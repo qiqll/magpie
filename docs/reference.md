@@ -1789,7 +1789,12 @@ restricted or to be verified). Each gateway key's users are its own: the
 same id sent with two keys is two users. Bindings are kept for good, by
 your user's id as sent, in `user-accounts.json` beside `providers.json`
 (`users` for callers without a key, `keys` by key id); edit a user's
-`who` there to move it, or delete the user to forget it. A file that
+`who` there to move it, or delete the user to forget it. The Gateway
+page's User bindings shows them, once anyone is bound: each provider's
+accounts with how many users are on each (one no longer on its provider
+said so), and the users with their account, provider, gateway key and
+when they were bound, 200 at a time, narrowed by a search. It only reads
+the file. A file that
 doesn't read keeps the users read before bound and binds nobody new. A
 request for a routing group isn't bound, and `X-Magpie-Account` wins over
 it. The header is not sent on to the vendor. A service that already sends

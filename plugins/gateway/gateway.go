@@ -1,5 +1,6 @@
-// Package gateway is the Gateway page: the gateway's state, its keys, how
-// to connect a client, the models it serves and its recent calls. The
+// Package gateway is the Gateway page: the gateway's state, its keys, the
+// users it keeps on one account, how to connect a client, the models it
+// serves and its recent calls. The
 // gateway itself is core and serves agents with the page off; while a
 // gateway key is there, the page that lists and changes them stays on.
 //
@@ -29,6 +30,6 @@ func init() {
 		},
 		Parts:    []pluginrt.Part{{Slot: "nav.page", Key: "gateway"}},
 		Settings: Settings{CallsPage: 20},
-		Client:   []string{"keys.js", "client.js"},
+		Client:   []string{"keys.js", "users.js", "client.js"},
 	})
 }

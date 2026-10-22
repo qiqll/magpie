@@ -499,3 +499,50 @@ func (u *UserBound) restsOn(why string) bool {
 func userKey(r *http.Request) string {
 	return access.Caller(r.Context()).KeyID
 }
+
+// UserRow is one user's binding, as user-accounts.json has it.
+type UserRow struct {
+	Key      string    // the gateway key's id, "" for callers without one
+	Provider string    // the provider's id
+	User     string    // the user's id, as the caller sent it
+	Who      string    // the account or key: candidate.who()
+	Account  string    // its user or key's name, as the Routing page names it
+	At       time.Time // when the user was bound
+}
+
+// UserBindings is every user's binding, read from user-accounts.json as
+// it is now, for a process other than the gateway's too (the window, magpie
+// web). No file is none; one that doesn't read is an error, never none.
+func UserBindings() ([]UserRow, error) {
+	b, err := os.ReadFile(usersPath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var f userFile
+	if err := json.Unmarshal(b, &f); err != nil {
+		return nil, err
+	}
+	var out []UserRow
+	add := func(key string, ps map[string]map[string]userBinding) {
+		for pid, us := range ps {
+			for u, b := range us {
+				out = append(out, UserRow{Key: key, Provider: pid, User: u, Who: b.Who, Account: b.Account, At: b.At})
+			}
+		}
+	}
+	add("", f.Users)
+	for k, ps := range f.Keys {
+		if k != "" {
+			add(k, ps)
+		}
+	}
+	return out, nil
+}
+
+// UserSeats is who every account or key p has is, lower-cased, as a
+// binding's Who names one; known is false when the saved accounts can't
+// be read, and a binding not among them can't be said gone.
+func UserSeats(p provider.Provider) (seats map[string]bool, known bool) { return seatsOf(p) }

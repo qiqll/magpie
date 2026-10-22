@@ -2794,7 +2794,8 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .sheet .tile.removed .acts { flex: none; display: flex; gap: 6px; }
 .sheet .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1px 12px; }
 .sheet .none { padding: 14px 2px; color: var(--muted); font-size: 12px; }
-#gwModels .none { padding: 16px; color: var(--muted); font-size: 12px; text-align: center; }
+#gwModels .none, #userBinds .none { padding: 16px; color: var(--muted); font-size: 12px; text-align: center; }
+#userBindAccounts + #userBinds { margin-top: 8px; }
 #view-gateway .row-head .find { margin-right: 8px; }
 /* a row of the add sheet: an icon and a name, no frame; a row already
    added has a small green dot after its name rather than fading */

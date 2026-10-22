@@ -1,5 +1,6 @@
 // The Gateway page (plugins/gateway): the gateway's state and its keys
-// (keys.js), how to connect a client, its models and its recent calls. It
+// (keys.js), the users it keeps on one account (users.js), how to connect
+// a client, its models and its recent calls. It
 // is a page the plugin adds to the window (kernel.js): its markup is the
 // html below, and the shell draws it through its hooks — loading before
 // the state is in, draft from the state kept, render with the new one —
@@ -665,6 +666,12 @@ magpie.plugin("gateway", (ctx) => {
   <p class="usage-note" data-t>Create a gateway key for each client. Usage is counted separately for each key.</p>
   <section id="gatewayKeys"></section>
 </section>
+<section id="userBindsBlock" hidden>
+  <div class="row-head" id="userBindsHead"><span class="label" data-t>User bindings</span><span class="note" id="userBindsCount"></span><span class="grow"></span></div>
+  <p class="usage-note" data-t>Each user your service names in X-Magpie-User (or the header MAGPIE_USER_HEADER names) stays on one account of each provider. To move a user or forget one, edit user-accounts.json.</p>
+  <div class="list" id="userBindAccounts"></div>
+  <div class="list" id="userBinds"></div>
+</section>
 <p class="usage-note gw-keys-off" id="gatewayKeysOff" hidden><span data-t>Gateway keys are for other computers, and for a tunnel to this one such as Cloudflare Tunnel: they are added here once Share on local network is on. Agents on this computer need none.</span> <button class="text" id="openLanSettings" data-t>Network and sharing</button></p>
 <div class="row-head"><button class="fold" id="foldConnect" aria-expanded="true" aria-controls="connect"><span class="label" data-t>Connect</span></button><span class="grow"></span><span class="note" id="connectNote"></span></div>
 <section class="list connect" id="connect"></section>
@@ -711,6 +718,11 @@ magpie.plugin("gateway", (ctx) => {
     calls() {
       if (view === "gateway" && providers && !$("#view-gateway").classList.contains("loading")) renderActivity();
     },
-    open: loadGatewayKeys,
+    // the keys' promise goes back to the kernel's error boundary, as it
+    // did when it was the hook itself; the users read on their own
+    open() {
+      loadUserBinds(); // users.js
+      return loadGatewayKeys();
+    },
   });
 });
