@@ -344,6 +344,8 @@ var carried = []string{
 	"http_proxy", "https_proxy", "all_proxy", "no_proxy",
 	"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
 	"MAGPIE_ADDR", "MAGPIE_TRUST_PROXY", "MAGPIE_BUN", "MAGPIE_WEB_URL",
+	// the header the gateway reads a caller's users from, besides its own
+	"MAGPIE_USER_HEADER",
 	// `magpie daemon install --tls-cert … --tls-key …` sets them
 	"MAGPIE_TLS_CERT", "MAGPIE_TLS_KEY",
 }

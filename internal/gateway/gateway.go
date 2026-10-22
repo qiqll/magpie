@@ -2085,7 +2085,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// a Codex reset spent before any try, on an account held as it won't
 	// spend its credits
 	var resetFirst *AutoReset
-	if len(cands) == 0 && len(pl.held) > 0 && strings.TrimSpace(r.Header.Get(AccountHeader)) == "" &&
+	// a user bound to an account (bindUser, below) is asked of that one
+	// alone: a reset spent here would be another's
+	bindsUser := false
+	if strings.TrimSpace(r.Header.Get(AccountHeader)) == "" && !isGroup {
+		user, bad := userOf(r.Header)
+		bindsUser = user != "" || bad != ""
+	}
+	if len(cands) == 0 && len(pl.held) > 0 && strings.TrimSpace(r.Header.Get(AccountHeader)) == "" && !bindsUser &&
 		(strictHeld != nil || !slices.ContainsFunc(pl.left, func(w Weighed) bool { return !w.Barred && !w.Held && w.Capped == 0 })) {
 		// every account there is is held, and one held only as it won't
 		// spend its credits is out of its allowance at the vendor's own
@@ -2251,11 +2258,30 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 	}
 	pin := strings.TrimSpace(r.Header.Get(AccountHeader))
+	var userBound *UserBound
 	if pin != "" {
 		var status int
 		var msg string
 		if cands, pl, status, msg = pinTo(pin, cands, pl); status != 0 {
 			call.Status, call.Error = status, "account pinned: "+pin
+			writeError(w, from, status, msg)
+			finishCapture()
+			s.record(call)
+			return
+		}
+	} else if user, bad := userOf(r.Header); bindsUser && bad != "" {
+		call.Status, call.Error = 400, bad
+		writeError(w, from, 400, bad)
+		finishCapture()
+		s.record(call)
+		return
+	} else if bindsUser {
+		// the caller's user stays on the one account of the provider it
+		// is bound to, whichever of its models it asks for
+		var status int
+		var msg string
+		if cands, pl, userBound, status, msg = bindUser(userKey(r), user, p, cands, pl); status != 0 {
+			call.Status, call.Error = status, "user bound: "+userBound.accountOr()
 			writeError(w, from, status, msg)
 			finishCapture()
 			s.record(call)
@@ -2294,7 +2320,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		capture.tools = tools
 	}
 	tierAsked := bodyTier(from, body) // the service tier the client asked for (#1784)
-	tr := s.trace.beginFor(r, Route{turn: turn, dirOf: dirOf(from, plain), tools: tools, imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, call.Agent), TitleLink: link, Pinned: pin, Time: start, Agent: call.Agent, Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, call.Kind), Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Tier: tierAsked, Provider: p.ID, Group: group, Rule: hit, Nested: nested, SealedTask: sealedTask, LeadAccount: leadAccount, Compaction: compactionWho(checkpoint), Subagent: subagent, SubagentEffort: subagentEffort, Sub: subOf(r.Header), SubagentID: subagentID, Affinity: shown, Order: pl.order, Left: pl.left})
+	tr := s.trace.beginFor(r, Route{turn: turn, dirOf: dirOf(from, plain), tools: tools, imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, call.Agent), TitleLink: link, Pinned: pin, User: userBound, Time: start, Agent: call.Agent, Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, call.Kind), Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Tier: tierAsked, Provider: p.ID, Group: group, Rule: hit, Nested: nested, SealedTask: sealedTask, LeadAccount: leadAccount, Compaction: compactionWho(checkpoint), Subagent: subagent, SubagentEffort: subagentEffort, Sub: subOf(r.Header), SubagentID: subagentID, Affinity: shown, Order: pl.order, Left: pl.left})
 	if watched != nil {
 		watched.routeID = tr.ID
 	}
@@ -3168,6 +3194,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				other = &Try{Status: call.Status, Error: call.Error}
 			}
 			try.Fail = failAuth
+			unbindTurnedAway(c, failAuth)
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 			skipped = append(skipped, c.label()+": "+call.Error)
 			continue
@@ -3546,7 +3573,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			try.Fail = failPrompt
 		} else {
 			try.Fail = failureOf(c, call.Status, []byte(call.Error))
-			if try.Fail == failVerify && !held || strictAlone {
+			// its vendor turned the account away for good: the users bound
+			// to it are bound afresh
+			unbindTurnedAway(c, try.Fail)
+			if try.Fail == failVerify && !held || strictAlone || userBound.restsOn(try.Fail) {
 				// the last one left rests too, for the app to show and the
 				// next requests to be held
 				rest := s.restAfter(c, call.Status, hw.header, []byte(call.Error))

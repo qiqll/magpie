@@ -1774,6 +1774,33 @@ subscription with several: only it is tried, and an unknown account, one
 whose plan lacks the model, or one resting is an error rather than another
 account's reply. The header is not sent on to the vendor.
 
+An optional `X-Magpie-User: <your user's id>` header (at most 128 bytes,
+no control or format characters) keeps one of your own users on one
+account of each provider, for every model of it. The user's first request
+to a provider binds it to the account of that provider fewest users are
+bound to, of those not resting; from then on only that account is asked
+for the user. When it can't answer (out of its allowance, rate limited,
+resting, at its usage cap, paused), the vendor's or magpie's error is
+yours: no other account answers in its place. The binding goes, and the
+user's next request is bound afresh, when the account is no longer on the
+provider (signed out, switched off, removed) or its vendor turns it away
+for good (a sign-in revoked that a refresh doesn't mend, an account
+restricted or to be verified). Each gateway key's users are its own: the
+same id sent with two keys is two users. Bindings are kept for good, by
+your user's id as sent, in `user-accounts.json` beside `providers.json`
+(`users` for callers without a key, `keys` by key id); edit a user's
+`who` there to move it, or delete the user to forget it. A file that
+doesn't read keeps the users read before bound and binds nobody new. A
+request for a routing group isn't bound, and `X-Magpie-Account` wins over
+it. The header is not sent on to the vendor. A service that already sends
+its users' ids under a header of its own sets `MAGPIE_USER_HEADER` to that
+name (`MAGPIE_USER_HEADER=X-User-ID`), and magpie reads the user from it
+too, `X-Magpie-User` first. It is off unless set, so a client that sends
+such a header for its own reasons isn't held to one account. The name must
+be an `X-` header that is neither magpie's, one that carries a key, nor one
+an agent sends its vendor (`X-Codex-…`, `X-OpenAI-…`, `X-Stainless-…`, a
+session header); another is refused and logged once.
+
 A status bar can show where a turn went before its first token arrives:
 send `X-Magpie-Session: <id>` with the requests (an agent's own session
 header, such as Pi's or Claude Code's, works too) and read

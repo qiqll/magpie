@@ -89,6 +89,9 @@ type Route struct {
 	Order    []Weighed    `json:"order"`              // who was to try it, first first
 	Left     []Weighed    `json:"left,omitempty"`
 	Tries    []Try        `json:"tries"`
+	// User is the caller's user UserHeader named, and the account it is
+	// bound to: only it was tried
+	User *UserBound `json:"user,omitempty"`
 	// Masked: what masking swapped in the request before it went, nil
 	// for nothing (noteMasked)
 	Masked *Masked `json:"masked,omitempty"`

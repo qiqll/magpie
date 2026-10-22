@@ -237,6 +237,19 @@ func readLogins() []savedLogin {
 	return slices.Clone(ls) // callers change theirs
 }
 
+// LoginsKnown says the saved accounts are known: logins.json was read, now
+// or before, or isn't there, and account discovery is on. Otherwise an
+// account missing from AlsoOn may only be one that couldn't be read.
+func LoginsKnown() bool {
+	if settings.AccountDiscoveryOff() {
+		return false
+	}
+	readLogins()
+	lastLoginsMu.Lock()
+	defer lastLoginsMu.Unlock()
+	return loginsKnown
+}
+
 // unreadBytes are a file's bytes, nil when it can't be read: for the log
 // to say what was wrong with it.
 func unreadBytes(path string) []byte {
