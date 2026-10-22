@@ -94,7 +94,7 @@ func TestGatewayUsersRoute(t *testing.T) {
 		t.Fatalf("key names %v", named)
 	}
 	// narrowed: every word must match the user, account, provider or key
-	if _, out := gatewayUsers(t, "?q=b%40x"); out.Matched != 1 || len(out.Users) != 1 || out.Users[0].User != "2" || out.Total != 4 || len(out.Accounts) != 3 {
+	if _, out := gatewayUsers(t, "?q=b%40x"); out.Matched != 1 || len(out.Users) != 1 || out.Users[0].User != "2" || out.Total != 4 || out.Accounts != nil {
 		t.Fatalf("q=b@x: %+v", out)
 	}
 	if _, out := gatewayUsers(t, "?q=tenant+a%40x"); out.Matched != 1 || out.Users[0].User != "1" {
@@ -119,5 +119,58 @@ func TestGatewayUsersRoute(t *testing.T) {
 	writeUsers(t, `{"users": `)
 	if code, out := gatewayUsers(t, ""); code == 200 || !strings.Contains(out.Error, "user-accounts.json") {
 		t.Fatalf("unreadable: %d %+v", code, out)
+	}
+}
+
+// An account is said gone only when its provider's accounts and keys are
+// known and it isn't among them: a key removed is, the same key written
+// in another case isn't, and so is a provider removed whole. A gateway key
+// list that can't be read names no key removed. A search leaves the
+// accounts out.
+func TestGatewayUsersGone(t *testing.T) {
+	sandboxHome(t)
+	if err := provider.Save(provider.Provider{ID: "relay", Name: "Relay", Chat: "http://127.0.0.1:1/v1", Key: "sk-1", KeyName: "First", Keys: []provider.KeyAccount{{Key: "sk-2", Name: "Second"}}}); err != nil {
+		t.Fatal(err)
+	}
+	on := "relay#" + provider.KeyID("sk-1")
+	at := time.Now().UTC().Format(time.RFC3339)
+	writeUsers(t, fmt.Sprintf(`{"users": {
+  "relay": {
+    "on": {"who": %q, "account": "First", "at": %q},
+    "cased": {"who": %q, "account": "First", "at": %q},
+    "gone": {"who": "relay#0000000000", "account": "Old", "at": %q}
+  },
+  "removed": {"r": {"who": "removed@a@x.com", "account": "a@x.com", "at": %q}}
+}, "keys": {"no-such-key": {"relay": {"k": {"who": %q, "account": "First", "at": %q}}}}}`,
+		on, at, strings.ToUpper(on), at, at, at, on, at))
+	_, out := gatewayUsers(t, "")
+	gone := map[string][2]bool{}
+	for _, a := range out.Accounts {
+		gone[a.Provider+" "+a.Account] = [2]bool{a.Gone, a.ProviderGone}
+	}
+	want := map[string][2]bool{"relay First": {false, false}, "relay Old": {true, false}, "removed a@x.com": {true, true}}
+	for k, w := range want {
+		if gone[k] != w {
+			t.Errorf("%s: gone, provider gone = %v, want %v (%+v)", k, gone[k], w, out.Accounts)
+		}
+	}
+	if counts := len(out.Accounts); counts != 3 {
+		t.Errorf("the same key in another case counted apart: %+v", out.Accounts)
+	}
+	for _, u := range out.Users {
+		if u.User == "k" && (!u.KeyGone || u.KeyName != "") {
+			t.Errorf("a key not in the list read isn't said removed: %+v", u)
+		}
+	}
+	// with the gateway keys unreadable, no key is said removed
+	os.MkdirAll(access.Path(), 0o700) // a folder where the file is: it can't be read
+	_, out = gatewayUsers(t, "")
+	for _, u := range out.Users {
+		if u.KeyGone {
+			t.Errorf("an unreadable key list said %s's key removed", u.User)
+		}
+	}
+	if code, out := gatewayUsers(t, "?q=cased"); code != 200 || out.Accounts != nil || out.Matched != 1 {
+		t.Fatalf("a search: %d %+v", code, out)
 	}
 }

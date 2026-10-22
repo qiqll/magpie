@@ -718,11 +718,10 @@ magpie.plugin("gateway", (ctx) => {
     calls() {
       if (view === "gateway" && providers && !$("#view-gateway").classList.contains("loading")) renderActivity();
     },
-    // the keys' promise goes back to the kernel's error boundary, as it
-    // did when it was the hook itself; the users read on their own
+    // both reads' promises go back to the kernel's error boundary: one
+    // that throws as it draws breaks the page with Try again
     open() {
-      loadUserBinds(); // users.js
-      return loadGatewayKeys();
+      return Promise.all([loadGatewayKeys(), loadUserBinds()]); // users.js
     },
   });
 });

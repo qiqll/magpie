@@ -21,13 +21,16 @@ const everyone = [
   { user: "1", provider: "antigravity", providerName: "Antigravity", account: "a@x.com", key: "k1", keyName: "Tenant A", at },
   { user: "2", provider: "antigravity", providerName: "Antigravity", account: "b@x.com", key: "k1", keyName: "Tenant A", at },
   { user: "3", provider: "antigravity", providerName: "Antigravity", account: "a@x.com", key: "", keyName: "", at },
-  { user: "4", provider: "codex", providerName: "ChatGPT", account: "c@x.com", key: "gone", keyName: "", at },
+  { user: "4", provider: "codex", providerName: "ChatGPT", account: "c@x.com", key: "gone", keyName: "", keyGone: true, at },
   { user: "a-very-long-user-id-from-the-service-0123456789abcdef", provider: "codex", providerName: "ChatGPT", account: "c@x.com", key: "k1", keyName: "Tenant A", at },
+  // a key the list couldn't be read for: named by its id, not said removed
+  { user: "6", provider: "codex", providerName: "ChatGPT", account: "c@x.com", key: "0123456789abcdef", keyName: "", at: "0001-01-01T00:00:00Z" },
 ];
 const accounts = [
   { provider: "antigravity", providerName: "Antigravity", account: "a@x.com", users: 2 },
   { provider: "antigravity", providerName: "Antigravity", account: "b@x.com", users: 1 },
-  { provider: "codex", providerName: "ChatGPT", account: "c@x.com", users: 2, gone: true },
+  { provider: "codex", providerName: "ChatGPT", account: "c@x.com", users: 3, gone: true },
+  { provider: "removed", providerName: "removed", account: "d@x.com", users: 1, gone: true, providerGone: true },
 ];
 
 function serve(lang, users) {
@@ -42,10 +45,13 @@ function serve(lang, users) {
     if (url.pathname === "/api/gateway/trace") return url.searchParams.get("wait") ? new Promise(() => {}) : json({ mine: true, now: new Date().toISOString(), seq: 1, totals: {}, routes: [] });
     if (url.pathname === "/api/gateway/users") {
       users.asked.push(url.searchParams.get("q") || "");
-      if (users.error) return json({ error: "user-accounts.json can't be read: unexpected end of JSON input" }, 400);
+      if (users.error) return json({ error: "user-accounts.json can't be read: unexpected end of JSON input", why: "unexpected end of JSON input" }, 400);
       const words = (url.searchParams.get("q") || "").toLowerCase().split(/\s+/).filter(Boolean);
       const hit = users.all.filter((u) => words.every((w) => `${u.user} ${u.account} ${u.providerName} ${u.keyName}`.toLowerCase().includes(w)));
-      return json({ total: users.all.length, matched: hit.length + (users.more || 0), accounts: users.all.length ? accounts : [], users: hit });
+      // a search leaves the accounts out, as the server does
+      const out = { total: users.all.length, matched: hit.length + (users.more || 0), users: hit };
+      if (!url.searchParams.get("q")) out.accounts = users.all.length ? accounts : [];
+      return json(out);
     }
     if (url.pathname.startsWith("/api/")) return json({});
     const file = path.join(assets, url.pathname === "/" ? "index.html" : url.pathname);
@@ -55,8 +61,8 @@ function serve(lang, users) {
 }
 
 const words = {
-  en: { head: "User bindings", two: "2 users", gone: "no longer on its provider", none: "without a gateway key", removed: "a removed gateway key", bound: "bound", match: "No users match", more: "Showing 5 of 300" },
-  zh: { head: "用户绑定", two: "2 个用户", gone: "已不在该供应商下", none: "未使用网关密钥", removed: "已删除的网关密钥", bound: "绑定于", match: "没有和“nobody”匹配的用户", more: "显示 300 个中的 5 个" },
+  en: { head: "User bindings", two: "2 users", gone: "no longer on its provider", provGone: "no longer in magpie", none: "without a gateway key", removed: "a removed gateway key", keyID: "gateway key 01234567", bound: "bound", match: "No users match “nobody”", more: "Showing 6 of 300", unread: "user-accounts.json can't be read: unexpected end" },
+  zh: { head: "用户绑定", two: "2 个用户", gone: "已不在该供应商下", provGone: "已不在 magpie 中", none: "未使用网关密钥", removed: "已删除的网关密钥", keyID: "网关密钥 01234567", bound: "绑定", match: "没有和“nobody”匹配的用户", more: "显示 300 个中的 6 个", unread: "无法读取 user-accounts.json：unexpected end" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -93,19 +99,24 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.locator("#userBinds .user-bind").first().waitFor();
         const block = page.locator("#userBindsBlock");
         assert.equal((await block.locator(".row-head .label").textContent()).trim(), w.head);
-        assert.equal((await page.locator("#userBindsCount").textContent()).trim(), "5");
+        assert.equal((await page.locator("#userBindsCount").textContent()).trim(), "6");
         const accountRows = page.locator("#userBindAccounts .user-account");
-        assert.equal(await accountRows.count(), 3);
+        assert.equal(await accountRows.count(), 4);
         assert.equal((await accountRows.nth(0).locator(".note").textContent()).trim(), w.two);
         assert.match(await accountRows.nth(2).textContent(), new RegExp(w.gone));
         assert(await accountRows.nth(2).evaluate((r) => r.classList.contains("gone")));
+        assert.match(await accountRows.nth(3).textContent(), new RegExp(w.provGone));
         const userRows = page.locator("#userBinds .user-bind");
-        assert.equal(await userRows.count(), 5);
+        assert.equal(await userRows.count(), 6);
         const first = await userRows.nth(0).textContent();
         assert.match(first, /a@x\.com · Antigravity · Tenant A/);
         assert.match(first, new RegExp(w.bound));
         assert.match(await userRows.nth(2).textContent(), new RegExp(w.none));
         assert.match(await userRows.nth(3).textContent(), new RegExp(w.removed));
+        const unknownKey = await userRows.nth(5).textContent();
+        assert.match(unknownKey, new RegExp(w.keyID), "a key not known to be removed is named by its id");
+        assert.doesNotMatch(unknownKey, new RegExp(w.removed));
+        assert.doesNotMatch(unknownKey, new RegExp(w.bound), "no time is said for a binding without one");
         assert.equal(await userRows.nth(0).locator("button.copy").count(), 1, "the user's id has a copy button");
 
         // nothing runs past the page's width, the long id included
@@ -122,17 +133,18 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await find.pressSequentially("b@x");
         await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-bind").length === 1);
         assert.match(await userRows.nth(0).textContent(), /b@x\.com/);
+        assert.equal(await accountRows.count(), 4, "a search keeps the accounts the page has");
         assert(await find.evaluate((f) => document.activeElement === f), "typing keeps the search's focus");
         assert(users.asked.includes("b@x"), "the words go to the server");
         await find.fill("nobody");
         await page.locator("#userBinds .none").waitFor();
         assert.match(await page.locator("#userBinds .none").textContent(), new RegExp(w.match));
         await find.press("Escape");
-        await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-bind").length === 5);
+        await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-bind").length === 6);
         assert.equal(await find.inputValue(), "");
 
         // more than a page: said, with how many match
-        users.more = 295;
+        users.more = 294;
         await find.fill("x");
         await page.waitForFunction(() => /300/.test(document.querySelector("#userBinds")?.textContent || ""));
         assert.match(await page.locator("#userBinds .none").last().textContent(), new RegExp(w.more));
@@ -143,7 +155,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.reload();
         await page.locator("#userBinds .none").waitFor();
         assert(!(await block.evaluate((b) => b.hidden)), "an unreadable file shows the section");
-        assert.match(await page.locator("#userBinds .none").textContent(), /user-accounts\.json can't be read/);
+        assert.match(await page.locator("#userBinds .none").textContent(), new RegExp(w.unread), "said in the reader's language");
         assert.deepEqual(errors, []);
       });
     }
