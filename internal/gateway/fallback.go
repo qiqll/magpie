@@ -1566,12 +1566,15 @@ func matesLast(left []candidate, c candidate) {
 // before it (#248), and a reply that isn't streamed is held whole to read
 // for one.
 type holdWriter struct {
-	w       http.ResponseWriter
-	hold    bool
-	header  http.Header
-	status  int
-	passing bool
-	held    bytes.Buffer
+	w    http.ResponseWriter
+	hold bool
+	// holdErrors holds an error status though the reply isn't held: a
+	// user's, for its limit to be said on it (userLimitedAfter)
+	holdErrors bool
+	header     http.Header
+	status     int
+	passing    bool
+	held       bytes.Buffer
 
 	stream     bool      // a stream held until its first content
 	since      time.Time // when it began
@@ -1733,7 +1736,7 @@ func (h *holdWriter) writeHeader(code int) {
 		return
 	}
 	h.status = code
-	if h.hold && code >= 400 {
+	if (h.hold || h.holdErrors) && code >= 400 {
 		return
 	}
 	if h.hold && strings.HasPrefix(h.header.Get("Content-Type"), "text/event-stream") {

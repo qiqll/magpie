@@ -56,11 +56,15 @@ const userMax = 128
 // ("quota"), its credit ("credit"), rate limited ("rate") or at the usage
 // cap set on it in magpie ("cap"). UserUntilHeader is when it is back,
 // RFC 3339 in UTC, as Retry-After is in seconds: the caller stops sending
-// the user's requests until then. Neither is there when the user's
-// account can answer again at once, or is let go (bound afresh next).
+// the user's requests until then. UserModelHeader names the one model
+// out, when the account still answers its others. Neither is there when
+// the user's account can answer again at once, or is let go (bound
+// afresh next); a limit without UserUntilHeader is one magpie doesn't
+// know the end of.
 const (
 	UserLimitHeader = "X-Magpie-User-Limit"
 	UserUntilHeader = "X-Magpie-User-Until"
+	UserModelHeader = "X-Magpie-User-Model"
 )
 
 // userLimit is the UserLimitHeader a failure why is, "" for one that
@@ -73,11 +77,15 @@ func userLimit(why string) string {
 	return ""
 }
 
-// userLimited marks h, an error's headers, with UserLimitHeader limit and,
-// when it is still to come, until, to the second after: never earlier
-// than the account is back.
-func userLimited(h http.Header, limit string, until time.Time) {
+// userLimited marks h, an error's headers, with UserLimitHeader limit,
+// the one model it is for (model, "" for the account) and, when it is
+// still to come, until, to the second after: never earlier than the
+// account is back.
+func userLimited(h http.Header, limit string, until time.Time, model string) {
 	h.Set(UserLimitHeader, limit)
+	if model != "" {
+		h.Set(UserModelHeader, model)
+	}
 	if until = until.Add(time.Second - 1).Truncate(time.Second); time.Until(until) > 0 {
 		h.Set(UserUntilHeader, until.UTC().Format(time.RFC3339))
 		h.Set("Retry-After", strconv.Itoa(int(math.Ceil(time.Until(until).Seconds()))))
@@ -85,13 +93,14 @@ func userLimited(h http.Header, limit string, until time.Time) {
 }
 
 // userRefusal is why a user's request goes to no account: its status and
-// message, and its UserLimitHeader and when the account is back, when it
-// is a limit.
+// message, and its UserLimitHeader, when the account is back and the one
+// model out ("" for the account), when it is a limit.
 type userRefusal struct {
 	status int
 	msg    string
 	limit  string
 	until  time.Time
+	model  string
 }
 
 // UserHeaderEnv names another header a caller's user is read from, for a
@@ -453,7 +462,7 @@ func boundRefusal(user string, b userBinding, pid string, rests []Rest, pl plann
 			}
 		}
 		return userRefusal{status: http.StatusTooManyRequests, msg: fmt.Sprintf("%s: %q is bound to %s, which %s; no other account is tried in its place", UserHeader, user, b.Account, strings.Join(said, "; ")),
-			limit: userLimit(first.Why), until: first.Until}
+			limit: userLimit(first.Why), until: first.Until, model: first.Model}
 	}
 	for _, w := range pl.left {
 		if !leftIs(w, pid, b.Who) {
@@ -495,21 +504,46 @@ func (s *Server) userLimitedAfter(h http.Header, u *UserBound, c candidate, stat
 	if limit == "" {
 		return false
 	}
-	now, until := time.Now(), heldBack
+	now, until, model := time.Now(), heldBack, ""
 	switch {
 	case u.restsOn(why) && try.Rest != nil:
 		// rested already, as the last key out of its allowance is
-		until, rested = try.Rest.Until, true
+		until, model, rested = try.Rest.Until, try.Rest.Model, true
 	case u.restsOn(why):
 		rest := s.restAfter(c, status, h, body)
-		try.Rest, until, rested = &rest, rest.Until, true
+		try.Rest, until, model, rested = &rest, rest.Until, rest.Model, true
 	default:
 		if d := retryAfter(h, now); d > 0 {
 			until = now.Add(d)
 		}
 	}
-	userLimited(h, limit, until)
+	userLimited(h, limit, until, model)
 	return rested
+}
+
+// cappedFor is the UserLimitHeader and when user, of the gateway key
+// keyID, is back when every account of provider pid there is is held
+// (ws, the first of them back at back): its own account's, when it is
+// bound to one of them, else the first's.
+func cappedFor(keyID, user, pid, model string, ws []Weighed, back time.Time) (string, time.Time) {
+	userBinds.Lock()
+	var b userBinding
+	ok := loadUsers() == nil
+	if ok {
+		b, ok = userBinds.m[keyID][pid][user]
+	}
+	userBinds.Unlock()
+	var own []Weighed
+	for _, w := range ws {
+		if ok && (w.Capped > 0 || w.NoCredits) && leftIs(w, pid, b.Who) {
+			own = append(own, w)
+		}
+	}
+	if len(own) == 0 {
+		return cappedLimit(ws), back
+	}
+	_, ownBack := cappedError(model, own, time.Now())
+	return cappedLimit(own), ownBack
 }
 
 // ownedBy is cands narrowed to who's of provider pid, those resting left

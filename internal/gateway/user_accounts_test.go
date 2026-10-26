@@ -200,6 +200,11 @@ func TestUserBoundAccountsFailureIsTheCallers(t *testing.T) {
 	if rec.Code < 400 {
 		t.Fatalf("answered past its account's 429: %d %s", rec.Code, rec.Body.String())
 	}
+	// the vendor's own 429, asked again in place until it gives up: said
+	// as a limit on the reply it fails with, not only on the next
+	if limit, until := limitOf(t, rec); limit != "rate" || !until.After(time.Now()) {
+		t.Fatalf("the vendor's 429: %q until %v: %v", limit, until, rec.Header())
+	}
 	if got := asked(true); slices.ContainsFunc(got, func(a string) bool { return a != bound }) {
 		t.Fatalf("another account was asked: %v", got)
 	}

@@ -2133,8 +2133,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
 		}
 		if limitedUser != "" {
-			// the user's account is held with the rest of them
-			userLimited(w.Header(), cappedLimit(held), back)
+			// the user's account is held with the rest of them: back
+			// when it is, not the first of them
+			limit, until := cappedFor(userKey(r), limitedUser, p.ID, call.Model, held, back)
+			userLimited(w.Header(), limit, until, "")
 		}
 		call.Status, call.Error = 429, record
 		writeError(w, from, 429, msg)
@@ -2287,7 +2289,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		if cands, pl, userBound, refused = bindUser(userKey(r), user, p, cands, pl); refused.status != 0 {
 			call.Status, call.Error = refused.status, "user bound: "+userBound.accountOr()
 			if refused.limit != "" {
-				userLimited(w.Header(), refused.limit, refused.until)
+				userLimited(w.Header(), refused.limit, refused.until, refused.model)
 			}
 			writeError(w, from, refused.status, refused.msg)
 			finishCapture()
@@ -2448,6 +2450,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// a compaction's summary is held to its end, for a cut or an
 		// error halfway to go to the next candidate (#2274)
 		hw.wantWhole = wantWhole
+		// a user's error is held to its end, its limit said on it
+		hw.holdErrors = userBound != nil
 		// Claude's and GPT's reasoning is held for a refusal after it only
 		// while another candidate could answer instead: the last one's
 		// refusal isn't asked again, so holding it only kept a lone relay's

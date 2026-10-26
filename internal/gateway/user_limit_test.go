@@ -173,7 +173,18 @@ func TestUserLimitSaysTheCap(t *testing.T) {
 	if rec := userPost(s, "codex/gpt-5.5", "bob", "hi"); rec.Code != 200 || rec.Header().Get(UserLimitHeader) != "" {
 		t.Fatalf("bob, on the other: %d %v", rec.Code, rec.Header())
 	}
-	capUsage(t, map[string]float64{bound: 75, other: 75})
+	// every account capped, the other's window renewing first: alice is
+	// told when her own is back, not the other's
+	old := allowances
+	t.Cleanup(func() { allowances = old })
+	renews := map[string]time.Duration{bound: 3 * time.Hour, other: time.Hour}
+	allowances = func(string) map[string]provider.Allowance {
+		out := map[string]provider.Allowance{}
+		for u, d := range renews {
+			out[u] = provider.Allowance{{Used: 75, Resets: time.Now().Add(d), Span: 5 * time.Hour}}
+		}
+		return out
+	}
 	rec = userPost(s, "codex/gpt-5.5", "alice", "all capped")
 	if limit, until := limitOf(t, rec); rec.Code != 429 || limit != "cap" || !near(until, 3*time.Hour) {
 		t.Fatalf("every account capped: %d %q until %v: %s", rec.Code, limit, until, rec.Body.String())
@@ -181,5 +192,26 @@ func TestUserLimitSaysTheCap(t *testing.T) {
 	rec = userPost(s, "codex/gpt-5.5", "", "nobody's")
 	if rec.Code != 429 || rec.Header().Get(UserLimitHeader) != "" || rec.Header().Get("Retry-After") == "" {
 		t.Fatalf("no user, every account capped: %d %v", rec.Code, rec.Header())
+	}
+}
+
+// A rest of one model of the account, its others still answered, is said
+// with the model it is for.
+func TestUserLimitOfOneModel(t *testing.T) {
+	back := time.Now().Add(time.Hour)
+	b := userBinding{Who: "codex@me@example.com", Account: "me@example.com"}
+	refused := boundRefusal("alice", b, "codex", []Rest{{Why: failQuota, Until: back, Model: "gpt-5.5"}}, planned{})
+	if refused.status != 429 || refused.limit != "quota" || refused.model != "gpt-5.5" || !refused.until.Equal(back) {
+		t.Fatalf("%+v", refused)
+	}
+	h := http.Header{}
+	userLimited(h, refused.limit, refused.until, refused.model)
+	if h.Get(UserModelHeader) != "gpt-5.5" || h.Get(UserLimitHeader) != "quota" || h.Get(UserUntilHeader) == "" {
+		t.Fatalf("%v", h)
+	}
+	h = http.Header{}
+	userLimited(h, "quota", back, "")
+	if _, ok := h[UserModelHeader]; ok {
+		t.Fatalf("the account as a whole said as a model: %v", h)
 	}
 }

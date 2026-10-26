@@ -1786,7 +1786,10 @@ limit, it says so and until when, for you to stop sending the user's
 requests until then: `X-Magpie-User-Limit` is `quota` (the account's
 allowance is used up), `credit` (out of credit), `rate` (rate limited) or
 `cap` (at the usage cap set on it in magpie), and `X-Magpie-User-Until`
-is when it is back (RFC 3339, UTC), as `Retry-After` is in seconds. Every
+is when it is back (RFC 3339, UTC), as `Retry-After` is in seconds. When
+only one model of the account is out and its others still answer,
+`X-Magpie-User-Model` names it: stop only that model's requests. A limit
+without `X-Magpie-User-Until` is one magpie doesn't know the end of. Every
 request of the user before then is refused at once, with the same headers,
 and nothing is sent to the vendor. A user bound to none because every
 account of the provider is out is told when the one asked is back. Neither
