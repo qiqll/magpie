@@ -17,7 +17,7 @@ import (
 const webAddr = "127.0.0.1:3430"
 
 // webCmd: magpie web [--addr host:port] [--lan] [--no-open] [--gateway]
-// [--tls-cert <file> --tls-key <file>] [--bind=session|user] [--bind-max=N] —
+// [--tls-cert <file> --tls-key <file>] [--bind=session|user] —
 // the app's window in a browser, for a computer that can't show the app;
 // --gateway shows it in gateway mode (gui.WebGateway) unless Settings says
 // otherwise; with a certificate the page and the gateway are HTTPS to
@@ -45,7 +45,7 @@ func webCmd(args []string) error {
 		case a == "--gateway":
 			gui.WebGateway.Store(true)
 		default:
-			return fmt.Errorf("magpie web: unknown %q · magpie web [--addr host:port] [--lan] [--no-open] [--gateway] [--tls-cert <file> --tls-key <file>] [--bind=session|user] [--bind-max=N], MAGPIE_WEB_KEY to keep one key", a)
+			return fmt.Errorf("magpie web: unknown %q · magpie web [--addr host:port] [--lan] [--no-open] [--gateway] [--tls-cert <file> --tls-key <file>] [--bind=session|user], MAGPIE_WEB_KEY to keep one key", a)
 		}
 	}
 	if lan && addr == webAddr {
@@ -165,8 +165,8 @@ func proxyLink(key string) string {
 	return strings.TrimRight(u.String(), "/") + key
 }
 
-// serveCmd: magpie serve [--web[=host:port]] [--bind=session|user]
-// [--bind-max=N] — the gateway, and with
+// serveCmd: magpie serve [--web[=host:port]] [--bind=session|user] —
+// the gateway, and with
 // --web magpie web's page from the same process: what the service runs
 // (`magpie daemon install --web`), so the page shows the gateway that
 // serves the agents, its routing included (HuanCheng on Discord).
@@ -189,7 +189,7 @@ func serveCmd(args []string) error {
 				return fmt.Errorf("magpie serve: --web=%s isn't host:port", web)
 			}
 		default:
-			return fmt.Errorf("magpie serve: unknown %q · magpie serve [--web[=host:port]] [--tls-cert <file> --tls-key <file>] [--bind=session|user] [--bind-max=N]", a)
+			return fmt.Errorf("magpie serve: unknown %q · magpie serve [--web[=host:port]] [--tls-cert <file> --tls-key <file>] [--bind=session|user]", a)
 		}
 	}
 	if web == "" {

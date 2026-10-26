@@ -42,7 +42,10 @@ a live gateway.
 `gateway-users.test.cjs` checks the Gateway page's User bindings with local
 API fixtures: hidden while nobody is bound; each account counted, one no
 longer on its provider said so; the users with their account, provider and
-gateway key (none, a removed one); nothing past the page at 420px with a
+gateway key (none, a removed one) and its tier (the default for one bound
+before tiers); how the gateway binds, by user each tier of user-tiers.json
+with its most accounts, or the tiers said unknown; nothing past the page at
+420px with a
 long id; the search asking the server again, keeping its focus, and Escape
 clearing it; a page of users said with how many match; an unreadable file
 shown as an error, never as nobody. English and Chinese, 960px and 420px,

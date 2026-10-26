@@ -111,7 +111,7 @@ func TestUserGivenASpareInTheSameRequest(t *testing.T) {
 func TestUserGivenASpareBeforeAsking(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	out, asked := limitUpstream(t)
-	one := byUserUpTo(New(), 1)
+	one := byUserUpTo(t, New(), 1)
 	userPost(one, "codex/gpt-5.5", "alice", "hi")
 	first := asked(true)[0]
 	out(first, 7200)
@@ -119,6 +119,8 @@ func TestUserGivenASpareBeforeAsking(t *testing.T) {
 		t.Fatalf("at a max of one: %d %s", rec.Code, rec.Body.String())
 	}
 	asked(true)
+	// room for a spare: user-tiers.json gone, free's 2 again
+	os.Remove(tiersPath())
 	s := byUser(New())
 	rec := userPost(s, "codex/gpt-5.5", "alice", "again")
 	if got := asked(true); rec.Code != 200 || len(got) != 1 || got[0] == first {
@@ -186,10 +188,11 @@ func slicesHasOther(got []string, want string) bool {
 	return false
 }
 
-// A user with --bind-max accounts, each out: a 429 that names its
-// accounts and says when the first of them is back, and for which model;
-// the third account isn't asked, nor added.
-func TestUserAtBindMaxIsTold(t *testing.T) {
+// A user with as many accounts as its tier has (free's 2: no tier sent,
+// no user-tiers.json), each out: a 429 that names its accounts, its tier
+// and its most, and says when the first of them is back, and for which
+// model; the third account isn't asked, nor added.
+func TestUserAtItsTierMostIsTold(t *testing.T) {
 	codexSignedIn(t, "spare@example.com", "third@example.com")
 	out, asked := limitUpstream(t)
 	s := byUser(New())
@@ -217,7 +220,7 @@ func TestUserAtBindMaxIsTold(t *testing.T) {
 	}
 	seats := seatsIn(t, "codex")["alice"]
 	body := rec.Body.String()
-	if len(seats) != 2 || !strings.Contains(body, "--bind-max") || !strings.Contains(body, "the first back is "+seats[1]) || !strings.Contains(body, "for every model") {
+	if len(seats) != 2 || !strings.Contains(body, "at its tier free's 2 accounts") || !strings.Contains(body, "the first back is "+seats[1]) || !strings.Contains(body, "for every model") {
 		t.Fatalf("%v: %s", seats, body)
 	}
 	if strings.Contains(strings.Join(seats, ","), "third") && first != "acct-3" && spare != "acct-3" {

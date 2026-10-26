@@ -1623,7 +1623,7 @@ func threadSource(meta string) string {
 
 func copyHeaders(dst, src http.Header) {
 	for k, vs := range src {
-		if ck := http.CanonicalHeaderKey(k); !hopHeader(k) && ck != "Host" && ck != AccountHeader && !isUserHeader(ck) {
+		if ck := http.CanonicalHeaderKey(k); !hopHeader(k) && ck != "Host" && ck != AccountHeader && !callerOnly(ck) {
 			dst[k] = vs
 		}
 	}

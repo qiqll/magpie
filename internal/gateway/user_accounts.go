@@ -6,7 +6,8 @@ package gateway
 // provider binds it to the account fewest users are bound to, and from
 // then on only its accounts are asked for it, of any of the provider's
 // models: its first, then its spares, in order. A spare is added, up to
-// --bind-max, only when each account it has is out a while (resting out
+// its tier's max_accounts (user_tiers.go), only when each account it has
+// is out a while (resting out
 // of its allowance or credit userLongRest or more, at its usage cap, all
 // but used up); a rate limit, or a rest back sooner, is the caller's
 // error, and nothing else is asked in its place. An account goes from a
@@ -40,7 +41,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/edit"
@@ -169,12 +169,15 @@ type userSeat struct {
 
 // userBinding is the accounts a user is bound to, of one provider: its
 // first in Who, Account and At, as a magpie before spares reads it, then
-// its spares in More, in the order they were added.
+// its spares in More, in the order they were added. Tier is the tier its
+// last request named (UserTierHeader, the default without it), for the
+// Gateway page; "" from a magpie before tiers.
 type userBinding struct {
 	Who     string     `json:"who"`
 	Account string     `json:"account"`
 	At      time.Time  `json:"at"`
 	More    []userSeat `json:"more,omitempty"`
+	Tier    string     `json:"tier,omitempty"`
 }
 
 // seats is b's accounts, its first first; one named twice, or by
@@ -199,6 +202,13 @@ func bindingOf(seats []userSeat) userBinding {
 		b.More = slices.Clone(seats[1:])
 	}
 	return b
+}
+
+// withSeats is b bound to seats instead, its tier kept.
+func (b userBinding) withSeats(seats []userSeat) userBinding {
+	n := bindingOf(seats)
+	n.Tier = b.Tier
+	return n
 }
 
 // seatIn says who is one of seats.
@@ -253,11 +263,15 @@ type UserBound struct {
 	// answer, and a spare was added), "none" (no account of the provider
 	// could be bound now)
 	Why string `json:"why"`
+	// Tier: the request's tier (UserTierHeader, the default without it)
+	Tier string `json:"tier,omitempty"`
 
-	// what growUser adds a spare to: the gateway key, the provider and
-	// the accounts bound when the request came; left, those of them left
-	// out of the plan, for a limit to say when the first is back
+	// what growUser adds a spare to: the gateway key, the provider, the
+	// most accounts the tier lets it have and the accounts bound when the
+	// request came; left, those of them left out of the plan, for a limit
+	// to say when the first is back
 	key, pid string
+	max      int
 	seats    []userSeat
 	left     []Weighed
 }
@@ -281,11 +295,8 @@ func userOf(h http.Header) (user, bad string) {
 		if user = strings.TrimSpace(h.Get(name)); user == "" {
 			continue
 		}
-		switch {
-		case len(user) > userMax:
-			return "", fmt.Sprintf("%s is at most %d bytes", name, userMax)
-		case strings.IndexFunc(user, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) >= 0:
-			return "", name + " can't hold control or format characters"
+		if bad := idBad(name, user); bad != "" {
+			return "", bad
 		}
 		return user, ""
 	}
@@ -432,15 +443,16 @@ func leftIs(w Weighed, pid, who string) bool {
 // each while it doesn't rest, one all but used up after the rest. A user
 // bound to none, or only to accounts that are gone, is bound first to the
 // one of cands fewest users of p are bound to (firstOf). One whose
-// accounts are all out is given a spare by growUser, after strictKeep:
-// narrowed to none here, the refusal is its.
-func bindUser(keyID, user string, p provider.Provider, cands []candidate, pl planned) ([]candidate, planned, *UserBound, userRefusal) {
+// accounts are all out is given a spare by growUser, up to tier's
+// max_accounts, after strictKeep: narrowed to none here, the refusal is
+// its. The binding keeps tier's name, written only when it changed.
+func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candidate, pl planned) ([]candidate, planned, *UserBound, userRefusal) {
 	userBinds.Lock()
 	defer userBinds.Unlock()
 	if loadUsers() != nil {
 		return nil, pl, nil, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know which account %q is bound to; nothing was sent. Its log says why", UserHeader, user)}
 	}
-	ub := &UserBound{User: user, key: keyID, pid: p.ID}
+	ub := &UserBound{User: user, Tier: tier.Name, key: keyID, pid: p.ID, max: tier.MaxAccounts}
 	seats := userBinds.m[keyID][p.ID][user].seats()
 	// an account not among cands may be gone: signed out, switched off or
 	// removed (seatsOf), unknown while the saved accounts can't be read
@@ -465,6 +477,7 @@ func bindUser(keyID, user string, p provider.Provider, cands []candidate, pl pla
 		}
 		// the first gone, its first spare is its first
 		setSeats(keyID, p.ID, user, kept)
+		setTier(keyID, p.ID, user, tier.Name)
 		saveUsersLogged()
 		ub.Why = "gone"
 	}
@@ -480,6 +493,7 @@ func bindUser(keyID, user string, p provider.Provider, cands []candidate, pl pla
 		}
 		kept = []userSeat{{Who: cands[pick].who(), Account: shownAs(cands[pick]), At: time.Now().UTC()}}
 		setSeats(keyID, p.ID, user, kept)
+		setTier(keyID, p.ID, user, tier.Name)
 		saveUsersLogged()
 		if ub.Why == "" {
 			ub.Why = "bound"
@@ -488,14 +502,32 @@ func bindUser(keyID, user string, p provider.Provider, cands []candidate, pl pla
 	if ub.Why == "" {
 		ub.Why = "kept"
 	}
+	// another tier than its last request's: kept, never written over a
+	// file that doesn't read
+	if !userBinds.stale && setTier(keyID, p.ID, user, tier.Name) {
+		saveUsersLogged()
+	}
 	ub.shown(kept)
 	out, opl := ownedBy(kept, p.ID, cands, pl)
 	ub.left = opl.left
 	return out, opl, ub, userRefusal{}
 }
 
+// setTier keeps tier as user's, of the gateway key keyID, with its
+// binding to accounts of provider pid; changed says it wasn't before.
+// Called with userBinds held.
+func setTier(keyID, pid, user, tier string) (changed bool) {
+	b, ok := userBinds.m[keyID][pid][user]
+	if !ok || b.Tier == tier {
+		return false
+	}
+	b.Tier = tier
+	userBinds.m[keyID][pid][user] = b
+	return true
+}
+
 // setSeats binds user, of the gateway key keyID, to seats of provider pid,
-// or to none. Called with userBinds held.
+// or to none, its tier kept. Called with userBinds held.
 func setSeats(keyID, pid, user string, seats []userSeat) {
 	if len(seats) == 0 {
 		delete(userBinds.m[keyID][pid], user)
@@ -510,7 +542,7 @@ func setSeats(keyID, pid, user string, seats []userSeat) {
 	if userBinds.m[keyID][pid] == nil {
 		userBinds.m[keyID][pid] = map[string]userBinding{}
 	}
-	userBinds.m[keyID][pid][user] = bindingOf(seats)
+	userBinds.m[keyID][pid][user] = userBinds.m[keyID][pid][user].withSeats(seats)
 }
 
 // boundCount is how many users of every key each account of provider pid
@@ -565,11 +597,13 @@ func spareOf(pid string, cands []candidate, pl planned, seats []userSeat, room b
 // request now, a spare of pool (the candidates before bindUser narrowed
 // them), and asks it first: when each of its accounts is out for a while
 // (resting out of its allowance or credit userLongRest or more, held at a
-// usage cap, all but used up), it has fewer than max, and one of pool not
-// among them has room (spareOf). cands are those of its accounts left,
-// all but used up, asked after the spare; the refusal is why none is
-// asked, with none left. Once a request: grew says it added one.
-func growUser(u *UserBound, max int, pool []candidate, poolPl planned, cands []candidate, pl planned) (_ []candidate, _ planned, _ *UserBound, grew bool, _ userRefusal) {
+// usage cap, all but used up), it has fewer than its tier's max_accounts
+// (u.max; a user with as many or more, its tier lowered since, keeps them
+// and is given none), and one of pool not among them has room (spareOf).
+// cands are those of its accounts left, all but used up, asked after the
+// spare; the refusal is why none is asked, with none left. Once a
+// request: grew says it added one.
+func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate, pl planned) (_ []candidate, _ planned, _ *UserBound, grew bool, _ userRefusal) {
 	if u == nil || len(u.seats) == 0 || slices.ContainsFunc(pl.order, func(w Weighed) bool { return !w.Known || w.Used < provider.SpentShareOf(w.Routing) }) {
 		return cands, pl, u, false, userRefusal{}
 	}
@@ -598,8 +632,8 @@ func growUser(u *UserBound, max int, pool []candidate, poolPl planned, cands []c
 	if !out {
 		return refuse("")
 	}
-	if len(u.seats) >= max {
-		return refuse(fmt.Sprintf("it has %d of the provider's accounts, the most --bind-max lets a user have", len(u.seats)))
+	if len(u.seats) >= u.max {
+		return refuse(u.atTier(len(u.seats)))
 	}
 	userBinds.Lock()
 	defer userBinds.Unlock()
@@ -607,8 +641,8 @@ func growUser(u *UserBound, max int, pool []candidate, poolPl planned, cands []c
 		return refuse("user-accounts.json can't be read to add a spare")
 	}
 	now := userBinds.m[u.key][u.pid][u.User].seats()
-	if len(now) >= max {
-		return refuse(fmt.Sprintf("it has %d of the provider's accounts, the most --bind-max lets a user have", len(now)))
+	if len(now) >= u.max {
+		return refuse(u.atTier(len(now)))
 	}
 	pick := spareOf(u.pid, pool, poolPl, now, true)
 	if pick < 0 {
@@ -623,6 +657,19 @@ func growUser(u *UserBound, max int, pool []candidate, poolPl planned, cands []c
 	grown.shown(seats)
 	grown.left = pl.left
 	return append(added, cands...), planned{order: append(addedPl.order, pl.order...), left: pl.left, held: pl.held, capped: pl.capped}, &grown, true, userRefusal{}
+}
+
+// atTier says u has n accounts of the provider, as many as its tier lets
+// it have or more (lowered since): why no spare is added.
+func (u *UserBound) atTier(n int) string {
+	at, accounts := "at", "accounts"
+	if n > u.max {
+		at = "past"
+	}
+	if u.max == 1 {
+		accounts = "account"
+	}
+	return fmt.Sprintf("it has %d of the provider's accounts, %s its tier %s's %d %s (%s)", n, at, u.Tier, u.max, accounts, UserTierHeader)
 }
 
 // How one of a user's accounts stands, for growUser.
@@ -947,7 +994,7 @@ func (s *Server) unbindTurnedAway(c candidate, why string) {
 			if len(seats) == 0 {
 				delete(ps[c.p.ID], u)
 			} else {
-				ps[c.p.ID][u] = bindingOf(seats)
+				ps[c.p.ID][u] = b.withSeats(seats)
 			}
 			gone++
 		}
@@ -1001,6 +1048,9 @@ type UserRow struct {
 	At       time.Time // when the user was bound to it
 	// Spares: the accounts it is bound to after its first, in order
 	Spares []UserSpare
+	// Tier: the tier its last request named, "" from a magpie before
+	// tiers (the default's then)
+	Tier string
 }
 
 // UserSpare is one of a user's accounts after its first.
@@ -1033,7 +1083,7 @@ func UserBindings() ([]UserRow, error) {
 				if len(seats) == 0 {
 					continue
 				}
-				row := UserRow{Key: key, Provider: pid, User: u, Who: seats[0].Who, Account: seats[0].Account, At: seats[0].At}
+				row := UserRow{Key: key, Provider: pid, User: u, Who: seats[0].Who, Account: seats[0].Account, At: seats[0].At, Tier: b.Tier}
 				for _, st := range seats[1:] {
 					row.Spares = append(row.Spares, UserSpare(st))
 				}

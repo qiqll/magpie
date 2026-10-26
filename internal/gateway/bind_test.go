@@ -1,6 +1,9 @@
 package gateway
 
 import (
+	"bytes"
+	"fmt"
+	"log"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -11,57 +14,74 @@ import (
 )
 
 // byUser is s bound by user, as `magpie serve --bind=user` starts it,
-// each user on at most bindMaxDefault accounts of a provider.
+// each user on as many accounts of a provider as its tier has
+// (defaultTiers without a user-tiers.json: 2 for one without a tier).
 func byUser(s *Server) *Server {
-	s.bind = Binding{Mode: BindUser, Max: bindMaxDefault}
+	s.bind = Binding{Mode: BindUser}
 	return s
 }
 
-// byUserUpTo is s bound by user, each on at most max accounts.
-func byUserUpTo(s *Server, max int) *Server {
-	s.bind = Binding{Mode: BindUser, Max: max}
-	return s
+// byUserUpTo is s bound by user, each user without a tier on at most max
+// accounts, as user-tiers.json says.
+func byUserUpTo(t *testing.T, s *Server, max int) *Server {
+	t.Helper()
+	writeTiers(t, fmt.Sprintf(`{"default":"free","tiers":{"free":{"credits":1000,"max_accounts":%d}}}`, max))
+	return byUser(s)
 }
 
-// BindEnv and BindMaxEnv take session or user and a whole number of 1 or
-// more, the defaults when unset; anything else is an error that names
-// the variable, beside the default binding.
+// BindEnv takes session or user, session when unset; anything else is an
+// error that names the variable, beside the default binding.
 func TestBindingOf(t *testing.T) {
 	for _, c := range []struct {
-		mode, max string
-		want      Binding
+		mode string
+		want Binding
 	}{
-		{"", "", Binding{BindSession, 2}},
-		{"session", "", Binding{BindSession, 2}},
-		{" user ", "", Binding{BindUser, 2}},
-		{"USER", "3", Binding{BindUser, 3}},
-		{"user", "1", Binding{BindUser, 1}},
+		{"", Binding{BindSession}},
+		{"session", Binding{BindSession}},
+		{" user ", Binding{BindUser}},
+		{"USER", Binding{BindUser}},
 	} {
-		if got, err := BindingOf(c.mode, c.max); err != nil || got != c.want {
-			t.Errorf("%q %q: %+v %v", c.mode, c.max, got, err)
+		if got, err := BindingOf(c.mode); err != nil || got != c.want {
+			t.Errorf("%q: %+v %v", c.mode, got, err)
 		}
 	}
-	for _, c := range []struct{ mode, max, says string }{
-		{"users", "", BindEnv},
-		{"sessions", "", BindEnv},
-		{"user", "0", BindMaxEnv},
-		{"user", "-1", BindMaxEnv},
-		{"user", "two", BindMaxEnv},
-		{"user", "1.5", BindMaxEnv},
-	} {
-		got, err := BindingOf(c.mode, c.max)
-		if err == nil || !strings.Contains(err.Error(), c.says) || got != (Binding{BindSession, 2}) {
-			t.Errorf("%q %q: %+v %v", c.mode, c.max, got, err)
+	for _, mode := range []string{"users", "sessions"} {
+		got, err := BindingOf(mode)
+		if err == nil || !strings.Contains(err.Error(), BindEnv) || got != (Binding{BindSession}) {
+			t.Errorf("%q: %+v %v", mode, got, err)
 		}
 	}
 	t.Setenv(BindEnv, "user")
-	t.Setenv(BindMaxEnv, "4")
-	if s := New(); s.Binding() != (Binding{BindUser, 4}) {
+	if s := New(); s.Binding() != (Binding{BindUser}) {
 		t.Fatalf("New read %+v", s.Binding())
 	}
 	t.Setenv(BindEnv, "nope")
-	if s := New(); s.Binding() != (Binding{BindSession, 2}) {
+	if s := New(); s.Binding() != (Binding{BindSession}) {
 		t.Fatalf("a bad %s: %+v", BindEnv, s.Binding())
+	}
+}
+
+// A service installed with --bind-max still has MAGPIE_BIND_MAX: the
+// gateway starts bound as MAGPIE_BIND says, ignores it, and logs that,
+// once, naming user-tiers.json in its place.
+func TestBindMaxLeftIsIgnored(t *testing.T) {
+	codexSignedIn(t)
+	var logs bytes.Buffer
+	was := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(was) })
+	t.Setenv(BindEnv, "user")
+	t.Setenv(bindMaxEnv, "7")
+	for range 2 {
+		if s := New(); s.Binding() != (Binding{BindUser}) {
+			t.Fatalf("with %s set: %+v", bindMaxEnv, s.Binding())
+		}
+	}
+	if n := strings.Count(logs.String(), bindMaxEnv+"=7 is ignored"); n != 1 || !strings.Contains(logs.String(), "user-tiers.json") {
+		t.Fatalf("said %d times: %s", n, logs.String())
+	}
+	if _, err := BindingFromEnv(); err != nil {
+		t.Fatalf("refused on it: %v", err)
 	}
 }
 

@@ -5,24 +5,29 @@ package gateway
 // says, as magpie always has), or by the caller's own user ("user": each
 // user UserHeader names stays on accounts of its own, bindUser). Read
 // once, as the gateway starts; `magpie serve --bind=user` and the like
-// set it in BindEnv and BindMaxEnv.
+// set it in BindEnv. How many accounts a user may have is its tier's
+// (user_tiers.go).
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/yetone/magpie/internal/provider"
 )
 
-// BindEnv is "session" or "user"; BindMaxEnv the most accounts of each
-// provider a user is bound to by "user".
-const (
-	BindEnv    = "MAGPIE_BIND"
-	BindMaxEnv = "MAGPIE_BIND_MAX"
-)
+// BindEnv is "session" or "user".
+const BindEnv = "MAGPIE_BIND"
+
+// bindMaxEnv is what said the most accounts of a provider a user had
+// before user-tiers.json did. A service installed then may carry it
+// still: it is read only to say it is ignored (bindMaxIgnored).
+const bindMaxEnv = "MAGPIE_BIND_MAX"
+
+var bindMaxSaid sync.Map // a bindMaxEnv left set, logged once a value
 
 // The modes BindEnv takes.
 const (
@@ -30,44 +35,45 @@ const (
 	BindUser    = "user"
 )
 
-// bindMaxDefault is BindMaxEnv unset: a user's first account and one
-// spare.
-const bindMaxDefault = 2
-
 // Binding is how the gateway binds a caller's requests to accounts.
 type Binding struct {
 	Mode string // BindSession or BindUser
-	Max  int    // the most accounts of a provider a user is bound to
 }
 
 // byUser says requests are bound by their user.
 func (b Binding) byUser() bool { return b.Mode == BindUser }
 
-// BindingOf is the binding mode and max say, as BindEnv and BindMaxEnv
-// take them; "" is the default. An error says why one can't be taken,
-// beside the default binding.
-func BindingOf(mode, max string) (Binding, error) {
-	b, def := Binding{Mode: BindSession, Max: bindMaxDefault}, Binding{Mode: BindSession, Max: bindMaxDefault}
+// BindingOf is the binding mode says, as BindEnv takes it; "" is the
+// default. An error says why it can't be taken, beside the default
+// binding.
+func BindingOf(mode string) (Binding, error) {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "", BindSession:
+		return Binding{Mode: BindSession}, nil
 	case BindUser:
-		b.Mode = BindUser
-	default:
-		return def, fmt.Errorf("--bind (%s) is %s or %s, not %q", BindEnv, BindSession, BindUser, mode)
+		return Binding{Mode: BindUser}, nil
 	}
-	if m := strings.TrimSpace(max); m != "" {
-		n, err := strconv.Atoi(m)
-		if err != nil || n < 1 {
-			return def, fmt.Errorf("--bind-max (%s) is a whole number of accounts, 1 or more, not %q", BindMaxEnv, max)
-		}
-		b.Max = n
-	}
-	return b, nil
+	return Binding{Mode: BindSession}, fmt.Errorf("--bind (%s) is %s or %s, not %q", BindEnv, BindSession, BindUser, mode)
 }
 
-// BindingFromEnv is BindingOf what BindEnv and BindMaxEnv hold.
+// BindingFromEnv is BindingOf what BindEnv holds. A bindMaxEnv left set
+// is logged, once, as ignored: never a reason not to start.
 func BindingFromEnv() (Binding, error) {
-	return BindingOf(os.Getenv(BindEnv), os.Getenv(BindMaxEnv))
+	bindMaxIgnored()
+	return BindingOf(os.Getenv(BindEnv))
+}
+
+// bindMaxIgnored logs, once a value, a bindMaxEnv still set (a service
+// installed with --bind-max): user-tiers.json's max_accounts says how
+// many accounts a user has now.
+func bindMaxIgnored() {
+	v := strings.TrimSpace(os.Getenv(bindMaxEnv))
+	if v == "" {
+		return
+	}
+	if _, said := bindMaxSaid.LoadOrStore(v, true); !said {
+		log.Printf("gateway: %s=%s is ignored: each user's tier in %s says how many accounts it has (max_accounts)", bindMaxEnv, v, tiersPath())
+	}
 }
 
 // Binding is how s binds requests, as it was started.
@@ -85,15 +91,21 @@ func (s *Server) userNeeded(from provider.Protocol, h http.HandlerFunc) http.Han
 }
 
 // noUser refuses with a 400, bound by user, a request without a user, or
-// with one UserHeader can't take: each request goes to its user's
+// with one UserHeader can't take, or with a tier (UserTierHeader) that
+// isn't one of user-tiers.json's: each request goes to its user's
 // accounts, so one without can't be placed. A group's request and one
-// with AccountHeader need it too, though neither is bound.
+// with AccountHeader need it too, though neither is bound. Tiers that
+// can't be read are left to the binding to refuse.
 func (s *Server) noUser(w http.ResponseWriter, r *http.Request, from provider.Protocol) bool {
 	if !s.bind.byUser() {
 		return false
 	}
 	user, bad := userOf(r.Header)
 	if user != "" {
+		if _, bad, _ := tierOf(r.Header); bad != "" {
+			writeError(w, from, http.StatusBadRequest, bad)
+			return true
+		}
 		return false
 	}
 	if bad == "" {

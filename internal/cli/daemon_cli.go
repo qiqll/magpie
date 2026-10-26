@@ -14,7 +14,7 @@ import (
 	"github.com/yetone/magpie/internal/gui"
 )
 
-const daemonUsage = "usage: magpie daemon [install|uninstall|start|stop|restart|status] · magpie daemon install [--web] [--lan] [--addr host:port] [--no-web] [--tls-cert <file> --tls-key <file>|--no-tls] [--bind=session|user] [--bind-max=N] · magpie daemon web [on|off] [--lan] [--addr host:port]"
+const daemonUsage = "usage: magpie daemon [install|uninstall|start|stop|restart|status] · magpie daemon install [--web] [--lan] [--addr host:port] [--no-web] [--tls-cert <file> --tls-key <file>|--no-tls] [--bind=session|user] · magpie daemon web [on|off] [--lan] [--addr host:port]"
 
 // daemonWait is how long install, start and restart wait for the gateway
 // to answer before saying where its log is; a var for the tests.
@@ -141,8 +141,8 @@ func daemonCmd(args []string) error {
 		if err != nil {
 			return err
 		}
-		// and how the gateway binds requests, written in as MAGPIE_BIND
-		// and MAGPIE_BIND_MAX: a value it can't take is refused here
+		// and how the gateway binds requests, written in as MAGPIE_BIND:
+		// a value it can't take is refused here
 		if rest, err = bindFlags(rest); err != nil {
 			return fmt.Errorf("magpie daemon install: %w", err)
 		}
@@ -251,17 +251,16 @@ func keepTLS(noTLS bool) {
 }
 
 // keepBind: the service installed again keeps how it bound requests when
-// this shell says nothing of it (no --bind, --bind-max, MAGPIE_BIND or
-// MAGPIE_BIND_MAX), as it keeps its certificate: a page turned on doesn't
-// put a service bound by user back to sessions.
+// this shell says nothing of it (no --bind, no MAGPIE_BIND), as it keeps
+// its certificate: a page turned on doesn't put a service bound by user
+// back to sessions. A MAGPIE_BIND_MAX it was installed with isn't kept:
+// user-tiers.json says how many accounts a user has.
 func keepBind() {
-	if os.Getenv(gateway.BindEnv) != "" || os.Getenv(gateway.BindMaxEnv) != "" {
+	if os.Getenv(gateway.BindEnv) != "" {
 		return
 	}
-	for _, v := range []string{gateway.BindEnv, gateway.BindMaxEnv} {
-		if was := daemon.Env(v); was != "" {
-			os.Setenv(v, was)
-		}
+	if was := daemon.Env(gateway.BindEnv); was != "" {
+		os.Setenv(gateway.BindEnv, was)
 	}
 }
 

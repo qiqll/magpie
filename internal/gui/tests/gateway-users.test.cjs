@@ -5,8 +5,9 @@
 // answer when the serving magpie didn't say); the users with their first
 // account and spares in order, each with its state, provider and gateway
 // key; an account no longer on its provider said so; how the gateway
-// binds said, and bound by session the bindings kept and shown as they
-// are; a search that asks again and keeps its focus and the accounts'
+// binds said, by user with each tier's most accounts, and bound by
+// session the bindings kept and shown as they are; each user's tier, the
+// default for one bound before tiers; a search that asks again and keeps its focus and the accounts'
 // states; a page of users said as such, and an unreadable file said,
 // never shown as nobody. In every language, wide and narrow, in Chromium
 // and WebKit.
@@ -26,7 +27,7 @@ const providers = {
 };
 const seat = (p, a) => `${p}@${a}`;
 const everyone = [
-  { user: "1", provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), spares: [{ account: "b@x.com", seat: seat("antigravity", "b@x.com"), at }], key: "k1", keyName: "Tenant A", at },
+  { user: "1", provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), spares: [{ account: "b@x.com", seat: seat("antigravity", "b@x.com"), at }], key: "k1", keyName: "Tenant A", at, tier: "pro" },
   { user: "2", provider: "antigravity", providerName: "Antigravity", account: "b@x.com", seat: seat("antigravity", "b@x.com"), spares: [{ account: "f@x.com", seat: seat("antigravity", "f@x.com"), at }], key: "k1", keyName: "Tenant A", at },
   { user: "3", provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), spares: [{ account: "e@x.com", seat: seat("antigravity", "e@x.com"), at }], key: "", keyName: "", at },
   { user: "4", provider: "codex", providerName: "ChatGPT", account: "c@x.com", seat: seat("codex", "c@x.com"), key: "gone", keyName: "", keyGone: true, at },
@@ -34,6 +35,8 @@ const everyone = [
   // a key the list couldn't be read for: named by its id, not said removed
   { user: "6", provider: "codex", providerName: "ChatGPT", account: "c@x.com", seat: seat("codex", "c@x.com"), key: "0123456789abcdef", keyName: "", at: "0001-01-01T00:00:00Z" },
 ];
+// user-tiers.json as the serving magpie holds to it
+const tiers = { default: "free", tiers: [{ name: "free", credits: 1000, max_accounts: 2 }, { name: "pro", credits: 5000, max_accounts: 4 }] };
 const accounts = [
   { provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), users: 2, spares: 0, out: "quota", outUntil: back, outKnown: true },
   { provider: "antigravity", providerName: "Antigravity", account: "b@x.com", seat: seat("antigravity", "b@x.com"), users: 2, spares: 1, outKnown: true },
@@ -64,7 +67,7 @@ function serve(lang, users) {
       const hit = users.all.filter((u) => words.every((w) => hay(u).includes(w)));
       // a search leaves the accounts and the mode out, as the server does
       const out = { total: users.all.length, matched: hit.length + (users.more || 0), users: hit };
-      if (!url.searchParams.get("q")) Object.assign(out, { accounts: users.all.length ? accounts : [], mode: users.mode, max: 3 });
+      if (!url.searchParams.get("q")) Object.assign(out, { accounts: users.all.length ? accounts : [], mode: users.mode, tiers: users.tiers });
       return json(out);
     }
     if (url.pathname.startsWith("/api/")) return json({});
@@ -78,27 +81,27 @@ const words = {
   en: {
     head: "User bindings", two: "2 users", gone: "no longer on its provider", provGone: "no longer in magpie", none: "without a gateway key", removed: "a removed gateway key", keyID: "gateway key 01234567", bound: "bound", match: "No users match “nobody”", more: "Showing 6 of 300", unread: "user-accounts.json can't be read: unexpected end",
     out: "out · quota used up · back in 3h", can: "can answer", unknown: "status unknown", model: "out · rate limited for m-1", spareNote: "2 users, 1 as a spare", first: "first", spare: "spare",
-    byUser: "Bound by user: up to 3 accounts of each provider for each user", off: "Binding by user is off (start option --bind=user)",
+    byUser: "Bound by user: accounts of each provider each user may have, by its tier: free up to 2 (default) · pro up to 4", tierPro: "tier pro", tierFree: "tier free", tiersUnknown: "Bound by user; the tiers in user-tiers.json are unknown", off: "Binding by user is off (start option --bind=user)",
   },
   zh: {
     head: "用户绑定", two: "2 个用户", gone: "已不在该供应商下", provGone: "已不在 magpie 中", none: "未使用网关密钥", removed: "已删除的网关密钥", keyID: "网关密钥 01234567", bound: "绑定", match: "没有和“nobody”匹配的用户", more: "显示 300 个中的 6 个", unread: "无法读取 user-accounts.json：unexpected end",
     out: "暂不可用 · 额度用尽 · 3 小时后恢复", can: "可用", unknown: "状态未知", model: "暂不可用 · m-1 限流", spareNote: "2 个用户，其中 1 个作为备用", first: "主账号", spare: "备用",
-    byUser: "按用户绑定：每个用户在每个供应商下最多 3 个账号", off: "按用户绑定未开启（启动参数 --bind=user）",
+    byUser: "按用户绑定：每个用户在每个供应商下的账号上限按等级：free 最多 2 个（默认） · pro 最多 4 个", tierPro: "等级 pro", tierFree: "等级 free", tiersUnknown: "按用户绑定；user-tiers.json 中的等级未知", off: "按用户绑定未开启（启动参数 --bind=user）",
   },
   "zh-TW": {
     head: "使用者綁定", two: "2 位使用者", gone: "已不在該供應商下", provGone: "已不在 magpie 中", none: "未使用閘道金鑰", removed: "已刪除的閘道金鑰", keyID: "閘道金鑰 01234567", bound: "綁定", match: "沒有和「nobody」匹配的使用者", more: "顯示 300 位中的 6 位", unread: "無法讀取 user-accounts.json：unexpected end",
     out: "暫不可用 · 額度用盡 · 3 小時後恢復", can: "可用", unknown: "狀態未知", model: "暫不可用 · m-1 限流", spareNote: "2 位使用者，其中 1 位作為備用", first: "主帳號", spare: "備用",
-    byUser: "依使用者綁定：每位使用者在每個供應商下最多 3 個帳號", off: "依使用者綁定未開啟（啟動參數 --bind=user）",
+    byUser: "依使用者綁定：每位使用者在每個供應商下的帳號上限依等級：free 最多 2 個（預設） · pro 最多 4 個", tierPro: "等級 pro", tierFree: "等級 free", tiersUnknown: "依使用者綁定；user-tiers.json 中的等級未知", off: "依使用者綁定未開啟（啟動參數 --bind=user）",
   },
   ja: {
     head: "ユーザーの割り当て", two: "2 ユーザー", gone: "プロバイダにもうありません", provGone: "magpie にもうありません", none: "ゲートウェイキーなし", removed: "削除されたゲートウェイキー", keyID: "ゲートウェイキー 01234567", bound: "割り当て", match: "「nobody」に一致するユーザーはいません", more: "300 件中 6 件を表示中", unread: "user-accounts.json を読み込めません：unexpected end",
     out: "利用不可 · クォータ切れ · 3 時間後に復帰", can: "利用可能", unknown: "状態は不明", model: "利用不可 · m-1 でレート制限", spareNote: "2 ユーザー（うち 1 は予備）", first: "最初", spare: "予備",
-    byUser: "ユーザーごとに割り当て：各ユーザーにプロバイダごと最大 3 アカウント", off: "ユーザーごとの割り当てはオフです（起動オプション --bind=user）",
+    byUser: "ユーザーごとに割り当て：各ユーザーのプロバイダごとのアカウント上限はティアで決まります：free 最大 2（デフォルト） · pro 最大 4", tierPro: "ティア pro", tierFree: "ティア free", tiersUnknown: "ユーザーごとに割り当て。user-tiers.json のティアは不明です", off: "ユーザーごとの割り当てはオフです（起動オプション --bind=user）",
   },
   de: {
     head: "Nutzerbindungen", two: "2 Nutzer", gone: "nicht mehr beim Anbieter", provGone: "nicht mehr in magpie", none: "ohne Zugangsschlüssel", removed: "ein entfernter Zugangsschlüssel", keyID: "Zugangsschlüssel 01234567", bound: "gebunden", match: "Keine Nutzer passen zu „nobody“", more: "6 von 300 angezeigt", unread: "user-accounts.json kann nicht gelesen werden: unexpected end",
     out: "nicht verfügbar · Kontingent aufgebraucht · zurück in 3 Std.", can: "verfügbar", unknown: "Status unbekannt", model: "nicht verfügbar · Rate-Limit für m-1", spareNote: "2 Nutzer, 1 als Ersatz", first: "erstes", spare: "Ersatz",
-    byUser: "Nach Nutzer gebunden: bis zu 3 Konten je Anbieter für jeden Nutzer", off: "Bindung nach Nutzer ist aus (Startoption --bind=user)",
+    byUser: "Nach Nutzer gebunden: Konten je Anbieter für jeden Nutzer nach seiner Stufe: free bis zu 2 (Standard) · pro bis zu 4", tierPro: "Stufe pro", tierFree: "Stufe free", tiersUnknown: "Nach Nutzer gebunden; die Stufen in user-tiers.json sind unbekannt", off: "Bindung nach Nutzer ist aus (Startoption --bind=user)",
   },
 };
 
@@ -113,7 +116,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         page.setDefaultTimeout(5000);
         const errors = [];
         page.on("pageerror", (e) => errors.push(e.message));
-        const users = { all: [], asked: [], mode: "user" };
+        const users = { all: [], asked: [], mode: "user", tiers };
         await page.route("**/*", serve(lang, users));
         t.after(async () => {
           if (process.env.ARTIFACT_DIR) {
@@ -162,6 +165,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await userRows.count(), 6);
         const first = await text(userRows.nth(0));
         assert(first.includes("Antigravity · Tenant A"), first);
+        assert(first.includes(w.tierPro), `the tier its last request named: ${first}`);
+        assert((await text(userRows.nth(1))).includes(w.tierFree), "one bound before tiers is of the default tier");
         assert.match(first, new RegExp(w.bound));
         // its first, then its spares in order, each with its state
         const chips = userRows.nth(0).locator(".user-seat");
@@ -197,6 +202,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await text(userRows.nth(0).locator(".user-seat").nth(1)), `f@x.com (${w.spare} · ${w.model})`, "a search keeps the accounts' states");
         assert.equal(await accountRows.count(), 7, "a search keeps the accounts the page has");
         assert.equal(await text(page.locator("#userBindsMode")), w.byUser, "and how the gateway binds");
+        assert((await text(userRows.nth(0))).includes(w.tierFree), "a search keeps the default tier");
         assert(await find.evaluate((f) => document.activeElement === f), "typing keeps the search's focus");
         assert(users.asked.includes("f@x"), "the words go to the server");
         await find.fill("nobody");
@@ -221,6 +227,15 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await userRows.count(), 6, "the bindings are kept");
         assert.equal(await accountRows.count(), 7);
         assert.deepEqual(await block.locator("button").evaluateAll((bs) => bs.filter((b) => !b.classList.contains("copy")).length), 0, "nothing to change them with");
+        // by user, its tiers not known (user-tiers.json unread): said so,
+        // and a user is said only the tier its request named
+        users.mode = "user";
+        users.tiers = undefined;
+        await page.reload();
+        await page.locator("#userBinds .user-bind").first().waitFor();
+        assert.equal(await text(page.locator("#userBindsMode")), w.tiersUnknown);
+        assert((await text(userRows.nth(0))).includes(w.tierPro));
+        assert(!(await text(userRows.nth(1))).includes(w.tierFree), "no default said while the tiers are unknown");
         // an older magpie that doesn't say how it binds: nothing said
         users.mode = undefined;
         await page.reload();

@@ -284,8 +284,10 @@ type Served struct {
 	Pid     int    // its process id; 0 from one that doesn't say
 	Serves  string // how it was started: app, tray, web, serve or tui; "" from one that doesn't say
 	// how it binds requests (Binding): "" from one that doesn't say
-	Bind    string
-	BindMax int
+	Bind string
+	// Tiers: the user tiers it holds to, bound by user; nil when it
+	// doesn't say (bound by session, its user-tiers.json unread)
+	Tiers *Tiers
 }
 
 // ServedBy asks the address which magpie answers there. Another magpie can
@@ -309,12 +311,12 @@ func ServedBy() Served {
 		Pid     int    `json:"pid"`
 		Serves  string `json:"serves"`
 		Bind    string `json:"bind"`
-		BindMax int    `json:"bindMax"`
+		Tiers   *Tiers `json:"tiers"`
 	}
 	if decodeJSON(b, &info) != nil || info.Name != "magpie" {
 		return Served{Running: bytes.Contains(b, []byte(`"magpie"`)), Window: bytes.Contains(b, []byte(`"window":true`))}
 	}
-	return Served{Running: true, Window: info.Window, Version: info.Version, Pid: info.Pid, Serves: info.Serves, Bind: info.Bind, BindMax: info.BindMax}
+	return Served{Running: true, Window: info.Window, Version: info.Version, Pid: info.Pid, Serves: info.Serves, Bind: info.Bind, Tiers: info.Tiers}
 }
 
 // Taken reports whether anything accepts connections at the gateway's
@@ -787,8 +789,14 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	// on its Routing page (#2606); not told to another machine
 	if local(r) {
 		out["pid"], out["serves"] = os.Getpid(), Serves
-		// and how it binds requests, for the Gateway page's User bindings
-		out["bind"], out["bindMax"] = s.bind.Mode, s.bind.Max
+		// and how it binds requests, for the Gateway page's User bindings:
+		// bound by user, the tiers it holds to
+		out["bind"] = s.bind.Mode
+		if s.bind.byUser() {
+			if t, err := loadTiers(); err == nil {
+				out["tiers"] = t
+			}
+		}
 	}
 	writeJSON(w, 200, out)
 }
@@ -2119,8 +2127,22 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			return
 		}
 		if user != "" {
+			// its tier says how many accounts it may have: one not among
+			// user-tiers.json's is a 400, tiers not known a 503
+			tier, bad, err := tierOf(r.Header)
+			if bad != "" || err != nil {
+				status, msg := 400, bad
+				if bad == "" {
+					status, msg = 503, fmt.Sprintf("%s: magpie can't read user-tiers.json, so it doesn't know how many accounts %q may have; nothing was sent. Its log says why", UserTierHeader, user)
+				}
+				call.Status, call.Error = status, msg
+				writeError(w, from, status, msg)
+				finishCapture()
+				s.record(call)
+				return
+			}
 			var refused userRefusal
-			if cands, pl, userBound, refused = bindUser(userKey(r), user, p, cands, pl); refused.status != 0 {
+			if cands, pl, userBound, refused = bindUser(userKey(r), user, tier, p, cands, pl); refused.status != 0 {
 				s.userRefused(w, from, &call, userBound, refused)
 				finishCapture()
 				s.record(call)
@@ -2138,7 +2160,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// none of the user's accounts has room: a spare, when each is out
 		// a while, or why none is asked
 		var refused userRefusal
-		if cands, pl, userBound, grew, refused = growUser(userBound, s.bind.Max, pool, poolPl, cands, pl); refused.status != 0 {
+		if cands, pl, userBound, grew, refused = growUser(userBound, pool, poolPl, cands, pl); refused.status != 0 {
 			s.userRefused(w, from, &call, userBound, refused)
 			finishCapture()
 			s.record(call)
@@ -3521,7 +3543,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			try.Fail, try.Rest = rest.Why, &rest
 			var next []candidate
 			var nextPl planned
-			if next, nextPl, userBound, grew, _ = growUser(userBound, s.bind.Max, pool, poolPl, nil, planned{left: userBound.left}); grew {
+			if next, nextPl, userBound, grew, _ = growUser(userBound, pool, poolPl, nil, planned{left: userBound.left}); grew {
 				bound := userBound
 				s.trace.update(tr, func(t *Route) {
 					t.Tries[len(t.Tries)-1] = try

@@ -71,6 +71,9 @@ type userJSON struct {
 	KeyName      string          `json:"keyName,omitempty"` // its name, while the keys could be read
 	KeyGone      bool            `json:"keyGone,omitempty"` // the key is removed: the keys were read and it isn't among them
 	At           time.Time       `json:"at"`
+	// Tier: the tier its last request named; "" from a magpie before
+	// tiers, which the page shows as the default tier
+	Tier string `json:"tier,omitempty"`
 }
 
 // gatewayUserRoutes serves the Gateway page's User bindings: each
@@ -133,7 +136,10 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 		out := map[string]any{"total": len(rows)}
 		if q == "" {
 			bind := servingBinding()
-			out["mode"], out["max"] = bind.mode, bind.max
+			out["mode"] = bind.mode
+			if bind.tiers != nil {
+				out["tiers"] = bind.tiers
+			}
 			out["accounts"] = userAccounts(rows, byID, seats, bind.rests, nameOf, providerGone)
 		}
 		words := strings.Fields(strings.ToLower(q))
@@ -153,7 +159,7 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			if len(users) == usersShown {
 				continue
 			}
-			uj := userJSON{User: u.User, Provider: u.Provider, ProviderName: p.name, Icon: p.icon, Account: u.Account, Seat: strings.ToLower(u.Who), Key: u.Key, KeyName: keyNames[u.Key], KeyGone: keyGone(u.Key), At: u.At}
+			uj := userJSON{User: u.User, Provider: u.Provider, ProviderName: p.name, Icon: p.icon, Account: u.Account, Seat: strings.ToLower(u.Who), Key: u.Key, KeyName: keyNames[u.Key], KeyGone: keyGone(u.Key), At: u.At, Tier: u.Tier}
 			for _, sp := range u.Spares {
 				uj.Spares = append(uj.Spares, userSpareJSON{Account: sp.Account, Seat: strings.ToLower(sp.Who), At: sp.At})
 			}
@@ -211,9 +217,24 @@ func userAccounts(rows []gateway.UserRow, byID map[string]provider.Provider, sea
 
 // gatewayBinding is how the gateway binds requests and what rests in it.
 type gatewayBinding struct {
-	mode  string // "session" or "user"; "" when the magpie serving doesn't say (an older one)
-	max   int    // the most accounts a user may have
+	mode string // "session" or "user"; "" when the magpie serving doesn't say (an older one)
+	// tiers: bound by user, the tiers it holds to, each tier's most
+	// accounts a user may have; nil when not known or bound by session
+	tiers *gateway.Tiers
 	rests map[string]gateway.Rest
+}
+
+// tiersOf is the tiers user-tiers.json holds as this process reads it,
+// bound by user; nil bound by session, or when it can't be read.
+func tiersOf(b gateway.Binding) *gateway.Tiers {
+	if b.Mode != gateway.BindUser {
+		return nil
+	}
+	t, err := gateway.UserTiers()
+	if err != nil {
+		return nil
+	}
+	return &t
 }
 
 // servingBinding is gatewayBinding of the gateway as it serves now: this
@@ -225,15 +246,15 @@ type gatewayBinding struct {
 func servingBinding() gatewayBinding {
 	if gw := served.Load(); gw != nil {
 		b := gw.Binding()
-		return gatewayBinding{b.Mode, b.Max, gateway.Rests()}
+		return gatewayBinding{b.Mode, tiersOf(b), gateway.Rests()}
 	}
 	if o := gateway.ServedBy(); o.Running {
 		rests, _ := gateway.OwnerRests()
-		return gatewayBinding{o.Bind, o.BindMax, rests}
+		return gatewayBinding{o.Bind, o.Tiers, rests}
 	}
 	if gateway.Taken() {
 		return gatewayBinding{}
 	}
 	b, _ := gateway.BindingFromEnv()
-	return gatewayBinding{b.Mode, b.Max, map[string]gateway.Rest{}}
+	return gatewayBinding{b.Mode, tiersOf(b), map[string]gateway.Rest{}}
 }

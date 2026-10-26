@@ -1780,14 +1780,21 @@ How the gateway keeps requests on accounts is set when it starts, with
 again without it). `--bind=session`, the default, keeps each
 conversation where its affinity says, as magpie always has: an
 `X-Magpie-User` header changes nothing, and `user-accounts.json` is
-neither read nor written. `--bind=user` keeps each of your users on
-accounts of its own, below. Then every request that asks a model (chat,
+neither read nor written, nor are `X-Magpie-User-Tier` and
+`user-tiers.json`. `--bind=user` keeps each of your users on accounts of
+its own, below. Then every request that asks a model (chat,
 responses, messages, Gemini's generateContent, images, embeddings,
 audio, videos, Codex's backend) must name its user: one without, or
 with one the header can't take, is a 400 that says why, and nothing is
 sent. A routing group's request and one with `X-Magpie-Account` need it
 too, though neither is bound. Listing models and counting tokens don't.
-A value either can't take refuses to start, saying why.
+A value either can't take refuses to start, saying why, and so does
+`--bind=user` with a `user-tiers.json` that doesn't read or holds a value
+it can't (below). `--bind-max` and `MAGPIE_BIND_MAX` are gone: the user's
+tier says how many accounts it has. `--bind-max` is refused as an
+unknown argument; a `MAGPIE_BIND_MAX` a service was installed with is
+ignored and logged once, never a reason not to start, and isn't kept when
+the service is installed again.
 
 Bound by user, the `X-Magpie-User: <your user's id>` header (at most 128 bytes,
 no control or format characters) keeps one of your own users on accounts
@@ -1805,10 +1812,11 @@ was sent rests first), at its usage cap, or all but used up. The spare is
 the account fewest users are on, the plan's order between those alike, of
 those not already the user's, not resting, not signed out by the vendor,
 not held at a cap and under 90% of each window that counts the model;
-with only such accounts left, none is added. `--bind-max` (2 unless set)
-is how many accounts of a provider a user may have. When its accounts
-can't answer and no spare is added (rate limited, back within half an
-hour, resting, at its usage cap, paused, `--bind-max` of them already),
+with only such accounts left, none is added. How many accounts of a
+provider a user may have, its first and its spares, is its tier's (below).
+When its accounts can't answer and no spare is added (rate limited, back
+within half an hour, resting, at its usage cap, paused, as many as its
+tier has already, "at its tier pro's 4 accounts"),
 the vendor's or magpie's error is yours: no other account answers in its
 place, and the error says why no spare was added. When that error is a
 limit, it says so and until when the first of the user's accounts is back,
@@ -1835,9 +1843,46 @@ your user's id as sent, in `user-accounts.json` beside `providers.json`
 (`users` for callers without a key, `keys` by key id): a user's first
 account in `who`, `account` and `at`, as a magpie before spares wrote it
 and still reads it, and its spares in `more`, each with the same three;
-edit them there to move it, or delete the user to forget it. The Gateway
-page's User bindings shows them, once anyone is bound: how the gateway
-binds over the list (bound by user, the most accounts a user has; bound by
+and the tier its last request named in `tier` (written only when it
+changes; a binding without one is of the default tier); edit them there to
+move it, or delete the user to forget it.
+
+A user's tier is named in `X-Magpie-User-Tier: <tier>`, read only bound
+by user and never sent on to the vendor, a remote MCP server or Codex's
+backend. As with `X-Magpie-User`, magpie takes the tier as the caller
+sends it: send it from your own service, which knows each user's tier,
+never as your users set it. A request without it is of the default tier,
+not of the tier last sent; one with a tier
+that isn't one of `user-tiers.json`'s (compared whatever its case), or a
+value longer than 128 bytes or with control or format characters, is a
+400 that lists the tiers there are, and nothing is sent. The tiers are in
+`user-tiers.json`, beside `user-accounts.json`:
+
+```json
+{"default": "free", "tiers": {
+  "free": {"credits": 1000, "max_accounts": 2},
+  "plus": {"credits": 3000, "max_accounts": 3},
+  "pro":  {"credits": 5000, "max_accounts": 4},
+  "max":  {"credits": 10000, "max_accounts": 5}}}
+```
+
+These are the tiers without the file, which magpie never writes: make it
+to change them. `max_accounts` is how many accounts of each provider a
+user of the tier may have (a whole number, 1 or more); `credits` (0 or
+more) are kept for a later allowance by use and not used yet; `default`
+names one of the tiers; a tier's name is held to the same rules as a
+user's, and no two may differ only in case. An edited file holds from the
+next request. One that doesn't read or holds a value it can't keeps the
+tiers read before, logged once a change (one that can't be read at all,
+not one that doesn't parse, is tried again on the next request); with none
+read before (a gateway
+started outside `magpie serve`, which refuses), a user's request is a 503
+that says why. A user's tier lowered keeps the accounts it has, in their
+order, and is given no spare while it has as many as the new tier allows
+or more; raised again, it is given spares up to the new tier's. The
+Gateway page's User bindings shows them, once anyone is bound: how the
+gateway binds over the list (bound by user, each tier with its most
+accounts and the default marked, or the tiers said unknown; bound by
 session, "Binding by user is off (start option --bind=user)", the
 bindings left in the file shown as they are and nothing removed, since
 they are used again once it is on), each provider's accounts with how
@@ -1846,7 +1891,8 @@ answer now (out, why and until when, one model's rest naming the model;
 "status unknown" when the magpie serving the gateway doesn't say, never
 "can answer"; one no longer on its provider said so), and the users with
 their first account and spares in order, each marked first or spare with
-its state, provider, gateway key and when they were bound, 200 at a time,
+its state, provider, gateway key, tier (the default's for one bound before
+tiers) and when they were bound, 200 at a time,
 narrowed by a search, which matches a spare's account too. It only reads
 the file. A file that
 doesn't read keeps the users read before bound and binds nobody new. A

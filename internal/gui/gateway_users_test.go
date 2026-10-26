@@ -24,7 +24,7 @@ type gatewayUsersOut struct {
 	Users    []userJSON        `json:"users"`
 	Error    string            `json:"error"`
 	Mode     *string           `json:"mode"`
-	Max      int               `json:"max"`
+	Tiers    *gateway.Tiers    `json:"tiers"`
 }
 
 // servingAt puts what answers at the gateway's address in h's hands, so
@@ -201,14 +201,18 @@ func TestGatewayUsersGone(t *testing.T) {
 }
 
 // fakeServing answers at the gateway's address as a magpie that binds as
-// mode and max say, and tells rests at RestsPath when rests isn't nil (an
-// older magpie doesn't).
-func fakeServing(t *testing.T, mode string, max int, rests map[string]gateway.Rest) *atomic.Int32 {
+// mode says, holding to tiers (nil: it says none), and tells rests at
+// RestsPath when rests isn't nil (an older magpie doesn't).
+func fakeServing(t *testing.T, mode string, tiers *gateway.Tiers, rests map[string]gateway.Rest) *atomic.Int32 {
 	t.Helper()
 	return servingAt(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/":
-			writeJSON(w, map[string]any{"name": "magpie", "version": "test", "bind": mode, "bindMax": max})
+			info := map[string]any{"name": "magpie", "version": "test", "bind": mode}
+			if tiers != nil {
+				info["tiers"] = tiers
+			}
+			writeJSON(w, info)
 		case r.URL.Path == gateway.RestsPath && rests != nil:
 			writeJSON(w, map[string]any{"object": "rests", "data": rests})
 		default:
@@ -222,7 +226,9 @@ func fakeServing(t *testing.T, mode string, max int, rests map[string]gateway.Re
 // per user, as a first or a spare. A file written before spares (no
 // "more") reads as a first alone. Each account says whether it is out as
 // the magpie serving the gateway tells its rests, a model's rest with its
-// model, and how that magpie binds, mode and max.
+// model, and how that magpie binds, its mode and, by user, its tiers.
+// Each user says the tier its last request named; one from before tiers
+// says none, which the page shows as the default.
 func TestGatewayUsersSpares(t *testing.T) {
 	sandboxHome(t)
 	if err := provider.Save(provider.Provider{ID: "relay", Name: "Relay", Chat: "http://127.0.0.1:1/v1", Key: "sk-1", KeyName: "First", Keys: []provider.KeyAccount{{Key: "sk-2", Name: "Second"}, {Key: "sk-3", Name: "Third"}}}); err != nil {
@@ -232,26 +238,27 @@ func TestGatewayUsersSpares(t *testing.T) {
 	at := time.Date(2026, 10, 22, 4, 21, 33, 0, time.UTC).Format(time.RFC3339)
 	writeUsers(t, fmt.Sprintf(`{"users": {"relay": {
   "old": {"who": %q, "account": "First", "at": %q},
-  "spared": {"who": %q, "account": "First", "at": %q, "more": [{"who": %q, "account": "Second", "at": %q}, {"who": %q, "account": "Third", "at": %q}]}
+  "spared": {"who": %q, "account": "First", "at": %q, "more": [{"who": %q, "account": "Second", "at": %q}, {"who": %q, "account": "Third", "at": %q}], "tier": "pro"}
 }}}`, one, at, one, at, two, at, three, at))
+	tiers := &gateway.Tiers{Default: "free", Tiers: []gateway.Tier{{Name: "free", Credits: 1000, MaxAccounts: 2}, {Name: "pro", Credits: 5000, MaxAccounts: 4}}}
 	until := time.Now().Add(40 * time.Minute).UTC().Truncate(time.Second)
-	fakeServing(t, "user", 3, map[string]gateway.Rest{
+	fakeServing(t, "user", tiers, map[string]gateway.Rest{
 		one:            {Why: "quota", Until: until},
 		three + "/m-1": {Why: "rate", Until: until, Model: "m-1"},
 	})
 	code, out := gatewayUsers(t, "")
-	if code != 200 || out.Total != 2 || out.Mode == nil || *out.Mode != "user" || out.Max != 3 {
+	if code != 200 || out.Total != 2 || out.Mode == nil || *out.Mode != "user" || out.Tiers == nil || fmt.Sprint(*out.Tiers) != fmt.Sprint(*tiers) {
 		t.Fatalf("%d %+v", code, out)
 	}
 	users := map[string]userJSON{}
 	for _, u := range out.Users {
 		users[u.User] = u
 	}
-	if u := users["old"]; u.Account != "First" || u.Seat != strings.ToLower(one) || len(u.Spares) != 0 {
+	if u := users["old"]; u.Account != "First" || u.Seat != strings.ToLower(one) || len(u.Spares) != 0 || u.Tier != "" {
 		t.Errorf("a binding from before spares: %+v", u)
 	}
 	u := users["spared"]
-	if u.Account != "First" || len(u.Spares) != 2 || u.Spares[0].Account != "Second" || u.Spares[1].Account != "Third" ||
+	if u.Account != "First" || u.Tier != "pro" || len(u.Spares) != 2 || u.Spares[0].Account != "Second" || u.Spares[1].Account != "Third" ||
 		u.Spares[0].Seat != strings.ToLower(two) || u.Spares[1].At.IsZero() {
 		t.Fatalf("its first and spares, in order: %+v", u)
 	}
@@ -277,8 +284,8 @@ func TestGatewayUsersSpares(t *testing.T) {
 	}
 
 	// bound by session: said, and the bindings kept as they are
-	fakeServing(t, "session", 2, map[string]gateway.Rest{})
-	if _, out := gatewayUsers(t, ""); out.Mode == nil || *out.Mode != "session" || out.Total != 2 || len(out.Accounts) != 3 {
+	fakeServing(t, "session", nil, map[string]gateway.Rest{})
+	if _, out := gatewayUsers(t, ""); out.Mode == nil || *out.Mode != "session" || out.Tiers != nil || out.Total != 2 || len(out.Accounts) != 3 {
 		t.Errorf("by session: %+v", out)
 	}
 }
@@ -299,7 +306,7 @@ func TestGatewayUsersOutUnknown(t *testing.T) {
   "u": {"who": %q, "account": "First", "at": %q, "more": [{"who": %q, "account": "Second", "at": %q}]},
   "v": {"who": "relay#0000000000", "account": "Old", "at": %q}
 }}}`, one, at, two, at, at))
-	asked := fakeServing(t, "user", 2, nil)
+	asked := fakeServing(t, "user", nil, nil)
 	_, out := gatewayUsers(t, "")
 	if out.Mode == nil || *out.Mode != "user" || len(out.Accounts) != 3 {
 		t.Fatalf("%+v", out)
@@ -310,7 +317,7 @@ func TestGatewayUsersOutUnknown(t *testing.T) {
 		}
 	}
 	before := asked.Load()
-	if _, out := gatewayUsers(t, "?q=second"); out.Matched != 1 || out.Accounts != nil || out.Mode != nil || len(out.Users[0].Spares) != 1 {
+	if _, out := gatewayUsers(t, "?q=second"); out.Matched != 1 || out.Accounts != nil || out.Mode != nil || out.Tiers != nil || len(out.Users[0].Spares) != 1 {
 		t.Errorf("a search: %+v", out)
 	}
 	if n := asked.Load() - before; n != 0 {
@@ -321,9 +328,22 @@ func TestGatewayUsersOutUnknown(t *testing.T) {
 	noGateway(t)
 	t.Setenv("MAGPIE_BIND", "")
 	_, out = gatewayUsers(t, "")
-	if out.Mode == nil || *out.Mode != "session" || out.Max < 1 {
+	if out.Mode == nil || *out.Mode != "session" || out.Tiers != nil {
 		t.Errorf("no gateway: %+v", out)
 	}
+	// bound by user there, the tiers it would read: none known with a
+	// user-tiers.json that doesn't read, the built-in ones with none
+	t.Setenv("MAGPIE_BIND", "user")
+	tiers := filepath.Join(filepath.Dir(provider.Path()), "user-tiers.json")
+	os.WriteFile(tiers, []byte(`{"default":`), 0o600)
+	if _, out := gatewayUsers(t, ""); out.Mode == nil || *out.Mode != "user" || out.Tiers != nil {
+		t.Errorf("no gateway, by user, tiers unread: %+v", out)
+	}
+	os.Remove(tiers)
+	if _, out := gatewayUsers(t, ""); out.Tiers == nil || out.Tiers.Default != "free" || len(out.Tiers.Tiers) != 4 || out.Tiers.Tiers[2] != (gateway.Tier{Name: "pro", Credits: 5000, MaxAccounts: 4}) {
+		t.Errorf("no gateway, by user: %+v", out.Tiers)
+	}
+	t.Setenv("MAGPIE_BIND", "")
 	for _, a := range out.Accounts {
 		if want := !a.Gone; a.OutKnown != want || a.Out != "" {
 			t.Errorf("no gateway, %s: %+v", a.Account, a)

@@ -14,7 +14,7 @@
 
 let userBinds = null;    // what /api/gateway/users said last, or {error}
 let userAccounts = [];   // the accounts, from the last read without a search (one with leaves them out)
-let userBindMode = null; // {mode, max}, from the same read
+let userBindMode = null; // {mode, tiers}, from the same read
 let userQuery = "";      // the words typed
 let userShownFor = "";   // the words userBinds' users were narrowed by
 let userBindsRead = 0;   // a newer read wins over an older one still out
@@ -33,7 +33,7 @@ async function loadUserBinds() {
   userShownFor = q;
   if (out?.accounts) {
     userAccounts = out.accounts;
-    userBindMode = { mode: out.mode || "", max: out.max || 0 };
+    userBindMode = { mode: out.mode || "", tiers: out.tiers || null };
   }
   renderUserBinds();
 }
@@ -80,13 +80,22 @@ function userSeatChip(u, account, seat, first) {
   return chip;
 }
 
-// how the gateway binds, said over the lists: bound by session, nothing
-// is bound by them, and they are kept as they are
+// how the gateway binds, said over the lists: bound by user, each tier
+// of user-tiers.json with the most accounts it gives, the default marked;
+// bound by session, nothing is bound by them, and they are kept as they
+// are
 function userModeSays(m) {
   if (m?.mode === "session") return t("Binding by user is off (start option --bind=user). The bindings below are kept as they are, and used again once it is on.");
-  if (m?.mode === "user") return t("Bound by user: up to {n} accounts of each provider for each user", { n: m.max });
-  return "";
+  if (m?.mode !== "user") return "";
+  const tiers = m.tiers?.tiers || [];
+  if (!tiers.length) return t("Bound by user; the tiers in user-tiers.json are unknown");
+  const each = tiers.map((x) => t(x.name === m.tiers.default ? "{tier} up to {n} (default)" : "{tier} up to {n}", { tier: x.name, n: x.max_accounts }));
+  return t("Bound by user: accounts of each provider each user may have, by its tier: {tiers}", { tiers: each.join(" · ") });
 }
+
+// a user's tier: the one its last request named, the default for one
+// bound before tiers; "" while the tiers aren't known
+const userTierOf = (u) => u.tier || userBindMode?.tiers?.default || "";
 
 function renderUserBinds() {
   const block = $("#userBindsBlock");
@@ -154,7 +163,8 @@ function renderUserBinds() {
     const seats = el("div", "sub wraps user-seats");
     seats.append(userSeatChip(u, u.account, u.seat, true));
     for (const sp of u.spares || []) seats.append(userSeatChip(u, sp.account, sp.seat, false));
-    const sub = el("div", "sub wraps", [u.providerName, userKeyLabel(u)].join(" · "));
+    const tier = userTierOf(u);
+    const sub = el("div", "sub wraps", [u.providerName, userKeyLabel(u), ...(tier ? [t("tier {tier}", { tier })] : [])].join(" · "));
     // a file edited by hand may leave the time out
     if (u.at && !u.at.startsWith("0001-")) {
       const when = el("span", "", " · " + t("bound {when}", { when: ago(u.at) }));

@@ -365,8 +365,8 @@ var carried = []string{
 	"MAGPIE_USER_HEADER",
 	// `magpie daemon install --tls-cert … --tls-key …` sets them
 	"MAGPIE_TLS_CERT", "MAGPIE_TLS_KEY",
-	// and --bind, --bind-max: how the gateway binds requests to accounts
-	"MAGPIE_BIND", "MAGPIE_BIND_MAX",
+	// and --bind: how the gateway binds requests to accounts
+	"MAGPIE_BIND",
 }
 
 // environ is carried's variables that are set, as KEY=value, in order.
