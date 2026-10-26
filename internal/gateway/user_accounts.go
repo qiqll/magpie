@@ -25,11 +25,13 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +49,50 @@ const UserHeader = "X-Magpie-User"
 
 // userMax is the longest user UserHeader takes.
 const userMax = 128
+
+// UserLimitHeader, on an error to a request with a user, says the user
+// can't be answered for a limit until a time: the account it is bound to
+// (bound to none, the provider's accounts) is out of its allowance
+// ("quota"), its credit ("credit"), rate limited ("rate") or at the usage
+// cap set on it in magpie ("cap"). UserUntilHeader is when it is back,
+// RFC 3339 in UTC, as Retry-After is in seconds: the caller stops sending
+// the user's requests until then. Neither is there when the user's
+// account can answer again at once, or is let go (bound afresh next).
+const (
+	UserLimitHeader = "X-Magpie-User-Limit"
+	UserUntilHeader = "X-Magpie-User-Until"
+)
+
+// userLimit is the UserLimitHeader a failure why is, "" for one that
+// isn't a limit.
+func userLimit(why string) string {
+	switch why {
+	case failQuota, failCredit, failRate:
+		return why
+	}
+	return ""
+}
+
+// userLimited marks h, an error's headers, with UserLimitHeader limit and,
+// when it is still to come, until, to the second after: never earlier
+// than the account is back.
+func userLimited(h http.Header, limit string, until time.Time) {
+	h.Set(UserLimitHeader, limit)
+	if until = until.Add(time.Second - 1).Truncate(time.Second); time.Until(until) > 0 {
+		h.Set(UserUntilHeader, until.UTC().Format(time.RFC3339))
+		h.Set("Retry-After", strconv.Itoa(int(math.Ceil(time.Until(until).Seconds()))))
+	}
+}
+
+// userRefusal is why a user's request goes to no account: its status and
+// message, and its UserLimitHeader and when the account is back, when it
+// is a limit.
+type userRefusal struct {
+	status int
+	msg    string
+	limit  string
+	until  time.Time
+}
 
 // UserHeaderEnv names another header a caller's user is read from, for a
 // caller that sends its users' ids already under a name of its own
@@ -317,13 +363,13 @@ func leftIs(w Weighed, pid, who string) bool {
 // bindUser narrows cands to the account of p that user, of the gateway key
 // keyID, is bound to, binding it first to the one of them fewest users of
 // p are bound to when it is bound to none, or to one that is gone. When
-// the account it is bound to can't take the request, status and msg say
+// the account it is bound to can't take the request, the refusal says
 // why, and nothing else is asked in its place.
-func bindUser(keyID, user string, p provider.Provider, cands []candidate, pl planned) ([]candidate, planned, *UserBound, int, string) {
+func bindUser(keyID, user string, p provider.Provider, cands []candidate, pl planned) ([]candidate, planned, *UserBound, userRefusal) {
 	userBinds.Lock()
 	defer userBinds.Unlock()
 	if loadUsers() != nil {
-		return nil, pl, nil, http.StatusServiceUnavailable, fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know which account %q is bound to; nothing was sent. Its log says why", UserHeader, user)
+		return nil, pl, nil, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know which account %q is bound to; nothing was sent. Its log says why", UserHeader, user)}
 	}
 	ub := &UserBound{User: user}
 	b, had := userBinds.m[keyID][p.ID][user]
@@ -331,24 +377,23 @@ func bindUser(keyID, user string, p provider.Provider, cands []candidate, pl pla
 		out, order, rests := ownedBy(b.Who, p.ID, cands, pl)
 		if len(out) > 0 {
 			ub.Account, ub.Why = b.Account, "kept"
-			return out, planned{order: order}, ub, 0, ""
+			return out, planned{order: order}, ub, userRefusal{}
 		}
 		seats, known := seatsOf(p)
 		if !known || seats[strings.ToLower(b.Who)] {
 			ub.Account, ub.Why = b.Account, "kept"
-			status, msg := boundRefusal(user, b, p.ID, rests, pl)
-			return nil, pl, ub, status, msg
+			return nil, pl, ub, boundRefusal(user, b, p.ID, rests, pl)
 		}
 		// signed out, switched off or removed: bound afresh below
 		if userBinds.stale {
-			return nil, pl, ub, http.StatusServiceUnavailable, fmt.Sprintf("%s: the account %q was bound to is gone, and user-accounts.json can't be read to bind it to another; nothing was sent. magpie's log says why", UserHeader, user)
+			return nil, pl, ub, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: the account %q was bound to is gone, and user-accounts.json can't be read to bind it to another; nothing was sent. magpie's log says why", UserHeader, user)}
 		}
 		delete(userBinds.m[keyID][p.ID], user)
 		saveUsersLogged()
 		ub.Why = "gone"
 	}
 	if userBinds.stale {
-		return nil, pl, ub, http.StatusServiceUnavailable, fmt.Sprintf("%s: user-accounts.json can't be read, so %q isn't bound to an account now; nothing was sent. magpie's log says why", UserHeader, user)
+		return nil, pl, ub, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: user-accounts.json can't be read, so %q isn't bound to an account now; nothing was sent. magpie's log says why", UserHeader, user)}
 	}
 	// the account of p fewest users are bound to, whichever key's, of
 	// those that can answer now; the plan's order between those alike
@@ -370,7 +415,7 @@ func bindUser(keyID, user string, p provider.Provider, cands []candidate, pl pla
 	if pick < 0 {
 		// none can answer now: routed as it would be, bound once one can
 		ub.Why = "none"
-		return cands, pl, ub, 0, ""
+		return cands, pl, ub, userRefusal{}
 	}
 	c := cands[pick]
 	if userBinds.m == nil {
@@ -389,15 +434,26 @@ func bindUser(keyID, user string, p provider.Provider, cands []candidate, pl pla
 	}
 	ub.Account = shownAs(c)
 	out, order, _ := ownedBy(c.who(), p.ID, cands, pl)
-	return out, planned{order: order}, ub, 0, ""
+	return out, planned{order: order}, ub, userRefusal{}
 }
 
 // boundRefusal is why the account b, which user is bound to, can't take
 // the request: resting (rests), left out of the plan, or narrowed away
-// before (a conversation kept strictly, or sealed, on another).
-func boundRefusal(user string, b userBinding, pid string, rests []string, pl planned) (int, string) {
+// before (a conversation kept strictly, or sealed, on another). Resting,
+// it is back when the first of its rests ends: a limit's, the user's
+// limit until then.
+func boundRefusal(user string, b userBinding, pid string, rests []Rest, pl planned) userRefusal {
 	if len(rests) > 0 {
-		return http.StatusTooManyRequests, fmt.Sprintf("%s: %q is bound to %s, which %s; no other account is tried in its place", UserHeader, user, b.Account, strings.Join(rests, "; "))
+		said := make([]string, len(rests))
+		first := rests[0]
+		for i, r := range rests {
+			said[i] = fmt.Sprintf("rests until %s (%s)", r.Until.Format(time.RFC3339), r.Why)
+			if r.Until.Before(first.Until) {
+				first = r
+			}
+		}
+		return userRefusal{status: http.StatusTooManyRequests, msg: fmt.Sprintf("%s: %q is bound to %s, which %s; no other account is tried in its place", UserHeader, user, b.Account, strings.Join(said, "; ")),
+			limit: userLimit(first.Why), until: first.Until}
 	}
 	for _, w := range pl.left {
 		if !leftIs(w, pid, b.Who) {
@@ -405,26 +461,66 @@ func boundRefusal(user string, b userBinding, pid string, rests []string, pl pla
 		}
 		switch {
 		case w.Held:
-			return http.StatusForbidden, fmt.Sprintf("%s: %q is bound to an account the gateway key may not use", UserHeader, user)
+			return userRefusal{status: http.StatusForbidden, msg: fmt.Sprintf("%s: %q is bound to an account the gateway key may not use", UserHeader, user)}
 		case w.Capped > 0 || w.NoCredits:
-			msg, _ := cappedError(w.Model, []Weighed{w}, time.Now())
-			return http.StatusTooManyRequests, fmt.Sprintf("%s: %q is bound to %s: %s; no other account is tried in its place", UserHeader, user, b.Account, msg)
+			msg, back := cappedError(w.Model, []Weighed{w}, time.Now())
+			return userRefusal{status: http.StatusTooManyRequests, msg: fmt.Sprintf("%s: %q is bound to %s: %s; no other account is tried in its place", UserHeader, user, b.Account, msg),
+				limit: cappedLimit([]Weighed{w}), until: back}
 		default:
-			return http.StatusBadRequest, fmt.Sprintf("%s: %q is bound to %s, which doesn't serve %s", UserHeader, user, b.Account, w.Model)
+			return userRefusal{status: http.StatusBadRequest, msg: fmt.Sprintf("%s: %q is bound to %s, which doesn't serve %s", UserHeader, user, b.Account, w.Model)}
 		}
 	}
-	return http.StatusServiceUnavailable, fmt.Sprintf("%s: %q is bound to %s, which can't take this request (paused, or the conversation is kept on, or was sealed by, another account); no other account is tried in its place", UserHeader, user, b.Account)
+	return userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: %q is bound to %s, which can't take this request (paused, or the conversation is kept on, or was sealed by, another account); no other account is tried in its place", UserHeader, user, b.Account)}
+}
+
+// cappedLimit is the UserLimitHeader of accounts ws held by magpie: "cap"
+// when one is at the usage cap set on it, "quota" when each has used up
+// its allowance and is set not to spend its credits.
+func cappedLimit(ws []Weighed) string {
+	if capped, _ := heldBy(ws); capped {
+		return "cap"
+	}
+	return failQuota
+}
+
+// userLimitedAfter marks h, the headers of the error account c gave a
+// request of the user u, when the error is a limit: UserLimitHeader and
+// until when. The account u is bound to rests now, as serve rests it
+// after (restsOn), for the caller to be told when it is back, and rested
+// says it does (try.Rest). Bound to none, the error's own Retry-After is
+// when, else when the first of those held is back (heldBack).
+func (s *Server) userLimitedAfter(h http.Header, u *UserBound, c candidate, status int, body []byte, heldBack time.Time, try *Try) (rested bool) {
+	why := failureOf(c, status, body)
+	limit := userLimit(why)
+	if limit == "" {
+		return false
+	}
+	now, until := time.Now(), heldBack
+	switch {
+	case u.restsOn(why) && try.Rest != nil:
+		// rested already, as the last key out of its allowance is
+		until, rested = try.Rest.Until, true
+	case u.restsOn(why):
+		rest := s.restAfter(c, status, h, body)
+		try.Rest, until, rested = &rest, rest.Until, true
+	default:
+		if d := retryAfter(h, now); d > 0 {
+			until = now.Add(d)
+		}
+	}
+	userLimited(h, limit, until)
+	return rested
 }
 
 // ownedBy is cands narrowed to who's of provider pid, those resting left
-// out and said in rests.
-func ownedBy(who, pid string, cands []candidate, pl planned) (out []candidate, order []Weighed, rests []string) {
+// out and their rests in rests.
+func ownedBy(who, pid string, cands []candidate, pl planned) (out []candidate, order []Weighed, rests []Rest) {
 	for i, c := range cands {
 		if c.p.ID != pid || !strings.EqualFold(c.who(), who) || i >= len(pl.order) {
 			continue
 		}
 		if r, ok := restingOf(c); ok {
-			rests = append(rests, fmt.Sprintf("rests until %s (%s)", r.Until.Format(time.RFC3339), r.Why))
+			rests = append(rests, r)
 			continue
 		}
 		out, order = append(out, c), append(order, pl.order[i])

@@ -2088,9 +2088,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// a user bound to an account (bindUser, below) is asked of that one
 	// alone: a reset spent here would be another's
 	bindsUser := false
+	var limitedUser string // the user a limit is said to, as UserLimitHeader
 	if strings.TrimSpace(r.Header.Get(AccountHeader)) == "" && !isGroup {
 		user, bad := userOf(r.Header)
-		bindsUser = user != "" || bad != ""
+		bindsUser, limitedUser = user != "" || bad != "", user
 	}
 	if len(cands) == 0 && len(pl.held) > 0 && strings.TrimSpace(r.Header.Get(AccountHeader)) == "" && !bindsUser &&
 		(strictHeld != nil || !slices.ContainsFunc(pl.left, func(w Weighed) bool { return !w.Barred && !w.Held && w.Capped == 0 })) {
@@ -2130,6 +2131,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		if d := time.Until(back); d > 0 {
 			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
+		}
+		if limitedUser != "" {
+			// the user's account is held with the rest of them
+			userLimited(w.Header(), cappedLimit(held), back)
 		}
 		call.Status, call.Error = 429, record
 		writeError(w, from, 429, msg)
@@ -2278,11 +2283,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	} else if bindsUser {
 		// the caller's user stays on the one account of the provider it
 		// is bound to, whichever of its models it asks for
-		var status int
-		var msg string
-		if cands, pl, userBound, status, msg = bindUser(userKey(r), user, p, cands, pl); status != 0 {
-			call.Status, call.Error = status, "user bound: "+userBound.accountOr()
-			writeError(w, from, status, msg)
+		var refused userRefusal
+		if cands, pl, userBound, refused = bindUser(userKey(r), user, p, cands, pl); refused.status != 0 {
+			call.Status, call.Error = refused.status, "user bound: "+userBound.accountOr()
+			if refused.limit != "" {
+				userLimited(w.Header(), refused.limit, refused.until)
+			}
+			writeError(w, from, refused.status, refused.msg)
 			finishCapture()
 			s.record(call)
 			return
@@ -2685,6 +2692,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		})
 		held := false          // answered as its vendor did a moment ago, without asking
 		var heldBack time.Time // when the first of those held out of their allowance is back
+		userRested := false    // the user's account rests already, its caller told until when
 		var queued int64       // ms it waited for a slot of its key's or account's
 		var laneErr error      // turned away by its key's or account's queue
 		at := &wireAt{}        // the level a translated request was built at
@@ -3512,6 +3520,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// No member left took the body; only now add the byte-limit hint.
 			failTo(w, kept, from, call.Status, call.Error)
 		} else {
+			// the user's account at a limit rests before its error goes,
+			// for the caller to be told when it is back (as below, once)
+			if !hw.passing && call.Status >= 400 && userBound != nil && !hw.refused && !hw.turnedAway && !promptRefused(call.Status, []byte(call.Error)) {
+				userRested = s.userLimitedAfter(hw.header, userBound, c, call.Status, []byte(call.Error), heldBack, &try)
+			}
 			hw.release()
 			if hw.passing {
 				clientResponseID = call.Usage.ResponseID
@@ -3576,7 +3589,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// its vendor turned the account away for good: the users bound
 			// to it are bound afresh
 			unbindTurnedAway(c, try.Fail)
-			if try.Fail == failVerify && !held || strictAlone || userBound.restsOn(try.Fail) {
+			if !userRested && (try.Fail == failVerify && !held || strictAlone || userBound.restsOn(try.Fail)) {
 				// the last one left rests too, for the app to show and the
 				// next requests to be held
 				rest := s.restAfter(c, call.Status, hw.header, []byte(call.Error))

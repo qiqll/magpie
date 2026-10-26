@@ -208,6 +208,9 @@ func TestUserBoundAccountsFailureIsTheCallers(t *testing.T) {
 	if rec.Code != 429 || !strings.Contains(rec.Body.String(), "rests until") {
 		t.Fatalf("resting: %d %s", rec.Code, rec.Body.String())
 	}
+	if limit, until := limitOf(t, rec); limit != "rate" || !until.After(time.Now()) {
+		t.Fatalf("resting, rate limited: %q until %v", limit, until)
+	}
 	if got := asked(true); len(got) != 0 {
 		t.Fatalf("asked while resting: %v", got)
 	}
@@ -478,8 +481,8 @@ func TestUserBadRequestRestsNobody(t *testing.T) {
 	userPost(s, "codex/gpt-5.5", "mallory", "hi")
 	bound := asked(true)[0]
 	refuse[bound] = 400
-	if rec := userPost(s, "codex/gpt-5.5", "mallory", "bad"); rec.Code != 400 {
-		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	if rec := userPost(s, "codex/gpt-5.5", "mallory", "bad"); rec.Code != 400 || rec.Header().Get(UserLimitHeader) != "" {
+		t.Fatalf("%d %v %s", rec.Code, rec.Header(), rec.Body.String())
 	}
 	if rests := restingNow(t); len(rests) != 0 {
 		t.Fatalf("a 400 rested %v", rests)

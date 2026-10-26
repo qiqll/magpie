@@ -1781,7 +1781,17 @@ to a provider binds it to the account of that provider fewest users are
 bound to, of those not resting; from then on only that account is asked
 for the user. When it can't answer (out of its allowance, rate limited,
 resting, at its usage cap, paused), the vendor's or magpie's error is
-yours: no other account answers in its place. The binding goes, and the
+yours: no other account answers in its place. When that error is a
+limit, it says so and until when, for you to stop sending the user's
+requests until then: `X-Magpie-User-Limit` is `quota` (the account's
+allowance is used up), `credit` (out of credit), `rate` (rate limited) or
+`cap` (at the usage cap set on it in magpie), and `X-Magpie-User-Until`
+is when it is back (RFC 3339, UTC), as `Retry-After` is in seconds. Every
+request of the user before then is refused at once, with the same headers,
+and nothing is sent to the vendor. A user bound to none because every
+account of the provider is out is told when the one asked is back. Neither
+header is there when the account is let go (the user is bound afresh on
+its next request), nor on an error of a stream already begun. The binding goes, and the
 user's next request is bound afresh, when the account is no longer on the
 provider (signed out, switched off, removed) or its vendor turns it away
 for good (a sign-in revoked that a refresh doesn't mend, an account
