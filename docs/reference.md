@@ -1790,34 +1790,52 @@ too, though neither is bound. Listing models and counting tokens don't.
 A value either can't take refuses to start, saying why.
 
 Bound by user, the `X-Magpie-User: <your user's id>` header (at most 128 bytes,
-no control or format characters) keeps one of your own users on one
-account of each provider, for every model of it. The user's first request
-to a provider binds it to the account of that provider fewest users are
-bound to, of those not resting; from then on only that account is asked
-for the user. When it can't answer (out of its allowance, rate limited,
-resting, at its usage cap, paused), the vendor's or magpie's error is
-yours: no other account answers in its place. When that error is a
-limit, it says so and until when, for you to stop sending the user's
-requests until then: `X-Magpie-User-Limit` is `quota` (the account's
-allowance is used up), `credit` (out of credit), `rate` (rate limited) or
-`cap` (at the usage cap set on it in magpie), and `X-Magpie-User-Until`
-is when it is back (RFC 3339, UTC), as `Retry-After` is in seconds. When
-only one model of the account is out and its others still answer,
-`X-Magpie-User-Model` names it: stop only that model's requests. A limit
-without `X-Magpie-User-Until` is one magpie doesn't know the end of. Every
-request of the user before then is refused at once, with the same headers,
-and nothing is sent to the vendor. A user bound to none because every
-account of the provider is out is told when the one asked is back. Neither
-header is there when the account is let go (the user is bound afresh on
-its next request), nor on an error of a stream already begun. The binding goes, and the
-user's next request is bound afresh, when the account is no longer on the
-provider (signed out, switched off, removed) or its vendor turns it away
-for good (a sign-in revoked that a refresh doesn't mend, an account
-restricted or to be verified). Each gateway key's users are its own: the
+no control or format characters) keeps one of your own users on accounts
+of its own of each provider, for every model of it. The user's first
+request to a provider binds it to the account of that provider fewest
+users are bound to (counting each user's first account and spares), of
+those not resting; from then on only its accounts are asked for the user:
+its first, then its spares, in that order. A conversation under way stays
+on the account of them it is on, as its affinity says; a new one goes to
+the first of them with room, so back to the first once it is back. A user
+is given a spare, in the same request and once a request, only when every
+account it has is out for a while: resting out of its allowance or credit
+for 30 minutes or more (an account that says so before any of the reply
+was sent rests first), at its usage cap, or all but used up. The spare is
+the account fewest users are on, the plan's order between those alike, of
+those not already the user's, not resting, not signed out by the vendor,
+not held at a cap and under 90% of each window that counts the model;
+with only such accounts left, none is added. `--bind-max` (2 unless set)
+is how many accounts of a provider a user may have. When its accounts
+can't answer and no spare is added (rate limited, back within half an
+hour, resting, at its usage cap, paused, `--bind-max` of them already),
+the vendor's or magpie's error is yours: no other account answers in its
+place, and the error says why no spare was added. When that error is a
+limit, it says so and until when the first of the user's accounts is back,
+for you to stop sending the user's requests until then:
+`X-Magpie-User-Limit` is `quota` (the account's allowance is used up),
+`credit` (out of credit), `rate` (rate limited) or `cap` (at the usage cap
+set on it in magpie), and `X-Magpie-User-Until` is when it is back
+(RFC 3339, UTC), as `Retry-After` is in seconds; the message names that
+account. When only one model of the account is out and its others still
+answer, `X-Magpie-User-Model` names it: stop only that model's requests. A
+limit without `X-Magpie-User-Until` is one magpie doesn't know the end of.
+Every request of the user before then is refused at once, with the same
+headers, and nothing is sent to the vendor. A user bound to none because
+every account of the provider is out is told when the one asked is back.
+Neither header is there when the account is let go (the user is bound afresh on
+its next request), nor on an error of a stream already begun. An account goes from a
+user only when it is no longer on the provider (signed out, switched off,
+removed) or its vendor turns it away for good (a sign-in revoked that a
+refresh doesn't mend, an account restricted or to be verified), never for
+being out of its allowance: the user's first spare is its first then, and
+a user left with none is bound afresh on its next request. Each gateway key's users are its own: the
 same id sent with two keys is two users. Bindings are kept for good, by
 your user's id as sent, in `user-accounts.json` beside `providers.json`
-(`users` for callers without a key, `keys` by key id); edit a user's
-`who` there to move it, or delete the user to forget it. The Gateway
+(`users` for callers without a key, `keys` by key id): a user's first
+account in `who`, `account` and `at`, as a magpie before spares wrote it
+and still reads it, and its spares in `more`, each with the same three;
+edit them there to move it, or delete the user to forget it. The Gateway
 page's User bindings shows them, once anyone is bound: each provider's
 accounts with how many users are on each (one no longer on its provider
 said so), and the users with their account, provider, gateway key and

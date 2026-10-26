@@ -95,7 +95,7 @@ func near(t time.Time, d time.Duration) bool {
 func TestUserLimitSaysWhenItsAccountIsBack(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	out, asked := limitUpstream(t)
-	s := byUser(New())
+	s := byUserUpTo(New(), 1) // one account each: no spare is added
 	rec := userPost(s, "codex/gpt-5.5", "alice", "hi")
 	if limit, _ := limitOf(t, rec); rec.Code != 200 || limit != "" {
 		t.Fatalf("first: %d %q %s", rec.Code, limit, rec.Body.String())
@@ -145,7 +145,7 @@ func TestUserLimitSaysWhenItsAccountIsBack(t *testing.T) {
 func TestUserLimitSaysTheCap(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked, _ := usersUpstream(t, nil)
-	s := byUser(New())
+	s := byUserUpTo(New(), 1) // one account each: no spare is added
 	if rec := userPost(s, "codex/gpt-5.5", "alice", "hi"); rec.Code != 200 {
 		t.Fatalf("first: %d %s", rec.Code, rec.Body.String())
 	}

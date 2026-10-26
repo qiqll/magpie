@@ -2097,23 +2097,57 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		cands, pl, accountHeld = allowedCandidates(who, cands, pl, members)
 	}
+	// a user is bound to accounts of the provider (bindUser): asked of
+	// those alone, whichever of its models it asks for. After the key's
+	// holds and the sealed narrowing, which bind it to none it may not
+	// reach, and before the conversation's own account is kept (strictKeep,
+	// affine), which keeps it among them. Bound by session, no user is
+	// bound, and user-accounts.json is neither read nor written
+	bindsUser := false
+	var limitedUser string // the user a limit is said to, as UserLimitHeader
+	var userBound *UserBound
+	pool, poolPl := cands, pl // before the user's narrowing, for a spare
+	if s.bind.byUser() && strings.TrimSpace(r.Header.Get(AccountHeader)) == "" && !isGroup {
+		user, bad := userOf(r.Header)
+		bindsUser, limitedUser = user != "" || bad != "", user
+		if bad != "" {
+			call.Status, call.Error = 400, bad
+			writeError(w, from, 400, bad)
+			finishCapture()
+			s.record(call)
+			return
+		}
+		if user != "" {
+			var refused userRefusal
+			if cands, pl, userBound, refused = bindUser(userKey(r), user, p, cands, pl); refused.status != 0 {
+				s.userRefused(w, from, &call, userBound, refused)
+				finishCapture()
+				s.record(call)
+				return
+			}
+		}
+	}
 	// a conversation that stays strictly where it is goes on on its
 	// account past the usage cap set on it, and is refused there, not
 	// moved, while the account is held as it won't spend its credits
 	// (#1797)
 	cands, pl, strictHeld := strictKeep(scope, mode, r.Header, body, cands, pl)
-	// a Codex reset spent before any try, on an account held as it won't
-	// spend its credits
-	var resetFirst *AutoReset
-	// a user bound to an account (bindUser, below) is asked of that one
-	// alone: a reset spent here would be another's. Bound by session, no
-	// user is bound, and user-accounts.json is neither read nor written
-	bindsUser := false
-	var limitedUser string // the user a limit is said to, as UserLimitHeader
-	if s.bind.byUser() && strings.TrimSpace(r.Header.Get(AccountHeader)) == "" && !isGroup {
-		user, bad := userOf(r.Header)
-		bindsUser, limitedUser = user != "" || bad != "", user
+	grew := false // a spare was added to the user's accounts, once a request
+	if userBound != nil && strictHeld == nil {
+		// none of the user's accounts has room: a spare, when each is out
+		// a while, or why none is asked
+		var refused userRefusal
+		if cands, pl, userBound, grew, refused = growUser(userBound, s.bind.Max, pool, poolPl, cands, pl); refused.status != 0 {
+			s.userRefused(w, from, &call, userBound, refused)
+			finishCapture()
+			s.record(call)
+			return
+		}
 	}
+	// a Codex reset spent before any try, on an account held as it won't
+	// spend its credits; not for a user bound to accounts (bindUser), as
+	// one spent here would be another's
+	var resetFirst *AutoReset
 	if len(cands) == 0 && len(pl.held) > 0 && strings.TrimSpace(r.Header.Get(AccountHeader)) == "" && !bindsUser &&
 		(strictHeld != nil || !slices.ContainsFunc(pl.left, func(w Weighed) bool { return !w.Barred && !w.Held && w.Capped == 0 })) {
 		// every account there is is held, and one held only as it won't
@@ -2193,6 +2227,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// (#63): its reasoning, sealed by the account that wrote it, is refused
 	// by another.
 	before := len(cands)
+	if userBound != nil {
+		// a user's accounts go in their order, its first first: a new
+		// conversation isn't sent round them
+		rotate = false
+	}
 	cands, pl, aff, stuck := affine(scope, mode, rotate, r.Header, from, body, cands, pl)
 	// a strict conversation left with its own account of several: its
 	// failure rests the account as it would with the others still there,
@@ -2286,33 +2325,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 	}
 	pin := strings.TrimSpace(r.Header.Get(AccountHeader))
-	var userBound *UserBound
 	if pin != "" {
 		var status int
 		var msg string
 		if cands, pl, status, msg = pinTo(pin, cands, pl); status != 0 {
 			call.Status, call.Error = status, "account pinned: "+pin
 			writeError(w, from, status, msg)
-			finishCapture()
-			s.record(call)
-			return
-		}
-	} else if user, bad := userOf(r.Header); bindsUser && bad != "" {
-		call.Status, call.Error = 400, bad
-		writeError(w, from, 400, bad)
-		finishCapture()
-		s.record(call)
-		return
-	} else if bindsUser {
-		// the caller's user stays on the one account of the provider it
-		// is bound to, whichever of its models it asks for
-		var refused userRefusal
-		if cands, pl, userBound, refused = bindUser(userKey(r), user, p, cands, pl); refused.status != 0 {
-			call.Status, call.Error = refused.status, "user bound: "+userBound.accountOr()
-			if refused.limit != "" {
-				userLimited(w.Header(), refused.limit, refused.until, refused.model)
-			}
-			writeError(w, from, refused.status, refused.msg)
 			finishCapture()
 			s.record(call)
 			return
@@ -3486,6 +3504,28 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				s.trace.update(tr, func(t *Route) {
 					t.Tries[len(t.Tries)-1] = try
 					t.Order = append(slices.Clip(t.Order), nextW...)
+				})
+				skipped = append(skipped, c.label()+": "+call.Error)
+				cands = append(cands[:len(cands):len(cands)], next...)
+				continue
+			}
+		}
+		if last && userBound != nil && !grew && hw.failed() && !hw.passing && !hw.turnedAway && !hw.refused &&
+			slices.Contains([]string{failQuota, failCredit}, failureOf(c, hw.code(), hw.errBody())) {
+			// the last of the user's accounts is out of its allowance or
+			// credit before any of its reply went: it rests, and, each of
+			// them out a while, a spare is added and asked in its place,
+			// once a request
+			rest := s.restAfterMarked(c, hw.code(), hw.header, hw.errBody(), hw.sharedPool)
+			try.Fail, try.Rest = rest.Why, &rest
+			var next []candidate
+			var nextPl planned
+			if next, nextPl, userBound, grew, _ = growUser(userBound, s.bind.Max, pool, poolPl, nil, planned{left: userBound.left}); grew {
+				bound := userBound
+				s.trace.update(tr, func(t *Route) {
+					t.Tries[len(t.Tries)-1] = try
+					t.Order = append(slices.Clip(t.Order), nextPl.order...)
+					t.User = bound
 				})
 				skipped = append(skipped, c.label()+": "+call.Error)
 				cands = append(cands[:len(cands):len(cands)], next...)
