@@ -14,7 +14,7 @@ import (
 	"github.com/yetone/magpie/internal/gui"
 )
 
-const daemonUsage = "usage: magpie daemon [install|uninstall|start|stop|restart|status] · magpie daemon install [--web] [--lan] [--addr host:port] [--no-web] [--tls-cert <file> --tls-key <file>|--no-tls] · magpie daemon web [on|off] [--lan] [--addr host:port]"
+const daemonUsage = "usage: magpie daemon [install|uninstall|start|stop|restart|status] · magpie daemon install [--web] [--lan] [--addr host:port] [--no-web] [--tls-cert <file> --tls-key <file>|--no-tls] [--bind=session|user] [--bind-max=N] · magpie daemon web [on|off] [--lan] [--addr host:port]"
 
 // daemonWait is how long install, start and restart wait for the gateway
 // to answer before saying where its log is; a var for the tests.
@@ -141,6 +141,11 @@ func daemonCmd(args []string) error {
 		if err != nil {
 			return err
 		}
+		// and how the gateway binds requests, written in as MAGPIE_BIND
+		// and MAGPIE_BIND_MAX: a value it can't take is refused here
+		if rest, err = bindFlags(rest); err != nil {
+			return fmt.Errorf("magpie daemon install: %w", err)
+		}
 		if noTLS && gateway.TLSOn() {
 			return errors.New("magpie daemon install: --no-tls and a certificate both")
 		}
@@ -152,6 +157,7 @@ func daemonCmd(args []string) error {
 	}
 	if cmd == "install" || cmd == "web" {
 		keepTLS(noTLS)
+		keepBind()
 	}
 	switch cmd {
 	case "status":
@@ -241,6 +247,21 @@ func keepTLS(noTLS bool) {
 	if c, k := daemon.TLS(); c != "" {
 		os.Setenv(gateway.TLSCertEnv, c)
 		os.Setenv(gateway.TLSKeyEnv, k)
+	}
+}
+
+// keepBind: the service installed again keeps how it bound requests when
+// this shell says nothing of it (no --bind, --bind-max, MAGPIE_BIND or
+// MAGPIE_BIND_MAX), as it keeps its certificate: a page turned on doesn't
+// put a service bound by user back to sessions.
+func keepBind() {
+	if os.Getenv(gateway.BindEnv) != "" || os.Getenv(gateway.BindMaxEnv) != "" {
+		return
+	}
+	for _, v := range []string{gateway.BindEnv, gateway.BindMaxEnv} {
+		if was := daemon.Env(v); was != "" {
+			os.Setenv(v, was)
+		}
 	}
 }
 

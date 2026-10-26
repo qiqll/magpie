@@ -169,22 +169,39 @@ func TLS() (cert, key string) {
 // tlsOf is TLS from a unit's or a launch agent's text: both files or
 // neither.
 func tlsOf(text string) (cert, key string) {
-	val := func(name string) string {
-		// a unit's Environment="NAME=…", quoted by unitQuote
-		if m := regexp.MustCompile(`Environment="` + name + `=((?:[^"\\]|\\.)*)"`).FindStringSubmatch(text); m != nil {
-			return strings.NewReplacer(`\\`, `\`, `\"`, `"`, "%%", "%").Replace(m[1])
-		}
-		// a plist's <key>NAME</key><string>…</string>
-		if m := regexp.MustCompile(`<key>` + name + `</key><string>([^<]*)</string>`).FindStringSubmatch(text); m != nil {
-			return html.UnescapeString(m[1])
-		}
-		return ""
-	}
-	cert, key = val("MAGPIE_TLS_CERT"), val("MAGPIE_TLS_KEY")
+	cert, key = envIn(text, "MAGPIE_TLS_CERT"), envIn(text, "MAGPIE_TLS_KEY")
 	if cert == "" || key == "" {
 		return "", ""
 	}
 	return cert, key
+}
+
+// envIn is the variable name a unit's or a launch agent's text sets, ""
+// for none.
+func envIn(text, name string) string {
+	// a unit's Environment="NAME=…", quoted by unitQuote
+	if m := regexp.MustCompile(`Environment="` + regexp.QuoteMeta(name) + `=((?:[^"\\]|\\.)*)"`).FindStringSubmatch(text); m != nil {
+		return strings.NewReplacer(`\\`, `\`, `\"`, `"`, "%%", "%").Replace(m[1])
+	}
+	// a plist's <key>NAME</key><string>…</string>
+	if m := regexp.MustCompile(`<key>` + regexp.QuoteMeta(name) + `</key><string>([^<]*)</string>`).FindStringSubmatch(text); m != nil {
+		return html.UnescapeString(m[1])
+	}
+	return ""
+}
+
+// Env is the variable name the installed service is given, "" when it
+// isn't, or the service isn't installed.
+func Env(name string) string {
+	m, err := current()
+	if err != nil {
+		return ""
+	}
+	b, err := os.ReadFile(m.file())
+	if err != nil {
+		return ""
+	}
+	return envIn(string(b), name)
 }
 
 // webOf is Web from a unit's or a launch agent's text.
@@ -348,6 +365,8 @@ var carried = []string{
 	"MAGPIE_USER_HEADER",
 	// `magpie daemon install --tls-cert … --tls-key …` sets them
 	"MAGPIE_TLS_CERT", "MAGPIE_TLS_KEY",
+	// and --bind, --bind-max: how the gateway binds requests to accounts
+	"MAGPIE_BIND", "MAGPIE_BIND_MAX",
 }
 
 // environ is carried's variables that are set, as KEY=value, in order.

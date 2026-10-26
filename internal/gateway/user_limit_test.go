@@ -95,7 +95,7 @@ func near(t time.Time, d time.Duration) bool {
 func TestUserLimitSaysWhenItsAccountIsBack(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	out, asked := limitUpstream(t)
-	s := New()
+	s := byUser(New())
 	rec := userPost(s, "codex/gpt-5.5", "alice", "hi")
 	if limit, _ := limitOf(t, rec); rec.Code != 200 || limit != "" {
 		t.Fatalf("first: %d %q %s", rec.Code, limit, rec.Body.String())
@@ -118,12 +118,10 @@ func TestUserLimitSaysWhenItsAccountIsBack(t *testing.T) {
 	if got := asked(true); len(got) != 0 {
 		t.Fatalf("asked while resting: %v", got)
 	}
-	// another user, on the other account, and a request without a user
-	for _, u := range []string{"bob", ""} {
-		rec := userPost(s, "codex/gpt-5.5", u, "hello")
-		if l, _ := limitOf(t, rec); rec.Code != 200 || l != "" || rec.Header().Get(UserUntilHeader) != "" {
-			t.Fatalf("user %q: %d %q %s", u, rec.Code, l, rec.Body.String())
-		}
+	// another user, on the other account
+	rec = userPost(s, "codex/gpt-5.5", "bob", "hello")
+	if l, _ := limitOf(t, rec); rec.Code != 200 || l != "" || rec.Header().Get(UserUntilHeader) != "" {
+		t.Fatalf("bob: %d %q %s", rec.Code, l, rec.Body.String())
 	}
 	other := asked(true)[0]
 	// every account out: a new user is bound to none, and told when the
@@ -147,7 +145,7 @@ func TestUserLimitSaysWhenItsAccountIsBack(t *testing.T) {
 func TestUserLimitSaysTheCap(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked, _ := usersUpstream(t, nil)
-	s := New()
+	s := byUser(New())
 	if rec := userPost(s, "codex/gpt-5.5", "alice", "hi"); rec.Code != 200 {
 		t.Fatalf("first: %d %s", rec.Code, rec.Body.String())
 	}
@@ -189,9 +187,10 @@ func TestUserLimitSaysTheCap(t *testing.T) {
 	if limit, until := limitOf(t, rec); rec.Code != 429 || limit != "cap" || !near(until, 3*time.Hour) {
 		t.Fatalf("every account capped: %d %q until %v: %s", rec.Code, limit, until, rec.Body.String())
 	}
-	rec = userPost(s, "codex/gpt-5.5", "", "nobody's")
-	if rec.Code != 429 || rec.Header().Get(UserLimitHeader) != "" || rec.Header().Get("Retry-After") == "" {
-		t.Fatalf("no user, every account capped: %d %v", rec.Code, rec.Header())
+	// pinned to an account, a user isn't bound: no limit of its own
+	rec = postAt(s, "/v1/responses", `{"model":"codex/gpt-5.5","stream":true,"input":"pinned"}`, map[string]string{UserHeader: "alice", AccountHeader: bound})
+	if rec.Code < 400 || rec.Header().Get(UserLimitHeader) != "" {
+		t.Fatalf("pinned, every account capped: %d %v", rec.Code, rec.Header())
 	}
 }
 

@@ -539,3 +539,41 @@ func TestInstallCarriesTLS(t *testing.T) {
 		})
 	}
 }
+
+// install carries how the gateway binds requests (--bind, --bind-max) into
+// the service, and Env reads each back from the unit and the plist, for
+// an install again to keep them; MAGPIE_BIND isn't taken for
+// MAGPIE_BIND_MAX's.
+func TestInstallCarriesBind(t *testing.T) {
+	for _, c := range []struct{ goos, in string }{
+		{"linux", `Environment="MAGPIE_BIND=user"`},
+		{"darwin", "<key>MAGPIE_BIND</key><string>user</string>"},
+	} {
+		t.Run(c.goos, func(t *testing.T) {
+			fakes(t, c.goos)
+			if v := Env("MAGPIE_BIND"); v != "" {
+				t.Errorf("Env with no service: %q", v)
+			}
+			t.Setenv("MAGPIE_BIND", "user")
+			t.Setenv("MAGPIE_BIND_MAX", "3")
+			if err := Install(Options{}); err != nil {
+				t.Fatal(err)
+			}
+			m, _ := current()
+			b, _ := os.ReadFile(m.file())
+			if !strings.Contains(string(b), c.in) {
+				t.Errorf("the service has no %q:\n%s", c.in, b)
+			}
+			if bind, max := Env("MAGPIE_BIND"), Env("MAGPIE_BIND_MAX"); bind != "user" || max != "3" {
+				t.Errorf("Env: %q %q", bind, max)
+			}
+			t.Setenv("MAGPIE_BIND", "")
+			if err := Install(Options{}); err != nil {
+				t.Fatal(err)
+			}
+			if bind, max := Env("MAGPIE_BIND"), Env("MAGPIE_BIND_MAX"); bind != "" || max != "3" {
+				t.Errorf("Env, MAGPIE_BIND unset: %q %q", bind, max)
+			}
+		})
+	}
+}

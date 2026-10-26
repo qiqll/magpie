@@ -42,12 +42,13 @@ const usage = `magpie — one place to pick every agent's model
   magpie panel                    open the menu bar icon's quick panel, or close it
   magpie autostart [on|off]       open magpie (in the menu bar) when you log in, or say whether it does
   magpie tui                      the same thing, in the terminal (serves the gateway while open when no magpie does)
-  magpie web [--addr host:port] [--lan] [--no-open] [--gateway] [--tls-cert <file> --tls-key <file>]
+  magpie web [--addr host:port] [--lan] [--no-open] [--gateway] [--tls-cert <file> --tls-key <file>] [--bind=session|user] [--bind-max=N]
                                   the app's window in a browser, with the gateway (no desktop needed: WSL, a server over SSH)
                                   a new key each run; MAGPIE_WEB_KEY (16+ letters, digits, - . _ ~) keeps one, signed in for 400 days
                                   behind a reverse proxy, MAGPIE_WEB_URL=https://<the page there> prints the link through it
                                   --gateway: gateway mode, no Agents, Sessions or Library (on by itself with no agents here; Settings › General turns it off)
                                   --tls-cert/--tls-key: the page and the gateway over https:// to other computers
+                                  --bind, --bind-max: how the gateway it serves binds requests to accounts, as magpie serve's
   magpie ls                       list detected agents and their settings
   magpie <agent>                  show one agent
   magpie <agent> <model>          set an agent's model   e.g. magpie claude deepseek/deepseek-chat
@@ -103,12 +104,15 @@ const usage = `magpie — one place to pick every agent's model
                                   OpenCode provider plugins and pi packages: subscriptions signed in to, and served, through a plugin
   magpie plugin move|migrate <subscription>   run a built-in subscription's accounts on its community plugin
 
-  magpie serve [--web[=host:port]] [--tls-cert <file> --tls-key <file>]
+  magpie serve [--web[=host:port]] [--tls-cert <file> --tls-key <file>] [--bind=session|user] [--bind-max=N]
                                   run the gateway alone (the app runs it too); --web serves magpie web's page too, from the same process (127.0.0.1:3430 unless told);
                                   with a certificate and key (PEM; MAGPIE_TLS_CERT, MAGPIE_TLS_KEY) other computers reach both over https://
+                                  --bind=session (the default) keeps each conversation where its affinity says; --bind=user keeps each user
+                                  named in X-Magpie-User on accounts of its own and refuses a request without one; --bind-max: how many
+                                  accounts of a provider a user may have, its first and its spares (2); MAGPIE_BIND, MAGPIE_BIND_MAX
   magpie daemon [install|uninstall|start|stop|restart|status]
                                   magpie serve as a service of yours, from boot or login and started again when it stops (systemd --user on Linux, launchd on the Mac)
-  magpie daemon install [--web] [--lan] [--addr host:port] [--no-web] [--tls-cert <file> --tls-key <file>|--no-tls]
+  magpie daemon install [--web] [--lan] [--addr host:port] [--no-web] [--tls-cert <file> --tls-key <file>|--no-tls] [--bind=session|user] [--bind-max=N]
                                   --web: the service serves magpie web's page too, with a key kept across restarts; installed again, it keeps what it served
   magpie daemon web [on|off] [--lan] [--addr host:port]
                                   the service's page: its link, or turn it on or off

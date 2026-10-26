@@ -73,6 +73,11 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// a turn, a compaction or a search asks a model: bound by user, of
+	// the request's user
+	if r.Method == http.MethodPost && (rest == AlphaSearchPath || rest == "/responses" || rest == "/responses/compact") && s.noUser(w, r, provider.Responses) {
+		return
+	}
 	var err error
 	switch {
 	case r.Method == http.MethodGet && rest == "/models":

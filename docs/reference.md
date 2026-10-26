@@ -1774,7 +1774,22 @@ subscription with several: only it is tried, and an unknown account, one
 whose plan lacks the model, or one resting is an error rather than another
 account's reply. The header is not sent on to the vendor.
 
-An optional `X-Magpie-User: <your user's id>` header (at most 128 bytes,
+How the gateway keeps requests on accounts is set when it starts, with
+`--bind` on `magpie serve`, `magpie web` and `magpie daemon install`
+(`MAGPIE_BIND`, which the service is given and keeps when installed
+again without it). `--bind=session`, the default, keeps each
+conversation where its affinity says, as magpie always has: an
+`X-Magpie-User` header changes nothing, and `user-accounts.json` is
+neither read nor written. `--bind=user` keeps each of your users on
+accounts of its own, below. Then every request that asks a model (chat,
+responses, messages, Gemini's generateContent, images, embeddings,
+audio, videos, Codex's backend) must name its user: one without, or
+with one the header can't take, is a 400 that says why, and nothing is
+sent. A routing group's request and one with `X-Magpie-Account` need it
+too, though neither is bound. Listing models and counting tokens don't.
+A value either can't take refuses to start, saying why.
+
+Bound by user, the `X-Magpie-User: <your user's id>` header (at most 128 bytes,
 no control or format characters) keeps one of your own users on one
 account of each provider, for every model of it. The user's first request
 to a provider binds it to the account of that provider fewest users are

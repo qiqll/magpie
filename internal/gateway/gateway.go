@@ -283,6 +283,9 @@ type Served struct {
 	Version string // its version; "" from one that doesn't say
 	Pid     int    // its process id; 0 from one that doesn't say
 	Serves  string // how it was started: app, tray, web, serve or tui; "" from one that doesn't say
+	// how it binds requests (Binding): "" from one that doesn't say
+	Bind    string
+	BindMax int
 }
 
 // ServedBy asks the address which magpie answers there. Another magpie can
@@ -305,11 +308,13 @@ func ServedBy() Served {
 		Window  bool   `json:"window"`
 		Pid     int    `json:"pid"`
 		Serves  string `json:"serves"`
+		Bind    string `json:"bind"`
+		BindMax int    `json:"bindMax"`
 	}
 	if decodeJSON(b, &info) != nil || info.Name != "magpie" {
 		return Served{Running: bytes.Contains(b, []byte(`"magpie"`)), Window: bytes.Contains(b, []byte(`"window":true`))}
 	}
-	return Served{Running: true, Window: info.Window, Version: info.Version, Pid: info.Pid, Serves: info.Serves}
+	return Served{Running: true, Window: info.Window, Version: info.Version, Pid: info.Pid, Serves: info.Serves, Bind: info.Bind, BindMax: info.BindMax}
 }
 
 // Taken reports whether anything accepts connections at the gateway's
@@ -389,6 +394,9 @@ type Server struct {
 	unfit        map[string]bool
 	subscription *subscriptionBridge
 	debug        bool
+	// bind is how a caller's requests are bound to accounts, read as
+	// the gateway starts (BindEnv)
+	bind         Binding
 	trace        trace // what routing did with each request, for the Gateway view
 	titlePrompts titlePrompts
 	// compactFails are the summaries each Codex conversation failed to
@@ -426,7 +434,14 @@ type Server struct {
 // New makes a gateway.
 func New() *Server {
 	redact.SetKeyPath(filepath.Join(settings.Dir(), "redact.key"))
+	bind, err := BindingFromEnv()
+	if err != nil {
+		// the commands that take it refuse to start on it: one that
+		// doesn't binds as magpie always has
+		log.Printf("gateway: %v; requests are bound by session", err)
+	}
 	return &Server{
+		bind: bind,
 		// a request counted against a MaxRPM waits for room in its minute
 		// first (rpm.go); the ChatGPT backend is spoken to over HTTP/1.1
 		// (netproxy.HTTP1, which provider/codex_http1.go sets)
@@ -675,8 +690,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/show", s.ollamaShow)
 	// and its chat routes, for a client that chats only through them
 	// (Zed's Ollama provider; ollama_chat.go)
-	mux.HandleFunc("POST /api/chat", s.ollamaChat(false))
-	mux.HandleFunc("POST /api/generate", s.ollamaChat(true))
+	mux.HandleFunc("POST /api/chat", s.userNeeded(provider.Chat, s.ollamaChat(false)))
+	mux.HandleFunc("POST /api/generate", s.userNeeded(provider.Chat, s.ollamaChat(true)))
 	mux.HandleFunc("GET /v1/magpie/quotas", s.quotas)
 	mux.HandleFunc("GET /v1/magpie/usage", s.usageSummary)
 	mux.HandleFunc("GET /v1/magpie/usage/requests", s.usageRequests)
@@ -695,34 +710,34 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+CPUPath, s.cpuProfile)
 	mux.HandleFunc("GET /v1/magpie/omarchy", s.omarchyTheme)
 	mux.HandleFunc("OPTIONS /v1/magpie/omarchy", s.omarchyTheme)
-	mux.HandleFunc("POST /v1/chat/completions", s.handle(provider.Chat))
-	mux.HandleFunc("POST /chat/completions", s.handle(provider.Chat))
-	mux.HandleFunc("POST /v1/responses", s.handle(provider.Responses))
-	mux.HandleFunc("POST /responses", s.handle(provider.Responses))
+	mux.HandleFunc("POST /v1/chat/completions", s.userNeeded(provider.Chat, s.handle(provider.Chat)))
+	mux.HandleFunc("POST /chat/completions", s.userNeeded(provider.Chat, s.handle(provider.Chat)))
+	mux.HandleFunc("POST /v1/responses", s.userNeeded(provider.Responses, s.handle(provider.Responses)))
+	mux.HandleFunc("POST /responses", s.userNeeded(provider.Responses, s.handle(provider.Responses)))
 	mux.HandleFunc("GET /v1/responses", responsesOverHTTP)
 	mux.HandleFunc("GET /responses", responsesOverHTTP)
-	mux.HandleFunc("POST /v1/messages", keepsSignIn(s.handle(provider.Anthropic)))
-	mux.HandleFunc("POST /messages", keepsSignIn(s.handle(provider.Anthropic)))
-	mux.HandleFunc("POST /v1/systemone", s.serveSystemOne)
+	mux.HandleFunc("POST /v1/messages", keepsSignIn(s.userNeeded(provider.Anthropic, s.handle(provider.Anthropic))))
+	mux.HandleFunc("POST /messages", keepsSignIn(s.userNeeded(provider.Anthropic, s.handle(provider.Anthropic))))
+	mux.HandleFunc("POST /v1/systemone", s.userNeeded(provider.Chat, s.serveSystemOne))
 	// Codex's web.run tool (anton on Discord)
-	mux.HandleFunc("POST /v1"+AlphaSearchPath, s.alphaSearch)
-	mux.HandleFunc("POST "+AlphaSearchPath, s.alphaSearch)
+	mux.HandleFunc("POST /v1"+AlphaSearchPath, s.userNeeded(provider.Responses, s.alphaSearch))
+	mux.HandleFunc("POST "+AlphaSearchPath, s.userNeeded(provider.Responses, s.alphaSearch))
 	mux.HandleFunc("POST /v1/messages/count_tokens", keepsSignIn(s.countTokens))
-	mux.HandleFunc("POST /v1/images/generations", s.images(false))
-	mux.HandleFunc("POST /images/generations", s.images(false))
-	mux.HandleFunc("POST /v1/images/edits", s.images(true))
-	mux.HandleFunc("POST /images/edits", s.images(true))
-	mux.HandleFunc("POST /v1/embeddings", s.retrieve("/embeddings", "embeddings"))
-	mux.HandleFunc("POST /embeddings", s.retrieve("/embeddings", "embeddings"))
-	mux.HandleFunc("POST /v1/rerank", s.retrieve("/rerank", "rerank"))
-	mux.HandleFunc("POST /rerank", s.retrieve("/rerank", "rerank"))
+	mux.HandleFunc("POST /v1/images/generations", s.userNeeded(provider.Chat, s.images(false)))
+	mux.HandleFunc("POST /images/generations", s.userNeeded(provider.Chat, s.images(false)))
+	mux.HandleFunc("POST /v1/images/edits", s.userNeeded(provider.Chat, s.images(true)))
+	mux.HandleFunc("POST /images/edits", s.userNeeded(provider.Chat, s.images(true)))
+	mux.HandleFunc("POST /v1/embeddings", s.userNeeded(provider.Chat, s.retrieve("/embeddings", "embeddings")))
+	mux.HandleFunc("POST /embeddings", s.userNeeded(provider.Chat, s.retrieve("/embeddings", "embeddings")))
+	mux.HandleFunc("POST /v1/rerank", s.userNeeded(provider.Chat, s.retrieve("/rerank", "rerank")))
+	mux.HandleFunc("POST /rerank", s.userNeeded(provider.Chat, s.retrieve("/rerank", "rerank")))
 	// speech to text, for a client's voice input (#2053)
-	mux.HandleFunc("POST /v1/audio/transcriptions", s.transcribe("/audio/transcriptions", "transcriptions"))
-	mux.HandleFunc("POST /audio/transcriptions", s.transcribe("/audio/transcriptions", "transcriptions"))
-	mux.HandleFunc("POST /v1/audio/translations", s.transcribe("/audio/translations", "translations"))
-	mux.HandleFunc("POST /audio/translations", s.transcribe("/audio/translations", "translations"))
-	mux.HandleFunc("POST /v1/videos", s.videosCreate)
-	mux.HandleFunc("POST /videos", s.videosCreate)
+	mux.HandleFunc("POST /v1/audio/transcriptions", s.userNeeded(provider.Chat, s.transcribe("/audio/transcriptions", "transcriptions")))
+	mux.HandleFunc("POST /audio/transcriptions", s.userNeeded(provider.Chat, s.transcribe("/audio/transcriptions", "transcriptions")))
+	mux.HandleFunc("POST /v1/audio/translations", s.userNeeded(provider.Chat, s.transcribe("/audio/translations", "translations")))
+	mux.HandleFunc("POST /audio/translations", s.userNeeded(provider.Chat, s.transcribe("/audio/translations", "translations")))
+	mux.HandleFunc("POST /v1/videos", s.userNeeded(provider.Chat, s.videosCreate))
+	mux.HandleFunc("POST /videos", s.userNeeded(provider.Chat, s.videosCreate))
 	mux.HandleFunc("GET /v1/videos/{id}", s.videosGet)
 	mux.HandleFunc("GET /videos/{id}", s.videosGet)
 	mux.HandleFunc("GET /v1/videos/{id}/content", s.videosContent)
@@ -771,6 +786,8 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	// on its Routing page (#2606); not told to another machine
 	if local(r) {
 		out["pid"], out["serves"] = os.Getpid(), Serves
+		// and how it binds requests, for the Gateway page's User bindings
+		out["bind"], out["bindMax"] = s.bind.Mode, s.bind.Max
 	}
 	writeJSON(w, 200, out)
 }
@@ -1552,6 +1569,9 @@ func (s *Server) gemini(w http.ResponseWriter, r *http.Request) {
 		writeError(w, provider.Gemini, 404, "unknown method "+method)
 		return
 	}
+	if s.noUser(w, r, provider.Gemini) {
+		return
+	}
 	s.serveAgent(w, r, provider.Gemini, withFields(body, map[string]any{"model": model, "stream": stream}))
 }
 
@@ -2086,10 +2106,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// spend its credits
 	var resetFirst *AutoReset
 	// a user bound to an account (bindUser, below) is asked of that one
-	// alone: a reset spent here would be another's
+	// alone: a reset spent here would be another's. Bound by session, no
+	// user is bound, and user-accounts.json is neither read nor written
 	bindsUser := false
 	var limitedUser string // the user a limit is said to, as UserLimitHeader
-	if strings.TrimSpace(r.Header.Get(AccountHeader)) == "" && !isGroup {
+	if s.bind.byUser() && strings.TrimSpace(r.Header.Get(AccountHeader)) == "" && !isGroup {
 		user, bad := userOf(r.Header)
 		bindsUser, limitedUser = user != "" || bad != "", user
 	}
@@ -3206,7 +3227,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				other = &Try{Status: call.Status, Error: call.Error}
 			}
 			try.Fail = failAuth
-			unbindTurnedAway(c, failAuth)
+			s.unbindTurnedAway(c, failAuth)
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 			skipped = append(skipped, c.label()+": "+call.Error)
 			continue
@@ -3592,7 +3613,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			try.Fail = failureOf(c, call.Status, []byte(call.Error))
 			// its vendor turned the account away for good: the users bound
 			// to it are bound afresh
-			unbindTurnedAway(c, try.Fail)
+			s.unbindTurnedAway(c, try.Fail)
 			if !userRested && (try.Fail == failVerify && !held || strictAlone || userBound.restsOn(try.Fail)) {
 				// the last one left rests too, for the app to show and the
 				// next requests to be held

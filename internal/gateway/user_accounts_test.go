@@ -100,7 +100,7 @@ func boundIn(t *testing.T, pid string) map[string]string {
 func TestUserBoundToOneAccountOfTheProvider(t *testing.T) {
 	codexSignedIn(t, "spare@example.com", "third@example.com")
 	asked, heads := usersUpstream(t, nil)
-	s := New()
+	s := byUser(New())
 	first := map[string]string{}
 	for _, u := range []string{"alice", "bob", "carol"} {
 		rec := userPost(s, "codex/gpt-5.5", u, "hello "+u)
@@ -148,8 +148,9 @@ func TestUserBoundToOneAccountOfTheProvider(t *testing.T) {
 	if got := asked(true); rec.Code != 200 || len(got) != 1 || got[0] != first["carol"] {
 		t.Fatalf("after a restart: asked %v, bound to %s", got, first["carol"])
 	}
-	// a request without a user is routed as before, and binds nobody
-	if rec := userPost(s, "codex/gpt-5.5", "", "nobody's"); rec.Code != 200 {
+	// a request without a user is refused, bound by user, and binds
+	// nobody
+	if rec := userPost(s, "codex/gpt-5.5", "", "nobody's"); rec.Code != 400 {
 		t.Fatalf("no user: %d %s", rec.Code, rec.Body.String())
 	}
 	if b := boundIn(t, "codex"); len(b) != 3 {
@@ -162,7 +163,7 @@ func TestUserBoundToOneAccountOfTheProvider(t *testing.T) {
 func TestUsersAtOnceSpread(t *testing.T) {
 	codexSignedIn(t, "spare@example.com", "third@example.com")
 	usersUpstream(t, nil)
-	s := New()
+	s := byUser(New())
 	var wg sync.WaitGroup
 	for i := range 24 {
 		wg.Add(1)
@@ -190,7 +191,7 @@ func TestUserBoundAccountsFailureIsTheCallers(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	refuse := map[string]int{}
 	asked, _ := usersUpstream(t, refuse)
-	s := New()
+	s := byUser(New())
 	if rec := userPost(s, "codex/gpt-5.5", "alice", "hi"); rec.Code != 200 {
 		t.Fatalf("first: %d %s", rec.Code, rec.Body.String())
 	}
@@ -229,7 +230,7 @@ func TestUserBoundAccountsFailureIsTheCallers(t *testing.T) {
 func TestUserBindingGoesWithItsAccount(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked, _ := usersUpstream(t, nil)
-	s := New()
+	s := byUser(New())
 	userPost(s, "codex/gpt-5.5", "alice", "hi")
 	userPost(s, "codex/gpt-5.5", "bob", "hi")
 	asked(true)
@@ -265,7 +266,7 @@ func TestUserBindingGoesWithItsAccount(t *testing.T) {
 func TestUserLetGoWhenItsAccountIsRevoked(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	tried := revokedUpstream(t, codexAccessToken(t))
-	s := New()
+	s := byUser(New())
 	// alice on the first account, the one Codex signed in to, revoked
 	rec := userPost(s, "codex/gpt-5.5", "alice", "ping")
 	if rec.Code != 401 {
@@ -290,18 +291,21 @@ func TestUserLetGoWhenItsAccountIsRevoked(t *testing.T) {
 	}
 }
 
-// An account found revoked by any request, a user's or not, lets go of
-// the users bound to it.
+// An account found revoked by any request, a bound user's or not (a
+// group's), lets go of the users bound to it.
 func TestUsersLetGoOfAnAccountRevokedForAnother(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	tried := revokedUpstream(t, codexAccessToken(t))
+	if err := provider.SaveGroup(provider.Group{Name: "Solo", Members: []string{"codex/gpt-5.5"}}); err != nil {
+		t.Fatal(err)
+	}
 	os.MkdirAll(filepath.Dir(usersPath()), 0o700)
 	os.WriteFile(usersPath(), mustJSON(userFile{Users: map[string]map[string]userBinding{"codex": {
 		"alice": {Who: "codex@me@example.com", Account: "me@example.com"},
 		"bob":   {Who: "codex@spare@example.com", Account: "spare@example.com"},
 	}}}), 0o600)
-	s := New()
-	if rec := userPost(s, "codex/gpt-5.5", "", "ping"); rec.Code != 200 {
+	s := byUser(New())
+	if rec := userPost(s, "group/solo", "ops", "ping"); rec.Code != 200 {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	if got := strings.Join(tried(true), ","); got != "acct-1,acct-2" {
@@ -322,7 +326,7 @@ func TestUnreadableUserBindingsRefuse(t *testing.T) {
 	if err := os.WriteFile(usersPath(), []byte(`{"users": {"codex": {"alice": `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s := New()
+	s := byUser(New())
 	rec := userPost(s, "codex/gpt-5.5", "alice", "hi")
 	if rec.Code != 503 || !strings.Contains(rec.Body.String(), "user-accounts.json") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
@@ -333,8 +337,12 @@ func TestUnreadableUserBindingsRefuse(t *testing.T) {
 	if b, _ := os.ReadFile(usersPath()); string(b) != `{"users": {"codex": {"alice": ` {
 		t.Fatalf("written over: %s", b)
 	}
-	if rec := userPost(s, "codex/gpt-5.5", "", "hi"); rec.Code != 200 {
-		t.Fatalf("no user: %d %s", rec.Code, rec.Body.String())
+	// a group's request isn't bound: it reads no file, and goes on
+	if err := provider.SaveGroup(provider.Group{Name: "Solo", Members: []string{"codex/gpt-5.5"}}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := userPost(s, "group/solo", "alice", "hi"); rec.Code != 200 {
+		t.Fatalf("a group's: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -342,7 +350,7 @@ func TestUnreadableUserBindingsRefuse(t *testing.T) {
 func TestUserHeaderRefusedBad(t *testing.T) {
 	codexSignedIn(t)
 	asked, _ := usersUpstream(t, nil)
-	s := New()
+	s := byUser(New())
 	for _, u := range []string{strings.Repeat("u", userMax+1), "a\tb"} {
 		if rec := userPost(s, "codex/gpt-5.5", u, "hi"); rec.Code != 400 || !strings.Contains(rec.Body.String(), UserHeader) {
 			t.Fatalf("%q: %d %s", u, rec.Code, rec.Body.String())
@@ -383,8 +391,13 @@ func userPostIn(s *Server, name, user, input string) *httptest.ResponseRecorder 
 func TestUserHeaderOfTheCallersOwn(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked, heads := usersUpstream(t, nil)
-	s := New()
-	if rec := userPostIn(s, "X-User-ID", "alice", "unnamed"); rec.Code != 200 {
+	s := byUser(New())
+	// not the user's header: bound by user, a request without a user;
+	// bound by session, routed as any
+	if rec := userPostIn(s, "X-User-ID", "alice", "unnamed"); rec.Code != 400 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := userPostIn(New(), "X-User-ID", "alice", "unnamed"); rec.Code != 200 {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	if _, err := os.Stat(usersPath()); err == nil {
@@ -456,7 +469,7 @@ func TestUsersOfEachKeyApart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New()
+	s := byUser(New())
 	if rec := userPostWith(s, a, "alice", "a's alice"); rec.Code != 200 {
 		t.Fatalf("a: %d %s", rec.Code, rec.Body.String())
 	}
@@ -482,7 +495,7 @@ func TestUserBadRequestRestsNobody(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	refuse := map[string]int{}
 	asked, _ := usersUpstream(t, refuse)
-	s := New()
+	s := byUser(New())
 	userPost(s, "codex/gpt-5.5", "mallory", "hi")
 	bound := asked(true)[0]
 	refuse[bound] = 400
@@ -500,7 +513,7 @@ func TestUserBadRequestRestsNobody(t *testing.T) {
 func TestUserKeptOnItsPausedAccount(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked, _ := usersUpstream(t, nil)
-	s := New()
+	s := byUser(New())
 	userPost(s, "codex/gpt-5.5", "alice", "hi")
 	if got := asked(true); len(got) != 1 || got[0] != "acct-1" {
 		t.Fatalf("alice on %v", got)
@@ -529,7 +542,7 @@ func TestUserKeptOnItsPausedAccount(t *testing.T) {
 func TestUserBindingsKeptWhenTheFileBreaks(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked, _ := usersUpstream(t, nil)
-	s := New()
+	s := byUser(New())
 	userPost(s, "codex/gpt-5.5", "alice", "hi")
 	bound := asked(true)[0]
 	os.WriteFile(usersPath(), []byte(`{"users": `), 0o600)
@@ -585,7 +598,7 @@ func TestUserKeptWhenARefreshMendsTheSignIn(t *testing.T) {
 	os.WriteFile(usersPath(), mustJSON(userFile{Users: map[string]map[string]userBinding{"codex": {
 		"bob": {Who: "codex@spare@example.com", Account: "spare@example.com"},
 	}}}), 0o600)
-	s := New()
+	s := byUser(New())
 	userPost(s, "codex/gpt-5.5", "bob", "ping")
 	if refreshed == 0 || provider.SignInMarked(&provider.Account{Agent: "codex", User: "spare@example.com"}) {
 		t.Fatalf("not refreshed (%d), or marked; asked %v", refreshed, tried(false))

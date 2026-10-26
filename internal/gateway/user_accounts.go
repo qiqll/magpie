@@ -565,8 +565,12 @@ func ownedBy(who, pid string, cands []candidate, pl planned) (out []candidate, o
 // unbindTurnedAway lets go of every user bound to c's account when its
 // vendor turned the account away for good (why): each is bound afresh on
 // its next request. A revoked sign-in counts once it is marked so: one a
-// refresh mended is the account as good as before.
-func unbindTurnedAway(c candidate, why string) {
+// refresh mended is the account as good as before. Bound by session,
+// the file isn't touched.
+func (s *Server) unbindTurnedAway(c candidate, why string) {
+	if !s.bind.byUser() {
+		return
+	}
 	switch why {
 	case failRestricted, failVerify:
 	case failAuth:
