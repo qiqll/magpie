@@ -1836,10 +1836,18 @@ your user's id as sent, in `user-accounts.json` beside `providers.json`
 account in `who`, `account` and `at`, as a magpie before spares wrote it
 and still reads it, and its spares in `more`, each with the same three;
 edit them there to move it, or delete the user to forget it. The Gateway
-page's User bindings shows them, once anyone is bound: each provider's
-accounts with how many users are on each (one no longer on its provider
-said so), and the users with their account, provider, gateway key and
-when they were bound, 200 at a time, narrowed by a search. It only reads
+page's User bindings shows them, once anyone is bound: how the gateway
+binds over the list (bound by user, the most accounts a user has; bound by
+session, "Binding by user is off (start option --bind=user)", the
+bindings left in the file shown as they are and nothing removed, since
+they are used again once it is on), each provider's accounts with how
+many users are on each and how many of them as a spare, whether it can
+answer now (out, why and until when, one model's rest naming the model;
+"status unknown" when the magpie serving the gateway doesn't say, never
+"can answer"; one no longer on its provider said so), and the users with
+their first account and spares in order, each marked first or spare with
+its state, provider, gateway key and when they were bound, 200 at a time,
+narrowed by a search, which matches a spare's account too. It only reads
 the file. A file that
 doesn't read keeps the users read before bound and binds nobody new. A
 request for a routing group isn't bound, and `X-Magpie-Account` wins over
@@ -1944,7 +1952,10 @@ callers as `/v1/magpie/heap`, and refuses the same ones 403.
 A gateway key held to a budget, to some models or to some accounts is told
 none of this magpie's accounts (#1981): `/v1/magpie/quotas`,
 `/v1/magpie/quotas/history`, `/v1/magpie/quotas/cards`,
-`POST /v1/magpie/quotas/refresh` and `/v1/magpie/concurrency` answer it
+`POST /v1/magpie/quotas/refresh`, `/v1/magpie/concurrency` and
+`/v1/magpie/rests` (what rests now, by account or key, with why and until
+when, which the Gateway page of a magpie on this computer that doesn't
+serve the gateway reads; answered as `/v1/magpie/concurrency` is) answer it
 403 with `"code": "gateway_key_held"`, from this machine or another. It
 reads its own limit from `GET /v1/magpie/limit`. Another magpie that uses
 such a key shows only that key's own card.

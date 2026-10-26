@@ -96,4 +96,7 @@ func TestOwnerReadOnLoopbackAlone(t *testing.T) {
 	if _, ok := OwnerLanes(); ok {
 		t.Error("lanes read from another host")
 	}
+	if _, ok := OwnerRests(); ok {
+		t.Error("rests read from another host")
+	}
 }

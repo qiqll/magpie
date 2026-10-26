@@ -2796,6 +2796,12 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .sheet .none { padding: 14px 2px; color: var(--muted); font-size: 12px; }
 #gwModels .none, #userBinds .none { padding: 16px; color: var(--muted); font-size: 12px; text-align: center; }
 #userBindAccounts + #userBinds { margin-top: 8px; }
+/* a user's accounts, its first then its spares; one out, or not known
+   to answer, has an amber dot before it */
+.user-seats { display: flex; flex-wrap: wrap; gap: 2px 12px; }
+.user-seat { min-width: 0; overflow-wrap: anywhere; }
+.user-seat .name { color: var(--fg); }
+.user-seat.out::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--amber); vertical-align: 1px; }
 #view-gateway .row-head .find { margin-right: 8px; }
 /* a row of the add sheet: an icon and a name, no frame; a row already
    added has a small green dot after its name rather than fading */

@@ -393,28 +393,12 @@ func saveUsersLogged() {
 // accounts couldn't be read.
 func seatsOf(p provider.Provider) (seats map[string]bool, known bool) {
 	seats = map[string]bool{}
-	if p.Account != nil {
-		// the account the agent is signed in to, paused or not: a pause is
-		// the user's to undo
-		seats[strings.ToLower(candidate{p: p, rest: p.ID}.who())] = true
-		for _, q := range p.AlsoOn() {
-			seats[strings.ToLower(candidate{p: q, rest: p.ID + "@" + q.Account.User}.who())] = true
-		}
-		return seats, p.IsPlugin() || provider.LoginsKnown()
+	for _, c := range seatCandidates(p) {
+		seats[strings.ToLower(c.who())] = true
 	}
-	keys := p.KeysOn()
-	for _, k := range keys {
-		q := p.WithKey(k)
-		rest := p.ID
-		if len(keys) > 1 {
-			rest += "#" + provider.KeyID(k.Key)
-		}
-		seats[strings.ToLower(candidate{p: q, rest: rest}.who())] = true
-	}
-	if len(keys) == 0 {
-		seats[strings.ToLower(candidate{p: p, rest: p.ID}.who())] = true
-	}
-	return seats, true
+	// the account the agent is signed in to counts paused or not: a pause
+	// is the user's to undo
+	return seats, p.Account == nil || p.IsPlugin() || provider.LoginsKnown()
 }
 
 // shownAs is how the Routing page names c's account or key.
@@ -1070,3 +1054,90 @@ func UserBindings() ([]UserRow, error) {
 // binding's Who names one; known is false when the saved accounts can't
 // be read, and a binding not among them can't be said gone.
 func UserSeats(p provider.Provider) (seats map[string]bool, known bool) { return seatsOf(p) }
+
+// SeatOut is why one of a user's accounts can't answer now, and until
+// when: "quota", "credit", "rate" or another failure it rests for, "cap"
+// at the usage cap set on it in magpie, "quota" as well when it is held
+// as it won't spend its credits. Model is the one model out, "" for the
+// account; Until is zero when it isn't known. CapUnknown: nothing
+// rests, but a usage cap set on it can't be told, as its windows weren't
+// read in this process.
+type SeatOut struct {
+	Why        string
+	Until      time.Time
+	Model      string
+	CapUnknown bool
+}
+
+// UserSeatOut is why the account or key who of p, as a binding names it,
+// can't answer now; Why "" while it can. rests is what rests in the
+// process serving the gateway (Rests, or OwnerRests from another), nil
+// when that isn't known: then only a usage cap is told, and Why "" is
+// unknown, never "it can". found is false when p has no such account.
+func UserSeatOut(p provider.Provider, who string, rests map[string]Rest) (out SeatOut, found bool) {
+	var c candidate
+	for _, x := range seatCandidates(p) {
+		if strings.EqualFold(x.who(), who) {
+			c, found = x, true
+			break
+		}
+	}
+	if !found {
+		return SeatOut{}, false
+	}
+	key := c.restKey()
+	if r, ok := rests[key]; ok {
+		return SeatOut{Why: cmp.Or(r.Why, failOther), Until: r.Until, Model: r.Model}, true
+	}
+	// one of its models resting, the first back said
+	var first Rest
+	one := false
+	for id, r := range rests {
+		if m, ok := strings.CutPrefix(id, key+"/"); ok && (!one || r.Until.Before(first.Until)) {
+			first, one = r, true
+			first.Model = cmp.Or(r.Model, m)
+		}
+	}
+	if one {
+		return SeatOut{Why: cmp.Or(first.Why, failOther), Until: first.Until, Model: first.Model}, true
+	}
+	if h := capHeld(p, c.p, "", time.Now()); h != nil {
+		why := "cap"
+		if h.noCredits {
+			why = failQuota
+		}
+		return SeatOut{Why: why, Until: h.back}, true
+	}
+	// a cap set on it with no reading of its windows here can't be told
+	if a := c.p.Account; a != nil && provider.HoldCaps(p, a.Agent, a.User).Holds() {
+		if _, read := allowances(a.UsageAgent())[a.User]; !read {
+			return SeatOut{CapUnknown: true}, true
+		}
+	}
+	return SeatOut{}, true
+}
+
+// seatCandidates is every account or key of p as candidates, as seatsOf
+// counts them.
+func seatCandidates(p provider.Provider) []candidate {
+	if p.Account != nil {
+		out := []candidate{{p: p, rest: p.ID}}
+		for _, q := range p.AlsoOn() {
+			out = append(out, candidate{p: q, rest: p.ID + "@" + q.Account.User})
+		}
+		return out
+	}
+	keys := p.KeysOn()
+	var out []candidate
+	for _, k := range keys {
+		rest := p.ID
+		if len(keys) > 1 {
+			rest += "#" + provider.KeyID(k.Key)
+		}
+		out = append(out, candidate{p: p.WithKey(k), rest: rest})
+	}
+	if len(keys) == 0 {
+		out = append(out, candidate{p: p, rest: p.ID})
+	}
+	return out
+}

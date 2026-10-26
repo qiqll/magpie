@@ -1,5 +1,5 @@
 // The Gateway page (plugins/gateway): the gateway's state and its keys
-// (keys.js), the users it keeps on one account (users.js), how to connect
+// (keys.js), the users it keeps on their accounts (users.js), how to connect
 // a client, its models and its recent calls. It
 // is a page the plugin adds to the window (kernel.js): its markup is the
 // html below, and the shell draws it through its hooks — loading before
@@ -668,7 +668,8 @@ magpie.plugin("gateway", (ctx) => {
 </section>
 <section id="userBindsBlock" hidden>
   <div class="row-head" id="userBindsHead"><span class="label" data-t>User bindings</span><span class="note" id="userBindsCount"></span><span class="grow"></span></div>
-  <p class="usage-note" data-t>Each user your service names in X-Magpie-User (or the header MAGPIE_USER_HEADER names) stays on one account of each provider. To move a user or forget one, edit user-accounts.json.</p>
+  <p class="usage-note" data-t>Each user your service names in X-Magpie-User (or the header MAGPIE_USER_HEADER names) stays on its first account of each provider, and is given a spare once each of its own is out a while. To move a user or forget one, edit user-accounts.json.</p>
+  <p class="usage-note" id="userBindsMode" hidden></p>
   <div class="list" id="userBindAccounts"></div>
   <div class="list" id="userBinds"></div>
 </section>
