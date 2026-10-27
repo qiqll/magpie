@@ -1801,7 +1801,17 @@ no control or format characters) keeps one of your own users on accounts
 of its own of each provider, for every model of it. The user's first
 request to a provider binds it to the account of that provider fewest
 users are bound to (counting each user's first account and spares), of
-those not resting; from then on only its accounts are asked for the user:
+those not resting and with a seat for its tier: an account takes no more
+users than the `share` of each user's tier on it, the new user's too
+(below), so a user of a tier with `share` 1 is bound only to an account
+nobody is on, and nobody joins it. A user of a tier that shares (`share` 2
+or more) goes to the account most users are on that still has a seat
+instead, leaving the empty ones to users who have theirs alone. With no
+account of the provider that has a seat for it, the request is a 429,
+`X-Magpie-User-Limit: quota`, and nothing is sent: with
+`X-Magpie-User-Until` when the accounts it could share rest (the first of
+them back), and without it when every account is taken, as a user leaves
+an account only when the account goes. From then on only its accounts are asked for the user:
 its first, then its spares, in that order. A conversation under way stays
 on the account of them it is on, as its affinity says; a new one goes to
 the first of them with room, so back to the first once it is back. A user
@@ -1810,8 +1820,9 @@ account it has is out for a while: resting out of its allowance or credit
 for 30 minutes or more (an account that says so before any of the reply
 was sent rests first), at its usage cap, or all but used up. The spare is
 the account fewest users are on, the plan's order between those alike, of
-those not already the user's, not resting, not signed out by the vendor,
-not held at a cap and under 90% of each window that counts the model;
+those not already the user's, with a seat for its tier, not resting, not
+signed out by the vendor, not held at a cap and under 90% of each window
+that counts the model (most users on it first, for a tier that shares);
 with only such accounts left, none is added. How many accounts of a
 provider a user may have, its first and its spares, is its tier's (below).
 When its accounts can't answer and no spare is added (rate limited, back
@@ -1860,15 +1871,21 @@ value longer than 128 bytes or with control or format characters, is a
 
 ```json
 {"default": "free", "tiers": {
-  "free": {"credits": 1000, "max_accounts": 2},
-  "plus": {"credits": 3000, "max_accounts": 3},
-  "pro":  {"credits": 5000, "max_accounts": 4},
-  "max":  {"credits": 10000, "max_accounts": 5}}}
+  "free": {"credits": 1000, "max_accounts": 2, "share": 2},
+  "plus": {"credits": 3000, "max_accounts": 3, "share": 1},
+  "pro":  {"credits": 5000, "max_accounts": 4, "share": 1},
+  "max":  {"credits": 10000, "max_accounts": 5, "share": 1}}}
 ```
 
 These are the tiers without the file, which magpie never writes: make it
 to change them. `max_accounts` is how many accounts of each provider a
-user of the tier may have (a whole number, 1 or more); `credits` (0 or
+user of the tier may have (a whole number, 1 or more); `share` is how
+many users an account a user of the tier is on may be bound to, that
+user among them (1: its own alone; 2: free users two to an account, and
+never on one a `share` 1 user has; 0 or left out: no limit, as a file
+written before shares has it), each user's first account and spares
+alike, of every gateway key; a user bound to more before is kept there; a
+binding of a tier no longer in the file counts as the default's; `credits` (0 or
 more) are kept for a later allowance by use and not used yet; `default`
 names one of the tiers; a tier's name is held to the same rules as a
 user's, and no two may differ only in case. An edited file holds from the

@@ -1,10 +1,11 @@
 package gateway
 
 // A user's tier, bound by user (--bind=user): how many accounts of each
-// provider it may be bound to, its first and its spares (growUser). The
+// provider it may be bound to, its first and its spares (growUser), and
+// how many users an account it is on may be bound to (share). The
 // caller names it in UserTierHeader, a request without it is of the
 // default tier, and user-tiers.json, next to user-accounts.json, says
-// each tier's max_accounts and credits (kept, not used yet). No file is
+// each tier's max_accounts, share and credits (kept, not used yet). No file is
 // defaultTiers, and none is written: the file is the user's to make. One
 // edited is read again. One that doesn't read, or holds a value it
 // can't, is unknown: the tiers read before still hold (logged once a
@@ -40,6 +41,9 @@ type Tier struct {
 	// used yet
 	Credits     int64 `json:"credits"`
 	MaxAccounts int   `json:"max_accounts"` // the most accounts of a provider a user of it has
+	// Share is the most users an account a user of it is on may be bound
+	// to, that user among them: 1 its own alone, 0 no limit
+	Share int `json:"share"`
 }
 
 // Tiers is user-tiers.json as it holds: Default names the tier of a
@@ -74,16 +78,31 @@ type tiersJSON struct {
 	Tiers   map[string]struct {
 		Credits     int64 `json:"credits"`
 		MaxAccounts int   `json:"max_accounts"`
+		Share       int   `json:"share"`
 	} `json:"tiers"`
 }
 
-// defaultTiers are the tiers without a user-tiers.json.
+// defaultTiers are the tiers without a user-tiers.json: free shares an
+// account with one other free user at most, the others have theirs alone.
 var defaultTiers = Tiers{Default: "free", Tiers: []Tier{
-	{Name: "free", Credits: 1000, MaxAccounts: 2},
-	{Name: "plus", Credits: 3000, MaxAccounts: 3},
-	{Name: "pro", Credits: 5000, MaxAccounts: 4},
-	{Name: "max", Credits: 10000, MaxAccounts: 5},
+	{Name: "free", Credits: 1000, MaxAccounts: 2, Share: 2},
+	{Name: "plus", Credits: 3000, MaxAccounts: 3, Share: 1},
+	{Name: "pro", Credits: 5000, MaxAccounts: 4, Share: 1},
+	{Name: "max", Credits: 10000, MaxAccounts: 5, Share: 1},
 }}
+
+// shareOf is the share of the tier a binding keeps (name), the default
+// tier's for one gone from the file or kept before tiers; 1, the least,
+// when not even that is known.
+func (t Tiers) shareOf(name string) int {
+	x, ok := t.find(name)
+	if !ok {
+		if x, ok = t.find(t.Default); !ok {
+			return 1
+		}
+	}
+	return x.Share
+}
 
 // idBad is why v, a user's or a tier's name sent in or read for name,
 // can't be taken: longer than userMax, or holding a control or format
@@ -100,7 +119,8 @@ func idBad(name, v string) string {
 
 // parseTiers is the tiers b says, or why they can't be taken: each name
 // one idBad takes and no two alike but for case, max_accounts a whole
-// number 1 or more, credits 0 or more, and default one of them.
+// number 1 or more, share 0 (no limit, as a file before shares) or more,
+// credits 0 or more, and default one of them.
 func parseTiers(b []byte) (Tiers, error) {
 	var f tiersJSON
 	if err := json.Unmarshal(b, &f); err != nil {
@@ -124,10 +144,13 @@ func parseTiers(b []byte) (Tiers, error) {
 		if x.MaxAccounts < 1 {
 			return Tiers{}, fmt.Errorf("tier %q: max_accounts is a whole number of accounts, 1 or more, not %d", n, x.MaxAccounts)
 		}
+		if x.Share < 0 {
+			return Tiers{}, fmt.Errorf("tier %q: share is how many users an account may be bound to, 1 or more, or 0 for no limit, not %d", n, x.Share)
+		}
 		if x.Credits < 0 {
 			return Tiers{}, fmt.Errorf("tier %q: credits are 0 or more, not %d", n, x.Credits)
 		}
-		t.Tiers = append(t.Tiers, Tier{Name: n, Credits: x.Credits, MaxAccounts: x.MaxAccounts})
+		t.Tiers = append(t.Tiers, Tier{Name: n, Credits: x.Credits, MaxAccounts: x.MaxAccounts, Share: x.Share})
 	}
 	slices.SortFunc(t.Tiers, func(a, b Tier) int {
 		return cmp.Or(cmp.Compare(a.MaxAccounts, b.MaxAccounts), strings.Compare(a.Name, b.Name))

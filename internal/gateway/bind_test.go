@@ -22,7 +22,8 @@ func byUser(s *Server) *Server {
 }
 
 // byUserUpTo is s bound by user, each user without a tier on at most max
-// accounts, as user-tiers.json says.
+// accounts, as user-tiers.json says, and sharing each with any number of
+// users (no share).
 func byUserUpTo(t *testing.T, s *Server, max int) *Server {
 	t.Helper()
 	writeTiers(t, fmt.Sprintf(`{"default":"free","tiers":{"free":{"credits":1000,"max_accounts":%d}}}`, max))

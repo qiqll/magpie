@@ -69,7 +69,7 @@ func TestUserGivenASpareInTheSameRequest(t *testing.T) {
 	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
 		"dave": {Who: "codex@dave@example.com", Account: "dave@example.com", More: []userSeat{{Who: "codex@spare@example.com", Account: "spare@example.com"}}},
 	}}})
-	s := byUser(New())
+	s := byUserUpTo(t, New(), 2) // no share: as many users as come on an account
 	if rec := userPost(s, "codex/gpt-5.5", "alice", "hi"); rec.Code != 200 {
 		t.Fatalf("first: %d %s", rec.Code, rec.Body.String())
 	}

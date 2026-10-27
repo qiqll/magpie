@@ -5,7 +5,12 @@ package gateway
 // names the user in UserHeader, the first request of that user to the
 // provider binds it to the account fewest users are bound to, and from
 // then on only its accounts are asked for it, of any of the provider's
-// models: its first, then its spares, in order. A spare is added, up to
+// models: its first, then its spares, in order. An account takes a user
+// only while it has a seat for it (seatUse.takes): as many users as the
+// tier of each, that user's too, shares one with (user_tiers.go, share),
+// so a user of a tier with its account alone is bound to one nobody
+// else is; with no account of the provider that has one, the user's
+// request is a 429. A spare is added, up to
 // its tier's max_accounts (user_tiers.go), only when each account it has
 // is out a while (resting out
 // of its allowance or credit userLongRest or more, at its usage cap, all
@@ -261,17 +266,18 @@ type UserBound struct {
 	// account it was bound to is gone, and it is bound now to the
 	// others, or to another), "added" (none of its accounts could
 	// answer, and a spare was added), "none" (no account of the provider
-	// could be bound now)
+	// could be bound now), "full" (none has a seat for its tier, or those
+	// that have rest)
 	Why string `json:"why"`
 	// Tier: the request's tier (UserTierHeader, the default without it)
 	Tier string `json:"tier,omitempty"`
 
 	// what growUser adds a spare to: the gateway key, the provider, the
-	// most accounts the tier lets it have and the accounts bound when the
-	// request came; left, those of them left out of the plan, for a limit
-	// to say when the first is back
+	// tier and the accounts bound when the request came; left, those of
+	// them left out of the plan, for a limit to say when the first is back
 	key, pid string
 	max      int
+	tier     Tier
 	seats    []userSeat
 	left     []Weighed
 }
@@ -442,17 +448,20 @@ func leftIs(w Weighed, pid, who string) bool {
 // key keyID, is bound to: its first, then its spares, in that order,
 // each while it doesn't rest, one all but used up after the rest. A user
 // bound to none, or only to accounts that are gone, is bound first to the
-// one of cands fewest users of p are bound to (firstOf). One whose
+// one of cands with a seat for tier fewest users of p are bound to
+// (firstOf); with none that has one, or those that have resting, it is
+// refused a 429 (fullRefusal). One whose
 // accounts are all out is given a spare by growUser, up to tier's
 // max_accounts, after strictKeep: narrowed to none here, the refusal is
 // its. The binding keeps tier's name, written only when it changed.
 func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candidate, pl planned) ([]candidate, planned, *UserBound, userRefusal) {
+	tiers, _ := loadTiers() // read already by tierOf: what it said
 	userBinds.Lock()
 	defer userBinds.Unlock()
 	if loadUsers() != nil {
 		return nil, pl, nil, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know which account %q is bound to; nothing was sent. Its log says why", UserHeader, user)}
 	}
-	ub := &UserBound{User: user, Tier: tier.Name, key: keyID, pid: p.ID, max: tier.MaxAccounts}
+	ub := &UserBound{User: user, Tier: tier.Name, key: keyID, pid: p.ID, max: tier.MaxAccounts, tier: tier}
 	seats := userBinds.m[keyID][p.ID][user].seats()
 	// an account not among cands may be gone: signed out, switched off or
 	// removed (seatsOf), unknown while the saved accounts can't be read
@@ -485,8 +494,15 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 		if userBinds.stale {
 			return nil, pl, ub, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: user-accounts.json can't be read, so %q isn't bound to an account now; nothing was sent. magpie's log says why", UserHeader, user)}
 		}
-		pick := firstOf(p.ID, cands, pl)
+		uses := seatUsesOf(p.ID, tiers)
+		pick := firstOf(p.ID, cands, pl, tier, uses)
 		if pick < 0 {
+			if slices.ContainsFunc(cands, func(c candidate) bool { return c.p.ID == p.ID && !uses.of(c).takes(tier.Share) }) {
+				// some are another's alone, or shared by as many as can:
+				// those others' accounts are never asked for it
+				ub.Why = "full"
+				return nil, pl, ub, fullRefusal(user, tier, p.ID, cands, uses)
+			}
 			// none can answer now: routed as it would be, bound once one can
 			ub.Why = "none"
 			return cands, pl, ub, userRefusal{}
@@ -545,52 +561,118 @@ func setSeats(keyID, pid, user string, seats []userSeat) {
 	userBinds.m[keyID][pid][user] = userBinds.m[keyID][pid][user].withSeats(seats)
 }
 
-// boundCount is how many users of every key each account of provider pid
-// is bound to, as a first or a spare. Called with userBinds held.
-func boundCount(pid string) map[string]int {
-	bound := map[string]int{}
+// seatUse is how an account is taken: by n users of every key, as a
+// first or a spare, the least share of their tiers share (0 for no
+// limit).
+type seatUse struct{ n, share int }
+
+// takes says the account has a seat for one more user, of a tier with
+// share: as many as its share and each user's on it let it have.
+func (u seatUse) takes(share int) bool {
+	n := u.n + 1
+	return (share == 0 || n <= share) && (u.share == 0 || n <= u.share)
+}
+
+// seatUses is how each account of provider pid is taken, lower-cased
+// who → its use, each user's share its tier's in tiers (Tiers.shareOf).
+// Called with userBinds held.
+type seatUses map[string]seatUse
+
+func seatUsesOf(pid string, tiers Tiers) seatUses {
+	uses := seatUses{}
 	for _, ps := range userBinds.m {
 		for _, b := range ps[pid] {
+			share := tiers.shareOf(b.Tier)
 			for _, s := range b.seats() {
-				bound[strings.ToLower(s.Who)]++
+				who := strings.ToLower(s.Who)
+				u := uses[who]
+				u.n++
+				if share > 0 && (u.share == 0 || share < u.share) {
+					u.share = share
+				}
+				uses[who] = u
 			}
 		}
 	}
-	return bound
+	return uses
 }
 
-// firstOf is the account of provider pid in cands to bind a user to
-// first: as spareOf picks, and when every one is past routes.LowShare, the
-// fewest bound of those not resting nor marked revoked all the same. -1
-// for none. Called with userBinds held.
-func firstOf(pid string, cands []candidate, pl planned) int {
-	if i := spareOf(pid, cands, pl, nil, true); i >= 0 {
+// of is how c's account is taken.
+func (uses seatUses) of(c candidate) seatUse { return uses[strings.ToLower(c.who())] }
+
+// firstOf is the account of provider pid in cands to bind a user of tier
+// to first: as spareOf picks, and when every one is past routes.LowShare,
+// the one of those not resting nor marked revoked all the same. -1 for
+// none. Called with userBinds held.
+func firstOf(pid string, cands []candidate, pl planned, tier Tier, uses seatUses) int {
+	if i := spareOf(pid, cands, pl, nil, true, tier, uses); i >= 0 {
 		return i
 	}
-	return spareOf(pid, cands, pl, nil, false)
+	return spareOf(pid, cands, pl, nil, false, tier, uses)
 }
 
-// spareOf is the account of provider pid in cands to bind a user to,
-// beside seats: of those not among them, not resting, not marked revoked
-// (provider.SignInMarked) and, with room, under routes.LowShare of each
-// window counting the model, the one fewest users of every key are bound
-// to, the plan's order (Smart's) between those alike. Those held at a cap
-// aren't among cands. -1 for none. Called with userBinds held.
-func spareOf(pid string, cands []candidate, pl planned, seats []userSeat, room bool) int {
-	bound := boundCount(pid)
+// spareOf is the account of provider pid in cands to bind a user of tier
+// to, beside seats: of those not among them, with a seat for it
+// (seatUse.takes), not resting, not marked revoked (provider.SignInMarked)
+// and, with room, under routes.LowShare of each window counting the
+// model, the one fewest users of every key are bound to; for a tier that
+// shares one with a few (share 2 or more), the one most are, so a user
+// that shares leaves alone the accounts nobody is on, for the users that
+// have theirs alone. The plan's order (Smart's) between those alike.
+// Those held at a cap aren't among cands. -1 for none. Called with
+// userBinds held.
+func spareOf(pid string, cands []candidate, pl planned, seats []userSeat, room bool, tier Tier, uses seatUses) int {
 	pick := -1
 	for i, c := range cands {
-		if c.p.ID != pid || seatIn(seats, c.who()) || resting(c) || provider.SignInMarked(c.p.Account) {
+		if c.p.ID != pid || seatIn(seats, c.who()) || !uses.of(c).takes(tier.Share) || resting(c) || provider.SignInMarked(c.p.Account) {
 			continue
 		}
 		if room && i < len(pl.order) && pl.order[i].Known && pl.order[i].Used >= routes.LowShare {
 			continue
 		}
-		if pick < 0 || bound[strings.ToLower(c.who())] < bound[strings.ToLower(cands[pick].who())] {
+		n, at := uses.of(c).n, uses.of(cands[max(pick, 0)]).n
+		if pick < 0 || tier.Share >= 2 && n > at || tier.Share < 2 && n < at {
 			pick = i
 		}
 	}
 	return pick
+}
+
+// shares says how many users tier lets an account it is on be bound to.
+func (t Tier) shares() string {
+	switch t.Share {
+	case 0:
+		return fmt.Sprintf("tier %s shares one with any number of users", t.Name)
+	case 1:
+		return fmt.Sprintf("tier %s has one alone", t.Name)
+	case 2:
+		return fmt.Sprintf("tier %s shares one with one other user at most", t.Name)
+	}
+	return fmt.Sprintf("tier %s shares one with %d other users at most", t.Name, t.Share-1)
+}
+
+// fullRefusal is why user, of tier, is bound to no account of provider
+// pid: none of cands has a seat for it but those resting, and those taken
+// are never asked for it. A 429, the "quota" of the pool: until the first
+// with a seat is back, when one rests, else unknown, as a user leaves an
+// account only when it goes.
+func fullRefusal(user string, tier Tier, pid string, cands []candidate, uses seatUses) userRefusal {
+	var first Rest
+	resting := false
+	for _, c := range cands {
+		if c.p.ID != pid || !uses.of(c).takes(tier.Share) {
+			continue
+		}
+		if r, ok := restingOf(c); ok && (!resting || r.Until.Before(first.Until)) {
+			first, resting = r, true
+		}
+	}
+	msg := fmt.Sprintf("%s: no account of the provider is free for %q: each is taken by as many users as can share it (its %s, %s); nothing was sent", UserHeader, user, tier.shares(), UserTierHeader)
+	if resting {
+		msg = fmt.Sprintf("%s: no account of the provider is free for %q: those its %s (%s) can share rest, the first until %s (%s), and the others are taken; nothing was sent", UserHeader, user, tier.shares(), UserTierHeader, first.Until.Format(time.RFC3339), first.Why)
+		return userRefusal{status: http.StatusTooManyRequests, msg: msg, limit: cmp.Or(userLimit(first.Why), failQuota), until: first.Until, model: first.Model}
+	}
+	return userRefusal{status: http.StatusTooManyRequests, msg: msg, limit: failQuota}
 }
 
 // growUser gives u, bound to accounts of p none of which can answer the
@@ -599,7 +681,8 @@ func spareOf(pid string, cands []candidate, pl planned, seats []userSeat, room b
 // (resting out of its allowance or credit userLongRest or more, held at a
 // usage cap, all but used up), it has fewer than its tier's max_accounts
 // (u.max; a user with as many or more, its tier lowered since, keeps them
-// and is given none), and one of pool not among them has room (spareOf).
+// and is given none), and one of pool not among them has room and a seat
+// for its tier (spareOf).
 // cands are those of its accounts left, all but used up, asked after the
 // spare; the refusal is why none is asked, with none left. Once a
 // request: grew says it added one.
@@ -635,6 +718,7 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 	if len(u.seats) >= u.max {
 		return refuse(u.atTier(len(u.seats)))
 	}
+	tiers, _ := loadTiers()
 	userBinds.Lock()
 	defer userBinds.Unlock()
 	if loadUsers() != nil || userBinds.stale {
@@ -644,8 +728,14 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 	if len(now) >= u.max {
 		return refuse(u.atTier(len(now)))
 	}
-	pick := spareOf(u.pid, pool, poolPl, now, true)
+	uses := seatUsesOf(u.pid, tiers)
+	pick := spareOf(u.pid, pool, poolPl, now, true, u.tier, uses)
 	if pick < 0 {
+		if !slices.ContainsFunc(pool, func(c candidate) bool {
+			return c.p.ID == u.pid && !seatIn(now, c.who()) && uses.of(c).takes(u.tier.Share)
+		}) {
+			return refuse(fmt.Sprintf("every other account of the provider is taken by as many users as can share it (its %s, %s)", u.tier.shares(), UserTierHeader))
+		}
 		return refuse("no other account of the provider has room to be added")
 	}
 	seats := append(slices.Clone(now), userSeat{Who: pool[pick].who(), Account: shownAs(pool[pick]), At: time.Now().UTC()})

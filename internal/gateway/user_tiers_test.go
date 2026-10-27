@@ -86,7 +86,7 @@ func tierIn(t *testing.T, pid string) map[string]string {
 // default among them; anything else says why.
 func TestParseTiers(t *testing.T) {
 	got, err := parseTiers([]byte(`{"default":"FREE","tiers":{"pro":{"credits":5000,"max_accounts":4},"free":{"credits":0,"max_accounts":1}}}`))
-	if err != nil || got.Default != "free" || len(got.Tiers) != 2 || got.Tiers[0] != (Tier{"free", 0, 1}) || got.Tiers[1] != (Tier{"pro", 5000, 4}) {
+	if err != nil || got.Default != "free" || len(got.Tiers) != 2 || got.Tiers[0] != (Tier{"free", 0, 1, 0}) || got.Tiers[1] != (Tier{"pro", 5000, 4, 0}) {
 		t.Fatalf("%+v %v", got, err)
 	}
 	if tr, ok := got.find("PrO"); !ok || tr.Name != "pro" {
@@ -497,7 +497,7 @@ func TestInfoSaysTheTiers(t *testing.T) {
 	writeTiers(t, `{"default":"basic","tiers":{"basic":{"credits":10,"max_accounts":1},"team":{"credits":0,"max_accounts":6}}}`)
 	out := info(byUser(New()))
 	var tiers Tiers
-	if json.Unmarshal(out["tiers"], &tiers) != nil || string(out["bind"]) != `"user"` || tiers.Default != "basic" || len(tiers.Tiers) != 2 || tiers.Tiers[1] != (Tier{"team", 0, 6}) {
+	if json.Unmarshal(out["tiers"], &tiers) != nil || string(out["bind"]) != `"user"` || tiers.Default != "basic" || len(tiers.Tiers) != 2 || tiers.Tiers[1] != (Tier{"team", 0, 6, 0}) {
 		t.Fatalf("by user: %s", mustJSON(out))
 	}
 	writeTiers(t, `{"default":`)

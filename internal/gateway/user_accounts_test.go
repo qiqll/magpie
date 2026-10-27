@@ -100,7 +100,7 @@ func boundIn(t *testing.T, pid string) map[string]string {
 func TestUserBoundToOneAccountOfTheProvider(t *testing.T) {
 	codexSignedIn(t, "spare@example.com", "third@example.com")
 	asked, heads := usersUpstream(t, nil)
-	s := byUser(New())
+	s := byUserUpTo(t, New(), 2) // no share: as many users as come on an account
 	first := map[string]string{}
 	for _, u := range []string{"alice", "bob", "carol"} {
 		rec := userPost(s, "codex/gpt-5.5", u, "hello "+u)
@@ -163,7 +163,7 @@ func TestUserBoundToOneAccountOfTheProvider(t *testing.T) {
 func TestUsersAtOnceSpread(t *testing.T) {
 	codexSignedIn(t, "spare@example.com", "third@example.com")
 	usersUpstream(t, nil)
-	s := byUser(New())
+	s := byUserUpTo(t, New(), 2) // no share: as many users as come on an account
 	var wg sync.WaitGroup
 	for i := range 24 {
 		wg.Add(1)
@@ -230,7 +230,7 @@ func TestUserBoundAccountsFailureIsTheCallers(t *testing.T) {
 func TestUserBindingGoesWithItsAccount(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked, _ := usersUpstream(t, nil)
-	s := byUser(New())
+	s := byUserUpTo(t, New(), 2) // no share: as many users as come on an account
 	userPost(s, "codex/gpt-5.5", "alice", "hi")
 	userPost(s, "codex/gpt-5.5", "bob", "hi")
 	asked(true)
@@ -469,7 +469,7 @@ func TestUsersOfEachKeyApart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := byUser(New())
+	s := byUserUpTo(t, New(), 2) // no share: as many users as come on an account
 	if rec := userPostWith(s, a, "alice", "a's alice"); rec.Code != 200 {
 		t.Fatalf("a: %d %s", rec.Code, rec.Body.String())
 	}

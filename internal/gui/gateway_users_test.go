@@ -340,7 +340,7 @@ func TestGatewayUsersOutUnknown(t *testing.T) {
 		t.Errorf("no gateway, by user, tiers unread: %+v", out)
 	}
 	os.Remove(tiers)
-	if _, out := gatewayUsers(t, ""); out.Tiers == nil || out.Tiers.Default != "free" || len(out.Tiers.Tiers) != 4 || out.Tiers.Tiers[2] != (gateway.Tier{Name: "pro", Credits: 5000, MaxAccounts: 4}) {
+	if _, out := gatewayUsers(t, ""); out.Tiers == nil || out.Tiers.Default != "free" || len(out.Tiers.Tiers) != 4 || out.Tiers.Tiers[2] != (gateway.Tier{Name: "pro", Credits: 5000, MaxAccounts: 4, Share: 1}) {
 		t.Errorf("no gateway, by user: %+v", out.Tiers)
 	}
 	t.Setenv("MAGPIE_BIND", "")
