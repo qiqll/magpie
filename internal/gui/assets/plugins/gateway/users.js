@@ -103,7 +103,12 @@ function userModeSays(m) {
   let says;
   if (!tiers.length) says = t("Bound by user; the tiers in user-tiers.json are unknown.");
   else {
-    const each = tiers.map((x) => t(x.name === m.tiers.default ? "{tier} up to {n}, {share} (default)" : "{tier} up to {n}, {share}", { tier: x.name, n: x.max_accounts, share: userShareSays(x) }));
+    // a tier with the other words a caller may send for it: "max (4)"
+    const named = (x) => {
+      const as = Object.entries(m.tiers.aliases || {}).filter(([, n]) => n === x.name).map(([a]) => a).sort();
+      return as.length ? `${x.name} (${as.join(", ")})` : x.name;
+    };
+    const each = tiers.map((x) => t(x.name === m.tiers.default ? "{tier} up to {n}, {share} (default)" : "{tier} up to {n}, {share}", { tier: named(x), n: x.max_accounts, share: userShareSays(x) }));
     says = t("Bound by user: accounts of each provider each user may have, by its tier: {tiers}.", { tiers: each.join(" · ") });
   }
   if (m.idleHours > 0) {

@@ -48,19 +48,42 @@ type Tier struct {
 
 // Tiers is user-tiers.json as it holds: Default names the tier of a
 // request without UserTierHeader; Tiers are in the order of their
-// max_accounts, then their names.
+// max_accounts, then their names. Aliases are other words a caller may
+// send in UserTierHeader for a tier (a caller that numbers them, "4" for
+// max): alias → the tier's name.
 type Tiers struct {
-	Default string `json:"default"`
-	Tiers   []Tier `json:"tiers"`
+	Default string            `json:"default"`
+	Tiers   []Tier            `json:"tiers"`
+	Aliases map[string]string `json:"aliases,omitempty"`
 }
 
-// find is the tier named name, whatever its case.
+// find is the tier named name, or one of its aliases, whatever its case.
 func (t Tiers) find(name string) (Tier, bool) {
 	i := slices.IndexFunc(t.Tiers, func(x Tier) bool { return strings.EqualFold(x.Name, name) })
+	if i < 0 {
+		for a, n := range t.Aliases {
+			if strings.EqualFold(a, name) {
+				i = slices.IndexFunc(t.Tiers, func(x Tier) bool { return x.Name == n })
+				break
+			}
+		}
+	}
 	if i < 0 {
 		return Tier{}, false
 	}
 	return t.Tiers[i], true
+}
+
+// aliasesOf is the aliases of the tier named name, in order.
+func (t Tiers) aliasesOf(name string) []string {
+	var out []string
+	for a, n := range t.Aliases {
+		if n == name {
+			out = append(out, a)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // names is each tier's name, in order.
@@ -72,24 +95,39 @@ func (t Tiers) names() []string {
 	return out
 }
 
+// said is each tier's name with its aliases, in order, as a refusal
+// lists them: "free (1), plus (2)".
+func (t Tiers) said() string {
+	out := make([]string, len(t.Tiers))
+	for i, x := range t.Tiers {
+		out[i] = x.Name
+		if as := t.aliasesOf(x.Name); len(as) > 0 {
+			out[i] += " (" + strings.Join(as, ", ") + ")"
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
 // tiersJSON is user-tiers.json on disk: tier name → tier.
 type tiersJSON struct {
 	Default string `json:"default"`
 	Tiers   map[string]struct {
-		Credits     int64 `json:"credits"`
-		MaxAccounts int   `json:"max_accounts"`
-		Share       int   `json:"share"`
+		Credits     int64    `json:"credits"`
+		MaxAccounts int      `json:"max_accounts"`
+		Share       int      `json:"share"`
+		Aliases     []string `json:"aliases"`
 	} `json:"tiers"`
 }
 
 // defaultTiers are the tiers without a user-tiers.json: free shares an
 // account with one other free user at most, the others have theirs alone.
+// A caller that numbers them sends 1 to 4.
 var defaultTiers = Tiers{Default: "free", Tiers: []Tier{
 	{Name: "free", Credits: 1000, MaxAccounts: 2, Share: 2},
 	{Name: "plus", Credits: 3000, MaxAccounts: 3, Share: 1},
 	{Name: "pro", Credits: 5000, MaxAccounts: 4, Share: 1},
 	{Name: "max", Credits: 10000, MaxAccounts: 5, Share: 1},
-}}
+}, Aliases: map[string]string{"1": "free", "2": "plus", "3": "pro", "4": "max"}}
 
 // shareOf is the share of the tier a binding keeps (name), the default
 // tier's for one gone from the file or kept before tiers; 1, the least,
@@ -120,7 +158,8 @@ func idBad(name, v string) string {
 // parseTiers is the tiers b says, or why they can't be taken: each name
 // one idBad takes and no two alike but for case, max_accounts a whole
 // number 1 or more, share 0 (no limit, as a file before shares) or more,
-// credits 0 or more, and default one of them.
+// credits 0 or more, and default one of them; each of its aliases taken
+// as a name is, and none a tier's name or another alias.
 func parseTiers(b []byte) (Tiers, error) {
 	var f tiersJSON
 	if err := json.Unmarshal(b, &f); err != nil {
@@ -151,6 +190,27 @@ func parseTiers(b []byte) (Tiers, error) {
 			return Tiers{}, fmt.Errorf("tier %q: credits are 0 or more, not %d", n, x.Credits)
 		}
 		t.Tiers = append(t.Tiers, Tier{Name: n, Credits: x.Credits, MaxAccounts: x.MaxAccounts, Share: x.Share})
+	}
+	// each alias another word for one tier: none a tier's name, nor
+	// another's alias, whatever its case
+	for name, x := range f.Tiers {
+		n := strings.TrimSpace(name)
+		for _, a := range x.Aliases {
+			a = strings.TrimSpace(a)
+			if a == "" {
+				return Tiers{}, fmt.Errorf("tier %q has an empty alias", n)
+			}
+			if bad := idBad(fmt.Sprintf("tier %q's alias %q", n, a), a); bad != "" {
+				return Tiers{}, errors.New(bad)
+			}
+			if x, taken := t.find(a); taken {
+				return Tiers{}, fmt.Errorf("tier %q's alias %q is already tier %q or its alias (the same whatever the case)", n, a, x.Name)
+			}
+			if t.Aliases == nil {
+				t.Aliases = map[string]string{}
+			}
+			t.Aliases[a] = n
+		}
 	}
 	slices.SortFunc(t.Tiers, func(a, b Tier) int {
 		return cmp.Or(cmp.Compare(a.MaxAccounts, b.MaxAccounts), strings.Compare(a.Name, b.Name))
@@ -289,7 +349,7 @@ func tierOf(h http.Header) (tier Tier, bad string, err error) {
 	if tier, ok := t.find(v); ok {
 		return tier, "", nil
 	}
-	return Tier{}, fmt.Sprintf("%s: %q is none of user-tiers.json's tiers: %s", UserTierHeader, v, strings.Join(t.names(), ", ")), nil
+	return Tier{}, fmt.Sprintf("%s: %q is none of user-tiers.json's tiers: %s", UserTierHeader, v, t.said()), nil
 }
 
 // callerOnly says name is a header that tells magpie of the caller's

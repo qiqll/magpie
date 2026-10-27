@@ -1883,11 +1883,16 @@ value longer than 128 bytes or with control or format characters, is a
 
 ```json
 {"default": "free", "tiers": {
-  "free": {"credits": 1000, "max_accounts": 2, "share": 2},
-  "plus": {"credits": 3000, "max_accounts": 3, "share": 1},
-  "pro":  {"credits": 5000, "max_accounts": 4, "share": 1},
-  "max":  {"credits": 10000, "max_accounts": 5, "share": 1}}}
+  "free": {"credits": 1000, "max_accounts": 2, "share": 2, "aliases": ["1"]},
+  "plus": {"credits": 3000, "max_accounts": 3, "share": 1, "aliases": ["2"]},
+  "pro":  {"credits": 5000, "max_accounts": 4, "share": 1, "aliases": ["3"]},
+  "max":  {"credits": 10000, "max_accounts": 5, "share": 1, "aliases": ["4"]}}}
 ```
+
+`aliases` are other words your service may send in `X-Magpie-User-Tier`
+for the tier, for one that numbers its tiers (`4` for max): taken whatever
+their case, none a tier's name or another tier's alias. The binding keeps,
+and the Gateway page shows, the tier's name, with its aliases beside it.
 
 These are the tiers without the file, which magpie never writes: make it
 to change them. `max_accounts` is how many accounts of each provider a

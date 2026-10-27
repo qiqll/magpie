@@ -168,7 +168,7 @@ func TestUserTierRefusedBad(t *testing.T) {
 	asked, _ := usersUpstream(t, nil)
 	s := byUser(New())
 	for _, c := range []struct{ tier, says string }{
-		{"gold", `gold\" is none of user-tiers.json's tiers: free, plus, pro, max`},
+		{"gold", `gold\" is none of user-tiers.json's tiers: free (1), plus (2), pro (3), max (4)`},
 		{strings.Repeat("t", userMax+1), "at most"},
 		{"a\tb", "control"},
 		{"a\u200bb", "format"},
@@ -184,7 +184,7 @@ func TestUserTierRefusedBad(t *testing.T) {
 	// a request pinned to an account isn't bound, and still needs a tier
 	// there is
 	pinned := postAt(s, "/v1/responses", `{"model":"codex/gpt-5.5","stream":true,"input":"hi"}`, map[string]string{UserHeader: "alice", UserTierHeader: "gold", AccountHeader: "spare@example.com"})
-	if pinned.Code != 400 || !strings.Contains(pinned.Body.String(), "free, plus, pro, max") {
+	if pinned.Code != 400 || !strings.Contains(pinned.Body.String(), "free (1), plus (2), pro (3), max (4)") {
 		t.Errorf("pinned: %d %s", pinned.Code, pinned.Body.String())
 	}
 	if got := asked(true); len(got) != 0 {
