@@ -74,6 +74,9 @@ type userJSON struct {
 	// Tier: the tier its last request named; "" from a magpie before
 	// tiers, which the page shows as the default tier
 	Tier string `json:"tier,omitempty"`
+	// Used: when it last sent the provider a request, to within an hour;
+	// left out for one bound before it was kept
+	Used time.Time `json:"used,omitzero"`
 }
 
 // gatewayUserRoutes serves the Gateway page's User bindings: each
@@ -159,7 +162,7 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			if len(users) == usersShown {
 				continue
 			}
-			uj := userJSON{User: u.User, Provider: u.Provider, ProviderName: p.name, Icon: p.icon, Account: u.Account, Seat: strings.ToLower(u.Who), Key: u.Key, KeyName: keyNames[u.Key], KeyGone: keyGone(u.Key), At: u.At, Tier: u.Tier}
+			uj := userJSON{User: u.User, Provider: u.Provider, ProviderName: p.name, Icon: p.icon, Account: u.Account, Seat: strings.ToLower(u.Who), Key: u.Key, KeyName: keyNames[u.Key], KeyGone: keyGone(u.Key), At: u.At, Tier: u.Tier, Used: u.Used}
 			for _, sp := range u.Spares {
 				uj.Spares = append(uj.Spares, userSpareJSON{Account: sp.Account, Seat: strings.ToLower(sp.Who), At: sp.At})
 			}

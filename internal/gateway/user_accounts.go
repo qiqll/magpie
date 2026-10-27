@@ -1340,6 +1340,9 @@ type UserRow struct {
 	// Tier: the tier its last request named, "" from a magpie before
 	// tiers (the default's then)
 	Tier string
+	// Used: when it last sent the provider a request, to within an hour;
+	// zero from a magpie before it was kept
+	Used time.Time
 }
 
 // UserSpare is one of a user's accounts after its first.
@@ -1372,7 +1375,7 @@ func UserBindings() ([]UserRow, error) {
 				if len(seats) == 0 {
 					continue
 				}
-				row := UserRow{Key: key, Provider: pid, User: u, Who: seats[0].Who, Account: seats[0].Account, At: seats[0].At, Tier: b.Tier}
+				row := UserRow{Key: key, Provider: pid, User: u, Who: seats[0].Who, Account: seats[0].Account, At: seats[0].At, Tier: b.Tier, Used: b.Used}
 				for _, st := range seats[1:] {
 					row.Spares = append(row.Spares, UserSpare(st))
 				}

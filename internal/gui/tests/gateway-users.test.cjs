@@ -1,13 +1,16 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
-// The Gateway page's User bindings: hidden while nobody is bound; with
+// The Gateway page's User bindings: bound by user, shown with nobody
+// bound yet and saying so; bound by session, hidden while nobody is; with
 // users, each provider's accounts counted, as a first or a spare, each
 // said out and until when, able to answer, or unknown (never able to
 // answer when the serving magpie didn't say); the users with their first
 // account and spares in order, each with its state, provider and gateway
 // key; an account no longer on its provider said so; how the gateway
-// binds said, by user with each tier's most accounts, and bound by
+// binds said, by user with each tier's most accounts and how many share
+// an account, and when a seat is let go, and bound by
 // session the bindings kept and shown as they are; each user's tier, the
-// default for one bound before tiers; a search that asks again and keeps its focus and the accounts'
+// default for one bound before tiers; each user's last use, none said for
+// one bound before it was kept; a search that asks again and keeps its focus and the accounts'
 // states; a page of users said as such, and an unreadable file said,
 // never shown as nobody. In every language, wide and narrow, in Chromium
 // and WebKit.
@@ -21,13 +24,15 @@ const assets = path.resolve(__dirname, "../assets");
 const at = new Date(Date.now() - 3 * 3600e3).toISOString();
 // three hours off: untilText says "in 3h" however long the run takes
 const back = new Date(Date.now() + 3 * 3600e3 + 10 * 60e3).toISOString();
+// two hours ago: ago() says "2 hours ago" however long the run takes
+const used = new Date(Date.now() - 2 * 3600e3 - 60e3).toISOString();
 const providers = {
   providers: [{ id: "antigravity", name: "Antigravity", icon: "generic", models: [{ id: "m", name: "M", on: true }], agents: [] }],
   gateway: { running: true, window: true, mine: true, url: "http://127.0.0.1:3999", calls: [], groups: [] },
 };
 const seat = (p, a) => `${p}@${a}`;
 const everyone = [
-  { user: "1", provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), spares: [{ account: "b@x.com", seat: seat("antigravity", "b@x.com"), at }], key: "k1", keyName: "Tenant A", at, tier: "pro" },
+  { user: "1", provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), spares: [{ account: "b@x.com", seat: seat("antigravity", "b@x.com"), at }], key: "k1", keyName: "Tenant A", at, tier: "pro", used },
   { user: "2", provider: "antigravity", providerName: "Antigravity", account: "b@x.com", seat: seat("antigravity", "b@x.com"), spares: [{ account: "f@x.com", seat: seat("antigravity", "f@x.com"), at }], key: "k1", keyName: "Tenant A", at },
   { user: "3", provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), spares: [{ account: "e@x.com", seat: seat("antigravity", "e@x.com"), at }], key: "", keyName: "", at },
   { user: "4", provider: "codex", providerName: "ChatGPT", account: "c@x.com", seat: seat("codex", "c@x.com"), key: "gone", keyName: "", keyGone: true, at },
@@ -36,7 +41,7 @@ const everyone = [
   { user: "6", provider: "codex", providerName: "ChatGPT", account: "c@x.com", seat: seat("codex", "c@x.com"), key: "0123456789abcdef", keyName: "", at: "0001-01-01T00:00:00Z" },
 ];
 // user-tiers.json as the serving magpie holds to it
-const tiers = { default: "free", tiers: [{ name: "free", credits: 1000, max_accounts: 2 }, { name: "pro", credits: 5000, max_accounts: 4 }] };
+const tiers = { default: "free", tiers: [{ name: "free", credits: 1000, max_accounts: 2, share: 2 }, { name: "pro", credits: 5000, max_accounts: 4, share: 1 }, { name: "team", credits: 0, max_accounts: 6, share: 0 }] };
 const accounts = [
   { provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), users: 2, spares: 0, out: "quota", outUntil: back, outKnown: true },
   { provider: "antigravity", providerName: "Antigravity", account: "b@x.com", seat: seat("antigravity", "b@x.com"), users: 2, spares: 1, outKnown: true },
@@ -81,27 +86,27 @@ const words = {
   en: {
     head: "User bindings", two: "2 users", gone: "no longer on its provider", provGone: "no longer in magpie", none: "without a gateway key", removed: "a removed gateway key", keyID: "gateway key 01234567", bound: "bound", match: "No users match “nobody”", more: "Showing 6 of 300", unread: "user-accounts.json can't be read: unexpected end",
     out: "out · quota used up · back in 3h", can: "can answer", unknown: "status unknown", model: "out · rate limited for m-1", spareNote: "2 users, 1 as a spare", first: "first", spare: "spare",
-    byUser: "Bound by user: accounts of each provider each user may have, by its tier: free up to 2 (default) · pro up to 4", tierPro: "tier pro", tierFree: "tier free", tiersUnknown: "Bound by user; the tiers in user-tiers.json are unknown", off: "Binding by user is off (start option --bind=user)",
+    byUser: "Bound by user: accounts of each provider each user may have, by its tier: free up to 2, each shared by up to 2 (default) · pro up to 4, each its own alone · team up to 6, shared by any number A user that sends a provider nothing for 3 days lets go of its accounts there.", empty: "No user is bound yet", lastUsed: "last used 2 hours ago", tierPro: "tier pro", tierFree: "tier free", tiersUnknown: "Bound by user; the tiers in user-tiers.json are unknown", off: "Binding by user is off (start option --bind=user)",
   },
   zh: {
     head: "用户绑定", two: "2 个用户", gone: "已不在该供应商下", provGone: "已不在 magpie 中", none: "未使用网关密钥", removed: "已删除的网关密钥", keyID: "网关密钥 01234567", bound: "绑定", match: "没有和“nobody”匹配的用户", more: "显示 300 个中的 6 个", unread: "无法读取 user-accounts.json：unexpected end",
     out: "暂不可用 · 额度用尽 · 3 小时后恢复", can: "可用", unknown: "状态未知", model: "暂不可用 · m-1 限流", spareNote: "2 个用户，其中 1 个作为备用", first: "主账号", spare: "备用",
-    byUser: "按用户绑定：每个用户在每个供应商下的账号上限按等级：free 最多 2 个（默认） · pro 最多 4 个", tierPro: "等级 pro", tierFree: "等级 free", tiersUnknown: "按用户绑定；user-tiers.json 中的等级未知", off: "按用户绑定未开启（启动参数 --bind=user）",
+    byUser: "按用户绑定：每个用户在每个供应商下的账号上限按等级：free 最多 2 个，每个号最多 2 人共用（默认） · pro 最多 4 个，每个号独占 · team 最多 6 个，共用人数不限 用户 3 天没有向某个供应商发请求，会让出在那里的账号。", empty: "还没有用户被绑定", lastUsed: "最后使用 2小时前", tierPro: "等级 pro", tierFree: "等级 free", tiersUnknown: "按用户绑定；user-tiers.json 中的等级未知", off: "按用户绑定未开启（启动参数 --bind=user）",
   },
   "zh-TW": {
     head: "使用者綁定", two: "2 位使用者", gone: "已不在該供應商下", provGone: "已不在 magpie 中", none: "未使用閘道金鑰", removed: "已刪除的閘道金鑰", keyID: "閘道金鑰 01234567", bound: "綁定", match: "沒有和「nobody」匹配的使用者", more: "顯示 300 位中的 6 位", unread: "無法讀取 user-accounts.json：unexpected end",
     out: "暫不可用 · 額度用盡 · 3 小時後恢復", can: "可用", unknown: "狀態未知", model: "暫不可用 · m-1 限流", spareNote: "2 位使用者，其中 1 位作為備用", first: "主帳號", spare: "備用",
-    byUser: "依使用者綁定：每位使用者在每個供應商下的帳號上限依等級：free 最多 2 個（預設） · pro 最多 4 個", tierPro: "等級 pro", tierFree: "等級 free", tiersUnknown: "依使用者綁定；user-tiers.json 中的等級未知", off: "依使用者綁定未開啟（啟動參數 --bind=user）",
+    byUser: "依使用者綁定：每位使用者在每個供應商下的帳號上限依等級：free 最多 2 個，每個帳號最多 2 人共用（預設） · pro 最多 4 個，每個帳號獨占 · team 最多 6 個，共用人數不限 使用者 3 天沒有向某個供應商發送請求，會讓出在那裡的帳號。", empty: "還沒有使用者被綁定", lastUsed: "最後使用 2小時前", tierPro: "等級 pro", tierFree: "等級 free", tiersUnknown: "依使用者綁定；user-tiers.json 中的等級未知", off: "依使用者綁定未開啟（啟動參數 --bind=user）",
   },
   ja: {
     head: "ユーザーの割り当て", two: "2 ユーザー", gone: "プロバイダにもうありません", provGone: "magpie にもうありません", none: "ゲートウェイキーなし", removed: "削除されたゲートウェイキー", keyID: "ゲートウェイキー 01234567", bound: "割り当て", match: "「nobody」に一致するユーザーはいません", more: "300 件中 6 件を表示中", unread: "user-accounts.json を読み込めません：unexpected end",
     out: "利用不可 · クォータ切れ · 3 時間後に復帰", can: "利用可能", unknown: "状態は不明", model: "利用不可 · m-1 でレート制限", spareNote: "2 ユーザー（うち 1 は予備）", first: "最初", spare: "予備",
-    byUser: "ユーザーごとに割り当て：各ユーザーのプロバイダごとのアカウント上限はティアで決まります：free 最大 2（デフォルト） · pro 最大 4", tierPro: "ティア pro", tierFree: "ティア free", tiersUnknown: "ユーザーごとに割り当て。user-tiers.json のティアは不明です", off: "ユーザーごとの割り当てはオフです（起動オプション --bind=user）",
+    byUser: "ユーザーごとに割り当て：各ユーザーのプロバイダごとのアカウント上限はティアで決まります：free 最大 2、各アカウントを最大 2 人で共有（デフォルト） · pro 最大 4、各アカウントを専有 · team 最大 6、共有人数は無制限 3 日間プロバイダにリクエストを送らなかったユーザーは、そのアカウントを手放します。", empty: "まだ割り当てられたユーザーはいません", lastUsed: "最終利用 2 時間前", tierPro: "ティア pro", tierFree: "ティア free", tiersUnknown: "ユーザーごとに割り当て。user-tiers.json のティアは不明です", off: "ユーザーごとの割り当てはオフです（起動オプション --bind=user）",
   },
   de: {
     head: "Nutzerbindungen", two: "2 Nutzer", gone: "nicht mehr beim Anbieter", provGone: "nicht mehr in magpie", none: "ohne Zugangsschlüssel", removed: "ein entfernter Zugangsschlüssel", keyID: "Zugangsschlüssel 01234567", bound: "gebunden", match: "Keine Nutzer passen zu „nobody“", more: "6 von 300 angezeigt", unread: "user-accounts.json kann nicht gelesen werden: unexpected end",
     out: "nicht verfügbar · Kontingent aufgebraucht · zurück in 3 Std.", can: "verfügbar", unknown: "Status unbekannt", model: "nicht verfügbar · Rate-Limit für m-1", spareNote: "2 Nutzer, 1 als Ersatz", first: "erstes", spare: "Ersatz",
-    byUser: "Nach Nutzer gebunden: Konten je Anbieter für jeden Nutzer nach seiner Stufe: free bis zu 2 (Standard) · pro bis zu 4", tierPro: "Stufe pro", tierFree: "Stufe free", tiersUnknown: "Nach Nutzer gebunden; die Stufen in user-tiers.json sind unbekannt", off: "Bindung nach Nutzer ist aus (Startoption --bind=user)",
+    byUser: "Nach Nutzer gebunden: Konten je Anbieter für jeden Nutzer nach seiner Stufe: free bis zu 2, jedes von bis zu 2 geteilt (Standard) · pro bis zu 4, jedes für sich allein · team bis zu 6, von beliebig vielen geteilt Ein Nutzer, der einem Anbieter 3 Tage lang nichts sendet, gibt seine Konten dort frei.", empty: "Noch kein Nutzer gebunden", lastUsed: "zuletzt genutzt vor 2 Stunden", tierPro: "Stufe pro", tierFree: "Stufe free", tiersUnknown: "Nach Nutzer gebunden; die Stufen in user-tiers.json sind unbekannt", off: "Bindung nach Nutzer ist aus (Startoption --bind=user)",
   },
 };
 
@@ -128,11 +133,20 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const w = words[lang];
         const text = async (l) => (await l.textContent()).replace(/\s+/g, " ").trim();
 
-        // nobody bound: the section stays hidden
+        // nobody bound, by session: the section stays hidden
+        users.mode = "session";
         await page.goto("http://magpie.test/?view=gateway");
         await page.locator("#gateway .name").waitFor();
         await page.waitForFunction(() => typeof userBinds !== "undefined" && userBinds !== null);
-        assert(await page.locator("#userBindsBlock").evaluate((b) => b.hidden), "hidden while nobody is bound");
+        assert(await page.locator("#userBindsBlock").evaluate((b) => b.hidden), "hidden while nobody is bound, by session");
+        // nobody bound, by user: shown, how it binds said, and nobody yet
+        users.mode = "user";
+        await page.reload();
+        await page.locator("#userBinds .none").waitFor();
+        assert(!(await page.locator("#userBindsBlock").evaluate((b) => b.hidden)), "shown by user with nobody bound");
+        assert.equal(await text(page.locator("#userBindsMode")), w.byUser);
+        assert((await text(page.locator("#userBinds .none"))).startsWith(w.empty), "nobody bound yet is said");
+        assert.equal((await page.locator("#userBindsCount").textContent()).trim(), "0");
 
         // users: accounts counted, users with account, provider and key
         users.all = everyone;
@@ -168,6 +182,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert(first.includes(w.tierPro), `the tier its last request named: ${first}`);
         assert((await text(userRows.nth(1))).includes(w.tierFree), "one bound before tiers is of the default tier");
         assert.match(first, new RegExp(w.bound));
+        // Intl spaces "2 小時前" in one engine and not the other
+        assert(first.replace(/\s/g, "").includes(w.lastUsed.replace(/\s/g, "")), `its last use: ${first}`);
+        assert.equal(await userRows.nth(1).locator(".user-used").count(), 0, "no last use said for one bound before it was kept");
         // its first, then its spares in order, each with its state
         const chips = userRows.nth(0).locator(".user-seat");
         assert.equal(await chips.count(), 2);

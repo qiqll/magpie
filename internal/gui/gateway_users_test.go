@@ -238,9 +238,9 @@ func TestGatewayUsersSpares(t *testing.T) {
 	at := time.Date(2026, 10, 22, 4, 21, 33, 0, time.UTC).Format(time.RFC3339)
 	writeUsers(t, fmt.Sprintf(`{"users": {"relay": {
   "old": {"who": %q, "account": "First", "at": %q},
-  "spared": {"who": %q, "account": "First", "at": %q, "more": [{"who": %q, "account": "Second", "at": %q}, {"who": %q, "account": "Third", "at": %q}], "tier": "pro"}
-}}}`, one, at, one, at, two, at, three, at))
-	tiers := &gateway.Tiers{Default: "free", Tiers: []gateway.Tier{{Name: "free", Credits: 1000, MaxAccounts: 2}, {Name: "pro", Credits: 5000, MaxAccounts: 4}}}
+  "spared": {"who": %q, "account": "First", "at": %q, "more": [{"who": %q, "account": "Second", "at": %q}, {"who": %q, "account": "Third", "at": %q}], "tier": "pro", "used": %q}
+}}}`, one, at, one, at, two, at, three, at, at))
+	tiers := &gateway.Tiers{Default: "free", Tiers: []gateway.Tier{{Name: "free", Credits: 1000, MaxAccounts: 2, Share: 2}, {Name: "pro", Credits: 5000, MaxAccounts: 4, Share: 1}}}
 	until := time.Now().Add(40 * time.Minute).UTC().Truncate(time.Second)
 	fakeServing(t, "user", tiers, map[string]gateway.Rest{
 		one:            {Why: "quota", Until: until},
@@ -254,10 +254,13 @@ func TestGatewayUsersSpares(t *testing.T) {
 	for _, u := range out.Users {
 		users[u.User] = u
 	}
-	if u := users["old"]; u.Account != "First" || u.Seat != strings.ToLower(one) || len(u.Spares) != 0 || u.Tier != "" {
+	if u := users["old"]; u.Account != "First" || u.Seat != strings.ToLower(one) || len(u.Spares) != 0 || u.Tier != "" || !u.Used.IsZero() {
 		t.Errorf("a binding from before spares: %+v", u)
 	}
 	u := users["spared"]
+	if u.Used.Format(time.RFC3339) != at {
+		t.Errorf("its last use: %v, want %s", u.Used, at)
+	}
 	if u.Account != "First" || u.Tier != "pro" || len(u.Spares) != 2 || u.Spares[0].Account != "Second" || u.Spares[1].Account != "Third" ||
 		u.Spares[0].Seat != strings.ToLower(two) || u.Spares[1].At.IsZero() {
 		t.Fatalf("its first and spares, in order: %+v", u)

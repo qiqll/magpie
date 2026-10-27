@@ -6,8 +6,9 @@
 // bound only while the gateway binds by user (--bind=user); bound by
 // session, the bindings are shown as they are and nothing is bound by
 // them. Read-only: a user is moved or forgotten in the file, which the
-// gateway reads again when it changes. The section stays hidden while
-// nobody is bound.
+// gateway reads again when it changes. Bound by user the section shows
+// even with nobody bound yet, saying so; bound by session it stays hidden
+// while nobody is.
 //
 // Classic script, loaded before client.js and app.js: nothing here runs
 // as it loads.
@@ -80,17 +81,25 @@ function userSeatChip(u, account, seat, first) {
   return chip;
 }
 
+// how many users an account a user of tier x is on may be bound to
+function userShareSays(x) {
+  if (!x.share) return t("shared by any number");
+  if (x.share === 1) return t("each its own alone");
+  return t("each shared by up to {n}", { n: x.share });
+}
+
 // how the gateway binds, said over the lists: bound by user, each tier
-// of user-tiers.json with the most accounts it gives, the default marked;
-// bound by session, nothing is bound by them, and they are kept as they
-// are
+// of user-tiers.json with the most accounts it gives and how many users
+// share one, the default marked, and when a seat is let go; bound by
+// session, nothing is bound by them, and they are kept as they are
 function userModeSays(m) {
   if (m?.mode === "session") return t("Binding by user is off (start option --bind=user). The bindings below are kept as they are, and used again once it is on.");
   if (m?.mode !== "user") return "";
   const tiers = m.tiers?.tiers || [];
   if (!tiers.length) return t("Bound by user; the tiers in user-tiers.json are unknown");
-  const each = tiers.map((x) => t(x.name === m.tiers.default ? "{tier} up to {n} (default)" : "{tier} up to {n}", { tier: x.name, n: x.max_accounts }));
-  return t("Bound by user: accounts of each provider each user may have, by its tier: {tiers}", { tiers: each.join(" · ") });
+  const each = tiers.map((x) => t(x.name === m.tiers.default ? "{tier} up to {n}, {share} (default)" : "{tier} up to {n}, {share}", { tier: x.name, n: x.max_accounts, share: userShareSays(x) }));
+  return t("Bound by user: accounts of each provider each user may have, by its tier: {tiers}", { tiers: each.join(" · ") }) + " " +
+    t("A user that sends a provider nothing for 3 days lets go of its accounts there.");
 }
 
 // a user's tier: the one its last request named, the default for one
@@ -104,7 +113,9 @@ function renderUserBinds() {
   const accounts = $("#userBindAccounts"), list = $("#userBinds");
   accounts.replaceChildren();
   list.replaceChildren();
-  if (!out || (!out.error && !out.total)) {
+  // bound by user, shown with nobody bound too, for the page to say so
+  const byUser = userBindMode?.mode === "user";
+  if (!out || (!out.error && !out.total && !byUser)) {
     block.hidden = true;
     return;
   }
@@ -152,6 +163,10 @@ function renderUserBinds() {
   q.hidden = out.total < 5 && !userQuery;
 
   const users = out.users || [];
+  if (!out.total) {
+    list.append(el("div", "none", t("No user is bound yet: a request with X-Magpie-User binds its user to an account")));
+    return;
+  }
   if (!users.length) {
     list.append(el("div", "none", t("No users match “{q}”", { q: userShownFor })));
     return;
@@ -170,6 +185,13 @@ function renderUserBinds() {
       const when = el("span", "", " · " + t("bound {when}", { when: ago(u.at) }));
       when.title = stamp(u.at);
       sub.append(when);
+    }
+    // when it last sent the provider a request; none kept for one bound
+    // before magpie noted it
+    if (u.used && !u.used.startsWith("0001-")) {
+      const used = el("span", "user-used", " · " + t("last used {when}", { when: ago(u.used) }));
+      used.title = stamp(u.used);
+      sub.append(used);
     }
     const name = el("div", "name", u.user);
     name.title = u.user; // a long id is cut short in its row

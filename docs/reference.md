@@ -1909,9 +1909,12 @@ started outside `magpie serve`, which refuses), a user's request is a 503
 that says why. A user's tier lowered keeps the accounts it has, in their
 order, and is given no spare while it has as many as the new tier allows
 or more; raised again, it is given spares up to the new tier's. The
-Gateway page's User bindings shows them, once anyone is bound: how the
+Gateway page's User bindings shows them, bound by user even before anyone
+is bound ("No user is bound yet"), bound by session once anyone is: how the
 gateway binds over the list (bound by user, each tier with its most
-accounts and the default marked, or the tiers said unknown; bound by
+accounts, how many users share one ("each its own alone", "each shared by
+up to 2", "shared by any number") and the default marked, and that a user
+idle 3 days lets go of its accounts, or the tiers said unknown; bound by
 session, "Binding by user is off (start option --bind=user)", the
 bindings left in the file shown as they are and nothing removed, since
 they are used again once it is on), each provider's accounts with how
@@ -1921,7 +1924,8 @@ answer now (out, why and until when, one model's rest naming the model;
 "can answer"; one no longer on its provider said so), and the users with
 their first account and spares in order, each marked first or spare with
 its state, provider, gateway key, tier (the default's for one bound before
-tiers) and when they were bound, 200 at a time,
+tiers), when they were bound and when they last sent the provider a
+request ("last used", none for a binding from before it was kept), 200 at a time,
 narrowed by a search, which matches a spare's account too. It only reads
 the file. A file that
 doesn't read keeps the users read before bound and binds nobody new. A
