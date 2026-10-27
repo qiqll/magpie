@@ -501,10 +501,13 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 				// some are another's alone, or shared by as many as can:
 				// those others' accounts are never asked for it
 				ub.Why = "full"
-				return nil, pl, ub, fullRefusal(user, tier, p.ID, cands, uses)
+				return nil, pl, ub, fullRefusal(user, tier, p.ID, cands, pl, uses)
 			}
-			// none can answer now: routed as it would be, bound once one can
+			// none can answer now: routed as it would be among the
+			// provider's, bound once one can; never on to another's
+			// accounts (a fallback), whose seats aren't counted here
 			ub.Why = "none"
+			cands, pl = onlyOf(p.ID, cands, pl)
 			return cands, pl, ub, userRefusal{}
 		}
 		kept = []userSeat{{Who: cands[pick].who(), Account: shownAs(cands[pick]), At: time.Now().UTC()}}
@@ -651,28 +654,74 @@ func (t Tier) shares() string {
 	return fmt.Sprintf("tier %s shares one with %d other users at most", t.Name, t.Share-1)
 }
 
+// onlyOf is cands narrowed to provider pid's, pl's order with them.
+func onlyOf(pid string, cands []candidate, pl planned) ([]candidate, planned) {
+	var out []candidate
+	var order []Weighed
+	for i, c := range cands {
+		if c.p.ID == pid {
+			out = append(out, c)
+			if i < len(pl.order) {
+				order = append(order, pl.order[i])
+			}
+		}
+	}
+	pl.order = order
+	return out, pl
+}
+
 // fullRefusal is why user, of tier, is bound to no account of provider
-// pid: none of cands has a seat for it but those resting, and those taken
+// pid: none of cands has a seat for it but those resting, signed out by
+// their vendor or held at a cap (pl's held and capped), and those taken
 // are never asked for it. A 429, the "quota" of the pool: until the first
-// with a seat is back, when one rests, else unknown, as a user leaves an
-// account only when it goes.
-func fullRefusal(user string, tier Tier, pid string, cands []candidate, uses seatUses) userRefusal {
-	var first Rest
-	resting := false
+// with a seat is back, a rest's end or a window's renewal, else unknown,
+// as a user leaves an account only when it goes.
+func fullRefusal(user string, tier Tier, pid string, cands []candidate, pl planned, uses seatUses) userRefusal {
+	r := userRefusal{status: http.StatusTooManyRequests, limit: failQuota}
+	var why []string
+	marked := false
 	for _, c := range cands {
 		if c.p.ID != pid || !uses.of(c).takes(tier.Share) {
 			continue
 		}
-		if r, ok := restingOf(c); ok && (!resting || r.Until.Before(first.Until)) {
-			first, resting = r, true
+		if rest, ok := restingOf(c); ok {
+			if r.until.IsZero() || rest.Until.Before(r.until) {
+				r.limit, r.until, r.model = cmp.Or(userLimit(rest.Why), failQuota), rest.Until, rest.Model
+				why = []string{fmt.Sprintf("rests until %s (%s)", rest.Until.Format(time.RFC3339), rest.Why)}
+			}
+		} else if provider.SignInMarked(c.p.Account) {
+			marked = true
 		}
 	}
-	msg := fmt.Sprintf("%s: no account of the provider is free for %q: each is taken by as many users as can share it (its %s, %s); nothing was sent", UserHeader, user, tier.shares(), UserTierHeader)
-	if resting {
-		msg = fmt.Sprintf("%s: no account of the provider is free for %q: those its %s (%s) can share rest, the first until %s (%s), and the others are taken; nothing was sent", UserHeader, user, tier.shares(), UserTierHeader, first.Until.Format(time.RFC3339), first.Why)
-		return userRefusal{status: http.StatusTooManyRequests, msg: msg, limit: cmp.Or(userLimit(first.Why), failQuota), until: first.Until, model: first.Model}
+	var held []Weighed
+	for _, c := range append(slices.Clone(pl.held), pl.capped...) {
+		if c.p.ID != pid || !uses.of(c).takes(tier.Share) {
+			continue
+		}
+		for _, w := range pl.left {
+			if leftIs(w, pid, c.who()) && (w.Capped > 0 || w.NoCredits) && !slices.ContainsFunc(held, func(h Weighed) bool { return h.ID == w.ID && h.Who == w.Who }) {
+				held = append(held, w)
+			}
+		}
 	}
-	return userRefusal{status: http.StatusTooManyRequests, msg: msg, limit: failQuota}
+	if len(held) > 0 {
+		msg, back := cappedError(held[0].Model, held, time.Now())
+		if !back.IsZero() && (r.until.IsZero() || back.Before(r.until)) {
+			r.limit, r.until, r.model = cappedLimit(held), back, ""
+			why = []string{msg}
+		} else if len(why) == 0 {
+			r.limit, why = cappedLimit(held), []string{msg}
+		}
+	}
+	if marked {
+		why = append(why, "one is signed out by its vendor")
+	}
+	if len(why) == 0 {
+		r.msg = fmt.Sprintf("%s: no account of the provider is free for %q: each is taken by as many users as can share it (its %s, %s); nothing was sent", UserHeader, user, tier.shares(), UserTierHeader)
+		return r
+	}
+	r.msg = fmt.Sprintf("%s: no account of the provider is free for %q: of those its %s (%s) can share, the first back %s, and the others are taken; nothing was sent", UserHeader, user, tier.shares(), UserTierHeader, strings.Join(why, "; "))
+	return r
 }
 
 // growUser gives u, bound to accounts of p none of which can answer the

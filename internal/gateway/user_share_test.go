@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // share is read from user-tiers.json: 0 when absent (no limit, as a file
@@ -156,7 +158,35 @@ func TestFullPoolSaysWhenASharedOneIsBack(t *testing.T) {
 	}
 	asked(true)
 	rec := tierPost(s, "carol", "free", "hi")
-	if limit, until := limitOf(t, rec); rec.Code != 429 || limit != "quota" || !near(until, 2*time.Hour) || !strings.Contains(rec.Body.String(), "can share rest") {
+	if limit, until := limitOf(t, rec); rec.Code != 429 || limit != "quota" || !near(until, 2*time.Hour) || !strings.Contains(rec.Body.String(), "the first back rests until") {
+		t.Fatalf("carol: %d %q until %v %s", rec.Code, limit, until, rec.Body.String())
+	}
+	if got := asked(true); len(got) != 0 {
+		t.Fatalf("asked: %v", got)
+	}
+}
+
+// With the account a new free user could share held at the usage cap set
+// on it, and the other taken, it is told "cap" and when the window
+// renews, not a pool full for good.
+func TestFullPoolSaysWhenASharedOneRenews(t *testing.T) {
+	codexSignedIn(t, "b@example.com")
+	asked, _ := usersUpstream(t, nil)
+	s := byUser(New())
+	if rec := tierPost(s, "alice", "pro", "hi"); rec.Code != 200 {
+		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := tierPost(s, "bob", "free", "hi"); rec.Code != 200 {
+		t.Fatalf("bob: %d %s", rec.Code, rec.Body.String())
+	}
+	asked(true)
+	bobs := seatsIn(t, "codex")["bob"][0]
+	capUsage(t, map[string]float64{bobs: 75})
+	if err := provider.SetAccountCap("codex", bobs, 70); err != nil {
+		t.Fatal(err)
+	}
+	rec := tierPost(s, "carol", "free", "hi")
+	if limit, until := limitOf(t, rec); rec.Code != 429 || limit != "cap" || !near(until, 3*time.Hour) {
 		t.Fatalf("carol: %d %q until %v %s", rec.Code, limit, until, rec.Body.String())
 	}
 	if got := asked(true); len(got) != 0 {
