@@ -1848,7 +1848,11 @@ sends a provider nothing for 3 days lets go of its accounts there too, so
 another can take them: the release is made by the next user's request to
 that provider, its own never (`sweepIdle`, `userIdle`), and a binding kept
 before magpie noted a last use (no `used`) is stamped then, never let go
-at once. An account goes from a
+at once. A user waiting out a rest magpie told it of (`X-Magpie-User-Until`)
+is in use until that rest ends. When no user sent the provider anything
+for 12 hours or more (the gateway was down, or nobody came), that time
+doesn't count toward anyone's 3 days. Requests served while
+`user-accounts.json` doesn't read count too, once it reads again. An account goes from a
 user only when it is no longer on the provider (signed out, switched off,
 removed) or its vendor turns it away for good (a sign-in revoked that a
 refresh doesn't mend, an account restricted or to be verified), never for

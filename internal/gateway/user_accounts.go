@@ -187,7 +187,7 @@ type userBinding struct {
 	Tier    string     `json:"tier,omitempty"`
 	// Used is when the user last sent the provider a request, to within
 	// userUsedEvery; zero from a magpie before it, stamped now when seen
-	Used time.Time `json:"used,omitempty"`
+	Used time.Time `json:"used,omitzero"`
 }
 
 // seats is b's accounts, its first first; one named twice, or by
@@ -230,13 +230,90 @@ const userIdle = 3 * 24 * time.Hour
 // on every request.
 const userUsedEvery = time.Hour
 
+// userSeen is when each user last sent a provider a request in this
+// process, gateway key, provider and user (seenKey) → when: kept while
+// user-accounts.json doesn't read too, so a user served from memory then
+// isn't idle for the file's older `used` once it reads again.
+var userSeen = struct {
+	sync.Mutex
+	m map[string]time.Time
+}{m: map[string]time.Time{}}
+
+func seenKey(keyID, pid, user string) string { return keyID + "\x00" + pid + "\x00" + user }
+
+// noteSeen notes now as user's last request to provider pid, of keyID.
+func noteSeen(keyID, pid, user string, now time.Time) {
+	userSeen.Lock()
+	userSeen.m[seenKey(keyID, pid, user)] = now
+	userSeen.Unlock()
+}
+
+// lastUse is when b, user's of keyID to provider pid, was last in use, as
+// of now: its `used` (one ahead of now, edited or the clock set back, is
+// now), this process's last request of it (userSeen), and the end of a
+// rest one of its accounts is on, which the user was told to wait out.
+func lastUse(b userBinding, keyID, pid, user string, now time.Time) time.Time {
+	last := b.Used
+	if last.After(now) {
+		last = now
+	}
+	userSeen.Lock()
+	if t := userSeen.m[seenKey(keyID, pid, user)]; t.After(last) {
+		last = t
+	}
+	userSeen.Unlock()
+	for _, st := range b.seats() {
+		if r, ok := restOf(strings.ToLower(st.Who)); ok && r.Until.After(last) {
+			last = r.Until
+		}
+	}
+	return last
+}
+
+// userGap is how long a provider gets no request from any user before
+// that time stops counting toward anyone's userIdle: a gateway down, or
+// nobody needing a seat, for a long weekend lets nobody go for it.
+const userGap = 12 * time.Hour
+
 // sweepIdle lets go of every binding to provider pid, of every gateway key,
-// whose user has sent it nothing for userIdle, but user's of keyID, whose
-// request this is; one with no Used yet (bound before it was kept) is
-// stamped now instead, so an upgrade frees nobody at once. changed says
-// a binding was, for the file to be written. Called with userBinds held,
-// never while the file doesn't read.
+// whose user has sent it nothing for userIdle (lastUse), but user's of
+// keyID, whose request this is. When no user sent pid anything for
+// userGap or more before this request, that gap doesn't count: every
+// binding's Used moves on by it, as if the clock had stopped. One with no
+// Used yet (bound before it was kept) is stamped now instead, so an
+// upgrade frees nobody at once. changed says a binding was, for the file
+// to be written. Called with userBinds held, never while the file
+// doesn't read.
 func sweepIdle(pid, keyID, user string, now time.Time) (changed bool) {
+	last := func(k, u string, b userBinding) time.Time {
+		if t := lastUse(b, k, pid, u, now); t.Before(now) {
+			return t
+		}
+		return now
+	}
+	var prev time.Time
+	for k, ps := range userBinds.m {
+		for u, b := range ps[pid] {
+			if t := last(k, u, b); !b.Used.IsZero() && t.After(prev) {
+				prev = t
+			}
+		}
+	}
+	if gap := now.Sub(prev); !prev.IsZero() && gap >= userGap {
+		for k, ps := range userBinds.m {
+			for u, b := range ps[pid] {
+				if !b.Used.IsZero() {
+					b.Used = last(k, u, b).Add(gap)
+					if b.Used.After(now) {
+						b.Used = now
+					}
+					ps[pid][u] = b
+					changed = true
+				}
+			}
+		}
+		log.Printf("user accounts: no user sent %s a request for %s: that time doesn't count toward any user's %s idle", pid, gap.Round(time.Minute), userIdle)
+	}
 	gone := 0
 	for k, ps := range userBinds.m {
 		for u, b := range ps[pid] {
@@ -246,10 +323,13 @@ func sweepIdle(pid, keyID, user string, now time.Time) (changed bool) {
 				b.Used = now
 				ps[pid][u] = b
 				changed = true
-			case now.Sub(b.Used) >= userIdle:
+			case now.Sub(last(k, u, b)) >= userIdle:
 				delete(ps[pid], u)
 				gone++
 			}
+		}
+		if len(ps[pid]) == 0 {
+			delete(ps, pid)
 		}
 	}
 	if gone > 0 {
@@ -263,7 +343,7 @@ func sweepIdle(pid, keyID, user string, now time.Time) (changed bool) {
 // was. Called with userBinds held.
 func touchUsed(keyID, pid, user string, now time.Time) (changed bool) {
 	b, ok := userBinds.m[keyID][pid][user]
-	if !ok || now.Sub(b.Used) < userUsedEvery {
+	if !ok || now.Sub(b.Used) < userUsedEvery && !b.Used.After(now) {
 		return false
 	}
 	b.Used = now
@@ -371,6 +451,11 @@ func loadUsers() error {
 	path := usersPath()
 	if path != userBinds.path {
 		userBinds.m, userBinds.path, userBinds.mod, userBinds.size, userBinds.read, userBinds.stale = nil, path, time.Time{}, 0, false, false
+		// another file's users: what this process saw of the last one's
+		// isn't theirs
+		userSeen.Lock()
+		clear(userSeen.m)
+		userSeen.Unlock()
 	}
 	fi, err := os.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -518,8 +603,10 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 	}
 	ub := &UserBound{User: user, Tier: tier.Name, key: keyID, pid: p.ID, max: tier.MaxAccounts, tier: tier}
 	// users idle for days let go of their seats before any are counted;
-	// never written over a file that doesn't read
+	// never written over a file that doesn't read, but this request seen
+	// all the same
 	now := time.Now().UTC()
+	defer noteSeen(keyID, p.ID, user, now)
 	if !userBinds.stale && sweepIdle(p.ID, keyID, user, now) {
 		saveUsersLogged()
 	}
