@@ -500,8 +500,11 @@ func TestInfoSaysTheTiers(t *testing.T) {
 	if json.Unmarshal(out["tiers"], &tiers) != nil || string(out["bind"]) != `"user"` || tiers.Default != "basic" || len(tiers.Tiers) != 2 || tiers.Tiers[1] != (Tier{"team", 0, 6, 0}) {
 		t.Fatalf("by user: %s", mustJSON(out))
 	}
+	if string(out["idle_hours"]) != "72" {
+		t.Fatalf("by user, idle hours: %s", out["idle_hours"])
+	}
 	writeTiers(t, `{"default":`)
-	if out := info(New()); string(out["bind"]) != `"session"` || out["tiers"] != nil {
+	if out := info(New()); string(out["bind"]) != `"session"` || out["tiers"] != nil || out["idle_hours"] != nil {
 		t.Fatalf("by session: %s", mustJSON(out))
 	}
 }

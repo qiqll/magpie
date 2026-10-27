@@ -72,7 +72,7 @@ function serve(lang, users) {
       const hit = users.all.filter((u) => words.every((w) => hay(u).includes(w)));
       // a search leaves the accounts and the mode out, as the server does
       const out = { total: users.all.length, matched: hit.length + (users.more || 0), users: hit };
-      if (!url.searchParams.get("q")) Object.assign(out, { accounts: users.all.length ? accounts : [], mode: users.mode, tiers: users.tiers });
+      if (!url.searchParams.get("q")) Object.assign(out, { accounts: users.all.length ? accounts : [], mode: users.mode, tiers: users.tiers, idleHours: users.idleHours });
       return json(out);
     }
     if (url.pathname.startsWith("/api/")) return json({});
@@ -86,27 +86,27 @@ const words = {
   en: {
     head: "User bindings", two: "2 users", gone: "no longer on its provider", provGone: "no longer in magpie", none: "without a gateway key", removed: "a removed gateway key", keyID: "gateway key 01234567", bound: "bound", match: "No users match “nobody”", more: "Showing 6 of 300", unread: "user-accounts.json can't be read: unexpected end",
     out: "out · quota used up · back in 3h", can: "can answer", unknown: "status unknown", model: "out · rate limited for m-1", spareNote: "2 users, 1 as a spare", first: "first", spare: "spare",
-    byUser: "Bound by user: accounts of each provider each user may have, by its tier: free up to 2, each shared by up to 2 (default) · pro up to 4, each its own alone · team up to 6, shared by any number A user that sends a provider nothing for 3 days lets go of its accounts there.", empty: "No user is bound yet", lastUsed: "last used 2 hours ago", tierPro: "tier pro", tierFree: "tier free", tiersUnknown: "Bound by user; the tiers in user-tiers.json are unknown", off: "Binding by user is off (start option --bind=user)",
+    byUser: "Bound by user: accounts of each provider each user may have, by its tier: free up to 2, each shared by up to 2 (default) · pro up to 4, each its own alone · team up to 6, shared by any number. A user that sends a provider nothing for 3 days lets go of its accounts there.", byUserNoIdle: "Bound by user: accounts of each provider each user may have, by its tier: free up to 2, each shared by up to 2 (default) · pro up to 4, each its own alone · team up to 6, shared by any number.", empty: "No user is bound yet", lastUsed: "last used 2 hours ago", tierPro: "tier pro", tierFree: "tier free", tiersUnknown: "Bound by user; the tiers in user-tiers.json are unknown.", off: "Binding by user is off (start option --bind=user)",
   },
   zh: {
     head: "用户绑定", two: "2 个用户", gone: "已不在该供应商下", provGone: "已不在 magpie 中", none: "未使用网关密钥", removed: "已删除的网关密钥", keyID: "网关密钥 01234567", bound: "绑定", match: "没有和“nobody”匹配的用户", more: "显示 300 个中的 6 个", unread: "无法读取 user-accounts.json：unexpected end",
     out: "暂不可用 · 额度用尽 · 3 小时后恢复", can: "可用", unknown: "状态未知", model: "暂不可用 · m-1 限流", spareNote: "2 个用户，其中 1 个作为备用", first: "主账号", spare: "备用",
-    byUser: "按用户绑定：每个用户在每个供应商下的账号上限按等级：free 最多 2 个，每个号最多 2 人共用（默认） · pro 最多 4 个，每个号独占 · team 最多 6 个，共用人数不限 用户 3 天没有向某个供应商发请求，会让出在那里的账号。", empty: "还没有用户被绑定", lastUsed: "最后使用 2小时前", tierPro: "等级 pro", tierFree: "等级 free", tiersUnknown: "按用户绑定；user-tiers.json 中的等级未知", off: "按用户绑定未开启（启动参数 --bind=user）",
+    byUser: "按用户绑定：每个用户在每个供应商下的账号上限按等级：free 最多 2 个，每个号最多 2 人共用（默认） · pro 最多 4 个，每个号独占 · team 最多 6 个，共用人数不限。 用户 3 天没有向某个供应商发请求，会让出在那里的账号。", byUserNoIdle: "按用户绑定：每个用户在每个供应商下的账号上限按等级：free 最多 2 个，每个号最多 2 人共用（默认） · pro 最多 4 个，每个号独占 · team 最多 6 个，共用人数不限。", empty: "还没有用户被绑定", lastUsed: "最后使用 2小时前", tierPro: "等级 pro", tierFree: "等级 free", tiersUnknown: "按用户绑定；user-tiers.json 中的等级未知。", off: "按用户绑定未开启（启动参数 --bind=user）",
   },
   "zh-TW": {
     head: "使用者綁定", two: "2 位使用者", gone: "已不在該供應商下", provGone: "已不在 magpie 中", none: "未使用閘道金鑰", removed: "已刪除的閘道金鑰", keyID: "閘道金鑰 01234567", bound: "綁定", match: "沒有和「nobody」匹配的使用者", more: "顯示 300 位中的 6 位", unread: "無法讀取 user-accounts.json：unexpected end",
     out: "暫不可用 · 額度用盡 · 3 小時後恢復", can: "可用", unknown: "狀態未知", model: "暫不可用 · m-1 限流", spareNote: "2 位使用者，其中 1 位作為備用", first: "主帳號", spare: "備用",
-    byUser: "依使用者綁定：每位使用者在每個供應商下的帳號上限依等級：free 最多 2 個，每個帳號最多 2 人共用（預設） · pro 最多 4 個，每個帳號獨占 · team 最多 6 個，共用人數不限 使用者 3 天沒有向某個供應商發送請求，會讓出在那裡的帳號。", empty: "還沒有使用者被綁定", lastUsed: "最後使用 2小時前", tierPro: "等級 pro", tierFree: "等級 free", tiersUnknown: "依使用者綁定；user-tiers.json 中的等級未知", off: "依使用者綁定未開啟（啟動參數 --bind=user）",
+    byUser: "依使用者綁定：每位使用者在每個供應商下的帳號上限依等級：free 最多 2 個，每個帳號最多 2 人共用（預設） · pro 最多 4 個，每個帳號獨占 · team 最多 6 個，共用人數不限。 使用者 3 天沒有向某個供應商發送請求，會讓出在那裡的帳號。", byUserNoIdle: "依使用者綁定：每位使用者在每個供應商下的帳號上限依等級：free 最多 2 個，每個帳號最多 2 人共用（預設） · pro 最多 4 個，每個帳號獨占 · team 最多 6 個，共用人數不限。", empty: "還沒有使用者被綁定", lastUsed: "最後使用 2小時前", tierPro: "等級 pro", tierFree: "等級 free", tiersUnknown: "依使用者綁定；user-tiers.json 中的等級未知。", off: "依使用者綁定未開啟（啟動參數 --bind=user）",
   },
   ja: {
     head: "ユーザーの割り当て", two: "2 ユーザー", gone: "プロバイダにもうありません", provGone: "magpie にもうありません", none: "ゲートウェイキーなし", removed: "削除されたゲートウェイキー", keyID: "ゲートウェイキー 01234567", bound: "割り当て", match: "「nobody」に一致するユーザーはいません", more: "300 件中 6 件を表示中", unread: "user-accounts.json を読み込めません：unexpected end",
     out: "利用不可 · クォータ切れ · 3 時間後に復帰", can: "利用可能", unknown: "状態は不明", model: "利用不可 · m-1 でレート制限", spareNote: "2 ユーザー（うち 1 は予備）", first: "最初", spare: "予備",
-    byUser: "ユーザーごとに割り当て：各ユーザーのプロバイダごとのアカウント上限はティアで決まります：free 最大 2、各アカウントを最大 2 人で共有（デフォルト） · pro 最大 4、各アカウントを専有 · team 最大 6、共有人数は無制限 3 日間プロバイダにリクエストを送らなかったユーザーは、そのアカウントを手放します。", empty: "まだ割り当てられたユーザーはいません", lastUsed: "最終利用 2 時間前", tierPro: "ティア pro", tierFree: "ティア free", tiersUnknown: "ユーザーごとに割り当て。user-tiers.json のティアは不明です", off: "ユーザーごとの割り当てはオフです（起動オプション --bind=user）",
+    byUser: "ユーザーごとに割り当て：各ユーザーのプロバイダごとのアカウント上限はティアで決まります：free 最大 2、各アカウントを最大 2 人で共有（デフォルト） · pro 最大 4、各アカウントを専有 · team 最大 6、共有人数は無制限。 3 日間プロバイダにリクエストを送らなかったユーザーは、そのアカウントを手放します。", byUserNoIdle: "ユーザーごとに割り当て：各ユーザーのプロバイダごとのアカウント上限はティアで決まります：free 最大 2、各アカウントを最大 2 人で共有（デフォルト） · pro 最大 4、各アカウントを専有 · team 最大 6、共有人数は無制限。", empty: "まだ割り当てられたユーザーはいません", lastUsed: "最終利用 2 時間前", tierPro: "ティア pro", tierFree: "ティア free", tiersUnknown: "ユーザーごとに割り当て。user-tiers.json のティアは不明です。", off: "ユーザーごとの割り当てはオフです（起動オプション --bind=user）",
   },
   de: {
     head: "Nutzerbindungen", two: "2 Nutzer", gone: "nicht mehr beim Anbieter", provGone: "nicht mehr in magpie", none: "ohne Zugangsschlüssel", removed: "ein entfernter Zugangsschlüssel", keyID: "Zugangsschlüssel 01234567", bound: "gebunden", match: "Keine Nutzer passen zu „nobody“", more: "6 von 300 angezeigt", unread: "user-accounts.json kann nicht gelesen werden: unexpected end",
     out: "nicht verfügbar · Kontingent aufgebraucht · zurück in 3 Std.", can: "verfügbar", unknown: "Status unbekannt", model: "nicht verfügbar · Rate-Limit für m-1", spareNote: "2 Nutzer, 1 als Ersatz", first: "erstes", spare: "Ersatz",
-    byUser: "Nach Nutzer gebunden: Konten je Anbieter für jeden Nutzer nach seiner Stufe: free bis zu 2, jedes von bis zu 2 geteilt (Standard) · pro bis zu 4, jedes für sich allein · team bis zu 6, von beliebig vielen geteilt Ein Nutzer, der einem Anbieter 3 Tage lang nichts sendet, gibt seine Konten dort frei.", empty: "Noch kein Nutzer gebunden", lastUsed: "zuletzt genutzt vor 2 Stunden", tierPro: "Stufe pro", tierFree: "Stufe free", tiersUnknown: "Nach Nutzer gebunden; die Stufen in user-tiers.json sind unbekannt", off: "Bindung nach Nutzer ist aus (Startoption --bind=user)",
+    byUser: "Nach Nutzer gebunden: Konten je Anbieter für jeden Nutzer nach seiner Stufe: free bis zu 2, jedes von bis zu 2 Nutzern geteilt (Standard) · pro bis zu 4, jedes Konto nur für einen Nutzer · team bis zu 6, von beliebig vielen Nutzern geteilt. Ein Nutzer, der einem Anbieter 3 Tage lang nichts sendet, gibt seine Konten dort frei.", byUserNoIdle: "Nach Nutzer gebunden: Konten je Anbieter für jeden Nutzer nach seiner Stufe: free bis zu 2, jedes von bis zu 2 Nutzern geteilt (Standard) · pro bis zu 4, jedes Konto nur für einen Nutzer · team bis zu 6, von beliebig vielen Nutzern geteilt.", empty: "Noch kein Nutzer gebunden", lastUsed: "zuletzt genutzt vor 2 Stunden", tierPro: "Stufe pro", tierFree: "Stufe free", tiersUnknown: "Nach Nutzer gebunden; die Stufen in user-tiers.json sind unbekannt.", off: "Bindung nach Nutzer ist aus (Startoption --bind=user)",
   },
 };
 
@@ -121,7 +121,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         page.setDefaultTimeout(5000);
         const errors = [];
         page.on("pageerror", (e) => errors.push(e.message));
-        const users = { all: [], asked: [], mode: "user", tiers };
+        const users = { all: [], asked: [], mode: "user", tiers, idleHours: 72 };
         await page.route("**/*", serve(lang, users));
         t.after(async () => {
           if (process.env.ARTIFACT_DIR) {
@@ -250,9 +250,16 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         users.tiers = undefined;
         await page.reload();
         await page.locator("#userBinds .user-bind").first().waitFor();
-        assert.equal(await text(page.locator("#userBindsMode")), w.tiersUnknown);
+        assert((await text(page.locator("#userBindsMode"))).startsWith(w.tiersUnknown + " "), "tiers unknown, the idle still said");
         assert((await text(userRows.nth(0))).includes(w.tierPro));
         assert(!(await text(userRows.nth(1))).includes(w.tierFree), "no default said while the tiers are unknown");
+        // a serving magpie that doesn't say it lets idle users go: not claimed
+        users.tiers = tiers;
+        users.idleHours = undefined;
+        await page.reload();
+        await page.locator("#userBinds .user-bind").first().waitFor();
+        assert.equal(await text(page.locator("#userBindsMode")), w.byUserNoIdle, "no idle claimed for a magpie that doesn't say");
+        users.idleHours = 72;
         // an older magpie that doesn't say how it binds: nothing said
         users.mode = undefined;
         await page.reload();

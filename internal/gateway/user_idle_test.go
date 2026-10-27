@@ -335,3 +335,35 @@ func TestUserIdleOfAnotherKey(t *testing.T) {
 		t.Fatalf("b's carol let go: %+v", f.Keys)
 	}
 }
+
+// The Gateway page is told a user's last use as this process saw it (the
+// file is written once an hour), and never ahead of now.
+func TestUserUsedShownAsSeen(t *testing.T) {
+	codexSignedIn(t)
+	usersUpstream(t, nil)
+	s := byUser(New())
+	kept := ago(30 * time.Minute)
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"carol": bound("me@example.com", "pro", kept),
+		"ahead": bound("me@example.com", "free", ago(-days(1)))}}})
+	if rec := tierPost(s, "carol", "pro", "hi"); rec.Code != 200 {
+		t.Fatalf("carol: %d %s", rec.Code, rec.Body.String())
+	}
+	if used := usedIn(t, "codex", "carol"); !used.Equal(kept) {
+		t.Fatalf("the file written within the hour: %v", used)
+	}
+	rows, err := UserBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]time.Time{}
+	for _, r := range rows {
+		got[r.User] = r.Used
+	}
+	if !near(got["carol"], 0) {
+		t.Errorf("carol shown at %v, not as seen now", got["carol"])
+	}
+	if got["ahead"].After(time.Now()) || !near(got["ahead"], 0) {
+		t.Errorf("ahead shown at %v", got["ahead"])
+	}
+}

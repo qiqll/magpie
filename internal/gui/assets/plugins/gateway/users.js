@@ -34,7 +34,7 @@ async function loadUserBinds() {
   userShownFor = q;
   if (out?.accounts) {
     userAccounts = out.accounts;
-    userBindMode = { mode: out.mode || "", tiers: out.tiers || null };
+    userBindMode = { mode: out.mode || "", tiers: out.tiers || null, idleHours: out.idleHours || 0 };
   }
   renderUserBinds();
 }
@@ -81,7 +81,9 @@ function userSeatChip(u, account, seat, first) {
   return chip;
 }
 
-// how many users an account a user of tier x is on may be bound to
+// how many users an account a user of tier x is on may be bound to; a
+// share left out (a magpie before shares) is 0 as well: no limit, as it
+// binds
 function userShareSays(x) {
   if (!x.share) return t("shared by any number");
   if (x.share === 1) return t("each its own alone");
@@ -90,16 +92,27 @@ function userShareSays(x) {
 
 // how the gateway binds, said over the lists: bound by user, each tier
 // of user-tiers.json with the most accounts it gives and how many users
-// share one, the default marked, and when a seat is let go; bound by
-// session, nothing is bound by them, and they are kept as they are
+// share one, the default marked, and when a seat is let go, as the
+// magpie serving says (an older one lets nobody go, and doesn't say);
+// bound by session, nothing is bound by them, and they are kept as they
+// are
 function userModeSays(m) {
   if (m?.mode === "session") return t("Binding by user is off (start option --bind=user). The bindings below are kept as they are, and used again once it is on.");
   if (m?.mode !== "user") return "";
   const tiers = m.tiers?.tiers || [];
-  if (!tiers.length) return t("Bound by user; the tiers in user-tiers.json are unknown");
-  const each = tiers.map((x) => t(x.name === m.tiers.default ? "{tier} up to {n}, {share} (default)" : "{tier} up to {n}, {share}", { tier: x.name, n: x.max_accounts, share: userShareSays(x) }));
-  return t("Bound by user: accounts of each provider each user may have, by its tier: {tiers}", { tiers: each.join(" · ") }) + " " +
-    t("A user that sends a provider nothing for 3 days lets go of its accounts there.");
+  let says;
+  if (!tiers.length) says = t("Bound by user; the tiers in user-tiers.json are unknown.");
+  else {
+    const each = tiers.map((x) => t(x.name === m.tiers.default ? "{tier} up to {n}, {share} (default)" : "{tier} up to {n}, {share}", { tier: x.name, n: x.max_accounts, share: userShareSays(x) }));
+    says = t("Bound by user: accounts of each provider each user may have, by its tier: {tiers}.", { tiers: each.join(" · ") });
+  }
+  if (m.idleHours > 0) {
+    const days = m.idleHours / 24;
+    says += " " + (Number.isInteger(days)
+      ? t("A user that sends a provider nothing for {n} days lets go of its accounts there.", { n: days })
+      : t("A user that sends a provider nothing for {n} hours lets go of its accounts there.", { n: m.idleHours }));
+  }
+  return says;
 }
 
 // a user's tier: the one its last request named, the default for one

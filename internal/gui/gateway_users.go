@@ -143,6 +143,9 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			if bind.tiers != nil {
 				out["tiers"] = bind.tiers
 			}
+			if bind.idleHours > 0 {
+				out["idleHours"] = bind.idleHours
+			}
 			out["accounts"] = userAccounts(rows, byID, seats, bind.rests, nameOf, providerGone)
 		}
 		words := strings.Fields(strings.ToLower(q))
@@ -225,6 +228,10 @@ type gatewayBinding struct {
 	// accounts a user may have; nil when not known or bound by session
 	tiers *gateway.Tiers
 	rests map[string]gateway.Rest
+	// idleHours: bound by user, how long a user sends nothing before its
+	// accounts are let go; 0 when the magpie serving doesn't say (an
+	// older one, which lets nobody go)
+	idleHours int
 }
 
 // tiersOf is the tiers user-tiers.json holds as this process reads it,
@@ -240,6 +247,14 @@ func tiersOf(b gateway.Binding) *gateway.Tiers {
 	return &t
 }
 
+// idleOf is this magpie's idle hours bound as mode says: none by session.
+func idleOf(mode string) int {
+	if mode == gateway.BindUser {
+		return gateway.UserIdleHours
+	}
+	return 0
+}
+
 // servingBinding is gatewayBinding of the gateway as it serves now: this
 // process's own when it serves it; else the magpie serving's as it says,
 // rests nil (unknown) when it doesn't tell them; else, while something
@@ -249,15 +264,19 @@ func tiersOf(b gateway.Binding) *gateway.Tiers {
 func servingBinding() gatewayBinding {
 	if gw := served.Load(); gw != nil {
 		b := gw.Binding()
-		return gatewayBinding{b.Mode, tiersOf(b), gateway.Rests()}
+		return gatewayBinding{b.Mode, tiersOf(b), gateway.Rests(), idleOf(b.Mode)}
 	}
 	if o := gateway.ServedBy(); o.Running {
 		rests, _ := gateway.OwnerRests()
-		return gatewayBinding{o.Bind, o.Tiers, rests}
+		idle := 0
+		if o.Bind == gateway.BindUser {
+			idle = o.IdleHours
+		}
+		return gatewayBinding{o.Bind, o.Tiers, rests, idle}
 	}
 	if gateway.Taken() {
 		return gatewayBinding{}
 	}
 	b, _ := gateway.BindingFromEnv()
-	return gatewayBinding{b.Mode, tiersOf(b), map[string]gateway.Rest{}}
+	return gatewayBinding{b.Mode, tiersOf(b), map[string]gateway.Rest{}, idleOf(b.Mode)}
 }

@@ -225,6 +225,9 @@ func (b userBinding) withSeats(seats []userSeat) userBinding {
 // of its accounts there (sweepIdle).
 const userIdle = 3 * 24 * time.Hour
 
+// UserIdleHours is userIdle in hours, as the gateway tells the Gateway page.
+const UserIdleHours = int(userIdle / time.Hour)
+
 // userUsedEvery is how stale a binding's Used may get before a request
 // writes it again: the file is written once an hour a user at most, not
 // on every request.
@@ -1368,6 +1371,7 @@ func UserBindings() ([]UserRow, error) {
 		return nil, err
 	}
 	var out []UserRow
+	now := time.Now().UTC()
 	add := func(key string, ps map[string]map[string]userBinding) {
 		for pid, us := range ps {
 			for u, b := range us {
@@ -1375,7 +1379,7 @@ func UserBindings() ([]UserRow, error) {
 				if len(seats) == 0 {
 					continue
 				}
-				row := UserRow{Key: key, Provider: pid, User: u, Who: seats[0].Who, Account: seats[0].Account, At: seats[0].At, Tier: b.Tier, Used: b.Used}
+				row := UserRow{Key: key, Provider: pid, User: u, Who: seats[0].Who, Account: seats[0].Account, At: seats[0].At, Tier: b.Tier, Used: shownUsed(b.Used, key, pid, u, now)}
 				for _, st := range seats[1:] {
 					row.Spares = append(row.Spares, UserSpare(st))
 				}
@@ -1390,6 +1394,25 @@ func UserBindings() ([]UserRow, error) {
 		}
 	}
 	return out, nil
+}
+
+// shownUsed is a binding's last use as the Gateway page says it: the
+// file's, or this process's later request of it (userSeen: the file is
+// written once an hour), never ahead of now (an edited file, a clock set
+// back). Zero stays zero: none kept for a binding from before it was.
+func shownUsed(used time.Time, keyID, pid, user string, now time.Time) time.Time {
+	if used.IsZero() {
+		return used
+	}
+	userSeen.Lock()
+	if t := userSeen.m[seenKey(keyID, pid, user)]; t.After(used) {
+		used = t
+	}
+	userSeen.Unlock()
+	if used.After(now) {
+		used = now
+	}
+	return used
 }
 
 // UserSeats is who every account or key p has is, lower-cased, as a

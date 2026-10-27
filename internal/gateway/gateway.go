@@ -288,6 +288,9 @@ type Served struct {
 	// Tiers: the user tiers it holds to, bound by user; nil when it
 	// doesn't say (bound by session, its user-tiers.json unread)
 	Tiers *Tiers
+	// IdleHours: bound by user, how long a user sends nothing before its
+	// accounts are let go; 0 from one that doesn't say (lets nobody go)
+	IdleHours int
 }
 
 // ServedBy asks the address which magpie answers there. Another magpie can
@@ -312,11 +315,12 @@ func ServedBy() Served {
 		Serves  string `json:"serves"`
 		Bind    string `json:"bind"`
 		Tiers   *Tiers `json:"tiers"`
+		Idle    int    `json:"idle_hours"`
 	}
 	if decodeJSON(b, &info) != nil || info.Name != "magpie" {
 		return Served{Running: bytes.Contains(b, []byte(`"magpie"`)), Window: bytes.Contains(b, []byte(`"window":true`))}
 	}
-	return Served{Running: true, Window: info.Window, Version: info.Version, Pid: info.Pid, Serves: info.Serves, Bind: info.Bind, Tiers: info.Tiers}
+	return Served{Running: true, Window: info.Window, Version: info.Version, Pid: info.Pid, Serves: info.Serves, Bind: info.Bind, Tiers: info.Tiers, IdleHours: info.Idle}
 }
 
 // Taken reports whether anything accepts connections at the gateway's
@@ -796,6 +800,9 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 			if t, err := loadTiers(); err == nil {
 				out["tiers"] = t
 			}
+			// how long a user may send nothing before its accounts are let
+			// go; an older magpie, which lets nobody go, doesn't say
+			out["idle_hours"] = UserIdleHours
 		}
 	}
 	writeJSON(w, 200, out)
