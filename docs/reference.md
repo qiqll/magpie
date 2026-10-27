@@ -1843,7 +1843,12 @@ Every request of the user before then is refused at once, with the same
 headers, and nothing is sent to the vendor. A user bound to none because
 every account of the provider is out is told when the one asked is back.
 Neither header is there when the account is let go (the user is bound afresh on
-its next request), nor on an error of a stream already begun. An account goes from a
+its next request), nor on an error of a stream already begun. A user that
+sends a provider nothing for 3 days lets go of its accounts there too, so
+another can take them: the release is made by the next user's request to
+that provider, its own never (`sweepIdle`, `userIdle`), and a binding kept
+before magpie noted a last use (no `used`) is stamped then, never let go
+at once. An account goes from a
 user only when it is no longer on the provider (signed out, switched off,
 removed) or its vendor turns it away for good (a sign-in revoked that a
 refresh doesn't mend, an account restricted or to be verified), never for
@@ -1854,9 +1859,12 @@ your user's id as sent, in `user-accounts.json` beside `providers.json`
 (`users` for callers without a key, `keys` by key id): a user's first
 account in `who`, `account` and `at`, as a magpie before spares wrote it
 and still reads it, and its spares in `more`, each with the same three;
-and the tier its last request named in `tier` (written only when it
-changes; a binding without one is of the default tier); edit them there to
-move it, or delete the user to forget it.
+the tier its last request named in `tier` (written only when it
+changes; a binding without one is of the default tier), and when it last
+sent that provider a request in `used`, to within an hour (a file written
+once an hour a user at most, not on every request); edit them there to
+move it, or delete the user to forget it, and the next request binds it
+afresh.
 
 A user's tier is named in `X-Magpie-User-Tier: <tier>`, read only bound
 by user and never sent on to the vendor, a remote MCP server or Codex's

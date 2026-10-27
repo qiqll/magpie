@@ -20,7 +20,9 @@ package gateway
 // switched off, removed) — or its vendor turned it away for good (a
 // sign-in revoked and marked so, an account restricted or to be
 // verified): its first spare is its first then, and a user left with
-// none is bound afresh on its next request.
+// none is bound afresh on its next request. A user that sends nothing to
+// the provider for userIdle lets go of its accounts there too (sweepIdle),
+// for others to take their seats; on its next request it is bound afresh.
 //
 // Each gateway key's users are its own, apart from another key's and from
 // those of callers without a key: the same id sent with two keys is two
@@ -183,6 +185,9 @@ type userBinding struct {
 	At      time.Time  `json:"at"`
 	More    []userSeat `json:"more,omitempty"`
 	Tier    string     `json:"tier,omitempty"`
+	// Used is when the user last sent the provider a request, to within
+	// userUsedEvery; zero from a magpie before it, stamped now when seen
+	Used time.Time `json:"used,omitempty"`
 }
 
 // seats is b's accounts, its first first; one named twice, or by
@@ -209,11 +214,61 @@ func bindingOf(seats []userSeat) userBinding {
 	return b
 }
 
-// withSeats is b bound to seats instead, its tier kept.
+// withSeats is b bound to seats instead, its tier and its last use kept.
 func (b userBinding) withSeats(seats []userSeat) userBinding {
 	n := bindingOf(seats)
-	n.Tier = b.Tier
+	n.Tier, n.Used = b.Tier, b.Used
 	return n
+}
+
+// userIdle is how long a user sends a provider nothing before it lets go
+// of its accounts there (sweepIdle).
+const userIdle = 3 * 24 * time.Hour
+
+// userUsedEvery is how stale a binding's Used may get before a request
+// writes it again: the file is written once an hour a user at most, not
+// on every request.
+const userUsedEvery = time.Hour
+
+// sweepIdle lets go of every binding to provider pid, of every gateway key,
+// whose user has sent it nothing for userIdle, but user's of keyID, whose
+// request this is; one with no Used yet (bound before it was kept) is
+// stamped now instead, so an upgrade frees nobody at once. changed says
+// a binding was, for the file to be written. Called with userBinds held,
+// never while the file doesn't read.
+func sweepIdle(pid, keyID, user string, now time.Time) (changed bool) {
+	gone := 0
+	for k, ps := range userBinds.m {
+		for u, b := range ps[pid] {
+			switch {
+			case k == keyID && u == user:
+			case b.Used.IsZero():
+				b.Used = now
+				ps[pid][u] = b
+				changed = true
+			case now.Sub(b.Used) >= userIdle:
+				delete(ps[pid], u)
+				gone++
+			}
+		}
+	}
+	if gone > 0 {
+		log.Printf("user accounts: %d user(s) of %s sent it nothing for %s: their accounts there are let go, each bound afresh on its next request", gone, pid, userIdle)
+	}
+	return changed || gone > 0
+}
+
+// touchUsed keeps now as when user, of keyID, last sent provider pid a
+// request, when it was kept userUsedEvery ago or more; changed says it
+// was. Called with userBinds held.
+func touchUsed(keyID, pid, user string, now time.Time) (changed bool) {
+	b, ok := userBinds.m[keyID][pid][user]
+	if !ok || now.Sub(b.Used) < userUsedEvery {
+		return false
+	}
+	b.Used = now
+	userBinds.m[keyID][pid][user] = b
+	return true
 }
 
 // seatIn says who is one of seats.
@@ -462,6 +517,12 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 		return nil, pl, nil, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know which account %q is bound to; nothing was sent. Its log says why", UserHeader, user)}
 	}
 	ub := &UserBound{User: user, Tier: tier.Name, key: keyID, pid: p.ID, max: tier.MaxAccounts, tier: tier}
+	// users idle for days let go of their seats before any are counted;
+	// never written over a file that doesn't read
+	now := time.Now().UTC()
+	if !userBinds.stale && sweepIdle(p.ID, keyID, user, now) {
+		saveUsersLogged()
+	}
 	seats := userBinds.m[keyID][p.ID][user].seats()
 	// an account not among cands may be gone: signed out, switched off or
 	// removed (seatsOf), unknown while the saved accounts can't be read
@@ -521,10 +582,12 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 	if ub.Why == "" {
 		ub.Why = "kept"
 	}
-	// another tier than its last request's: kept, never written over a
-	// file that doesn't read
-	if !userBinds.stale && setTier(keyID, p.ID, user, tier.Name) {
-		saveUsersLogged()
+	// another tier than its last request's, or its last use an hour or
+	// more ago: kept, never written over a file that doesn't read
+	if !userBinds.stale {
+		if tiered, used := setTier(keyID, p.ID, user, tier.Name), touchUsed(keyID, p.ID, user, now); tiered || used {
+			saveUsersLogged()
+		}
 	}
 	ub.shown(kept)
 	out, opl := ownedBy(kept, p.ID, cands, pl)
