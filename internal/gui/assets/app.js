@@ -12869,6 +12869,42 @@ function loginsInOrder(a, p) {
   return ls.sort((x, y) => (y.active ? 1 : 0) - (x.active ? 1 : 0));
 }
 
+// CLIPROXY_AGENTS: the accounts CLIProxyAPI takes as auth files
+// (provider.CLIProxyAgents)
+const CLIPROXY_AGENTS = ["codex", "claude", "antigravity"];
+
+// cliproxyButton downloads an account's sign-in as CLIProxyAPI's auth file,
+// asked first: the file holds the refresh token, and a ChatGPT or Claude
+// one refreshed on one side stops working on the other. To the browser in
+// magpie web, to Downloads in the app.
+function cliproxyButton(a, l) {
+  const b = el("button", "text quiet", t("Export"));
+  b.title = t("Download this account's sign-in as a CLIProxyAPI auth file");
+  b.onclick = async () => {
+    const shared = a.agent === "antigravity" ? "" : " " + t("Once either refreshes it, the other's copy stops working: sign in to the account in one of them again then.");
+    if (!await confirmAction(t("Export {user} for CLIProxyAPI?", { user: l.user }),
+      t("The file holds this account's sign-in, its refresh token too: anyone with it can use the account. Keep it private.") + shared, t("Export"))) return;
+    b.classList.add("busy");
+    b.disabled = true;
+    try {
+      const r = await api("login/cliproxy", { agent: a.agent, user: l.user });
+      if (web) {
+        const link = el("a");
+        link.href = URL.createObjectURL(new Blob([r.file], { type: "application/json" }));
+        link.download = r.name;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      } else status(t("Saved to {path}", { path: r.path }), "ok");
+    } catch (e) {
+      status(t(e.message), "err");
+    } finally {
+      b.classList.remove("busy");
+      b.disabled = false;
+    }
+  };
+  return b;
+}
+
 function renderAccounts(a, p) {
   const sub = subOf(a.agent);
   const list = el("div", "accts");
@@ -13020,6 +13056,8 @@ function renderAccounts(a, p) {
         row.append(forget, use);
       }
     }
+    // its sign-in as CLIProxyAPI's auth file
+    if (CLIPROXY_AGENTS.includes(a.agent) && !sub?.plugin && !unusable(l) && !(a.agent === "antigravity" && l.own)) row.append(cliproxyButton(a, l));
     row.append(accountQuota(l.lapsed ? { [l.user]: { error: t(l.lapsed) } } : quota, l.user, capFor, p ? (m, w) => windowCapMeter(m, p, l.user, w) : null));
     row.classList.add("with-aq"); // not :has(.aq), which Safari 15.0 lacks (#220)
     if (amBox) row.append(amBox);

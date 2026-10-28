@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/base64"
@@ -2019,6 +2020,31 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 		defer cancel()
 		writeJSON(rw, provider.WithCapped(provider.LoginUsage(ctx, r.URL.Query().Get("agent"))))
+	})
+	// An account's sign-in as CLIProxyAPI's auth file: in the app to
+	// Downloads, which only the user can read (saveDownload's temp file is
+	// 0600); to the browser that asks in magpie web, which saves it itself.
+	mux.HandleFunc("POST /api/login/cliproxy", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ Agent, User string }
+		if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		name, data, err := provider.CLIProxyAuthFile(in.Agent, in.User)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		if isWeb(w) {
+			writeJSON(rw, map[string]string{"name": name, "file": string(data)})
+			return
+		}
+		path, err := saveDownload(downloads(), strings.TrimSuffix(name, ".json"), ".json", bytes.NewReader(data))
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, map[string]string{"path": tilde(path)})
 	})
 	// Switching the account an agent is signed in to, among those magpie
 	// remembers, and forgetting one.

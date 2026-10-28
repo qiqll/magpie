@@ -2486,3 +2486,12 @@ does. Both engines, at 440px. The reckoning itself is covered by
 `TestHistoricalWindowHoldsUsesEachWindowsOwnReading`,
 `TestWindowHoldsResetBeforeRefillReading` and
 `TestWindowHoldsDryAgainAfterReset`.
+
+## CLIProxyAPI export
+
+`cliproxy-export.test.cjs` checks an account row's Export with local API
+fixtures: asked first, saying the file holds the refresh token; Cancel sends
+nothing; in `magpie web` the browser saves CLIProxyAPI's file under its own
+name, in the app the status says where in Downloads it went; Copilot and a
+Claude account whose sign-in is gone have none; nothing runs past 420px.
+English and Chinese, Chromium and WebKit. No real sign-in is read.

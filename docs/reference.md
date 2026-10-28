@@ -1671,6 +1671,15 @@ accounts, and an entry with only an access token (a ChatGPT web session)
 is refused, since it would stop working within days with nothing to renew
 it.
 
+The other way, a Codex, Claude or Antigravity account's *Export* writes
+its sign-in as CLIProxyAPI's own auth file, named as CLIProxyAPI names it
+(`codex-<hash>-<email>-<plan>.json`, `claude-<hash>-<email>.json`,
+`antigravity-<email>.json`), for its `auth-dir`: to Downloads in the app,
+readable by you only, and to the browser in `magpie web`. The file holds
+the refresh token, so anyone with it can use the account. A ChatGPT or
+Claude refresh token is spent when either side refreshes it, so after
+that the account works in one of the two only; sign in again on the other.
+
 ### Connecting anything else
 
 The gateway listens on `127.0.0.1:3425` (`MAGPIE_ADDR` changes it) and starts
