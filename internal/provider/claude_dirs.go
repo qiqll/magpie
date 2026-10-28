@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -357,6 +358,7 @@ func claudeLoggedOut(ls []savedLogin) bool {
 		ls[i].Held, changed = false, true
 		if claudeSignedOut(ls[i]) == "" {
 			ls[i].Lapsed, ls[i].Refused = claudeLogoutLapse, ""
+			log.Printf("claude %s: Claude Code on this computer no longer holds its sign-in (a /logout, or Anthropic refused it), so magpie's copy is passed over until it is signed in again", ls[i].User)
 		}
 	}
 	return changed

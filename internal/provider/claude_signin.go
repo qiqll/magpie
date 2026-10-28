@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -40,6 +41,10 @@ type claudeCLISignIn struct {
 // openedURLEnv names the file the browser Claude Code is given (magpie
 // itself, TookOpenedURL) writes the page it was asked to open to.
 const openedURLEnv = "MAGPIE_OPENED_URL"
+
+// claudeSaidKept is how many of a failed `claude auth login`'s last lines
+// are logged.
+const claudeSaidKept = 12
 
 // claudeURLOpener is the browser `claude auth login` is given; a var so
 // tests can give another.
@@ -242,6 +247,13 @@ func startClaudeSignIn(s *signInFlow) error {
 			msg = lerr.Error()
 		}
 		cleanup()
+		// the window shows only the last line: the log has the lines before
+		// it and how Claude Code ended (its links aren't among them)
+		ended := "exit 0"
+		if err != nil {
+			ended = err.Error()
+		}
+		log.Printf("claude sign-in: `%s auth login` ended (%s); it printed: %q", cli.path, ended, tail[max(0, len(tail)-claudeSaidKept):])
 		exited <- msg
 		s.finish(SignInState{State: "failed", Error: msg})
 	}()

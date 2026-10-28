@@ -14,6 +14,7 @@ package provider
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"log"
 	"strings"
 )
 
@@ -88,7 +89,8 @@ func refuseClaudeLogin(l *savedLogin, version string) bool {
 // NoteClaudeSignInFailure keeps a run's refusal on the saved Claude account
 // user, when the run started on the credential the account still has
 // (version): one started on an older credential says nothing of this one.
-// The run's own error stays in the request's trace.
+// The run's own error stays in the request's trace, and is logged when the
+// account is first passed over for it.
 func NoteClaudeSignInFailure(user, version, message string) {
 	if !ClaudeSignInRequired(message) {
 		return
@@ -100,6 +102,7 @@ func NoteClaudeSignInFailure(user, version, message string) {
 		if ls[i].Agent == "claude" && strings.EqualFold(ls[i].User, user) && claudeLoginVersion(ls[i]) == version {
 			if refuseClaudeLogin(&ls[i], version) {
 				_ = writeLogins(ls)
+				log.Printf("claude %s: Anthropic refused its sign-in, so it is passed over until it is signed in again; Claude Code said: %s", ls[i].User, message)
 			}
 			return
 		}

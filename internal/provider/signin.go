@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -490,9 +491,20 @@ func SubmitSignInCallback(id, raw string) error {
 		return s.pastedPluginKey(raw)
 	}
 	if s.claude != nil {
-		return s.claudePaste(raw)
+		return logPasteRefused(s, s.claudePaste(raw))
 	}
-	return s.pastedCallback(raw)
+	return logPasteRefused(s, s.pastedCallback(raw))
+}
+
+// logPasteRefused logs why a pasted address or code didn't finish a
+// sign-in, which the window shows only until it is closed. What was
+// pasted isn't logged: it carries the sign-in's code.
+func logPasteRefused(s *signInFlow, err error) error {
+	if err != nil {
+		st := s.status()
+		log.Printf("sign-in %s (%s): the pasted address wasn't taken: %v", st.Agent, st.ID, err)
+	}
+	return err
 }
 
 // pastedCallback takes the address a sign-in's browser was sent back to,
@@ -646,6 +658,10 @@ func (s *signInFlow) finish(out SignInState) bool {
 	s.st = out
 	stop, srv := s.stop, s.srv
 	s.mu.Unlock()
+	if out.State == "failed" {
+		// the window says it only while it is open
+		log.Printf("sign-in %s (%s) failed: %s", out.Agent, out.ID, out.Error)
+	}
 	close(s.done)
 	if stop != nil {
 		stop()
