@@ -5069,6 +5069,7 @@ func cutMidReply(name string, err error) string {
 // streamFailure is an error event ending a stream in proto, as each
 // protocol's own server sends one mid-reply.
 func streamFailure(proto provider.Protocol, msg string) []byte {
+	msg = hideAccounts(msg)
 	var name string
 	var v map[string]any
 	switch proto {
@@ -6989,6 +6990,7 @@ func failTo(w http.ResponseWriter, a *keptAlive, proto provider.Protocol, status
 func streamError(w http.ResponseWriter, proto provider.Protocol, status int, msg string) {
 	sw := newSSEWriter(w)
 	sw.begun = true
+	msg = hideAccounts(msg)
 	text := saysPassing(status, msg)
 	ev := Event{Kind: KError, Text: text, Status: status}
 	overflow := tooLong(status, msg)
@@ -7054,6 +7056,7 @@ func writeVendorError(w http.ResponseWriter, proto provider.Protocol, status int
 // writeErrorSaid is writeError with the code and param an OpenAI-shaped
 // answer names, nil for none.
 func writeErrorSaid(w http.ResponseWriter, proto provider.Protocol, status int, msg string, code, param any) int {
+	msg = hideAccounts(msg) // the operator's, never the caller's (accounts_hidden.go)
 	typ := "api_error"
 	switch {
 	case status == 400:

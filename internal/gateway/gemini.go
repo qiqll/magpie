@@ -684,7 +684,7 @@ func (e *geminiEncoder) event(ev Event) {
 			e.args.WriteString(ev.Text)
 		}
 	case KError:
-		e.w.event("", map[string]any{"error": map[string]any{"code": 502, "message": ev.Text, "status": "UNAVAILABLE"}})
+		e.w.event("", map[string]any{"error": map[string]any{"code": 502, "message": hideAccounts(ev.Text), "status": "UNAVAILABLE"}})
 	}
 	e.col.add(ev)
 }

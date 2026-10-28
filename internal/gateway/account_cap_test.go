@@ -89,7 +89,7 @@ func TestAccountCapEveryAccount(t *testing.T) {
 	if tried, _ := b.seen(); code != 429 || tried != "" {
 		t.Fatalf("%d tried %q", code, tried)
 	}
-	for _, want := range []string{"rate_limit_error", "usage cap reached", "me@example.com", "past its 70% cap", "spare@example.com", "past its 90% cap", "account-cap"} {
+	for _, want := range []string{"rate_limit_error", "usage cap reached", "(an account) is at 75%", "past its 70% cap", "past its 90% cap", "account-cap"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("no %q in %s", want, body)
 		}
@@ -214,7 +214,7 @@ func TestWindowCapsHoldTheAccount(t *testing.T) {
 	if code != 429 || tried != "" {
 		t.Fatalf("both held: %d tried %q", code, tried)
 	}
-	for _, want := range []string{"usage cap reached", "(me@example.com) is at 45%", "past its 40% cap", "spare@example.com", "past its 10% cap"} {
+	for _, want := range []string{"usage cap reached", "(an account) is at 45%", "past its 40% cap", "past its 10% cap"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("no %q in %s", want, body)
 		}

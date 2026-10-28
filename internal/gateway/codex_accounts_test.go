@@ -391,7 +391,7 @@ func TestGatewayKeyAccountsHoldCodexCompact(t *testing.T) {
 	}
 	json.Unmarshal([]byte(body), &e)
 	if code != 403 || e.Error.Type != "permission_error" || !strings.Contains(e.Error.Message, `"Held"`) || !strings.Contains(e.Error.Message, "may not use") ||
-		!strings.Contains(e.Error.Message, "it may use codex/spare@example.com") || !strings.Contains(e.Error.Message, "add the signed-in account to the key") ||
+		!strings.Contains(e.Error.Message, "it may use codex/an account") || !strings.Contains(e.Error.Message, "add the signed-in account to the key") ||
 		!strings.Contains(e.Error.Message, "compaction_trigger on /responses") {
 		t.Fatalf("held off the sign-in: %d %s", code, body)
 	}

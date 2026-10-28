@@ -87,7 +87,7 @@ func TestAccountPinnedUnknown(t *testing.T) {
 	s := New()
 	for path, model := range pinPaths {
 		code, body := pinnedPost(t, s, path, model, "nobody@example.com")
-		if code != 404 || !strings.Contains(body, "nobody@example.com") || !strings.Contains(body, "spare@example.com") {
+		if code != 404 || strings.Contains(body, "@example.com") || !strings.Contains(body, "its accounts are an account") {
 			t.Fatalf("%s: %d %s", path, code, body)
 		}
 	}

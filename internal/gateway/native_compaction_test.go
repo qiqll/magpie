@@ -299,7 +299,7 @@ func TestNativeCompactionWriterAtItsCap(t *testing.T) {
 	if tried, _ := b.seen(); code != 429 || tried != "" {
 		t.Fatalf("%d tried %q: %s", code, tried, body)
 	}
-	for _, want := range []string{"rate_limit_error", "one account this conversation can go to", "me@example.com", "past its 70% cap", "compacted natively", "routing mode", "account-cap"} {
+	for _, want := range []string{"rate_limit_error", "one account this conversation can go to", "(an account)", "past its 70% cap", "compacted natively", "routing mode", "account-cap"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("no %q in %s", want, body)
 		}
@@ -501,7 +501,7 @@ func TestNativeCompactionWriterGoneSaysWhy(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			[]string{"switched off in magpie", "switch spare@example.com on again", "the others can stay on beside it"},
+			[]string{"switched off in magpie", "switch an account on again", "the others can stay on beside it"},
 			[]string{"no longer signed in", "paused"}},
 		{"own paused", "me@example.com",
 			func(t *testing.T) {
@@ -509,7 +509,7 @@ func TestNativeCompactionWriterGoneSaysWhy(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			[]string{"it is paused", "turn me@example.com on again"},
+			[]string{"it is paused", "turn an account on again"},
 			[]string{"no longer signed in", "switched off in magpie"}},
 		{"kept from the model", "me@example.com",
 			func(t *testing.T) {
@@ -517,10 +517,10 @@ func TestNativeCompactionWriterGoneSaysWhy(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			[]string{"set not to serve gpt-5.5 (Names & levels)", "let me@example.com serve gpt-5.5 again"},
+			[]string{"set not to serve gpt-5.5 (Names & levels)", "let an account serve gpt-5.5 again"},
 			[]string{"no longer signed in", "switched off in magpie", "paused"}},
 		{"signed out", "gone@example.com", func(t *testing.T) {},
-			[]string{"gone@example.com is no longer signed in to magpie", "sign in to gone@example.com again"},
+			[]string{"an account is no longer signed in to magpie", "sign in to an account again"},
 			[]string{"switched off in magpie", "paused"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -533,7 +533,7 @@ func TestNativeCompactionWriterGoneSaysWhy(t *testing.T) {
 			if tried, _ := b.seen(); code != 400 || tried != "" {
 				t.Fatalf("%d tried %q: %s", code, tried, body)
 			}
-			for _, want := range append(c.want, "compacted natively by codex@"+c.writer, "sealed (encrypted) to that account", "start a new conversation", "Native compaction is off for codex now") {
+			for _, want := range append(c.want, "compacted natively by codex@an account", "sealed (encrypted) to that account", "start a new conversation", "Native compaction is off for codex now") {
 				if !strings.Contains(body, want) {
 					t.Errorf("no %q in %s", want, body)
 				}
@@ -711,7 +711,7 @@ func TestNativeCompactionCompactJudgesItsWriter(t *testing.T) {
 		if code != 400 || seen != "" {
 			t.Fatalf("%d, the backend saw %q: %s", code, seen, body)
 		}
-		for _, want := range []string{"compacted natively by codex@gone@example.com", "gone@example.com is no longer signed in to magpie", "sign in to gone@example.com again"} {
+		for _, want := range []string{"compacted natively by codex@an account", "an account is no longer signed in to magpie", "sign in to an account again"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("no %q in %s", want, body)
 			}
@@ -755,7 +755,7 @@ func TestNativeCompactionCompactJudgesItsWriter(t *testing.T) {
 		if code != 400 || seen != "" {
 			t.Fatalf("%d, the backend saw %q: %s", code, seen, body)
 		}
-		if !strings.Contains(body, "gone@example.com is no longer signed in to magpie") {
+		if !strings.Contains(body, "an account is no longer signed in to magpie") || strings.Contains(body, "@example.com") {
 			t.Errorf("body %s", body)
 		}
 	})
@@ -784,7 +784,7 @@ func TestNativeCompactionCompactKeepsTheKeysAccounts(t *testing.T) {
 		code          int
 		seen, says    string
 	}{
-		{"the writer is not the key's", "codex/me@example.com", 403, "", "sealed by biz@example.com, and only that account can read it"},
+		{"the writer is not the key's", "codex/me@example.com", 403, "", "sealed by an account, and only that account can read it"},
 		{"the writer is the key's", "codex/biz@example.com", 200, "acct-2", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {

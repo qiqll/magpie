@@ -1959,7 +1959,7 @@ func (e *responsesEncoder) event(ev Event) {
 		if ev.Code != "" {
 			code = ev.Code
 		}
-		failed := map[string]any{"code": code, "message": ev.Text}
+		failed := map[string]any{"code": code, "message": hideAccounts(ev.Text)}
 		saidError(failed, ev.Said)
 		e.send("response.failed", map[string]any{"response": e.response("failed", map[string]any{"error": failed})})
 	}

@@ -40,6 +40,8 @@ func fresh(t *testing.T) {
 	t.Setenv("USERPROFILE", home) // Windows finds the home there
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	forgetAccountNames() // the last test's accounts
+	t.Cleanup(forgetAccountNames)
 	restingUntil.Lock()
 	restingUntil.m = map[string]time.Time{}
 	restingUntil.Unlock()

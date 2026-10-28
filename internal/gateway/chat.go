@@ -1440,7 +1440,7 @@ func (e *chatEncoder) event(ev Event) {
 			// the same type a 413 JSON body carries (writeErrorSaid)
 			typ = "request_too_large"
 		}
-		failed := map[string]any{"message": ev.Text, "type": typ}
+		failed := map[string]any{"message": hideAccounts(ev.Text), "type": typ}
 		if ev.Code != "" {
 			failed["code"] = ev.Code // preserve the upstream error type, including refusals
 		}

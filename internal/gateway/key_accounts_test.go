@@ -106,7 +106,7 @@ func TestGatewayKeyAccountsHoldAKey(t *testing.T) {
 	}
 	json.Unmarshal([]byte(body), &e)
 	if code != 403 || e.Error.Type != "permission_error" || !strings.Contains(e.Error.Message, `"Held"`) ||
-		!strings.Contains(e.Error.Message, "is not allowed to use the accounts behind") || !strings.Contains(e.Error.Message, "codex/me@example.com") {
+		!strings.Contains(e.Error.Message, "is not allowed to use the accounts behind") || !strings.Contains(e.Error.Message, "codex/an account") {
 		t.Fatalf("every account held out: %d %s", code, body)
 	}
 	if len(*heads) != 0 {
@@ -126,7 +126,7 @@ func TestGatewayKeyAccountsHoldAKey(t *testing.T) {
 	}
 	*heads = nil
 	code, body = post(secrets[0])
-	if code != 429 || !strings.Contains(body, "usage cap reached") || !strings.Contains(body, "me@example.com") {
+	if code != 429 || !strings.Contains(body, "usage cap reached") || strings.Contains(body, "@example.com") {
 		t.Fatalf("a cap before the accounts: %d %s", code, body)
 	}
 	if err := provider.SetAccountCap("codex", "me@example.com", 0); err != nil {

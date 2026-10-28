@@ -1529,7 +1529,7 @@ func (e *anthropicEncoder) event(ev Event) {
 			// the same type a 413 JSON body carries (writeErrorSaid)
 			typ = "request_too_large"
 		}
-		failed := map[string]any{"type": typ, "message": ev.Text}
+		failed := map[string]any{"type": typ, "message": hideAccounts(ev.Text)}
 		if ev.Code != "" {
 			failed["code"] = ev.Code // preserve the upstream error type, including refusals
 		}
