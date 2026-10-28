@@ -248,6 +248,9 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 		s.record(call)
 		w.Header().Set("Content-Type", req.answerType(got))
 		w.WriteHeader(code)
+		if code >= 400 {
+			b = hideAccountsBody(b) // the vendor's words, without the account
+		}
 		w.Write(b)
 		return
 	}

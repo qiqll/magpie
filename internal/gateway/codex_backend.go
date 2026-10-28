@@ -1244,7 +1244,13 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 				if res.StatusCode >= 400 && len(refusal) < 8<<10 {
 					refusal = append(refusal, buf[:n]...)
 				}
-				if _, werr := out.Write(buf[:n]); werr != nil {
+				chunk := buf[:n]
+				if res.StatusCode >= 400 {
+					chunk = hideAccountsBody(chunk) // the backend's error, without the account
+				} else if streams {
+					chunk = hideErrorEvents(chunk)
+				}
+				if _, werr := out.Write(chunk); werr != nil {
 					break
 				}
 				if f != nil {
@@ -1667,7 +1673,7 @@ func (s *Server) codexModels(w http.ResponseWriter, r *http.Request) {
 				// a sign-in to renew is Codex's to see
 				w.Header().Set("Content-Type", res.Header.Get("Content-Type"))
 				w.WriteHeader(res.StatusCode)
-				w.Write(b)
+				w.Write(hideAccountsBody(b))
 				return
 			}
 		}

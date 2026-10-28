@@ -2401,7 +2401,12 @@ func (h *holdWriter) release() {
 		return
 	}
 	h.pass()
-	h.w.Write(h.held.Bytes())
+	if h.status >= 400 {
+		// the vendor's error as it came, without the account
+		h.w.Write(hideAccountsBody(h.held.Bytes()))
+	} else {
+		h.w.Write(h.held.Bytes())
+	}
 	h.flush()
 }
 

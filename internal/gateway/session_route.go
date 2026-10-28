@@ -123,13 +123,23 @@ func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
 	secs, _ := strconv.ParseFloat(q.Get("wait"), 64)
 	wait := min(time.Duration(secs*float64(time.Second)), routeWaitMax)
 	only := ""
+	held := false
 	if who := access.Caller(r.Context()); heldKey(who) {
-		only = who.KeyID
+		only, held = who.KeyID, true
 	}
 	seq, route := s.trace.sessionLatest(r.Context(), session, only, after, wait)
 	out := map[string]any{"session": session, "seq": seq, "route": nil}
 	if route != nil {
-		out["route"] = sessionRouteOf(*route)
+		sr := sessionRouteOf(*route)
+		if held {
+			// a key held to a budget, models or accounts is someone
+			// else's: why a try failed is told it without the accounts
+			sr.Error = hideAccounts(sr.Error)
+			for i := range sr.Tries {
+				sr.Tries[i].Fail = hideAccounts(sr.Tries[i].Fail)
+			}
+		}
+		out["route"] = sr
 	}
 	writeJSON(w, 200, out)
 }

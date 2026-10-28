@@ -3,6 +3,7 @@ package gateway
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
@@ -78,5 +79,20 @@ func (s *Server) usageRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.CallerKey = who.KeyID
-	writeJSON(w, 200, usageapi.OwnPage(usageapi.LedgerPage(usageapi.PeriodOf(q.Get("period")), f, offset, limit), who.KeyID))
+	writeJSON(w, 200, withoutAccounts(usageapi.OwnPage(usageapi.LedgerPage(usageapi.PeriodOf(q.Get("period")), f, offset, limit), who.KeyID)))
+}
+
+// withoutAccounts is a held key's own calls with nothing of the accounts
+// and keys that answered them: they are the operator's (accounts_hidden.go).
+func withoutAccounts(l usageapi.Ledger) usageapi.Ledger {
+	l.Accounts = nil
+	for i := range l.Rows {
+		r := &l.Rows[i]
+		r.ProviderAccount, r.ProviderKeyName, r.ProviderKeyID, r.SessionAccount = "", "", "", ""
+		if i := strings.LastIndex(r.Host, " as "); i >= 0 {
+			r.Host = r.Host[:i] // where it went, not as whom
+		}
+		r.Error = hideAccounts(r.Error)
+	}
+	return l
 }

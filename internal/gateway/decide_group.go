@@ -236,6 +236,7 @@ func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body [
 		}
 		if status >= 400 {
 			keepRetry(w.Header(), header, b)
+			b = hideAccountsBody(b) // the vendor's words, without the account
 		}
 		w.Header().Set("Content-Type", ctype)
 		w.WriteHeader(status)

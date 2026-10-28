@@ -4928,6 +4928,9 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			if sigs != nil {
 				out = sigs.write(out)
 			}
+			if sse {
+				out = hideErrorEvents(out) // a vendor's error mid-stream, without the account
+			}
 			if ids != nil {
 				out = ids.write(out)
 			}
