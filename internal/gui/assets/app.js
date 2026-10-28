@@ -235,6 +235,7 @@ const CROSS = "M4.5 4.5l7 7M11.5 4.5l-7 7";
 const PLUS = "M8 3.5v9M3.5 8h9";
 const OUT = "M6.5 3.5h-3v9h9v-3M9 3.5h3.5V7M12.5 3.5 7.5 8.5";
 const COPY_ICON = "M5.5 5.5V3.5h7v7h-2M3.5 5.5h7v7h-7z";
+const DOWNLOAD = "M8 3v7M5 7.5l3 3 3-3M3.5 12.5h9";
 const PENCIL = "M3.5 12.5l.5-2.5 6.8-6.8a1.2 1.2 0 0 1 1.7 0l.3.3a1.2 1.2 0 0 1 0 1.7L6 12z M9.8 4.2l2 2";
 const PUZZLE = "M6.2 2.8h2.3a1.3 1.3 0 1 1 2.5 0h2.2V5a1.3 1.3 0 1 0 0 2.6v5.6H3V7.6a1.3 1.3 0 1 1 0-2.6V2.8z";
 
@@ -12878,7 +12879,12 @@ const CLIPROXY_AGENTS = ["codex", "claude", "antigravity"];
 // one refreshed on one side stops working on the other. To the browser in
 // magpie web, to Downloads in the app.
 function cliproxyButton(a, l) {
-  const b = el("button", "text quiet", t("Export"));
+  // an icon, not a word: "Exportieren" beside Remove and a by-window cap
+  // pill took a line of its own, blank until hovered, and WebKit left the
+  // row its old height, so the meters ran under the next account's row
+  const b = el("button", "key-edit acc-export");
+  b.setAttribute("aria-label", t("Export"));
+  b.append(svg(DOWNLOAD, 12, 1.5));
   b.title = t("Download this account's sign-in as a CLIProxyAPI auth file");
   b.onclick = async () => {
     const shared = a.agent === "antigravity" ? "" : " " + t("magpie renews this sign-in by itself, about once a day, and the copy in the file then stops working: to use the account in CLIProxyAPI, remove it from magpie after exporting.");

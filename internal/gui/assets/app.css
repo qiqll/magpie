@@ -2440,6 +2440,9 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acc .text.quiet { opacity: 0; transition: opacity .15s; }
 .acc:hover .text.quiet { opacity: 1; }
 .acc .text.quiet:focus-visible { opacity: 1; }
+/* Export, an icon (cliproxyButton), shown as Remove is */
+.acc .acc-export { opacity: 0; transition: opacity .15s, background .12s, color .12s; }
+.acc:hover .acc-export, .acc .acc-export:focus-visible, .acc .acc-export.busy { opacity: 1; }
 /* an account signed out (#1363) shows its Remove without a hover: it is
    one of the two ways out of that state, beside Sign in again */
 .acc.signed-out .text.quiet { opacity: 1; }
