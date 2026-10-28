@@ -2224,7 +2224,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			userLimited(w.Header(), limit, until, "")
 		}
 		call.Status, call.Error = 429, record
-		writeError(w, from, 429, msg)
+		if limitedUser != "" && record != msg {
+			call.Error += ": " + msg
+		}
+		writeError(w, from, 429, saidToUser(limitedUser, 429, msg))
 		turnedAway()
 		return
 	}
@@ -2880,7 +2883,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				}
 				w.Header().Set("Retry-After", after)
 			}
-			failTo(w, kept, from, call.Status, call.Error)
+			failTo(w, kept, from, call.Status, saidToUser(limitedUser, call.Status, call.Error))
 			// nobody was asked, and the agent is told: the ledger gets
 			// the row, as any other turn-away leaves one, and the usual
 			// entry in Recent calls is the one serve writes at its end

@@ -12881,7 +12881,7 @@ function cliproxyButton(a, l) {
   const b = el("button", "text quiet", t("Export"));
   b.title = t("Download this account's sign-in as a CLIProxyAPI auth file");
   b.onclick = async () => {
-    const shared = a.agent === "antigravity" ? "" : " " + t("Once either refreshes it, the other's copy stops working: sign in to the account in one of them again then.");
+    const shared = a.agent === "antigravity" ? "" : " " + t("magpie renews this sign-in by itself, about once a day, and the copy in the file then stops working: to use the account in CLIProxyAPI, remove it from magpie after exporting.");
     if (!await confirmAction(t("Export {user} for CLIProxyAPI?", { user: l.user }),
       t("The file holds this account's sign-in, its refresh token too: anyone with it can use the account. Keep it private.") + shared, t("Export"))) return;
     b.classList.add("busy");

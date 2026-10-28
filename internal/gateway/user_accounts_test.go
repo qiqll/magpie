@@ -616,3 +616,18 @@ func TestUserKeptWhenARefreshMendsTheSignIn(t *testing.T) {
 		t.Fatalf("let go on a 401 a refresh mended: %v", b)
 	}
 }
+
+// A 429 to a caller that sent a user says only userLimitSaid; another
+// status, or no user, is said as it is.
+func TestSaidToUser(t *testing.T) {
+	const msg = "Codex (me@example.com): its queue is full"
+	if got := saidToUser("alice", 429, msg); got != userLimitSaid {
+		t.Fatalf("a user's 429: %q", got)
+	}
+	if got := saidToUser("", 429, msg); got != msg {
+		t.Fatalf("no user: %q", got)
+	}
+	if got := saidToUser("alice", 400, msg); got != msg {
+		t.Fatalf("a user's 400: %q", got)
+	}
+}

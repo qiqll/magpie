@@ -31,6 +31,9 @@ func CLIProxyAuthFile(agent, user string) (name string, data []byte, err error) 
 	if settings.AccountDiscoveryOff() {
 		return "", nil, errAccountDiscoveryOff
 	}
+	if PluginServes(agent) {
+		return "", nil, fmt.Errorf("%s accounts are its plugin's; magpie holds no sign-in of its own to export", agent)
+	}
 	var v map[string]any
 	switch agent {
 	case "codex":
@@ -51,28 +54,30 @@ func CLIProxyAuthFile(agent, user string) (name string, data []byte, err error) 
 
 // exportedLogin is the sign-in of the account user of agent: the one the
 // agent is signed in to now, read from its own files, or the one kept.
-func exportedLogin(agent, user string) (savedLogin, bool) {
+func exportedLogin(agent, user string) (savedLogin, error) {
 	if l, ok := liveLogin(agent); ok && strings.EqualFold(l.User, user) {
-		return l, true
+		return l, nil
 	}
 	if agent == "claude" {
 		// Claude Code may have refreshed it in the account's own directory
 		syncSavedClaude(user)
 	}
-	loginsMu.Lock()
-	defer loginsMu.Unlock()
 	for _, l := range readLogins() {
 		if l.Agent == agent && strings.EqualFold(l.User, user) && !l.own() {
-			return l, true
+			if l.Lapsed != "" {
+				// its vendor refused the sign-in: a dead token, nothing to carry
+				return savedLogin{}, fmt.Errorf("%s has to be signed in again before it can be exported: %s", user, l.Lapsed)
+			}
+			return l, nil
 		}
 	}
-	return savedLogin{}, false
+	return savedLogin{}, fmt.Errorf("no %s account %q", map[string]string{"codex": "ChatGPT", "claude": "Claude"}[agent], user)
 }
 
 func cliproxyCodex(user string) (string, map[string]any, error) {
-	l, ok := exportedLogin("codex", user)
-	if !ok {
-		return "", nil, fmt.Errorf("no ChatGPT account %q", user)
+	l, err := exportedLogin("codex", user)
+	if err != nil {
+		return "", nil, err
 	}
 	var raw map[string]any
 	var a codexAuth
@@ -80,25 +85,27 @@ func cliproxyCodex(user string) (string, map[string]any, error) {
 		return "", nil, fmt.Errorf("the ChatGPT sign-in of %s has no refresh token to export", user)
 	}
 	id := jwtClaims(a.Tokens.IDToken)
-	email := claimString(id, "email")
-	accountID := cmp.Or(claimString(id, "https://api.openai.com/auth", "chatgpt_account_id"), a.Tokens.AccountID)
+	email := cmp.Or(claimString(id, "email"), strings.SplitN(l.User, " · ", 2)[0])
+	claimed := claimString(id, "https://api.openai.com/auth", "chatgpt_account_id")
+	accountID := cmp.Or(claimed, a.Tokens.AccountID)
 	plan := cmp.Or(claimString(id, "https://api.openai.com/auth", "chatgpt_plan_type"), l.Plan, "free")
 	last, _ := raw["last_refresh"].(string)
 	v := map[string]any{"type": "codex", "id_token": a.Tokens.IDToken, "access_token": a.Tokens.AccessToken,
 		"refresh_token": a.Tokens.RefreshToken, "account_id": accountID, "last_refresh": last,
 		"email": email, "expired": jwtExpiry(a.Tokens.AccessToken), "plan_type": plan}
-	// codex-<account hash>-<email>-<plan>.json, as CredentialFileName names it
+	// codex-<account hash>-<email>-<plan>.json, as CredentialFileName names
+	// it: the hash of the ID token's own account id only, as CLIProxyAPI's
 	name := "codex-"
-	if accountID != "" {
-		name += shortHash(accountID) + "-"
+	if claimed != "" {
+		name += shortHash(claimed) + "-"
 	}
-	return name + cmp.Or(email, user) + "-" + planForFile(plan) + ".json", v, nil
+	return name + email + "-" + planForFile(plan) + ".json", v, nil
 }
 
 func cliproxyClaude(user string) (string, map[string]any, error) {
-	l, ok := exportedLogin("claude", user)
-	if !ok {
-		return "", nil, fmt.Errorf("no Claude account %q", user)
+	l, err := exportedLogin("claude", user)
+	if err != nil {
+		return "", nil, err
 	}
 	var raw struct {
 		OAuth claudeAuth `json:"claudeAiOauth"`
@@ -136,9 +143,6 @@ func cliproxyClaude(user string) (string, map[string]any, error) {
 }
 
 func cliproxyAntigravity(user string) (string, map[string]any, error) {
-	if PluginServes("antigravity") {
-		return "", nil, fmt.Errorf("Antigravity's accounts are its plugin's; magpie holds no sign-in to export")
-	}
 	for _, g := range googleLogins("antigravity") {
 		if !strings.EqualFold(g.User, user) {
 			continue
@@ -184,10 +188,11 @@ func planForFile(plan string) string {
 	return strings.ToLower(strings.Join(parts, "-"))
 }
 
-// cliproxyFileName keeps a name to one file's: no folder in it.
+// cliproxyFileName keeps a name to one file's, on every system: no
+// folder in it, nor a character Windows refuses in a name.
 func cliproxyFileName(name string) string {
 	return strings.Map(func(r rune) rune {
-		if r == '/' || r == '\\' || r == ':' || r < ' ' {
+		if strings.ContainsRune(`/\:*?"<>|`, r) || r < ' ' {
 			return '_'
 		}
 		return r

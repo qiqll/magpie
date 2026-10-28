@@ -52,8 +52,8 @@ function serve(lang, web, posts) {
 }
 
 const words = {
-  en: { export: "Export", cancel: "Cancel", ask: "Export me@example.com for CLIProxyAPI?", warn: /refresh token/, shared: /stops working/, saved: "Saved to ~/Downloads/codex-1a2b3c4d-me@example.com-plus.json" },
-  zh: { export: "导出", cancel: "取消", ask: "为 CLIProxyAPI 导出 me@example.com？", warn: /refresh token/, shared: /失效/, saved: "已保存到 ~/Downloads/codex-1a2b3c4d-me@example.com-plus.json" },
+  en: { export: "Export", cancel: "Cancel", ask: "Export me@example.com for CLIProxyAPI?", warn: /refresh token/, shared: /about once a day/, saved: "Saved to ~/Downloads/codex-1a2b3c4d-me@example.com-plus.json" },
+  zh: { export: "导出", cancel: "取消", ask: "为 CLIProxyAPI 导出 me@example.com？", warn: /refresh token/, shared: /每天一次/, saved: "已保存到 ~/Downloads/codex-1a2b3c4d-me@example.com-plus.json" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -99,7 +99,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const missing = await page.evaluate(() => [
         "Download this account's sign-in as a CLIProxyAPI auth file", "Export {user} for CLIProxyAPI?",
         "The file holds this account's sign-in, its refresh token too: anyone with it can use the account. Keep it private.",
-        "Once either refreshes it, the other's copy stops working: sign in to the account in one of them again then.",
+        "magpie renews this sign-in by itself, about once a day, and the copy in the file then stops working: to use the account in CLIProxyAPI, remove it from magpie after exporting.",
       ].filter((k) => !I18N.zh[k] || !I18N["zh-TW"][k] || !I18N.ja[k] || !I18N.de[k]));
       assert.deepEqual(missing, [], "every string has its zh, zh-TW, ja and de");
       assert.deepEqual(errors, []);

@@ -1677,8 +1677,10 @@ its sign-in as CLIProxyAPI's own auth file, named as CLIProxyAPI names it
 `antigravity-<email>.json`), for its `auth-dir`: to Downloads in the app,
 readable by you only, and to the browser in `magpie web`. The file holds
 the refresh token, so anyone with it can use the account. A ChatGPT or
-Claude refresh token is spent when either side refreshes it, so after
-that the account works in one of the two only; sign in again on the other.
+Claude refresh token is spent when either side refreshes it, and magpie
+renews its own sign-ins about once a day, so the file stops working soon
+after: remove the account from magpie once it is exported. A Codex or
+Claude account whose sign-in its vendor refused isn't exported.
 
 ### Connecting anything else
 

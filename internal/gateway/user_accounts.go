@@ -1103,6 +1103,17 @@ func restWho(r Rest, seats []userSeat) string {
 // in Retry-After and UserUntilHeader.
 const userLimitSaid = "This request would exceed your account's rate limit. Please try again later."
 
+// saidToUser is what a caller that sent a user (UserHeader) is told of a
+// 429 magpie gives: userLimitSaid, never the accounts, caps and rests in
+// msg, which are the operator's (the call's error keeps them). Another
+// status, or no user, is msg.
+func saidToUser(user string, status int, msg string) string {
+	if user != "" && status == http.StatusTooManyRequests {
+		return userLimitSaid
+	}
+	return msg
+}
+
 // userRefused writes refused, why a request of the user u goes to none
 // of its accounts, with its limit when it is one. A 429 says only
 // userLimitSaid; why is in the call's error.

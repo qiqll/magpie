@@ -146,3 +146,40 @@ func TestStrictAffinityHeldForCreditsIsRefused(t *testing.T) {
 		t.Fatalf("a new conversation: %d tried %s", code, tried)
 	}
 }
+
+// A user (UserHeader) in a strict conversation whose account is held: the
+// 429 says only userLimitSaid, never the account, as every other 429 of a
+// bound user; why, with the account, is the call's error.
+func TestStrictHeldTellsABoundUserOnlyTheLimit(t *testing.T) {
+	b := strictSetup(t)
+	capUsage(t, map[string]float64{"me@example.com": 50, "spare@example.com": 20})
+	srv := byUser(New())
+	post := func(session string) (int, string) {
+		b.mu.Lock()
+		b.tried = nil
+		b.mu.Unlock()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", CodexPath+"/responses", strings.NewReader(`{"model":"gpt-5.5","stream":true,"input":"ping `+session+`"}`))
+		req.Header.Set("Authorization", "Bearer chatgpt-token")
+		req.Header.Set("session_id", session)
+		req.Header.Set(UserHeader, "alice")
+		srv.Handler().ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	if code, body := post("s1"); code != 200 {
+		t.Fatalf("first turn: %d %s", code, body)
+	}
+	capUsage(t, map[string]float64{"me@example.com": 100, "spare@example.com": 100})
+	for _, u := range []string{"me@example.com", "spare@example.com"} {
+		if err := provider.SetCodexCredits(u, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, body := post("s1")
+	if code != 429 || !strings.Contains(body, userLimitSaid) || strings.Contains(body, "@") {
+		t.Fatalf("held, bound: %d %s", code, body)
+	}
+	if why := refusedWhy(srv); !strings.Contains(why, "@example.com") {
+		t.Fatalf("the call's error lost why: %q", why)
+	}
+}

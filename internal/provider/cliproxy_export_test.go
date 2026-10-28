@@ -39,8 +39,10 @@ func TestCLIProxyAuthFile(t *testing.T) {
 		{"codex", "team@example.com · Team", "codex-" + shortHash("acct-team") + "-team@example.com-team.json",
 			map[string]any{"type": "codex", "refresh_token": "r-team", "account_id": "acct-team", "email": "team@example.com", "plan_type": "team",
 				"expired": exp.UTC().Format(time.RFC3339)}},
-		// the one Codex is signed in to, read from its own auth.json
-		{"codex", "live@example.com", "codex-" + shortHash("acct-live@example.com") + "-live@example.com-plus.json",
+		// the one Codex is signed in to, read from its own auth.json; its ID
+		// token names no account id, so the name has no hash (CLIProxyAPI
+		// hashes the claim only, not auth.json's account_id)
+		{"codex", "live@example.com", "codex-live@example.com-plus.json",
 			map[string]any{"type": "codex", "refresh_token": "r-live", "email": "live@example.com", "plan_type": "plus"}},
 		{"claude", "user@example.com", "claude-00f765af-user@example.com.json",
 			map[string]any{"type": "claude", "access_token": "sk-ant-oat01-a", "refresh_token": "sk-ant-ort01-r", "email": "user@example.com",
@@ -87,11 +89,24 @@ func TestCLIProxyAuthFile(t *testing.T) {
 	if _, _, err := CLIProxyAuthFile("copilot", "x"); err == nil {
 		t.Fatal("a Copilot account exported")
 	}
+	// one whose vendor refused its sign-in carries a dead token: refused
+	ls := readLogins()
+	for i := range ls {
+		if ls[i].Agent == "codex" {
+			ls[i].Lapsed = "token_revoked"
+		}
+	}
+	if err := writeLogins(ls); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := CLIProxyAuthFile("codex", "team@example.com · Team"); err == nil || !strings.Contains(err.Error(), "signed in again") {
+		t.Fatalf("a lapsed account exported: %v", err)
+	}
 }
 
 // A name is one file's, whatever the account is called.
 func TestCLIProxyFileNameStaysOneFile(t *testing.T) {
-	if got := cliproxyFileName("antigravity-../../a/b\\c:d.json"); strings.ContainsAny(got, "/\\:") {
+	if got := cliproxyFileName("antigravity-../../a/b\\c:d*e?f\"g<h>i|j.json"); strings.ContainsAny(got, `/\:*?"<>|`) {
 		t.Fatalf("%q", got)
 	}
 }
