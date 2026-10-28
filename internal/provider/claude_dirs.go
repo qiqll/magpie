@@ -348,9 +348,8 @@ const claudeGoneLapse = "its sign-in is gone; sign in again"
 // Code emptied was. Which it was can't be told from here. Signed in to it
 // again, Claude Code holds it once more (rememberLogins). The accounts
 // magpie keeps in config directories of their own are sign-ins of their own
-// and stay. It says whether ls changed.
-func claudeLoggedOut(ls []savedLogin) bool {
-	changed := false
+// and stay. It says whether ls changed, and which accounts lapsed now.
+func claudeLoggedOut(ls []savedLogin) (changed bool, lapsed []string) {
 	for i := range ls {
 		if ls[i].Agent != "claude" || !ls[i].Held {
 			continue
@@ -358,10 +357,18 @@ func claudeLoggedOut(ls []savedLogin) bool {
 		ls[i].Held, changed = false, true
 		if claudeSignedOut(ls[i]) == "" {
 			ls[i].Lapsed, ls[i].Refused = claudeLogoutLapse, ""
-			log.Printf("claude %s: Claude Code on this computer no longer holds its sign-in (a /logout, or Anthropic refused it), so magpie's copy is passed over until it is signed in again", ls[i].User)
+			lapsed = append(lapsed, ls[i].User)
 		}
 	}
-	return changed
+	return changed, lapsed
+}
+
+// logClaudeLoggedOut logs the accounts claudeLoggedOut lapsed, once that
+// was written, after loginsMu: the log's writer can block.
+func logClaudeLoggedOut(users []string) {
+	for _, u := range users {
+		log.Printf("claude %s: Claude Code on this computer no longer holds its sign-in (a /logout, or Anthropic refused it), so magpie's copy is passed over until it is signed in again", u)
+	}
 }
 
 // claudeSignedOut is why a saved Claude account can't be used, "" when it

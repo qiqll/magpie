@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,6 +46,25 @@ const openedURLEnv = "MAGPIE_OPENED_URL"
 // claudeSaidKept is how many of a failed `claude auth login`'s last lines
 // are logged.
 const claudeSaidKept = 12
+
+// claudeSaidSecret matches a line of `claude auth login` that may hold the
+// sign-in's code or a token: an address (http too, the callback's), a
+// form or a JSON field naming one, or a pasted code#state. "OAuth token
+// revoked" is kept: it names no value.
+var claudeSaidSecret = regexp.MustCompile(`(?i)https?://|code=|code_verifier|(token|secret)("\s*:|=)|_(token|secret)\s*[:=]|\S{16,}#\S{8,}`)
+
+// claudeSaidSafe is the last claudeSaidKept lines of tail fit for the
+// log: a line that may hold a secret is left out, and says so.
+func claudeSaidSafe(tail []string) []string {
+	out := []string{}
+	for _, l := range tail[max(0, len(tail)-claudeSaidKept):] {
+		if claudeSaidSecret.MatchString(l) {
+			l = "(a line left out: it may hold the sign-in's code)"
+		}
+		out = append(out, l)
+	}
+	return out
+}
 
 // claudeURLOpener is the browser `claude auth login` is given; a var so
 // tests can give another.
@@ -247,15 +267,17 @@ func startClaudeSignIn(s *signInFlow) error {
 			msg = lerr.Error()
 		}
 		cleanup()
+		exited <- msg
+		if !s.finish(SignInState{State: "failed", Error: msg}) {
+			return // canceled or replaced: not a failure to log
+		}
 		// the window shows only the last line: the log has the lines before
-		// it and how Claude Code ended (its links aren't among them)
+		// it and how Claude Code ended
 		ended := "exit 0"
 		if err != nil {
 			ended = err.Error()
 		}
-		log.Printf("claude sign-in: `%s auth login` ended (%s); it printed: %q", cli.path, ended, tail[max(0, len(tail)-claudeSaidKept):])
-		exited <- msg
-		s.finish(SignInState{State: "failed", Error: msg})
+		log.Printf("claude sign-in: `%s auth login` ended (%s); it printed: %q", cli.path, ended, claudeSaidSafe(tail))
 	}()
 
 	var link string
@@ -421,6 +443,11 @@ func (s *signInFlow) claudePaste(raw string) error {
 		c := http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		res, err := c.Do(req)
 		if err != nil {
+			// without the address: it carries the sign-in's code
+			var ue *url.Error
+			if errors.As(err, &ue) {
+				err = ue.Err
+			}
 			return errors.New("Claude Code didn't take that address: " + err.Error())
 		}
 		res.Body.Close()

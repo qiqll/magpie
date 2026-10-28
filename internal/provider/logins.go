@@ -751,6 +751,9 @@ func rememberLogins(force bool) {
 	if !force && !loginsLookDue() {
 		return
 	}
+	// accounts Claude Code let go of, logged once written and unlocked
+	var lapsed []string
+	defer func() { logClaudeLoggedOut(lapsed) }()
 	loginsMu.Lock()
 	defer loginsMu.Unlock()
 	// another ask may have looked while this one waited for the lock
@@ -768,8 +771,10 @@ func rememberLogins(force bool) {
 		}
 		l, ok := liveLogin(agent)
 		if !ok {
-			if agent == "claude" && claudeLoggedOut(ls) {
-				changed = true
+			if agent == "claude" {
+				if out, who := claudeLoggedOut(ls); out {
+					changed, lapsed = true, who
+				}
 			}
 			continue
 		}
@@ -787,7 +792,11 @@ func rememberLogins(force bool) {
 	// seconds above don't hold for: one that would only move Seen on, and
 	// that recently, writes nothing (#1674)
 	if changed && !onlySeenMoved(was, ls, now) {
-		_ = writeLogins(ls)
+		if writeLogins(ls) != nil {
+			lapsed = nil
+		}
+	} else {
+		lapsed = nil
 	}
 }
 

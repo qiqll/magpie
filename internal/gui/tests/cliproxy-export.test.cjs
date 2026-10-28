@@ -121,6 +121,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const row = (user) => page.locator(".editor .acc", { hasText: user }).getByRole("button", { name: w.export, exact: true });
       assert.equal(await row("ok@example.com").count(), 1);
       assert.equal(await row("gone@example.com").count(), 0, "a Claude account whose sign-in is gone");
+      // nothing hovers on a phone: Export shows as Remove does, a finger's size
+      const shown = await row("ok@example.com").evaluate((b) => { const r = b.getBoundingClientRect(); return [getComputedStyle(b).opacity, Math.round(r.width), Math.round(r.height)]; });
+      assert.equal(shown[0], "1", "Export is hidden on a phone");
+      assert.ok(shown[1] >= 44 && shown[2] >= 44, `Export is ${shown[1]}×${shown[2]} on a phone`);
       const over = await page.evaluate(() => document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth);
       assert.ok(over <= 0, `the page runs ${over}px past 420px`);
       await page.goto("http://magpie.test/?view=providers");

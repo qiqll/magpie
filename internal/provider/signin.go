@@ -481,31 +481,49 @@ func SubmitSignInCallback(id, raw string) error {
 	if !ok {
 		return errors.New("no such sign-in")
 	}
-	if s.plugin != "" {
-		return s.pluginCode(raw)
+	var err error
+	switch {
+	case s.plugin != "":
+		err = s.pluginCode(raw)
+	case s.pluginPorts != nil:
+		err = s.pluginCallback(raw)
+	case s.pluginKey != nil:
+		err = s.pastedPluginKey(raw)
+	case s.claude != nil:
+		err = s.claudePaste(raw)
+	default:
+		err = s.pastedCallback(raw)
 	}
-	if s.pluginPorts != nil {
-		return s.pluginCallback(raw)
-	}
-	if s.pluginKey != nil {
-		return s.pastedPluginKey(raw)
-	}
-	if s.claude != nil {
-		return logPasteRefused(s, s.claudePaste(raw))
-	}
-	return logPasteRefused(s, s.pastedCallback(raw))
-}
-
-// logPasteRefused logs why a pasted address or code didn't finish a
-// sign-in, which the window shows only until it is closed. What was
-// pasted isn't logged: it carries the sign-in's code.
-func logPasteRefused(s *signInFlow, err error) error {
-	if err != nil {
-		st := s.status()
-		log.Printf("sign-in %s (%s): the pasted address wasn't taken: %v", st.Agent, st.ID, err)
-	}
+	logPasteRefused(s, raw, err)
 	return err
 }
+
+// logPasteRefused logs why what was pasted didn't finish a sign-in still
+// waiting, which the window shows only until it is closed; a sign-in it
+// ended is logged by finish. What was pasted isn't logged: it carries the
+// sign-in's code or key, and it is cut out of the error too.
+func logPasteRefused(s *signInFlow, raw string, err error) {
+	if st := s.status(); err != nil && st.State == "waiting" {
+		why := err.Error()
+		if raw = strings.TrimSpace(raw); raw != "" {
+			why = strings.ReplaceAll(why, raw, "…")
+		}
+		log.Printf("sign-in %s (%s): what was pasted wasn't taken: %s", st.Agent, st.ID, logText(why))
+	}
+}
+
+// logText is text from outside magpie (a vendor, a plugin, a page) as one
+// line of the log: quoted, so it can't start a line of its own, and cut
+// at logTextMost bytes.
+func logText(s string) string {
+	if len(s) > logTextMost {
+		s = s[:logTextMost] + "…"
+	}
+	return strconv.Quote(s)
+}
+
+// logTextMost is how much of a text from outside magpie a log line keeps.
+const logTextMost = 500
 
 // pastedCallback takes the address a sign-in's browser was sent back to,
 // for a magpie that browser can't reach. Only this sign-in's own address is
@@ -660,7 +678,7 @@ func (s *signInFlow) finish(out SignInState) bool {
 	s.mu.Unlock()
 	if out.State == "failed" {
 		// the window says it only while it is open
-		log.Printf("sign-in %s (%s) failed: %s", out.Agent, out.ID, out.Error)
+		log.Printf("sign-in %s (%s) failed: %s", out.Agent, out.ID, logText(out.Error))
 	}
 	close(s.done)
 	if stop != nil {

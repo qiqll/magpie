@@ -95,18 +95,28 @@ func NoteClaudeSignInFailure(user, version, message string) {
 	if !ClaudeSignInRequired(message) {
 		return
 	}
+	if who := refuseClaudeVersion(user, version); who != "" {
+		// after the lock: the log's writer can block (a journal's pipe)
+		log.Printf("claude %s: Anthropic refused its sign-in, so it is passed over until it is signed in again; Claude Code said: %s", who, logText(message))
+	}
+}
+
+// refuseClaudeVersion keeps the refusal on the saved account user, while
+// it has the credential version, and is the account's name when it was
+// kept now: "" when it had been already, or couldn't be written.
+func refuseClaudeVersion(user, version string) string {
 	loginsMu.Lock()
 	defer loginsMu.Unlock()
 	ls := readLogins()
 	for i := range ls {
 		if ls[i].Agent == "claude" && strings.EqualFold(ls[i].User, user) && claudeLoginVersion(ls[i]) == version {
-			if refuseClaudeLogin(&ls[i], version) {
-				_ = writeLogins(ls)
-				log.Printf("claude %s: Anthropic refused its sign-in, so it is passed over until it is signed in again; Claude Code said: %s", ls[i].User, message)
+			if refuseClaudeLogin(&ls[i], version) && writeLogins(ls) == nil {
+				return ls[i].User
 			}
-			return
+			return ""
 		}
 	}
+	return ""
 }
 
 // claudeOwnRefused is why the account Claude Code itself is signed in to,

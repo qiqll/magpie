@@ -2442,7 +2442,8 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acc .text.quiet:focus-visible { opacity: 1; }
 /* Export, an icon (cliproxyButton), shown as Remove is */
 .acc .acc-export { opacity: 0; transition: opacity .15s, background .12s, color .12s; }
-.acc:hover .acc-export, .acc .acc-export:focus-visible, .acc .acc-export.busy { opacity: 1; }
+.acc:hover .acc-export, .acc .acc-export:focus-visible { opacity: 1; }
+.acc .acc-export.busy { opacity: .55; }
 /* an account signed out (#1363) shows its Remove without a hover: it is
    one of the two ways out of that state, beside Sign in again */
 .acc.signed-out .text.quiet { opacity: 1; }
@@ -3728,7 +3729,8 @@ body.panel .modal { padding: 16px 12px; }
   body.web .row-head { height: auto; min-height: 40px; flex-wrap: wrap; gap: 4px; }
   body.web .text, body.web .field, body.web .segs .opt, body.web .copy { min-height: 44px; }
   body.web .text { padding: 8px 10px; }
-  body.web .copy { min-width: 44px; }
+  body.web .copy, body.web .acc .acc-export { min-width: 44px; }
+  body.web .acc .acc-export { min-height: 44px; }
   body.web .fields { width: 100%; grid-template-columns: minmax(0, 1fr) minmax(0, 124px); }
   body.web .row.agent { flex-wrap: wrap; }
   body.web .row.agent > .fields { flex-basis: 100%; }
@@ -3807,7 +3809,7 @@ body.panel .modal { padding: 16px 12px; }
   body.web .acc > .grow + * { margin-left: auto; }
   /* nothing hovers on a phone: what a row shows on hover is shown, and a
      key's row gives it back the room it folds away till a hover (#841) */
-  body.web .acc :is(.text.quiet, .proto, .amodels, .alane) { opacity: 1; }
+  body.web .acc :is(.text.quiet, .acc-export, .proto, .amodels, .alane) { opacity: 1; }
   body.web .accts.keys .acc > :is(.amodels, .proto, .alane, .text.quiet) { max-width: none !important; padding: 0 7px !important; flex-shrink: 0 !important; }
   body.web .accts.keys .acc > .alane:not(.set) { margin-left: 0 !important; }
   body.web #gatewayKeys .acc > .key-quotas { max-width: none !important; padding: 0 7px !important; margin-left: 0 !important; flex-shrink: 0; }
