@@ -63,6 +63,15 @@ func usersUpstream(t *testing.T, refuse map[string]int) (asked func(reset bool) 
 
 // userPost asks for model on magpie's /v1/responses for user, each with
 // a conversation of its own.
+// refusedWhy is why the last request to s was refused its user, as the
+// usage log keeps it: a 429's caller is told only userLimitSaid.
+func refusedWhy(s *Server) string {
+	if calls := s.Recent(); len(calls) > 0 {
+		return calls[0].Error
+	}
+	return ""
+}
+
 func userPost(s *Server, model, user, input string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"`+model+`","stream":true,"input":"`+input+`"}`))
@@ -211,7 +220,7 @@ func TestUserBoundAccountsFailureIsTheCallers(t *testing.T) {
 	}
 	// resting now: refused without asking anyone
 	rec = userPost(s, "codex/gpt-5.5", "alice", "and again")
-	if rec.Code != 429 || !strings.Contains(rec.Body.String(), "rests until") {
+	if rec.Code != 429 || !strings.Contains(refusedWhy(s), "rests until") {
 		t.Fatalf("resting: %d %s", rec.Code, rec.Body.String())
 	}
 	if limit, until := limitOf(t, rec); limit != "rate" || !until.After(time.Now()) {

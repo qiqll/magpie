@@ -131,7 +131,7 @@ func TestUserTierSetsItsAccounts(t *testing.T) {
 	}
 
 	got, rec := spend(t, s, "alice", "", out, asked)
-	if len(got) != 2 || rec.Code != 429 || !strings.Contains(rec.Body.String(), "at its tier free's 2 accounts") {
+	if len(got) != 2 || rec.Code != 429 || !strings.Contains(refusedWhy(s), "at its tier free's 2 accounts") {
 		t.Fatalf("no tier: answered by %v, then %d %s", got, rec.Code, rec.Body.String())
 	}
 	if n := len(seatsIn(t, "codex")["alice"]); n != 2 {
@@ -142,7 +142,7 @@ func TestUserTierSetsItsAccounts(t *testing.T) {
 	}
 
 	got, rec = spend(t, s, "bob", "pro", out, asked)
-	if len(got) != 4 || rec.Code != 429 || !strings.Contains(rec.Body.String(), "at its tier pro's 4 accounts") || rec.Header().Get(UserLimitHeader) != "quota" {
+	if len(got) != 4 || rec.Code != 429 || !strings.Contains(refusedWhy(s), "at its tier pro's 4 accounts") || rec.Header().Get(UserLimitHeader) != "quota" {
 		t.Fatalf("pro: answered by %v, then %d %v %s", got, rec.Code, rec.Header(), rec.Body.String())
 	}
 	if seats := seatsIn(t, "codex")["bob"]; len(seats) != 4 {
@@ -313,7 +313,7 @@ func TestUserTiersReadAgain(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(was) })
 	s := byUserUpTo(t, New(), 1)
 	got, rec := spend(t, s, "alice", "", out, asked)
-	if len(got) != 1 || !strings.Contains(rec.Body.String(), "at its tier free's 1 account") {
+	if len(got) != 1 || !strings.Contains(refusedWhy(s), "at its tier free's 1 account") {
 		t.Fatalf("at 1: %v %d %s", got, rec.Code, rec.Body.String())
 	}
 	// edited so it doesn't read: still 1
@@ -321,7 +321,7 @@ func TestUserTiersReadAgain(t *testing.T) {
 		writeTiers(t, bad)
 		for range 2 {
 			rec := tierPost(s, "alice", "", "again")
-			if got := asked(true); rec.Code != 429 || len(got) != 0 || !strings.Contains(rec.Body.String(), "at its tier free's 1 account") {
+			if got := asked(true); rec.Code != 429 || len(got) != 0 || !strings.Contains(refusedWhy(s), "at its tier free's 1 account") {
 				t.Fatalf("%s: %d asked %v %s", bad, rec.Code, got, rec.Body.String())
 			}
 		}
@@ -335,7 +335,7 @@ func TestUserTiersReadAgain(t *testing.T) {
 	// mended, with room for 3: grown
 	writeTiers(t, `{"default":"free","tiers":{"free":{"credits":1000,"max_accounts":3}}}`)
 	got, rec = spend(t, s, "alice", "", out, asked)
-	if len(got) != 2 || !strings.Contains(rec.Body.String(), "at its tier free's 3 accounts") {
+	if len(got) != 2 || !strings.Contains(refusedWhy(s), "at its tier free's 3 accounts") {
 		t.Fatalf("at 3: %v %d %s", got, rec.Code, rec.Body.String())
 	}
 	if n := len(seatsIn(t, "codex")["alice"]); n != 3 {
@@ -409,8 +409,8 @@ func TestUserTierLoweredKeepsItsAccounts(t *testing.T) {
 		if tier == "plus" {
 			want = "at its tier plus's 3 accounts"
 		}
-		if !strings.Contains(rec.Body.String(), want) {
-			t.Fatalf("%q: %s", tier, rec.Body.String())
+		if !strings.Contains(refusedWhy(s), want) {
+			t.Fatalf("%q: %s", tier, refusedWhy(s))
 		}
 		if now := seatsIn(t, "codex")["alice"]; !slices.Equal(now, seats[:3]) {
 			t.Fatalf("%q: %v, was %v", tier, now, seats[:3])

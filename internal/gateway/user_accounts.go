@@ -1097,14 +1097,26 @@ func restWho(r Rest, seats []userSeat) string {
 	return ""
 }
 
+// userLimitSaid is all a user's 429 says, as Anthropic's own rate limit
+// does: which account the user is bound to, its cap and its rests are the
+// operator's, kept in the usage log, not the caller's. When it is back is
+// in Retry-After and UserUntilHeader.
+const userLimitSaid = "This request would exceed your account's rate limit. Please try again later."
+
 // userRefused writes refused, why a request of the user u goes to none
-// of its accounts, with its limit when it is one.
+// of its accounts, with its limit when it is one. A 429 says only
+// userLimitSaid; why is in the call's error.
 func (s *Server) userRefused(w http.ResponseWriter, from provider.Protocol, call *Call, u *UserBound, refused userRefusal) {
 	call.Status, call.Error = refused.status, "user bound: "+u.accountOr()
 	if refused.limit != "" {
 		userLimited(w.Header(), refused.limit, refused.until, refused.model)
 	}
-	writeError(w, from, refused.status, refused.msg)
+	msg := refused.msg
+	if refused.status == http.StatusTooManyRequests {
+		call.Error += ": " + msg
+		msg = userLimitSaid
+	}
+	writeError(w, from, refused.status, msg)
 }
 
 // cappedLimit is the UserLimitHeader of accounts ws held by magpie: "cap"

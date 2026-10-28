@@ -219,9 +219,14 @@ func TestUserAtItsTierMostIsTold(t *testing.T) {
 		t.Fatalf("the first back: %q until %v: %v %s", limit, until, rec.Header(), rec.Body.String())
 	}
 	seats := seatsIn(t, "codex")["alice"]
-	body := rec.Body.String()
-	if len(seats) != 2 || !strings.Contains(body, "at its tier free's 2 accounts") || !strings.Contains(body, "the first back is "+seats[1]) || !strings.Contains(body, "for every model") {
-		t.Fatalf("%v: %s", seats, body)
+	// the caller is told a rate limit, as Anthropic's own; why, and the
+	// accounts, are the usage log's
+	body, why := rec.Body.String(), s.Recent()[0].Error
+	if !strings.Contains(body, userLimitSaid) || !strings.Contains(body, "rate_limit_error") || strings.Contains(body, "@") || strings.Contains(body, "tier") {
+		t.Fatalf("the caller told more than a rate limit: %s", body)
+	}
+	if len(seats) != 2 || !strings.Contains(why, "at its tier free's 2 accounts") || !strings.Contains(why, "the first back is "+seats[1]) || !strings.Contains(why, "for every model") {
+		t.Fatalf("%v: %s", seats, why)
 	}
 	if strings.Contains(strings.Join(seats, ","), "third") && first != "acct-3" && spare != "acct-3" {
 		t.Fatalf("the third added: %v", seats)
@@ -247,7 +252,7 @@ func TestUserNotGivenAnAlmostSpentSpare(t *testing.T) {
 		t.Fatalf("an almost spent spare added: %v", got)
 	}
 	rec = userPost(s, "codex/gpt-5.5", "alice", "again")
-	if got := asked(true); rec.Code != 429 || len(got) != 0 || !strings.Contains(rec.Body.String(), "room") {
+	if got := asked(true); rec.Code != 429 || len(got) != 0 || !strings.Contains(refusedWhy(s), "room") {
 		t.Fatalf("resting: %d asked %v: %s", rec.Code, got, rec.Body.String())
 	}
 	// with room again, it is added

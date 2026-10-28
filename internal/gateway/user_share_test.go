@@ -60,7 +60,7 @@ func TestPaidUserHasItsAccountAlone(t *testing.T) {
 	for _, u := range []struct{ user, tier string }{{"erin", ""}, {"frank", "pro"}} {
 		rec := tierPost(s, u.user, u.tier, "hi")
 		limit, until := limitOf(t, rec)
-		if rec.Code != 429 || limit != "quota" || !until.IsZero() || !strings.Contains(rec.Body.String(), "no account of the provider is free") {
+		if rec.Code != 429 || limit != "quota" || !until.IsZero() || !strings.Contains(refusedWhy(s), "no account of the provider is free") {
 			t.Fatalf("%s, every account taken: %d %q until %v %s", u.user, rec.Code, limit, until, rec.Body.String())
 		}
 	}
@@ -127,7 +127,7 @@ func TestUserGivenNoSpareThatIsAnothersAlone(t *testing.T) {
 		t.Fatalf("alice's account asked for bob: %v", got)
 	}
 	rec := tierPost(s, "bob", "free", "again")
-	if limit, until := limitOf(t, rec); rec.Code != 429 || limit != "quota" || !near(until, 2*time.Hour) || !strings.Contains(rec.Body.String(), "every other account of the provider is taken") {
+	if limit, until := limitOf(t, rec); rec.Code != 429 || limit != "quota" || !near(until, 2*time.Hour) || !strings.Contains(refusedWhy(s), "every other account of the provider is taken") {
 		t.Fatalf("bob again: %d %q until %v %s", rec.Code, limit, until, rec.Body.String())
 	}
 	if got := asked(true); len(got) != 0 {
@@ -158,7 +158,7 @@ func TestFullPoolSaysWhenASharedOneIsBack(t *testing.T) {
 	}
 	asked(true)
 	rec := tierPost(s, "carol", "free", "hi")
-	if limit, until := limitOf(t, rec); rec.Code != 429 || limit != "quota" || !near(until, 2*time.Hour) || !strings.Contains(rec.Body.String(), "the first back rests until") {
+	if limit, until := limitOf(t, rec); rec.Code != 429 || limit != "quota" || !near(until, 2*time.Hour) || !strings.Contains(refusedWhy(s), "the first back rests until") {
 		t.Fatalf("carol: %d %q until %v %s", rec.Code, limit, until, rec.Body.String())
 	}
 	if got := asked(true); len(got) != 0 {

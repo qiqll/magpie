@@ -1829,14 +1829,17 @@ When its accounts can't answer and no spare is added (rate limited, back
 within half an hour, resting, at its usage cap, paused, as many as its
 tier has already, "at its tier pro's 4 accounts"),
 the vendor's or magpie's error is yours: no other account answers in its
-place, and the error says why no spare was added. When that error is a
+place. A 429 magpie gives says only Anthropic's own words, "This request
+would exceed your account's rate limit. Please try again later.", as
+`rate_limit_error` in your protocol's shape; which accounts the user is on,
+their caps and rests, and why no spare was added are in the request's
+error in the usage log (`userRefused`), not the reply. When that error is a
 limit, it says so and until when the first of the user's accounts is back,
 for you to stop sending the user's requests until then:
 `X-Magpie-User-Limit` is `quota` (the account's allowance is used up),
 `credit` (out of credit), `rate` (rate limited) or `cap` (at the usage cap
 set on it in magpie), and `X-Magpie-User-Until` is when it is back
-(RFC 3339, UTC), as `Retry-After` is in seconds; the message names that
-account. When only one model of the account is out and its others still
+(RFC 3339, UTC), as `Retry-After` is in seconds. When only one model of the account is out and its others still
 answer, `X-Magpie-User-Model` names it: stop only that model's requests. A
 limit without `X-Magpie-User-Until` is one magpie doesn't know the end of.
 Every request of the user before then is refused at once, with the same
