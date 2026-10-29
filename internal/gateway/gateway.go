@@ -1488,7 +1488,11 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 		// ZCode itself never counts, and zcode.z.ai answers count_tokens
 		// with an error every time: one more request its firewall weighs
 		p.Account.Agent == "zcode") ||
-		ok && p.IsPlugin() && (slices.Contains(estimatedMoved, p.ID) || slices.Contains(estimatedMoved, p.PluginProvider())) {
+		ok && p.IsPlugin() && (slices.Contains(estimatedMoved, p.ID) || slices.Contains(estimatedMoved, p.PluginProvider())) ||
+		// bound by user, a count without a user asks no account: none is
+		// its to ask (bindUser places a request by its user), so it is
+		// estimated here rather than refused
+		s.countsWithoutUser(r) {
 		req, err := parseAnthropic(body)
 		if err != nil {
 			writeError(w, provider.Anthropic, 400, err.Error())
@@ -1567,6 +1571,16 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 		return
 	}
 	writeJSON(w, 200, map[string]any{"input_tokens": estimate(req)})
+}
+
+// countsWithoutUser is whether r is a count, bound by user, that names
+// no user (userOf): one no account of the pool may be asked for.
+func (s *Server) countsWithoutUser(r *http.Request) bool {
+	if !s.bind.byUser() {
+		return false
+	}
+	user, _ := userOf(r.Header)
+	return user == ""
 }
 
 // Match the counting operation or the endpoint itself, not an unsupported
@@ -1717,6 +1731,8 @@ func (s *Server) gemini(w http.ResponseWriter, r *http.Request) {
 		if countOff(w, provider.Gemini, model) { // nor a disabled one (#1867)
 			return
 		}
+		// estimated here, asking no account: so bound by user a count
+		// without a user touches none, as Anthropic's (countsWithoutUser)
 		s.geminiCount(w, model, body)
 		return
 	default:

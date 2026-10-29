@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http/httptest"
@@ -163,8 +164,9 @@ func postAt(s *Server, path, body string, h map[string]string) *httptest.Respons
 // Bound by user, every request that asks a model names its user: one
 // without, or with one the header can't take, is a 400 that says so and
 // asks nobody — a group's and one pinned to an account too, though
-// neither is bound. Listing models and counting tokens pick no account,
-// and need none.
+// neither is bound. Listing models picks no account, and needs none; a
+// count without a user is estimated, asking none
+// (TestUserBindingCountsWithoutTheUserLocally).
 func TestUserBindingNeedsTheUser(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked, _ := usersUpstream(t, nil)
@@ -238,5 +240,52 @@ func TestUserBindingNeedsTheUser(t *testing.T) {
 	s = New()
 	if rec := postAt(s, "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), nil); rec.Code != 200 {
 		t.Fatalf("bound by session, no user: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Bound by user, a count without a user — Anthropic's count_tokens and
+// Gemini's :countTokens — asks no account of the pool: it is estimated
+// here, a 200, not refused. With a user, or bound by session, Anthropic's
+// count still goes to the provider.
+func TestUserBindingCountsWithoutTheUserLocally(t *testing.T) {
+	noRests()
+	t.Cleanup(noRests)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	up := &countAsked{}
+	srv := httptest.NewServer(up)
+	t.Cleanup(srv.Close)
+	if err := provider.Save(provider.Provider{ID: "fake", Name: "Fake", Key: "k", Models: []string{"m1"},
+		Anthropic: srv.URL, Gemini: srv.URL, Chat: srv.URL + "/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	msg := `{"model":"fake/m1","messages":[{"role":"user","content":"hello there, count me"}]}`
+	s := byUser(New())
+	if n := estimated(t, postAt(s, "/v1/messages/count_tokens", msg, nil)); n == 999 {
+		t.Fatalf("count_tokens without a user was the provider's: %d", n)
+	}
+	if got := up.asked(); len(got) != 0 {
+		t.Fatalf("count_tokens without a user asked an account: %v", got)
+	}
+	rec := postAt(s, "/v1beta/models/fake/m1:countTokens", `{"contents":[{"parts":[{"text":"hello there, count me"}]}]}`, nil)
+	var gem struct {
+		TotalTokens int `json:"totalTokens"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &gem); rec.Code != 200 || err != nil || gem.TotalTokens == 0 {
+		t.Fatalf(":countTokens without a user: %d %s", rec.Code, rec.Body)
+	}
+	if got := up.asked(); len(got) != 0 {
+		t.Fatalf(":countTokens without a user asked an account: %v", got)
+	}
+	// with a user, the provider counts, as before
+	if n := estimated(t, postAt(s, "/v1/messages/count_tokens", msg, map[string]string{UserHeader: "alice"})); n != 999 {
+		t.Fatalf("count_tokens with a user: %d, want the provider's 999", n)
+	}
+	// and bound by session, without one
+	if n := estimated(t, postAt(New(), "/v1/messages/count_tokens", msg, nil)); n != 999 {
+		t.Fatalf("count_tokens bound by session: %d, want the provider's 999", n)
+	}
+	if got := up.asked(); len(got) != 2 {
+		t.Fatalf("asked %v, want the two counts with a user and by session", got)
 	}
 }
