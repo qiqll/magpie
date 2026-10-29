@@ -92,6 +92,15 @@ func (s *Server) ownSearch(ctx context.Context, p provider.Provider, query strin
 // service, any other by its model.
 func (s *Server) searchBy(ctx context.Context, p provider.Provider, model, query, effort string) (string, []Hit, error) {
 	if provider.KimiCodeSearch(p) != "" {
+		// the plan's service is asked with a key straight: bound by user,
+		// the user's own (usersOwn), never the provider's first for all
+		own, bound, err := s.usersOwn(ctx, p, model, provider.Anthropic)
+		if err != nil {
+			return "", nil, fmt.Errorf("%s: %w", p.Name, err)
+		}
+		if bound {
+			p = own[0].p
+		}
 		return s.kimiSearch(ctx, p, query)
 	}
 	return s.searchWith(ctx, p, model, query, effort)

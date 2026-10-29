@@ -71,7 +71,17 @@ func (s *Server) alphaSearchBody(w http.ResponseWriter, r *http.Request, body []
 		return
 	}
 	note := ""
-	if ons, model := chatGPTSearchers(r, q.Model); len(ons) > 0 {
+	ons, model := chatGPTSearchers(r, q.Model)
+	if len(ons) > 0 {
+		// bound by user, only the user's own ChatGPT accounts search
+		// for it; with none, magpie searches, on the user's accounts too
+		var why string
+		if ons, why = s.usersSearchers(r, q.Model, ons, model); why != "" {
+			log.Printf("web search on ChatGPT for %s: %s", q.Model, why)
+			note = "ChatGPT's web search isn't for this user (" + why + "); magpie searched in its place.\n\n"
+		}
+	}
+	if len(ons) > 0 {
 		answered, why := s.alphaSearchOn(w, r, withModel(body, model), model, ons)
 		if answered {
 			return
@@ -114,6 +124,36 @@ func chatGPTSearchers(r *http.Request, model string) ([]provider.Provider, strin
 		ready = append(ready, o)
 	}
 	return append(ready, later...), bare
+}
+
+// usersSearchers is ons, the ChatGPT accounts a search for id (bare as
+// model) may go to, bound by user less those r's user isn't on
+// (usersOwn), and why, when none is left.
+func (s *Server) usersSearchers(r *http.Request, id string, ons []provider.Provider, model string) ([]provider.Provider, string) {
+	p, _, ok := provider.Resolve(id)
+	if !ok {
+		return ons, ""
+	}
+	own, bound, err := s.usersOwn(s.forUser(r.Context(), r), p, model, provider.Responses)
+	if !bound {
+		return ons, ""
+	}
+	if err != nil {
+		return nil, err.Error()
+	}
+	var out []provider.Provider
+	for _, c := range own {
+		for _, o := range ons {
+			if strings.EqualFold(candidate{p: o, model: model, rest: o.ID}.who(), c.who()) {
+				out = append(out, o)
+				break
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil, "none of the user's accounts can search now"
+	}
+	return out, ""
 }
 
 // alphaSearchOn sends the search to the ChatGPT backend on each account in

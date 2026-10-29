@@ -2068,9 +2068,14 @@ with one the header can't take, is a 400 that says why, and nothing is
 sent. A routing group's request and one with `X-Magpie-Account` need it
 too, though neither is bound. Listing models and counting tokens don't.
 magpie's own MCP tools that draw, search or look at an image need it as
-well, and refuse a call without it. A web search or image description
-magpie makes for a request goes to the accounts that request's user is
-bound to, never to another user's.
+well, and refuse a call without it. The web searches and image
+descriptions magpie makes for a request go to the accounts that
+request's user is bound to, never to another user's: its web search MCP
+tool, a model's web_search, Codex's web.run (on a ChatGPT account too),
+a Kimi Code plan's search service, its image recognition MCP tool, and
+the image a model that can't see is sent. A routing group's request and
+one with `X-Magpie-Account` are bound for these too, though the request
+itself isn't.
 A value either can't take refuses to start, saying why, and so does
 `--bind=user` with a `user-tiers.json` that doesn't read or holds a value
 it can't (below). `--bind-max` and `MAGPIE_BIND_MAX` are gone: the user's

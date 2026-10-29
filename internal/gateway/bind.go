@@ -10,6 +10,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -134,6 +135,41 @@ func askedUser(ctx context.Context) string {
 		return ""
 	}
 	return f.key + "\x00" + f.user
+}
+
+// usersOwn is, for magpie's own ask of p's model made for a user
+// (forUser), the accounts and keys of p that user is on, its first first,
+// bound now when it is on none, as a request of that user to the model
+// would have them (bindUser); for an ask that goes to the vendor without
+// a request through serve (Codex's web.run on the ChatGPT backend, a Kimi
+// Code plan's search service). bound is false for an ask made for no
+// user: nothing to narrow. With none of the user's to ask, err says why,
+// and none of p's other accounts is asked in their place.
+func (s *Server) usersOwn(ctx context.Context, p provider.Provider, model string, from provider.Protocol) (own []candidate, bound bool, err error) {
+	f, ok := ctx.Value(askedForKey{}).(askedFor)
+	if !ok {
+		return nil, false, nil
+	}
+	h := http.Header{}
+	askAsUser(ctx, h)
+	tier, bad, err := tierOf(h)
+	if bad != "" {
+		return nil, true, errors.New(bad)
+	}
+	if err != nil {
+		return nil, true, fmt.Errorf("%s: magpie can't read user-tiers.json, so it doesn't know how many accounts %q may have; nothing was sent", UserTierHeader, f.user)
+	}
+	cands, pl := s.plan(p, model, from)
+	cands, _, ub, refused := bindUser(f.key, f.user, tier, p, cands, pl)
+	if refused.status != 0 {
+		return nil, true, errors.New(refused.msg)
+	}
+	// "none": no account of p can answer now, and the user is bound to
+	// none of them yet; those cands are p's, not the user's
+	if ub != nil && ub.Why == "none" || len(cands) == 0 {
+		return nil, true, fmt.Errorf("%s: none of %s's accounts %q is on can answer now; no other is asked in its place", UserHeader, p.Name, f.user)
+	}
+	return cands, true, nil
 }
 
 // noUser refuses with a 400, bound by user, a request without a user, or
