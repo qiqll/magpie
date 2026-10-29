@@ -396,11 +396,11 @@ func TestPinnedLapsedBindsTheUserASpare(t *testing.T) {
 }
 
 // With nothing to take it in its place, nobody is asked (c): not bound by
-// user, with the other account one the key may not use, the pin is
-// refused 403 with why; a user's, with the other another user's alone,
-// is a 429 with a time to try again that says nothing of a sign-in (the
-// owner's decision, 2026-10-29). A pin to an account the key may not use
-// is still told so first.
+// user, with the other account one the key may not use, and a user's,
+// with the other another user's alone, each is a 429 with a time to try
+// again that says nothing of a sign-in, why in the usage log and the log
+// (the owner's decisions, 2026-10-29; not bound, it was a 403 with why).
+// A pin to an account the key may not use is still told so first.
 func TestPinnedLapsedRefusedWithNothingInItsPlace(t *testing.T) {
 	t.Run("the other outside the key", func(t *testing.T) {
 		codexSignedIn(t, "spare@example.com")
@@ -414,9 +414,21 @@ func TestPinnedLapsedRefusedWithNothingInItsPlace(t *testing.T) {
 		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"codex/gpt-5.5","stream":true,"input":"ping"}`))
 		req.Header.Set("Authorization", "Bearer "+secrets[0])
 		req.Header.Set(AccountHeader, "spare@example.com")
-		New().Handler().ServeHTTP(rec, req)
-		if got := asked(true); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "has expired") || len(got) != 0 {
-			t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+		var logged strings.Builder
+		log.SetOutput(&logged)
+		t.Cleanup(func() { log.SetOutput(os.Stderr) })
+		lapseRefusedSaid.Clear()
+		s := New()
+		s.Handler().ServeHTTP(rec, req)
+		if got := asked(true); rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" || len(got) != 0 {
+			t.Fatalf("%d %v %s, asked %v", rec.Code, rec.Header(), rec.Body.String(), got)
+		}
+		saysNoLapse(t, rec)
+		if c := s.Recent(); len(c) == 0 || !strings.Contains(c[0].Error, "has expired") {
+			t.Fatalf("the usage log doesn't say why: %+v", c)
+		}
+		if l := logged.String(); !strings.Contains(l, "codex account spare@example.com has to be signed in again") || !strings.Contains(l, "has expired") {
+			t.Fatalf("not logged with provider, account and why: %s", l)
 		}
 	})
 	t.Run("the other another user's alone", func(t *testing.T) {

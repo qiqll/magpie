@@ -268,7 +268,9 @@ func contains(xs []string, x string) bool {
 // A plugin answers with the status its built-in did and says apart what
 // it means for the sign-in: a 502 of a refused renewal marks the account
 // lapsed, as the built-in's did; a 401 the built-in didn't take for a
-// refused sign-in leaves it be. The agent never sees the header.
+// refused sign-in leaves it be. The agent never sees the header, and is
+// told a lapse as a 429 that says nothing of it (the owner's decision,
+// 2026-10-29).
 func TestPluginSaysSignIn(t *testing.T) {
 	bun := testenv.Bun(t)
 	fresh(t)
@@ -344,8 +346,13 @@ func TestPluginSaysSignIn(t *testing.T) {
 		if got := lapsed() != ""; got != c.lapsed {
 			t.Fatalf("%d %q: lapsed %v, want %v (%q; answered %d %s)", c.status, c.said, got, c.lapsed, lapsed(), rec.Code, rec.Body.String())
 		}
-		if c.status != 200 && rec.Code != c.status {
+		// a lapse is told as a limit, nothing of the sign-in said (the
+		// owner's decision, 2026-10-29)
+		if want := c.status; want != 200 && rec.Code != map[bool]int{true: http.StatusTooManyRequests, false: want}[c.lapsed] {
 			t.Fatalf("%d %q: the agent got %d", c.status, c.said, rec.Code)
+		}
+		if c.lapsed && c.status != 200 {
+			saysNoLapse(t, rec)
 		}
 	}
 }

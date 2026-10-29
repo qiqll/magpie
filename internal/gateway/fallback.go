@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1027,6 +1028,61 @@ func lapsedBack(cs []candidate, pl planned, keep func(candidate) bool) ([]candid
 		return slices.ContainsFunc(back, func(b candidate) bool { return b.rest == c.rest && b.model == c.model })
 	})
 	return append(cs, back...), pl
+}
+
+// lapsedTry says the try on c failed as its sign-in has to be made
+// again: refused so (failAuth), or, on an account marked to be signed in
+// again (read after the try, which may have marked it), turned away
+// (401, 403) or not sent (502: its refresh refused).
+func lapsedTry(c candidate, status int, body []byte) bool {
+	if failureOf(c, status, body) == failAuth {
+		return true
+	}
+	if c.p.Account == nil || c.p.Account.User == "" {
+		return false
+	}
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusBadGateway:
+		return provider.SignInLapsed(c.p.Account) != ""
+	}
+	return false
+}
+
+// lapsedRetryAfter marks h, a 429 a caller with no user bound is told
+// when the account its request would go to has to be signed in again (the
+// owner's decision, 2026-10-29, as a user's is: userLimitSaid), back in
+// lapsedRetry; nothing of a sign-in or the account is said. Why is the
+// call's error, the account's row and the log the operator's.
+func lapsedRetryAfter(h http.Header) {
+	h.Set("Retry-After", strconv.Itoa(int(lapsedRetry/time.Second)))
+}
+
+// lapseRefusedSaid is the lapse logged of each account a request was
+// refused for, by its who lower-cased: logged once a change, and again
+// once lapsedRetry has gone by, not once a request.
+var lapseRefusedSaid sync.Map
+
+type lapseLogged struct {
+	why string
+	at  time.Time
+}
+
+// noteLapseRefused logs that a request with no user bound was told to try
+// again later as the account who ("<provider>@<account>") has to be
+// signed in again, why ("" when its mark isn't written yet).
+func noteLapseRefused(who, why string) {
+	now := time.Now()
+	if was, ok := lapseRefusedSaid.Load(strings.ToLower(who)); ok {
+		if l := was.(lapseLogged); l.why == why && now.Sub(l.at) < lapsedRetry {
+			return
+		}
+	}
+	lapseRefusedSaid.Store(strings.ToLower(who), lapseLogged{why, now})
+	pid, account, _ := strings.Cut(who, "@")
+	if why == "" {
+		why = "its vendor refused the sign-in"
+	}
+	log.Printf("gateway: %s account %s has to be signed in again (%s): its request was told to try again later, nothing of the sign-in said", pid, account, why)
 }
 
 // barredOf is how the trace tells the accounts or keys the user set not
@@ -3659,8 +3715,9 @@ func streamStatus(msg string) int {
 // (its user, or its id in the routing trace), and pl with them. Nothing
 // else is tried in its place: a caller that names one account asks about
 // that one. The error says why none is left: no such account, one that
-// doesn't list the model, or one resting.
-func pinTo(want string, cands []candidate, pl planned) ([]candidate, planned, int, string) {
+// doesn't list the model, or one resting; lapsed is why when it has to
+// be signed in again, which the caller isn't told (lapsedRetryAfter).
+func pinTo(want string, cands []candidate, pl planned) ([]candidate, planned, int, string, string) {
 	match := func(w Weighed) bool { return strings.EqualFold(want, w.Who) || want == w.ID }
 	var out []candidate
 	var order []Weighed
@@ -3680,24 +3737,24 @@ func pinTo(want string, cands []candidate, pl planned) ([]candidate, planned, in
 		out, order = append(out, c), append(order, pl.order[i])
 	}
 	if len(out) > 0 {
-		return out, planned{order: order}, 0, ""
+		return out, planned{order: order}, 0, "", ""
 	}
 	if len(rests) > 0 {
-		return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + strings.Join(rests, "; ") + "; no other account is tried in its place"
+		return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + strings.Join(rests, "; ") + "; no other account is tried in its place", ""
 	}
 	for _, w := range pl.left {
 		if match(w) && w.Held {
-			return nil, pl, http.StatusForbidden, fmt.Sprintf("%s: the gateway key may not use %s's account", AccountHeader, w.Who)
+			return nil, pl, http.StatusForbidden, fmt.Sprintf("%s: the gateway key may not use %s's account", AccountHeader, w.Who), ""
 		}
 		if match(w) && w.Capped > 0 {
 			msg, _ := cappedError(w.Model, []Weighed{w}, time.Now())
-			return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + msg + "; no other account is tried in its place"
+			return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + msg + "; no other account is tried in its place", ""
 		}
 		if match(w) && w.Lapsed != "" {
-			return nil, pl, http.StatusForbidden, AccountHeader + ": " + w.Lapsed + "; no other account is tried in its place"
+			return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + w.Lapsed + "; no other account is tried in its place", w.Lapsed
 		}
 		if match(w) {
-			return nil, pl, http.StatusBadRequest, fmt.Sprintf("%s: %s's plan doesn't list %s", AccountHeader, w.Who, w.Model)
+			return nil, pl, http.StatusBadRequest, fmt.Sprintf("%s: %s's plan doesn't list %s", AccountHeader, w.Who, w.Model), ""
 		}
 	}
 	var have []string
@@ -3710,7 +3767,7 @@ func pinTo(want string, cands []candidate, pl planned) ([]candidate, planned, in
 	if len(have) > 0 {
 		msg += "; its accounts are " + strings.Join(have, ", ")
 	}
-	return nil, pl, http.StatusNotFound, msg
+	return nil, pl, http.StatusNotFound, msg, ""
 }
 
 // pinnedLapsed is why the account pin (AccountHeader) names, of cands

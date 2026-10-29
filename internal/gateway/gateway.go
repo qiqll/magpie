@@ -2378,8 +2378,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// pinned to an account whose sign-in has to be made again: sent to
 	// another of its provider's that can answer now, the user's own under
 	// --bind=user (bound afresh to a spare when it has none), else refused
-	// with why (pinnedLapsed). An account the key may not use is told so
-	// by pinTo first, as before
+	// as a limit, why (pinnedLapsed) the operator's. An account the key
+	// may not use is told so by pinTo first, as before
 	pin := strings.TrimSpace(r.Header.Get(AccountHeader))
 	pinLapsed, pinProvider := pinnedLapsed(pin, cands, pl)
 	if pinLapsed != "" && pinProvider != p.ID && s.bind.byUser() && !isGroup {
@@ -2404,10 +2404,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		finishCapture()
 		s.record(call)
 	}
+	// with no user bound, told as a limit too: a 429 back in lapsedRetry
+	// that names no sign-in (the owner's decision, 2026-10-29); why is the
+	// call's error, and the log says it
 	lapsedRefused := func(more string) {
-		msg := AccountHeader + ": " + pinLapsed + "; " + more
-		call.Status, call.Error = http.StatusForbidden, "account pinned: "+strings.TrimSpace(r.Header.Get(AccountHeader))
-		writeError(w, from, http.StatusForbidden, msg)
+		call.Status, call.Error = http.StatusTooManyRequests, "account pinned: "+strings.TrimSpace(r.Header.Get(AccountHeader))+": "+pinLapsed+"; "+more
+		noteLapseRefused(pinProvider+"@"+strings.TrimSpace(r.Header.Get(AccountHeader)), pinLapsed)
+		lapsedRetryAfter(w.Header())
+		writeError(w, from, http.StatusTooManyRequests, userLimitSaid)
 		finishCapture()
 		s.record(call)
 	}
@@ -2681,9 +2685,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	}
 	if pin != "" {
 		var status int
-		var msg string
-		if cands, pl, status, msg = pinTo(pin, cands, pl); status != 0 {
+		var msg, lapsed string
+		if cands, pl, status, msg, lapsed = pinTo(pin, cands, pl); status != 0 {
 			call.Status, call.Error = status, "account pinned: "+pin
+			if lapsed != "" {
+				// one to be signed in again: told as a limit, as above
+				call.Error += ": " + msg
+				noteLapseRefused(p.ID+"@"+pin, lapsed)
+				lapsedRetryAfter(w.Header())
+				msg = userLimitSaid
+			}
 			writeError(w, from, status, msg)
 			finishCapture()
 			s.record(call)
@@ -2871,6 +2882,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		hw.wantWhole = wantWhole
 		// a user's error is held to its end, its limit said on it
 		hw.holdErrors = userBound != nil
+		if c.p.Account != nil && c.p.Account.User != "" {
+			// and an account's, for a sign-in to be made again to be
+			// told as a limit (lapsedTry), not as the vendor said it
+			hw.holdErrors = true
+		}
 		// Claude's and GPT's reasoning is held for a refusal after it only
 		// while another candidate could answer instead: the last one's
 		// refusal isn't asked again, so holding it only kept a lone relay's
@@ -3634,11 +3650,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// the account's sign-in is gone, refused by Anthropic: no rest
 			// brings it back, so none is told; it is passed over until it
 			// is signed in again (provider/claude_auth.go), and the next
-			// one is asked
-			if other == nil && userBound == nil {
-				// a user's caller is never told a sign-in lapsed
-				other = &Try{Status: call.Status, Error: call.Error}
-			}
+			// one is asked. Its error isn't the one told when the last is
+			// out of its allowance (other): no caller is told a sign-in
+			// lapsed (the owner's decision, 2026-10-29)
 			try.Fail = failAuth
 			s.unbindTurnedAway(c, failAuth)
 			if userBound != nil {
@@ -3693,6 +3707,24 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 			call.Status, call.Error = refused.status, "user bound: "+userBound.accountOr()+": "+refused.msg+": "+call.Error
 			failTo(w, kept, from, refused.status, said)
+			break
+		}
+		if last && userBound == nil && !hw.passing && hw.code() >= 400 && lapsedTry(c, hw.code(), hw.errBody()) {
+			// the last account left has to be signed in again (a lapsed
+			// one brought back as none other could answer, lapsedBack, or
+			// one whose sign-in failed just now) and no user is bound:
+			// told as a limit, back in lapsedRetry, never the vendor's 401
+			// or magpie's words to sign in again (the owner's decision,
+			// 2026-10-29, as a user's is). Why is the call's error, the
+			// trace's and the log's
+			if failureOf(c, hw.code(), hw.errBody()) == failAuth {
+				try.Fail = failAuth
+			}
+			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+			noteLapseRefused(c.who(), provider.SignInLapsed(c.p.Account))
+			call.Status, call.Error = http.StatusTooManyRequests, "sign-in lapsed: "+c.who()+": "+call.Error
+			lapsedRetryAfter(w.Header())
+			failTo(w, kept, from, http.StatusTooManyRequests, userLimitSaid)
 			break
 		}
 		// the ChatGPT backend's 502 "response protection is unavailable"

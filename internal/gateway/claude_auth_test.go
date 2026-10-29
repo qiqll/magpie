@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -90,9 +91,11 @@ func TestClaudeAuthFailureFallsBackWithoutRetryingTheLogin(t *testing.T) {
 	}
 }
 
-// With every account refused, the agent is told to sign in again, not that
-// nothing is ready.
-func TestClaudeAllRefusedSaysSignInAgain(t *testing.T) {
+// With every account refused, the agent is told a limit to try again
+// after, nothing of a sign-in, not that nothing is ready; the call's error
+// and the log say to sign in again (the owner's decision, 2026-10-29: it
+// used to be told so).
+func TestClaudeAllRefusedToldAsALimit(t *testing.T) {
 	claudeMadeFirst(t, false)
 	loginFile := filepath.Join(filepath.Dir(provider.Path()), "logins.json")
 	var logins []map[string]any
@@ -109,9 +112,22 @@ func TestClaudeAllRefusedSaysSignInAgain(t *testing.T) {
 	claudeRefuses(t, filepath.Join(t.TempDir(), "calls"))
 	s := New()
 	t.Cleanup(s.subscription.abortAll)
-	askClaudeModel(s, "first")
-	if rec := askClaudeModel(s, "second"); rec.Code == 200 || !strings.Contains(rec.Body.String(), "sign in again") {
-		t.Fatalf("not told to sign in again: %d %s", rec.Code, rec.Body.String())
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	lapseRefusedSaid.Clear()
+	for _, text := range []string{"first", "second"} {
+		rec := askClaudeModel(s, text)
+		if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" {
+			t.Fatalf("%s: not a limit with a time to try again: %d %v %s", text, rec.Code, rec.Header(), rec.Body.String())
+		}
+		saysNoLapse(t, rec)
+		if c := s.Recent(); len(c) == 0 || !strings.Contains(c[0].Error, "sign-in lapsed") {
+			t.Fatalf("%s: the usage log doesn't say why: %+v", text, c)
+		}
+	}
+	if l := logged.String(); !strings.Contains(l, "has to be signed in again") || !strings.Contains(l, "sign in again") {
+		t.Fatalf("not logged: %s", l)
 	}
 }
 
