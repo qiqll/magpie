@@ -305,8 +305,13 @@ type sight struct {
 // described, is given the same description.
 func (s *Server) describe(ctx context.Context, model, src string) (string, error) {
 	// a level picked since is asked again, not given what was said at the
-	// last; bound by user, each user's look is asked of its own accounts
-	sum := sha256.Sum256([]byte(model + "\x00" + visionEffort(model) + "\x00" + askedUser(ctx) + "\x00" + src))
+	// last; bound by user, each user's look is asked of its own accounts,
+	// and a request without one keys as it always has
+	seen := model + "\x00" + visionEffort(model) + "\x00" + src
+	if u := askedUser(ctx); u != "" {
+		seen = u + "\x00" + seen
+	}
+	sum := sha256.Sum256([]byte(seen))
 	key := hex.EncodeToString(sum[:])
 	s.sightMu.Lock()
 	if e, ok := s.sights[key]; ok {
