@@ -55,11 +55,27 @@ func RenewLogins(ctx context.Context, every time.Duration) []Renewal {
 	loginsMu.Unlock()
 	out := []Renewal{}
 	for _, l := range ls {
+		if l.Agent == ChatGPTAPIID && l.Lapsed != "" {
+			// a ChatGPT API sign-in whose refresh was refused is left out
+			// of routing (SignInLapsed), so no request tries it again:
+			// it is tried here, and one that goes through is back
+			r := Renewal{Agent: l.Agent, User: l.User}
+			if _, err := siwcFresh(ctx, l.User, true); err != nil {
+				r.Err, r.Lapsed = err.Error(), errors.Is(err, ErrSIWCSignIn)
+			} else {
+				r.Renewed = true
+			}
+			out = append(out, r)
+			continue
+		}
 		if l.Agent != "codex" || strings.EqualFold(active[l.Agent], l.User) || leftAlone(l.Agent) {
 			continue
 		}
 		r := Renewal{Agent: l.Agent, User: l.User}
-		if every > 0 && !renewalDue(l, every, time.Now()) {
+		// one whose refresh was refused is due at once: routing leaves it
+		// out (SignInLapsed), so this is its only way back short of a
+		// sign-in anew
+		if every > 0 && l.Lapsed == "" && !renewalDue(l, every, time.Now()) {
 			out = append(out, r)
 			continue
 		}

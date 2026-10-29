@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
@@ -210,4 +211,48 @@ func TestLapsedAccountKeptWhenNoOtherCanAnswer(t *testing.T) {
 			t.Fatalf("pinned outside the key: %d %s", rec.Code, rec.Body.String())
 		}
 	})
+}
+
+// Under --bind=user, a user whose account is lapsed while the provider's
+// other account is another user's alone stays on its own and is sent
+// there (to be told to sign in again), not refused as the pool full.
+func TestUserKeptOnItsLapsedAccountWithNoSpare(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	asked, _ := usersUpstream(t, nil)
+	lapseSaved(t, "spare@example.com")
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC(), Tier: "pro"},
+		"bob":   {Who: "codex@spare@example.com", Account: "spare@example.com", At: time.Now().UTC(), Tier: "pro"},
+	}}})
+	s := byUser(New())
+	rec := tierPost(s, "bob", "pro", "hi")
+	if got := asked(true); rec.Code == http.StatusTooManyRequests || !slices.Equal(got, []string{"acct-2"}) {
+		t.Fatalf("bob: %d %s, asked %v", rec.Code, rec.Body.String(), got)
+	}
+	if b := boundIn(t, "codex"); b["bob"] != "spare@example.com" || b["alice"] != "me@example.com" {
+		t.Fatalf("bindings: %v", b)
+	}
+}
+
+// Codex's compaction moved off its paused sign-in goes to an account the
+// calling key may use, a lapsed one before one the key may not use
+// (compactSigninHeld would refuse that one).
+func TestLapsedCompactionOnAnAccountTheKeyMayUse(t *testing.T) {
+	codexSignedIn(t, "spare@example.com", "third@example.com")
+	asked, _ := usersUpstream(t, nil)
+	lapseSaved(t, "spare@example.com")
+	if err := provider.SetLoginOn("codex", "me@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	keys, secrets := newCaller(t, "Spare only")
+	if _, err := access.Update("accounts-key", access.Change{Key: keys[0].ID, Accounts: []string{"codex/spare@example.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", CodexPath+"/responses/compact", strings.NewReader(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":"ping"}]}`))
+	req.Header.Set("Authorization", "Bearer "+secrets[0])
+	New().Handler().ServeHTTP(rec, req)
+	if got := asked(true); !slices.Equal(got, []string{"acct-2"}) {
+		t.Fatalf("compacted on %v: %d %s", got, rec.Code, rec.Body.String())
+	}
 }

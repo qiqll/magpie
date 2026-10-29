@@ -108,8 +108,9 @@ func revokedKnown() bool {
 
 // revokedWhy is why account a's sign-in was revoked, as SignInMarked
 // tells it is; "" when it wasn't. A saved login that no longer holds the
-// mark (signed in again in magpie, or renewed by the agent itself) is not
-// revoked, whatever was kept of it here: the mark was only ever cleared
+// mark, or whose lapse a refresh since cleared (renewSaved), is not
+// revoked, as its row reads it (signed in again in magpie, or renewed by
+// the agent itself), whatever was kept of it here: the mark was only ever cleared
 // by a request it serves, which routing no longer sends it.
 func revokedWhy(ls []savedLogin, a *Account) string {
 	if !RevokedAccount(a) {
@@ -123,7 +124,7 @@ func revokedWhy(ls []savedLogin, a *Account) string {
 	if !ok {
 		return ""
 	}
-	if l, saved := loginIn(ls, func(l savedLogin) bool { return l.Agent == a.Agent && strings.EqualFold(l.User, a.User) }); saved && l.Refused != revokedPrefix+m {
+	if l, saved := loginIn(ls, func(l savedLogin) bool { return l.Agent == a.Agent && strings.EqualFold(l.User, a.User) }); saved && (l.Refused != revokedPrefix+m || l.Lapsed == "") {
 		return ""
 	}
 	if why != "" {

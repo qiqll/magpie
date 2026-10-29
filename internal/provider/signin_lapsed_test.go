@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/yetone/magpie/internal/plugin"
@@ -173,5 +175,116 @@ func TestSignInLapsedClearedBySigningInAnAgain(t *testing.T) {
 	pp := plugin.Provider{ID: "zed"}
 	if got := SignInLapsed(&Account{Agent: "plugin", User: "z", plugin: &pp}); got != "" {
 		t.Fatalf("a plugin account with no key held: %q", got)
+	}
+}
+
+// A saved ChatGPT account whose refresh was refused is left out of
+// routing, and tried again by the keepalive loop each time it runs: the
+// refusal doesn't count as a renewal, so it stays due, and a refresh that
+// goes through brings it back.
+func TestSavedCodexLapseTriedAgainByKeepalive(t *testing.T) {
+	home := signIn(t)
+	resetRevoked()
+	t.Cleanup(resetRevoked)
+	codexSignIn(t, home, "old@example.com", "r-old")
+	rememberLogins(true)
+	codexSignIn(t, home, "work@example.com", "r-work")
+	rememberLogins(true)
+	refuse := true
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if refuse {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":"invalid_grant"}`))
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"access_token": "fresh", "refresh_token": "r-old-2"})
+	}))
+	defer fake.Close()
+	old := codexTokenURL
+	codexTokenURL = fake.URL
+	t.Cleanup(func() { codexTokenURL = old })
+	a := &Account{Agent: "codex", User: "old@example.com", token: func(context.Context) (string, error) { return "", nil }}
+	if _, _, err := renewSavedLogin(context.Background(), "codex", "old@example.com", true); err == nil || SignInLapsed(a) == "" {
+		t.Fatalf("a refused refresh isn't held: %v", err)
+	}
+	for range 2 {
+		RenewLogins(context.Background(), keepAliveEvery)
+		if SignInLapsed(a) == "" {
+			t.Fatal("let back while still refused")
+		}
+	}
+	refuse = false
+	RenewLogins(context.Background(), keepAliveEvery)
+	if got := SignInLapsed(a); got != "" {
+		t.Fatalf("renewed by the keepalive loop, still held: %q", got)
+	}
+}
+
+// A revoked saved ChatGPT account that a refresh mends (the keepalive
+// loop's, now that routing doesn't ask it) is back, as its row says.
+func TestRevokedCodexBackOnceRefreshed(t *testing.T) {
+	home := signIn(t)
+	resetRevoked()
+	t.Cleanup(resetRevoked)
+	codexSignIn(t, home, "old@example.com", "r-old")
+	rememberLogins(true)
+	codexSignIn(t, home, "work@example.com", "r-work")
+	rememberLogins(true)
+	refuse := true
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if refuse {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":"invalid_grant"}`))
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"access_token": "fresh", "refresh_token": "r-old-2"})
+	}))
+	defer fake.Close()
+	old := codexTokenURL
+	codexTokenURL = fake.URL
+	t.Cleanup(func() { codexTokenURL = old })
+	a := &Account{Agent: "codex", User: "old@example.com", token: func(context.Context) (string, error) { return "", nil }}
+	NoteRevokedSignIn(context.Background(), a, revokedReq(t, "stale"))
+	if SignInLapsed(a) == "" {
+		t.Fatal("not held once revoked")
+	}
+	refuse = false
+	RenewLogins(context.Background(), keepAliveEvery)
+	if got := SignInLapsed(a); got != "" {
+		t.Fatalf("refreshed, still held: %q", got)
+	}
+}
+
+// A plugin's account its vendor refused is back once a reply on it goes
+// through (a usage read's, routing no longer asking it): the mark goes.
+// A Copilot account is read under its name with its host: a same-named
+// one saved before #1220 on another host is another account.
+func TestSignInLapsedPluginServedAndCopilotHost(t *testing.T) {
+	signIn(t)
+	resetRevoked()
+	t.Cleanup(resetRevoked)
+	pp := plugin.Provider{ID: "zed"}
+	loginsMu.Lock()
+	err := writeLogins([]savedLogin{
+		{Agent: pluginAgent(pp), User: "z", Home: "k1", Lapsed: "z's Zed sign-in has expired — sign in again"},
+		{Agent: "copilot", User: "gh", Auth: json.RawMessage(`{"oauth_token":"t1","host":"acme.ghe.com"}`), Lapsed: copilotLapsedText, Refused: copilotTokenMark("t1")},
+	})
+	loginsMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &Account{Agent: "plugin", User: "z", plugin: &pp, pluginKey: "k1"}
+	if SignInLapsed(a) == "" {
+		t.Fatal("not held")
+	}
+	notePluginLapseOf(pluginAgent(pp), "k1", http.StatusOK, toldNow, nil)
+	if got := SignInLapsed(a); got != "" {
+		t.Fatalf("served, still held: %q", got)
+	}
+	if got := SignInLapsed(copilotProvider(copilotApp{User: "gh", Token: "t1"}, "").Account); got != "" {
+		t.Fatalf("github.com's gh held for acme.ghe.com's: %q", got)
+	}
+	if got := SignInLapsed(copilotProvider(copilotApp{User: "gh@acme.ghe.com", Token: "t1"}, "").Account); got != copilotLapsedText {
+		t.Fatalf("acme.ghe.com's gh: %q", got)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -454,5 +455,40 @@ func TestChatGPTAPIExplain(t *testing.T) {
 		if tt.want == "" && got != "" || !strings.Contains(got, tt.want) {
 			t.Errorf("%d %s: %q", tt.status, tt.body, got)
 		}
+	}
+}
+
+// A ChatGPT API sign-in whose refresh was refused is left out of routing
+// (SignInLapsed), so no request tries it again: the keepalive loop does,
+// and a refresh that goes through brings it back with no request asked.
+func TestChatGPTAPILapseTriedAgainByKeepalive(t *testing.T) {
+	claudeHome(t)
+	f := newFakeOpenAI(t)
+	if st := signInVia(t, f, "oaiapp_9", same); st.State != "done" {
+		t.Fatalf("sign-in %+v", st)
+	}
+	user := "me@example.com"
+	a := &Account{Agent: ChatGPTAPIID, User: user}
+	f.mu.Lock()
+	f.refuse = "refresh_token_reused"
+	f.mu.Unlock()
+	if _, err := siwcFresh(context.Background(), user, true); !errors.Is(err, ErrSIWCSignIn) {
+		t.Fatalf("refused: %v", err)
+	}
+	if SignInLapsed(a) == "" {
+		t.Fatal("a refused refresh isn't held")
+	}
+	// still refused: tried, and still held
+	if rs := RenewLogins(context.Background(), keepAliveEvery); !slices.ContainsFunc(rs, func(r Renewal) bool { return r.User == user && r.Lapsed }) || SignInLapsed(a) == "" {
+		t.Fatalf("not tried, or let back while refused: %+v", rs)
+	}
+	f.mu.Lock()
+	f.refuse = ""
+	f.mu.Unlock()
+	if rs := RenewLogins(context.Background(), keepAliveEvery); !slices.ContainsFunc(rs, func(r Renewal) bool { return r.User == user && r.Renewed }) {
+		t.Fatalf("not renewed: %+v", rs)
+	}
+	if got := SignInLapsed(a); got != "" {
+		t.Fatalf("renewed, still held: %q", got)
 	}
 }
