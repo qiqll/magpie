@@ -340,3 +340,159 @@ func TestPinnedLapsedRefusedWithNothingInItsPlace(t *testing.T) {
 		}
 	})
 }
+
+// restLong has the account who of codex rest two hours out of its
+// allowance, as a 429 that said so would.
+func restLong(t *testing.T, who string) {
+	t.Helper()
+	key := "codex@" + who
+	restingUntil.Lock()
+	if restingUntil.m == nil {
+		restingUntil.m = map[string]time.Time{}
+	}
+	if restingUntil.note == nil {
+		restingUntil.note = map[string]Rest{}
+	}
+	restingUntil.m[key] = time.Now().Add(2 * time.Hour)
+	restingUntil.note[key] = Rest{Why: failQuota, Status: 429, By: "quota"}
+	restingUntil.Unlock()
+	t.Cleanup(func() {
+		restingUntil.Lock()
+		delete(restingUntil.m, key)
+		delete(restingUntil.note, key)
+		restingUntil.Unlock()
+	})
+}
+
+// (b) with the user's own other account resting a while: a pin to its
+// lapsed one is bound a spare its tier has room for, as growUser does,
+// not refused because none of its own can answer now (review of
+// df779d95, H1).
+func TestPinnedLapsedGrowsWhenTheUsersOwnRest(t *testing.T) {
+	codexSignedIn(t, "spare@example.com", "third@example.com")
+	asked, _ := usersUpstream(t, nil)
+	lapseSaved(t, "spare@example.com")
+	restLong(t, "third@example.com")
+	now := time.Now().UTC()
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: now, Tier: "free",
+			More: []userSeat{{Who: "codex@third@example.com", Account: "third@example.com", At: now}}},
+	}}})
+	rec := pinPost(byUser(New()), "spare@example.com", "bob", "free")
+	if got := asked(true); rec.Code != 200 || !slices.Equal(got, []string{"acct-1"}) {
+		t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+	}
+	if got := seatsIn(t, "codex")["bob"]; !slices.Contains(got, "me@example.com") {
+		t.Fatalf("not bound the spare: %v", got)
+	}
+}
+
+// A pin to a lapsed account of a fallback's provider: under --bind=user
+// with a user, no account of that provider is the user's (one is
+// another user's), so it is refused with why, nobody asked; bound by
+// session, it goes to that provider's other account (review of
+// df779d95, H2).
+func TestPinnedLapsedOnAFallbackProvider(t *testing.T) {
+	setup := func(t *testing.T) (func(bool) []string, *scripted) {
+		codexSignedIn(t, "spare@example.com")
+		asked, _ := usersUpstream(t, nil)
+		lapseSaved(t, "spare@example.com")
+		fb := &scripted{replies: []reply{{200, "text/event-stream", sse(
+			`data: {"type":"response.output_text.delta","delta":"from the primary"}`,
+			`data: {"type":"response.completed","response":{"id":"f1","status":"completed","output":[]}}`)}}}
+		up := httptest.NewServer(fb)
+		t.Cleanup(up.Close)
+		if err := provider.Save(provider.Provider{ID: "fb", Name: "FB", Key: "k", Models: []string{"m"}, Responses: up.URL + "/v1", Fallback: []string{"codex/gpt-5.5"}}); err != nil {
+			t.Fatal(err)
+		}
+		return asked, fb
+	}
+	body := `{"model":"fb/m","stream":true,"input":"ping"}`
+	t.Run("bound by user", func(t *testing.T) {
+		asked, fb := setup(t)
+		writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+			"v": {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC(), Tier: "pro"},
+		}}})
+		rec := postAt(byUser(New()), "/v1/responses", body, map[string]string{AccountHeader: "spare@example.com", UserHeader: "u", UserTierHeader: "pro"})
+		if got := asked(true); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "has expired") || len(got) != 0 || fb.n != 0 {
+			t.Fatalf("%d %s, asked %v and the primary %d times", rec.Code, rec.Body.String(), got, fb.n)
+		}
+	})
+	t.Run("bound by session", func(t *testing.T) {
+		asked, fb := setup(t)
+		rec := postAt(New(), "/v1/responses", body, map[string]string{AccountHeader: "spare@example.com"})
+		if got := asked(true); rec.Code != 200 || !slices.Equal(got, []string{"acct-1"}) || fb.n != 0 {
+			t.Fatalf("%d %s, asked %v and the primary %d times", rec.Code, rec.Body.String(), got, fb.n)
+		}
+	})
+}
+
+// A user-accounts.json that can't be read is unknown: a pin to a lapsed
+// account is answered 503 as any of the user's requests is, not a 403
+// (review of df779d95, M1).
+func TestPinnedLapsedUnreadBindingsStay503(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	asked, _ := usersUpstream(t, nil)
+	lapseSaved(t, "spare@example.com")
+	os.MkdirAll(filepath.Dir(usersPath()), 0o700)
+	if err := os.WriteFile(usersPath(), []byte(`{"users": {"codex": {"bob": `), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := pinPost(byUser(New()), "spare@example.com", "bob", "pro")
+	if got := asked(true); rec.Code != http.StatusServiceUnavailable || len(got) != 0 {
+		t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+	}
+}
+
+// The same name lapsed on the provider asked for and serving on a
+// fallback's (a key named so): the pin goes to the one that serves, as
+// before, not to the lapsed one's provider (review of df779d95, M2).
+func TestPinnedNameServingElsewhereKeepsItsPin(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	asked, _ := usersUpstream(t, nil)
+	lapseSaved(t, "spare@example.com")
+	rel := &scripted{replies: []reply{{200, "text/event-stream", sse(
+		`data: {"type":"response.output_text.delta","delta":"from the relay"}`,
+		`data: {"type":"response.completed","response":{"id":"f1","status":"completed","output":[]}}`)}}}
+	up := httptest.NewServer(rel)
+	t.Cleanup(up.Close)
+	if err := provider.Save(provider.Provider{ID: "rel", Name: "Rel", Models: []string{"m"}, Responses: up.URL + "/v1",
+		Key: "k1", KeyName: "spare@example.com", Keys: []provider.KeyAccount{{Name: "other", Key: "k2"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Save(provider.Provider{ID: "codex", Fallback: []string{"rel/m"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := New()
+	rec := pinPost(s, "spare@example.com", "", "")
+	if got := asked(true); rec.Code != 200 || len(got) != 0 || rel.n != 1 {
+		r := lastRoute(s)
+		t.Fatalf("%d, codex asked %v, the relay %d times; order %+v left %+v", rec.Code, got, rel.n, r.Order, r.Left)
+	}
+}
+
+// A pin to an account not lapsed goes to it as before, and a group's
+// request pinned to a lapsed member account goes to the provider's other
+// one (L2).
+func TestPinnedUnlapsedAndGroupPins(t *testing.T) {
+	t.Run("not lapsed", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com")
+		asked, _ := usersUpstream(t, nil)
+		rec := pinPost(New(), "spare@example.com", "", "")
+		if got := asked(true); rec.Code != 200 || !slices.Equal(got, []string{"acct-2"}) {
+			t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+		}
+	})
+	t.Run("a group's", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com")
+		asked, _ := usersUpstream(t, nil)
+		lapseSaved(t, "spare@example.com")
+		if err := provider.SaveGroup(provider.Group{Name: "Solo", Members: []string{"codex/gpt-5.5"}}); err != nil {
+			t.Fatal(err)
+		}
+		rec := postAt(New(), "/v1/responses", `{"model":"group/solo","stream":true,"input":"ping"}`, map[string]string{AccountHeader: "spare@example.com"})
+		if got := asked(true); rec.Code != 200 || !slices.Equal(got, []string{"acct-1"}) {
+			t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+		}
+	})
+}

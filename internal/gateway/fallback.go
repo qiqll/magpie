@@ -3727,17 +3727,32 @@ func pinnedLapsed(pin string, cands []candidate, pl planned) (why, pid string) {
 			return "", ""
 		}
 	}
+	// one of that name among the candidates and not lapsed (the same
+	// email signed in at a fallback's provider) takes the pin, as before;
+	// one there that is lapsed was brought back as none other could
+	// answer (lapsedBack)
+	why, pid = "", ""
+	for i, c := range cands {
+		if i >= len(pl.order) || !match(pl.order[i]) {
+			continue
+		}
+		if c.p.Account == nil {
+			return "", ""
+		}
+		w := provider.SignInLapsed(c.p.Account)
+		if w == "" {
+			return "", ""
+		}
+		if why == "" {
+			why, pid = w, c.p.ID
+		}
+	}
+	if why != "" {
+		return why, pid
+	}
 	for _, w := range pl.left {
 		if match(w) && w.Lapsed != "" {
 			return w.Lapsed, w.Provider
-		}
-	}
-	// brought back as none other could answer (lapsedBack)
-	for i, c := range cands {
-		if i < len(pl.order) && match(pl.order[i]) && c.p.Account != nil {
-			if why := provider.SignInLapsed(c.p.Account); why != "" {
-				return why, c.p.ID
-			}
 		}
 	}
 	return "", ""

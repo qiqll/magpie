@@ -2386,6 +2386,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	var limitedUser string // the user a limit is said to, as UserLimitHeader
 	var userBound *UserBound
 	pool, poolPl := cands, pl // before the user's narrowing, for a spare
+	if s.bind.byUser() && pinLapsed != "" && pinProvider != p.ID && !isGroup {
+		// pinned to an account of a fallback's provider: a user is bound
+		// to accounts of the provider asked for alone (bindUser), so none
+		// of that one's is known the user's own, and none is taken in its
+		// place, never another user's
+		if user, bad := userOf(r.Header); user != "" || bad != "" {
+			lapsedRefused("its provider is a fallback of the one asked for, where the user has no accounts bound, so no other is taken in its place")
+			return
+		}
+	}
 	if s.bind.byUser() && pin == "" && !isGroup && (pinLapsed == "" || pinProvider == p.ID) {
 		user, bad := userOf(r.Header)
 		bindsUser, limitedUser = user != "" || bad != "", user
@@ -2412,11 +2422,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				return
 			}
 			var refused userRefusal
+			// its refusal goes as it is, a pin to a lapsed account or not:
+			// user-accounts.json unread is unknown (503), and the pool
+			// full keeps its limit headers (429)
 			if cands, pl, userBound, refused = bindUser(userKey(r), user, tier, p, cands, pl); refused.status != 0 {
-				if pinLapsed != "" {
-					lapsedRefused("none of the user's accounts can take it in its place, and none is free to bind it to")
-					return
-				}
 				s.userRefused(w, from, &call, userBound, refused)
 				finishCapture()
 				s.record(call)
@@ -2424,9 +2433,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 		}
 	}
-	if pinLapsed != "" {
-		// of those left (the user's own, bound), only one that can
-		// answer now takes it
+	// a pin to a lapsed account with no user bound: of those left, only
+	// one that can answer now takes it (a user's own are judged once
+	// growUser has had its say, below)
+	if pinLapsed != "" && userBound == nil {
 		if cands, pl = canAnswer(cands, pl); len(cands) == 0 {
 			lapsedRefused("no other account the request may go to can take it in its place")
 			return
@@ -2446,6 +2456,18 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			s.userRefused(w, from, &call, userBound, refused)
 			finishCapture()
 			s.record(call)
+			return
+		}
+	}
+	if pinLapsed != "" && userBound != nil {
+		// pinned to a lapsed account of the user's: one of its own that
+		// can answer now takes it, or the spare growUser bound it to when
+		// each of its own is out a while; with none, refused with why.
+		// A spare firstOf bound it to (bindUser) is one with a seat,
+		// whether or not its own list has the model: one without it is
+		// left out here, and the pin refused, the binding kept
+		if cands, pl = canAnswer(cands, pl); len(cands) == 0 {
+			lapsedRefused("none of the user's accounts can take it in its place, and none is free to bind it to")
 			return
 		}
 	}
