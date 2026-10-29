@@ -922,6 +922,7 @@ func (s *Server) searchWith(ctx context.Context, p provider.Provider, model, que
 	}
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("User-Agent", SearchAgent)
+	askAsUser(ctx, r.Header)
 	w := httptest.NewRecorder()
 	s.serve(w, r, provider.Anthropic, body)
 	var out struct {
@@ -1049,7 +1050,7 @@ type round func(ctx context.Context, req *Request) (<-chan Event, int, string)
 // reply. The first round's failure is a status, as another provider may
 // take over.
 func (s *Server) searchReply(w http.ResponseWriter, r *http.Request, from provider.Protocol, name string, req *Request, usage *Usage, ask round) (int, string) {
-	ctx, cancel := context.WithCancel(context.WithValue(r.Context(), searchForKey{}, &CallFor{Agent: callerOf(r).agent, Model: unprefixed(req.Model)}))
+	ctx, cancel := context.WithCancel(context.WithValue(s.forUser(r.Context(), r), searchForKey{}, &CallFor{Agent: callerOf(r).agent, Model: unprefixed(req.Model)}))
 	defer cancel()
 	q := *req
 	q.WebSearch = false

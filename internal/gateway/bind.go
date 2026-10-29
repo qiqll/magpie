@@ -9,6 +9,7 @@ package gateway
 // (user_tiers.go).
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -88,6 +89,51 @@ func (s *Server) userNeeded(from provider.Protocol, h http.HandlerFunc) http.Han
 		}
 		h(w, r)
 	}
+}
+
+// askedForKey holds, bound by user, the user (and its tier) of the
+// request magpie's own asks are made for — a web search, an image looked
+// at — so each is bound to that user's accounts, as the request is
+// (bindUser): never drawn from every account of the provider.
+type askedForKey struct{}
+
+type askedFor struct{ key, user, tier string }
+
+// forUser is ctx for magpie's own asks made for r: carrying r's user and
+// tier, bound by user. Bound by session, or for a request without a user,
+// it is ctx.
+func (s *Server) forUser(ctx context.Context, r *http.Request) context.Context {
+	if !s.bind.byUser() {
+		return ctx
+	}
+	user, _ := userOf(r.Header)
+	if user == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, askedForKey{}, askedFor{userKey(r), user, strings.TrimSpace(r.Header.Get(UserTierHeader))})
+}
+
+// askAsUser names, on h, the headers of magpie's own ask, the user ctx
+// is asked for (forUser), and its tier.
+func askAsUser(ctx context.Context, h http.Header) {
+	f, ok := ctx.Value(askedForKey{}).(askedFor)
+	if !ok {
+		return
+	}
+	h.Set(UserHeader, f.user)
+	if f.tier != "" {
+		h.Set(UserTierHeader, f.tier)
+	}
+}
+
+// askedUser is the user ctx is asked for (forUser), with its gateway
+// key's id, whose users are its own; "" for none.
+func askedUser(ctx context.Context) string {
+	f, ok := ctx.Value(askedForKey{}).(askedFor)
+	if !ok {
+		return ""
+	}
+	return f.key + "\x00" + f.user
 }
 
 // noUser refuses with a 400, bound by user, a request without a user, or

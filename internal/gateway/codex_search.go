@@ -210,7 +210,7 @@ func (s *Server) alphaSearchHere(w http.ResponseWriter, r *http.Request, q alpha
 		writeJSON(w, http.StatusOK, alphaSearchReply{Output: note + "magpie can only search the web for " + q.Model + ": give web.run a search_query. Opening, clicking or finding in a page goes to the ChatGPT backend, for a ChatGPT account's model in magpie."})
 		return
 	}
-	ctx := context.WithValue(r.Context(), searchForKey{}, &CallFor{Agent: callerOf(r).agent, Model: q.Model})
+	ctx := context.WithValue(s.forUser(r.Context(), r), searchForKey{}, &CallFor{Agent: callerOf(r).agent, Model: q.Model})
 	var said []string
 	for _, query := range queries {
 		found, _, err := s.webSearch(ctx, query)

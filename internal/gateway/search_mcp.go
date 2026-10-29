@@ -159,6 +159,9 @@ func (s *Server) searchMCPCall(r *http.Request, m mcpMessage) (any, map[string]a
 		var err error
 		switch p.Name {
 		case searchMCPTool:
+			if said, ok := s.mcpNoUser(r); ok {
+				return said, nil
+			}
 			said, err = s.searchMCPRun(r, strings.TrimSpace(p.Arguments.Query))
 		case fetchMCPTool:
 			said, err = s.fetchMCPRun(r, p.Arguments.fetchArgs)
@@ -206,7 +209,7 @@ func (s *Server) searchMCPRun(r *http.Request, query string) (string, error) {
 		return "", err
 	}
 	defer release()
-	ctx := context.WithValue(r.Context(), searchForKey{}, &CallFor{Agent: callerOf(r).agent, MCP: true})
+	ctx := context.WithValue(s.forUser(r.Context(), r), searchForKey{}, &CallFor{Agent: callerOf(r).agent, MCP: true})
 	said, _, err := s.webSearch(ctx, query)
 	if err != nil {
 		if r.Context().Err() == nil {

@@ -215,7 +215,7 @@ func (s *Server) imageMCPCall(r *http.Request, m mcpMessage) (any, map[string]an
 		}
 		switch p.Name {
 		case GenerateImageTool, GenerateVideoTool:
-			if said, ok := s.imageMCPNoUser(r); ok {
+			if said, ok := s.mcpNoUser(r); ok {
 				return said, nil
 			}
 		}
@@ -236,10 +236,12 @@ func (s *Server) imageMCPCall(r *http.Request, m mcpMessage) (any, map[string]an
 	return nil, map[string]any{"code": -32601, "message": "method not found: " + m.Method}
 }
 
-// imageMCPNoUser is a drawing's answer, bound by user (--bind=user), to a
-// call without its user: /v1/images and /v1/videos refuse it (userNeeded),
-// so the tools that reach them in process do too.
-func (s *Server) imageMCPNoUser(r *http.Request) (map[string]any, bool) {
+// mcpNoUser is the answer of a tool of magpie's own MCP servers that asks
+// a model or an account, bound by user (--bind=user), to a call without
+// its user: /v1/images, /v1/videos and the model APIs refuse it
+// (userNeeded), so the drawings, searches and looks made for an MCP call
+// do too.
+func (s *Server) mcpNoUser(r *http.Request) (map[string]any, bool) {
 	rec := httptest.NewRecorder()
 	if !s.noUser(rec, r, provider.Chat) {
 		return nil, false

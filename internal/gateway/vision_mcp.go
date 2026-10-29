@@ -96,6 +96,9 @@ func (s *Server) visionMCPCall(r *http.Request, m mcpMessage) (any, map[string]a
 		if p.Name != visionMCPTool {
 			return nil, map[string]any{"code": -32602, "message": "unknown tool " + p.Name + ": this server has " + visionMCPTool}
 		}
+		if said, ok := s.mcpNoUser(r); ok {
+			return said, nil
+		}
 		said, err := s.visionMCPRun(r, strings.TrimSpace(p.Arguments.Image), strings.TrimSpace(p.Arguments.Prompt))
 		if err != nil {
 			return toolResult(err.Error(), true), nil
@@ -128,7 +131,7 @@ func (s *Server) visionMCPRun(r *http.Request, image, prompt string) (string, er
 		return "", err
 	}
 	defer release()
-	ctx := context.WithValue(r.Context(), describeForKey{}, describeFor{call: &CallFor{Agent: callerOf(r).agent, Missing: VisionMissing(), MCP: true}})
+	ctx := context.WithValue(s.forUser(r.Context(), r), describeForKey{}, describeFor{call: &CallFor{Agent: callerOf(r).agent, Missing: VisionMissing(), MCP: true}})
 	var said string
 	if prompt == "" {
 		said, err = s.describe(ctx, model, src)

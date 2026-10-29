@@ -304,8 +304,9 @@ type sight struct {
 // image: a request that sends it again, or sends it while it is being
 // described, is given the same description.
 func (s *Server) describe(ctx context.Context, model, src string) (string, error) {
-	// a level picked since is asked again, not given what was said at the last
-	sum := sha256.Sum256([]byte(model + "\x00" + visionEffort(model) + "\x00" + src))
+	// a level picked since is asked again, not given what was said at the
+	// last; bound by user, each user's look is asked of its own accounts
+	sum := sha256.Sum256([]byte(model + "\x00" + visionEffort(model) + "\x00" + askedUser(ctx) + "\x00" + src))
 	key := hex.EncodeToString(sum[:])
 	s.sightMu.Lock()
 	if e, ok := s.sights[key]; ok {
@@ -387,6 +388,7 @@ func (s *Server) askVisionWith(ctx context.Context, model, src, system, text str
 	}
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("User-Agent", VisionAgent)
+	askAsUser(ctx, r.Header)
 	if f, _ := ctx.Value(describeForKey{}).(describeFor); f.session != "" {
 		// in the Routing view beside the request it describes for
 		r.Header.Set(SessionHeader, f.session)
