@@ -260,13 +260,34 @@ func TestUserBindingCountsWithoutTheUserLocally(t *testing.T) {
 		t.Fatal(err)
 	}
 	msg := `{"model":"fake/m1","messages":[{"role":"user","content":"hello there, count me"}]}`
+	// users are read from X-User-ID too (MAGPIE_USER_HEADER), as from
+	// UserHeader
+	t.Setenv(UserHeaderEnv, "X-User-ID")
 	s := byUser(New())
-	if n := estimated(t, postAt(s, "/v1/messages/count_tokens", msg, nil)); n == 999 {
-		t.Fatalf("count_tokens without a user was the provider's: %d", n)
+	// each a request noUser refuses generating: no user, one the header
+	// can't take, or a tier that is none of user-tiers.json's
+	for _, c := range []struct {
+		name string
+		h    map[string]string
+	}{
+		{"none", nil},
+		{"blank", map[string]string{UserHeader: "   "}},
+		{"control", map[string]string{UserHeader: "a\tb"}},
+		{"too long", map[string]string{UserHeader: strings.Repeat("u", userMax+1)}},
+		{"custom blank", map[string]string{"X-User-ID": "  "}},
+		{"custom control", map[string]string{"X-User-ID": "a\tb"}},
+		{"bad tier", map[string]string{UserHeader: "alice", UserTierHeader: "no-such-tier"}},
+	} {
+		if n := estimated(t, postAt(s, "/v1/messages/count_tokens", msg, c.h)); n == 999 {
+			t.Errorf("count_tokens, %s: the provider's count", c.name)
+		}
+		if got := up.asked(); len(got) != 0 {
+			t.Fatalf("count_tokens, %s: asked an account: %v", c.name, got)
+		}
 	}
-	if got := up.asked(); len(got) != 0 {
-		t.Fatalf("count_tokens without a user asked an account: %v", got)
-	}
+	// Gemini's count is estimated whatever the binding (geminiCount asks
+	// no provider): this half pins that, and no change to countOn turns it
+	// red
 	rec := postAt(s, "/v1beta/models/fake/m1:countTokens", `{"contents":[{"parts":[{"text":"hello there, count me"}]}]}`, nil)
 	var gem struct {
 		TotalTokens int `json:"totalTokens"`
@@ -277,15 +298,17 @@ func TestUserBindingCountsWithoutTheUserLocally(t *testing.T) {
 	if got := up.asked(); len(got) != 0 {
 		t.Fatalf(":countTokens without a user asked an account: %v", got)
 	}
-	// with a user, the provider counts, as before
-	if n := estimated(t, postAt(s, "/v1/messages/count_tokens", msg, map[string]string{UserHeader: "alice"})); n != 999 {
-		t.Fatalf("count_tokens with a user: %d, want the provider's 999", n)
+	// with a user, in either header, the provider counts, as before
+	for _, h := range []map[string]string{{UserHeader: "alice"}, {"X-User-ID": "bob"}} {
+		if n := estimated(t, postAt(s, "/v1/messages/count_tokens", msg, h)); n != 999 {
+			t.Fatalf("count_tokens with a user %v: %d, want the provider's 999", h, n)
+		}
 	}
 	// and bound by session, without one
 	if n := estimated(t, postAt(New(), "/v1/messages/count_tokens", msg, nil)); n != 999 {
 		t.Fatalf("count_tokens bound by session: %d, want the provider's 999", n)
 	}
-	if got := up.asked(); len(got) != 2 {
-		t.Fatalf("asked %v, want the two counts with a user and by session", got)
+	if got := up.asked(); len(got) != 3 {
+		t.Fatalf("asked %v, want the counts with a user and by session", got)
 	}
 }

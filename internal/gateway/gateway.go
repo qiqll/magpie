@@ -1489,9 +1489,9 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 		// with an error every time: one more request its firewall weighs
 		p.Account.Agent == "zcode") ||
 		ok && p.IsPlugin() && (slices.Contains(estimatedMoved, p.ID) || slices.Contains(estimatedMoved, p.PluginProvider())) ||
-		// bound by user, a count without a user asks no account: none is
-		// its to ask (bindUser places a request by its user), so it is
-		// estimated here rather than refused
+		// bound by user, a count without a user (or with a bad tier) asks
+		// no account: none is its to ask (bindUser places a request by its
+		// user), so it is estimated here rather than refused
 		s.countsWithoutUser(r) {
 		req, err := parseAnthropic(body)
 		if err != nil {
@@ -1574,13 +1574,19 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 }
 
 // countsWithoutUser is whether r is a count, bound by user, that names
-// no user (userOf): one no account of the pool may be asked for.
+// no user (userOf), or one with a tier UserTierHeader can't take: one
+// noUser would refuse generating, so no account of the pool may be asked
+// for it. Tiers that can't be read are left to the count, as noUser
+// leaves them to the binding.
 func (s *Server) countsWithoutUser(r *http.Request) bool {
 	if !s.bind.byUser() {
 		return false
 	}
-	user, _ := userOf(r.Header)
-	return user == ""
+	if user, _ := userOf(r.Header); user == "" {
+		return true
+	}
+	_, bad, _ := tierOf(r.Header)
+	return bad != ""
 }
 
 // Match the counting operation or the endpoint itself, not an unsupported
