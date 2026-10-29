@@ -55,7 +55,7 @@
 
 | ID | 任务 | 模块 | 状态 | 依赖 | 备注 |
 |----|------|------|------|------|------|
-| T-002 | `POST /v1/messages/count_tokens`（及无 /v1 前缀的同名路由）未经 `userNeeded` 检查，与 /v1/messages 不一致 | gateway（gateway.go 路由注册） | 待决策 | — | 审查发现；不消耗用量，影响小。自动循环（2026-10-29）未改代码：count_tokens 免用户是既有设计（bind_test.go:228-236 TestUserBindingNeedsTheUser 断言、gateway-routing.md:174 有写），但理由「计数不选账号」与代码不符——countOn 经 s.candidates 转发到任意账号、不按用户收窄。Gemini :countTokens 同类须一起处理；无 /v1 前缀的同名路由不存在 |
+| T-002 | `POST /v1/messages/count_tokens`（及无 /v1 前缀的同名路由）未经 `userNeeded` 检查，与 /v1/messages 不一致 | gateway（gateway.go 路由注册） | 待开始 | — | 需求方决策（2026-10-29）：选 A——不带用户时不碰任何账号、用本地估算回答、不返回 400；带用户时不变；Anthropic 与 Gemini :countTokens 一起改，各补「无用户时 upstream 未被请求」测试，既有断言不放宽，文档 gateway-routing.md:174 的理由改成与代码一致。审查发现；不消耗用量，影响小。自动循环（2026-10-29）未改代码：count_tokens 免用户是既有设计（bind_test.go:228-236 TestUserBindingNeedsTheUser 断言、gateway-routing.md:174 有写），但理由「计数不选账号」与代码不符——countOn 经 s.candidates 转发到任意账号、不按用户收窄。Gemini :countTokens 同类须一起处理；无 /v1 前缀的同名路由不存在 |
 | T-004 | `--bind=user` 下路由分类器 / 决策模型的 askChat 用 context.Background() 发出，不带用户和 gateway key，会从整个账号池取账号，也绕过调用方 key 的限制 | gateway（classify.go:471） | 待开始 | — | 验收：传入外层 ctx 配合 forUser / askAsUser，测试证明分类请求落在调用方用户的账号上。来源：衍生自 T-001（第 1 层，code-reviewer M2 / security-analyst MINOR-3）；衍生层级：1 |
 | T-005 | 加固：`--bind=user` 下 serve 对没有用户、又不带「magpie 自身请求」标记的请求一律拒绝 | gateway（gateway.go:2359） | 待开始 | T-003, T-004 | 验收：守卫测试覆盖进程内所有 s.serve 调用方。来源：衍生自 T-001（第 1 层，security-analyst MINOR-4）；衍生层级：1；依赖 T-003/T-004 先让各内部调用方都带上用户 |
 
@@ -73,7 +73,7 @@
 
 | 任务 | 问题 | 选项（推荐在前） | 挂起时间 |
 |------|------|-----------------|---------|
-| T-002 | count_tokens 免用户是有意设计且有测试守着，但 --bind=user 下不带用户的计数仍会转发到任意账号。怎么处理？ | **A（推荐）**：不带用户时不碰账号，用本地估算回答，不返回 400；带用户时不变。改动小，不破坏不带用户头的客户端，既有断言不放宽；缺点是无用户请求拿到的是估算值。**B**：/v1/messages/count_tokens 和 Gemini :countTokens 都加 userNeeded，不带用户返回 400；要反转既有测试、改写文档，计数请求不带用户头的客户端会开始报错。**C**：维持现状，只修正文档里的理由，无用户的计数仍走任意账号 | 2026-10-29 |
+| — | 暂无 | | |
 
 ---
 
