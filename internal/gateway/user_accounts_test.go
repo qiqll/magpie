@@ -269,40 +269,59 @@ func TestUserBindingGoesWithItsAccount(t *testing.T) {
 	}
 }
 
-// A user bound to an account whose sign-in its vendor revoked is let go:
-// that request is the caller's error, and the next is bound to another
-// account, never to the revoked one, which would only fail again.
-func TestUserLetGoWhenItsAccountIsRevoked(t *testing.T) {
+// A user bound to an account whose sign-in its vendor revoked stays bound
+// to it (the owner's decision, 2026-10-29; it used to be let go): the
+// request that found it revoked is given a spare beside it, its tier
+// having room, and answered there, never told of the sign-in; later ones
+// go to the spare without asking the revoked one; signed in again, the
+// user's requests go back to it, the binding as it was.
+func TestUserKeptBoundWhenItsAccountIsRevoked(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	tried := revokedUpstream(t, codexAccessToken(t))
 	s := byUser(New())
 	// alice on the first account, the one Codex signed in to, revoked
 	rec := userPost(s, "codex/gpt-5.5", "alice", "ping")
-	if rec.Code != 401 {
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "revoked") {
 		t.Fatalf("first: %d %s", rec.Code, rec.Body.String())
 	}
-	if got := tried(true); len(got) != 1 || got[0] != "acct-1" {
-		t.Fatalf("first: asked %v", got)
+	if got := strings.Join(tried(true), ","); got != "acct-1,acct-2" {
+		t.Fatalf("first: asked %s", got)
 	}
-	if b := boundIn(t, "codex"); b["alice"] != "" {
-		t.Fatalf("still bound to the revoked account: %v", b)
+	if got := seatsIn(t, "codex")["alice"]; !slices.Equal(got, []string{"me@example.com", "spare@example.com"}) {
+		t.Fatalf("not kept on the revoked account with a spare beside it: %v", got)
 	}
-	for _, u := range []string{"alice", "bob"} {
-		if rec := userPost(s, "codex/gpt-5.5", u, "later"); rec.Code != 200 {
-			t.Fatalf("%s: %d %s", u, rec.Code, rec.Body.String())
-		}
-		if got := tried(true); len(got) != 1 || got[0] != "acct-2" {
-			t.Fatalf("%s: asked %v", u, got)
-		}
+	if rec := userPost(s, "codex/gpt-5.5", "alice", "later"); rec.Code != 200 {
+		t.Fatalf("later: %d %s", rec.Code, rec.Body.String())
 	}
-	if b := boundIn(t, "codex"); b["alice"] != "spare@example.com" || b["bob"] != "spare@example.com" {
-		t.Fatalf("not bound afresh to the spare: %v", b)
+	if got := strings.Join(tried(true), ","); got != "acct-2" {
+		t.Fatalf("later: asked %s", got)
+	}
+
+	// Codex signed in again: a new token, the revoked mark no longer its
+	claims, _ := json.Marshal(map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "who": "acct-1", "n": 2})
+	auth := map[string]any{"auth_mode": "chatgpt", "tokens": map[string]any{
+		"id_token":      "h." + base64.RawURLEncoding.EncodeToString(mustJSON(map[string]any{"email": "me@example.com"})) + ".s",
+		"access_token":  "h." + base64.RawURLEncoding.EncodeToString(claims) + ".s",
+		"refresh_token": "r-acct-1b", "account_id": "acct-1"}}
+	if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), ".codex", "auth.json"), mustJSON(auth), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	provider.ForgetAccounts()
+	if rec := userPost(s, "codex/gpt-5.5", "alice", "back"); rec.Code != 200 {
+		t.Fatalf("back: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := strings.Join(tried(true), ","); got != "acct-1" {
+		t.Fatalf("signed in again, asked %s, not its own account", got)
+	}
+	if got := seatsIn(t, "codex")["alice"]; !slices.Equal(got, []string{"me@example.com", "spare@example.com"}) {
+		t.Fatalf("binding changed: %v", got)
 	}
 }
 
 // An account found revoked by any request, a bound user's or not (a
-// group's), lets go of the users bound to it.
-func TestUsersLetGoOfAnAccountRevokedForAnother(t *testing.T) {
+// group's), keeps the users bound to it (the owner's decision,
+// 2026-10-29; it used to let them go).
+func TestUsersKeptBoundToAnAccountRevokedForAnother(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	tried := revokedUpstream(t, codexAccessToken(t))
 	if err := provider.SaveGroup(provider.Group{Name: "Solo", Members: []string{"codex/gpt-5.5"}}); err != nil {
@@ -320,7 +339,7 @@ func TestUsersLetGoOfAnAccountRevokedForAnother(t *testing.T) {
 	if got := strings.Join(tried(true), ","); got != "acct-1,acct-2" {
 		t.Fatalf("asked %s", got)
 	}
-	if b := boundIn(t, "codex"); b["alice"] != "" || b["bob"] != "spare@example.com" {
+	if b := boundIn(t, "codex"); b["alice"] != "me@example.com" || b["bob"] != "spare@example.com" {
 		t.Fatalf("%v", b)
 	}
 }

@@ -2369,6 +2369,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		pin = ""
 		cands, pl = ofProvider(pinProvider, cands, pl)
 	}
+	// a user's request (--bind=user) is told only as a limit: a 429,
+	// back in lapsedRetry, that names no sign-in; why is the call's error,
+	// the operator's, and the account's row and the log say it lapsed
+	userLapsedRefused := func(user, more string) {
+		limitedUser := user
+		s.userRefused(w, from, &call, &UserBound{User: limitedUser}, userRefusal{status: http.StatusTooManyRequests,
+			msg: AccountHeader + ": " + pinLapsed + "; " + more, limit: failQuota, until: time.Now().Add(lapsedRetry)})
+		finishCapture()
+		s.record(call)
+	}
 	lapsedRefused := func(more string) {
 		msg := AccountHeader + ": " + pinLapsed + "; " + more
 		call.Status, call.Error = http.StatusForbidden, "account pinned: "+strings.TrimSpace(r.Header.Get(AccountHeader))
@@ -2392,7 +2402,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// of that one's is known the user's own, and none is taken in its
 		// place, never another user's
 		if user, bad := userOf(r.Header); user != "" || bad != "" {
-			lapsedRefused("its provider is a fallback of the one asked for, where the user has no accounts bound, so no other is taken in its place")
+			userLapsedRefused(user, "its provider is a fallback of the one asked for, where the user has no accounts bound, so no other is taken in its place")
 			return
 		}
 	}
@@ -2467,7 +2477,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// whether or not its own list has the model: one without it is
 		// left out here, and the pin refused, the binding kept
 		if cands, pl = canAnswer(cands, pl); len(cands) == 0 {
-			lapsedRefused("none of the user's accounts can take it in its place, and none is free to bind it to")
+			userLapsedRefused(userBound.User, "none of the user's accounts can take it in its place, and none is free to bind it to")
 			return
 		}
 	}
@@ -3609,7 +3619,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// brings it back, so none is told; it is passed over until it
 			// is signed in again (provider/claude_auth.go), and the next
 			// one is asked
-			if other == nil {
+			if other == nil && userBound == nil {
+				// a user's caller is never told a sign-in lapsed
 				other = &Try{Status: call.Status, Error: call.Error}
 			}
 			try.Fail = failAuth
@@ -3617,6 +3628,37 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 			skipped = append(skipped, c.label()+": "+call.Error)
 			continue
+		}
+		if last && userBound != nil && hw.failed() && failureOf(c, hw.code(), hw.errBody()) == failAuth {
+			// the last of a user's accounts turned out to have to be
+			// signed in again: its users stay bound to it. A spare is added
+			// beside it, the user's tier letting it have one more, and
+			// asked; else the caller is told a limit, back in lapsedRetry,
+			// never the sign-in (the owner's decision, 2026-10-29)
+			try.Fail = failAuth
+			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+			skipped = append(skipped, c.label()+": "+call.Error)
+			if c.p.Account != nil {
+				noteSeatLapsed(c.p.ID, c.p.Account.User, call.Error)
+			}
+			if !grew {
+				var next []candidate
+				var nextPl planned
+				if next, nextPl, userBound, grew, _ = growUser(userBound, pool, poolPl, nil, planned{left: userBound.left}); grew {
+					bound := userBound
+					s.trace.update(tr, func(t *Route) {
+						t.Order = append(slices.Clip(t.Order), nextPl.order...)
+						t.User = bound
+					})
+					cands = append(cands[:len(cands):len(cands)], next...)
+					continue
+				}
+			}
+			refused := lapsedRefusal(userBound, "")
+			userLimited(w.Header(), refused.limit, refused.until, refused.model)
+			call.Status, call.Error = refused.status, "user bound: "+userBound.accountOr()+": "+refused.msg+": "+call.Error
+			failTo(w, kept, from, refused.status, userLimitSaid)
+			break
 		}
 		// the ChatGPT backend's 502 "response protection is unavailable"
 		// (vs on Discord): the same history fails the same on every one

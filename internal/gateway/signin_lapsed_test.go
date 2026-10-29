@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,24 @@ import (
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
 )
+
+// limitedNotLapsed fails t unless rec is a user's 429 with a time to try
+// again that says nothing of a sign-in, in its body or its headers.
+func limitedNotLapsed(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" || rec.Header().Get(UserLimitHeader) == "" || rec.Header().Get(UserUntilHeader) == "" {
+		t.Fatalf("not a limit with a time to try again: %d %v %s", rec.Code, rec.Header(), rec.Body.String())
+	}
+	all := rec.Body.String()
+	for k, vs := range rec.Header() {
+		all += k + strings.Join(vs, "")
+	}
+	for _, w := range []string{"sign in", "sign-in", "signed in", "expired", "revoked", "authenticate", "spare@"} {
+		if strings.Contains(strings.ToLower(all), w) {
+			t.Fatalf("the caller is told %q: %v %s", w, rec.Header(), rec.Body.String())
+		}
+	}
+}
 
 // lapseSaved marks the saved account user as one whose sign-in has to be
 // made again, as a refused refresh does (savedRefreshFailed): its access
@@ -78,9 +97,11 @@ func TestLapsedAccountLeftOutWhileAnotherCanAnswer(t *testing.T) {
 	}
 }
 
-// A user bound to an account whose sign-in has to be made again is bound
-// to one that can answer, the lapsed one not asked (--bind=user).
-func TestUserLetGoOfALapsedAccountUnasked(t *testing.T) {
+// A user bound to an account whose sign-in has to be made again, its tier
+// having room for another, is given a spare beside it and served there,
+// the lapsed one not asked; it stays bound to the lapsed one
+// (--bind=user; the owner's decision, 2026-10-29).
+func TestUserGivenASpareBesideALapsedAccount(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked, _ := usersUpstream(t, nil)
 	lapseSaved(t, "spare@example.com")
@@ -95,8 +116,50 @@ func TestUserLetGoOfALapsedAccountUnasked(t *testing.T) {
 	if got := asked(true); len(got) != 1 || got[0] != "acct-1" {
 		t.Fatalf("asked %v", got)
 	}
-	if b := boundIn(t, "codex"); b["bob"] != "me@example.com" {
-		t.Fatalf("not bound afresh: %v", b)
+	if got := seatsIn(t, "codex")["bob"]; !slices.Equal(got, []string{"spare@example.com", "me@example.com"}) {
+		t.Fatalf("not kept on the lapsed one with a spare beside it: %v", got)
+	}
+	// signed in again: its requests go back to it, the spare kept beside
+	path := filepath.Join(filepath.Dir(provider.Path()), "logins.json")
+	var ls []map[string]any
+	raw, _ := os.ReadFile(path)
+	json.Unmarshal(raw, &ls)
+	for _, l := range ls {
+		delete(l, "lapsed")
+	}
+	os.WriteFile(path, mustJSON(ls), 0o600)
+	provider.ForgetAccounts()
+	if rec := userPost(s, "codex/gpt-5.5", "bob", "back"); rec.Code != 200 {
+		t.Fatalf("back: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := asked(true); !slices.Equal(got, []string{"acct-2"}) {
+		t.Fatalf("signed in again, asked %v, not its own", got)
+	}
+	if got := seatsIn(t, "codex")["bob"]; !slices.Equal(got, []string{"spare@example.com", "me@example.com"}) {
+		t.Fatalf("binding changed: %v", got)
+	}
+}
+
+// A user whose accounts all have to be signed in again, at its tier's
+// most accounts, is given no spare: a 429 with a time to try again that
+// says nothing of a sign-in, nobody asked, its binding kept.
+func TestUserLimitedWithItsAccountsLapsedAtItsTier(t *testing.T) {
+	codexSignedIn(t, "spare@example.com", "third@example.com")
+	asked, _ := usersUpstream(t, nil)
+	lapseSaved(t, "spare@example.com")
+	lapseSaved(t, "third@example.com")
+	now := time.Now().UTC()
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: now, Tier: "free",
+			More: []userSeat{{Who: "codex@third@example.com", Account: "third@example.com", At: now}}},
+	}}})
+	rec := tierPost(byUser(New()), "bob", "free", "hi")
+	limitedNotLapsed(t, rec)
+	if got := asked(true); len(got) != 0 {
+		t.Fatalf("asked %v", got)
+	}
+	if got := seatsIn(t, "codex")["bob"]; !slices.Equal(got, []string{"spare@example.com", "third@example.com"}) {
+		t.Fatalf("binding changed: %v", got)
 	}
 }
 
@@ -201,9 +264,12 @@ func TestLapsedAccountKeptWhenNoOtherCanAnswer(t *testing.T) {
 }
 
 // Under --bind=user, a user whose account is lapsed while the provider's
-// other account is another user's alone stays on its own and is sent
-// there (to be told to sign in again), not refused as the pool full.
-func TestUserKeptOnItsLapsedAccountWithNoSpare(t *testing.T) {
+// other account is another user's alone has no spare to be given: a 429
+// with a time to try again, nothing sent, the lapsed one not asked, and
+// nothing of a sign-in said to the caller; its binding is kept, the
+// account's row says it lapsed and the log says why (the owner's
+// decision, 2026-10-29; it used to be sent to the lapsed one).
+func TestUserLimitedWithOnlyALapsedAccountAndNoSpare(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked, _ := usersUpstream(t, nil)
 	lapseSaved(t, "spare@example.com")
@@ -211,13 +277,27 @@ func TestUserKeptOnItsLapsedAccountWithNoSpare(t *testing.T) {
 		"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC(), Tier: "pro"},
 		"bob":   {Who: "codex@spare@example.com", Account: "spare@example.com", At: time.Now().UTC(), Tier: "pro"},
 	}}})
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	seatLapsedSaid.Clear()
 	s := byUser(New())
 	rec := tierPost(s, "bob", "pro", "hi")
-	if got := asked(true); rec.Code == http.StatusTooManyRequests || !slices.Equal(got, []string{"acct-2"}) {
-		t.Fatalf("bob: %d %s, asked %v", rec.Code, rec.Body.String(), got)
+	limitedNotLapsed(t, rec)
+	if got := asked(true); len(got) != 0 {
+		t.Fatalf("asked %v", got)
 	}
 	if b := boundIn(t, "codex"); b["bob"] != "spare@example.com" || b["alice"] != "me@example.com" {
 		t.Fatalf("bindings: %v", b)
+	}
+	if got := codexLapsed(t, "spare@example.com"); !strings.Contains(got, "has expired") {
+		t.Fatalf("the account's row doesn't say it lapsed: %q", got)
+	}
+	if l := logged.String(); !strings.Contains(l, "codex account spare@example.com has to be signed in again") || !strings.Contains(l, "has expired") {
+		t.Fatalf("not logged with provider, account and why: %s", l)
+	}
+	if c := s.Recent(); len(c) == 0 || !strings.Contains(c[0].Error, "to be signed in again") {
+		t.Fatalf("the usage log doesn't say why: %+v", c)
 	}
 }
 
@@ -286,8 +366,8 @@ func TestPinnedLapsedGoesToAnotherThatCanAnswer(t *testing.T) {
 	})
 }
 
-// A user with no account but the lapsed one pinned is bound afresh to a
-// spare its tier has room on, and served there (b).
+// A user with no account but the lapsed one pinned is given a spare its
+// tier has room for, beside the lapsed one, and served there (b).
 func TestPinnedLapsedBindsTheUserASpare(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked, _ := usersUpstream(t, nil)
@@ -299,15 +379,17 @@ func TestPinnedLapsedBindsTheUserASpare(t *testing.T) {
 	if got := asked(true); rec.Code != 200 || !slices.Equal(got, []string{"acct-1"}) {
 		t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
 	}
-	if b := boundIn(t, "codex"); b["bob"] != "me@example.com" {
-		t.Fatalf("not bound to the spare: %v", b)
+	if got := seatsIn(t, "codex")["bob"]; !slices.Equal(got, []string{"spare@example.com", "me@example.com"}) {
+		t.Fatalf("not given the spare beside it: %v", got)
 	}
 }
 
-// With nothing to take it in its place — the other account one the key
-// may not use, or another user's alone — the pin is refused 403 with why,
-// nobody asked (c). A pin to an account the key may not use is still told
-// so first.
+// With nothing to take it in its place, nobody is asked (c): not bound by
+// user, with the other account one the key may not use, the pin is
+// refused 403 with why; a user's, with the other another user's alone,
+// is a 429 with a time to try again that says nothing of a sign-in (the
+// owner's decision, 2026-10-29). A pin to an account the key may not use
+// is still told so first.
 func TestPinnedLapsedRefusedWithNothingInItsPlace(t *testing.T) {
 	t.Run("the other outside the key", func(t *testing.T) {
 		codexSignedIn(t, "spare@example.com")
@@ -335,8 +417,9 @@ func TestPinnedLapsedRefusedWithNothingInItsPlace(t *testing.T) {
 			"bob":   {Who: "codex@spare@example.com", Account: "spare@example.com", At: time.Now().UTC(), Tier: "pro"},
 		}}})
 		rec := pinPost(byUser(New()), "spare@example.com", "bob", "pro")
-		if got := asked(true); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "has expired") || len(got) != 0 {
-			t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+		limitedNotLapsed(t, rec)
+		if got := asked(true); len(got) != 0 {
+			t.Fatalf("asked %v", got)
 		}
 	})
 }
@@ -375,10 +458,10 @@ func TestPinnedLapsedGrowsWhenTheUsersOwnRest(t *testing.T) {
 	restLong(t, "third@example.com")
 	now := time.Now().UTC()
 	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
-		"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: now, Tier: "free",
+		"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: now, Tier: "pro",
 			More: []userSeat{{Who: "codex@third@example.com", Account: "third@example.com", At: now}}},
 	}}})
-	rec := pinPost(byUser(New()), "spare@example.com", "bob", "free")
+	rec := pinPost(byUser(New()), "spare@example.com", "bob", "pro")
 	if got := asked(true); rec.Code != 200 || !slices.Equal(got, []string{"acct-1"}) {
 		t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
 	}
@@ -389,9 +472,9 @@ func TestPinnedLapsedGrowsWhenTheUsersOwnRest(t *testing.T) {
 
 // A pin to a lapsed account of a fallback's provider: under --bind=user
 // with a user, no account of that provider is the user's (one is
-// another user's), so it is refused with why, nobody asked; bound by
-// session, it goes to that provider's other account (review of
-// df779d95, H2).
+// another user's), so nobody is asked, a 429 that says nothing of a
+// sign-in; bound by session, it goes to that provider's other account
+// (review of df779d95, H2).
 func TestPinnedLapsedOnAFallbackProvider(t *testing.T) {
 	setup := func(t *testing.T) (func(bool) []string, *scripted) {
 		codexSignedIn(t, "spare@example.com")
@@ -414,8 +497,9 @@ func TestPinnedLapsedOnAFallbackProvider(t *testing.T) {
 			"v": {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC(), Tier: "pro"},
 		}}})
 		rec := postAt(byUser(New()), "/v1/responses", body, map[string]string{AccountHeader: "spare@example.com", UserHeader: "u", UserTierHeader: "pro"})
-		if got := asked(true); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "has expired") || len(got) != 0 || fb.n != 0 {
-			t.Fatalf("%d %s, asked %v and the primary %d times", rec.Code, rec.Body.String(), got, fb.n)
+		limitedNotLapsed(t, rec)
+		if got := asked(true); len(got) != 0 || fb.n != 0 {
+			t.Fatalf("asked %v and the primary %d times", got, fb.n)
 		}
 	})
 	t.Run("bound by session", func(t *testing.T) {
