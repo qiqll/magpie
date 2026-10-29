@@ -2365,6 +2365,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// by pinTo first, as before
 	pin := strings.TrimSpace(r.Header.Get(AccountHeader))
 	pinLapsed, pinProvider := pinnedLapsed(pin, cands, pl)
+	if pinLapsed != "" && pinProvider != p.ID && s.bind.byUser() && !isGroup {
+		// pinned to a lapsed account of a fallback's provider, with a
+		// user (or one the header can't take, a 400 below): served as if
+		// unpinned, bound to its accounts of the provider asked for
+		if user, bad := userOf(r.Header); user != "" || bad != "" {
+			pin, pinLapsed, pinProvider = "", "", ""
+		}
+	}
 	if pinLapsed != "" {
 		pin = ""
 		cands, pl = ofProvider(pinProvider, cands, pl)
@@ -2396,16 +2404,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	var limitedUser string // the user a limit is said to, as UserLimitHeader
 	var userBound *UserBound
 	pool, poolPl := cands, pl // before the user's narrowing, for a spare
-	if s.bind.byUser() && pinLapsed != "" && pinProvider != p.ID && !isGroup {
-		// pinned to an account of a fallback's provider: a user is bound
-		// to accounts of the provider asked for alone (bindUser), so none
-		// of that one's is known the user's own, and none is taken in its
-		// place, never another user's
-		if user, bad := userOf(r.Header); user != "" || bad != "" {
-			userLapsedRefused(user, "its provider is a fallback of the one asked for, where the user has no accounts bound, so no other is taken in its place")
-			return
-		}
-	}
 	if s.bind.byUser() && pin == "" && !isGroup && (pinLapsed == "" || pinProvider == p.ID) {
 		user, bad := userOf(r.Header)
 		bindsUser, limitedUser = user != "" || bad != "", user
@@ -3638,13 +3636,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			try.Fail = failAuth
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 			skipped = append(skipped, c.label()+": "+call.Error)
-			if c.p.Account != nil {
-				noteSeatLapsed(c.p.ID, c.p.Account.User, call.Error)
-			}
+			// a stable why, not the vendor's words, for the log to say once
+			noteSeatLapsed(c.who(), cmp.Or(provider.SignInLapsed(c.p.Account), failAuth))
+			var refused userRefusal
 			if !grew {
 				var next []candidate
 				var nextPl planned
-				if next, nextPl, userBound, grew, _ = growUser(userBound, pool, poolPl, nil, planned{left: userBound.left}); grew {
+				// this account counts as lapsed for the spare though its
+				// mark may not be written yet (Claude's, or a revoke a
+				// refresh is still trying to mend)
+				if next, nextPl, userBound, grew, refused = growUser(userBound, pool, poolPl, nil, planned{left: userBound.left}, c.who()); grew {
 					bound := userBound
 					s.trace.update(tr, func(t *Route) {
 						t.Order = append(slices.Clip(t.Order), nextPl.order...)
@@ -3654,10 +3655,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 					continue
 				}
 			}
-			refused := lapsedRefusal(userBound, "")
-			userLimited(w.Header(), refused.limit, refused.until, refused.model)
+			// growUser's own refusal stands: unknown (503) as it is, a
+			// limit with its note and when; none, the lapse's 429
+			if refused.status == 0 {
+				refused = lapsedRefusal(userBound, "")
+			}
+			said := refused.msg
+			if refused.limit != "" {
+				userLimited(w.Header(), refused.limit, refused.until, refused.model)
+			}
+			if refused.status == http.StatusTooManyRequests {
+				said = userLimitSaid
+			}
 			call.Status, call.Error = refused.status, "user bound: "+userBound.accountOr()+": "+refused.msg+": "+call.Error
-			failTo(w, kept, from, refused.status, userLimitSaid)
+			failTo(w, kept, from, refused.status, said)
 			break
 		}
 		// the ChatGPT backend's 502 "response protection is unavailable"

@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"maps"
 	"math"
 	"net/http"
 	"os"
@@ -599,6 +600,9 @@ func leftIs(w Weighed, pid, who string) bool {
 // its. The binding keeps tier's name, written only when it changed.
 func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candidate, pl planned) ([]candidate, planned, *UserBound, userRefusal) {
 	tiers, _ := loadTiers() // read already by tierOf: what it said
+	// which of p's accounts have to be signed in again, read before the
+	// lock: logins.json isn't read while userBinds is held
+	lapsedWho := lapsedOf(p.ID, cands, pl)
 	userBinds.Lock()
 	defer userBinds.Unlock()
 	if loadUsers() != nil {
@@ -624,11 +628,12 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 	var on map[string]bool
 	known := true
 	for _, st := range seats {
-		if why := seatLapsed(st, p.ID, cands, pl); why != "" {
-			noteSeatLapsed(p.ID, st.Account, why)
+		if why := lapsedWho[strings.ToLower(st.Who)]; why != "" {
+			noteSeatLapsed(st.Who, why)
 			lapsed = append(lapsed, st)
 			continue
 		}
+		clearSeatLapsed(st.Who)
 		if slices.ContainsFunc(cands, func(c candidate) bool { return c.p.ID == p.ID && strings.EqualFold(c.who(), st.Who) }) {
 			kept = append(kept, st)
 			continue
@@ -653,7 +658,16 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 	if len(kept) == 0 && len(lapsed) > 0 {
 		// bound to none that can be asked now: growUser adds a spare
 		// beside them, its tier letting it have one more, or says why
-		// none is asked, a 429 that names no sign-in
+		// none is asked, a 429 that names no sign-in. With the file not
+		// reading, no spare can be added: unknown, a 503
+		if userBinds.stale {
+			return nil, pl, ub, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: user-accounts.json can't be read, so no other account can be added for %q now; nothing was sent. magpie's log says why", UserHeader, user)}
+		}
+		// its use and tier kept as any bound user's, so it isn't let go
+		// as idle while its accounts wait to be signed in again
+		if tiered, used := setTier(keyID, p.ID, user, tier.Name), touchUsed(keyID, p.ID, user, now); tiered || used {
+			saveUsersLogged()
+		}
 		ub.Why = "lapsed"
 		ub.shown(lapsed)
 		out, opl := ownedBy(lapsed, p.ID, nil, pl)
@@ -711,38 +725,51 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 	return out, opl, ub, userRefusal{}
 }
 
-// seatLapsed is why the account st of provider pid, one of a user's, has
-// to be signed in again: left out of the plan so (leaveLapsed), or among
-// cands brought back as none other could answer (lapsedBack); "" when it
-// needn't.
-func seatLapsed(st userSeat, pid string, cands []candidate, pl planned) string {
+// lapsedOf is why each account of provider pid has to be signed in
+// again, by its who lower-cased: left out of the plan so (leaveLapsed),
+// or among cands brought back as none other could answer (lapsedBack).
+// It reads logins.json: never asked with userBinds held.
+func lapsedOf(pid string, cands []candidate, pl planned) map[string]string {
+	out := map[string]string{}
 	for _, w := range pl.left {
-		if w.Lapsed != "" && leftIs(w, pid, st.Who) {
-			return w.Lapsed
+		if w.Lapsed != "" && w.Provider == pid && w.Kind == "account" {
+			out[strings.ToLower(pid+"@"+w.Who)] = w.Lapsed
 		}
 	}
+	var accts []*provider.Account
+	var who []string
 	for _, c := range cands {
-		if c.p.ID == pid && strings.EqualFold(c.who(), st.Who) && c.p.Account != nil {
-			return provider.SignInLapsed(c.p.Account)
+		if c.p.ID == pid && c.p.Account != nil {
+			accts, who = append(accts, c.p.Account), append(who, strings.ToLower(c.who()))
 		}
 	}
-	return ""
+	for i, why := range provider.SignInLapsedOf(accts) {
+		if why != "" {
+			out[who[i]] = why
+		}
+	}
+	return out
 }
 
-// seatLapsedSaid is the account of each provider whose lapse was logged,
-// by why, for it to be logged once a change, not once a request.
+// seatLapsedSaid is the lapse of each user's account logged, by its who
+// lower-cased, for it to be logged once a change, not once a request.
 var seatLapsedSaid sync.Map
 
-// noteSeatLapsed logs that a user's account of provider pid is passed
-// over until it is signed in again, why: the operator's to see (its row on
-// the Providers page says Sign-in required too), never the caller's.
-func noteSeatLapsed(pid, account, why string) {
-	if was, ok := seatLapsedSaid.Load(pid + "\x00" + account); ok && was == why {
+// noteSeatLapsed logs that a user's account who ("<provider>@<account>")
+// is passed over until it is signed in again, why: the operator's to see
+// (its row on the Providers page says Sign-in required too), never the
+// caller's.
+func noteSeatLapsed(who, why string) {
+	if was, loaded := seatLapsedSaid.Swap(strings.ToLower(who), why); loaded && was == why {
 		return
 	}
-	seatLapsedSaid.Store(pid+"\x00"+account, why)
+	pid, account, _ := strings.Cut(who, "@")
 	log.Printf("user accounts: %s account %s has to be signed in again (%s): its users stay bound to it, and are served by their other accounts or a spare until it is", pid, account, why)
 }
+
+// clearSeatLapsed forgets the lapse logged of who, back among the user's
+// accounts that can be asked: a lapse again is logged again.
+func clearSeatLapsed(who string) { seatLapsedSaid.Delete(strings.ToLower(who)) }
 
 // lapsedRetry is when a user whose accounts all have to be signed in
 // again, or are out, is told to try again with none known back sooner:
@@ -953,13 +980,21 @@ func fullRefusal(user string, tier Tier, pid string, cands []candidate, pl plann
 // cands are those of its accounts left, all but used up, asked after the
 // spare; the refusal is why none is asked, with none left. Once a
 // request: grew says it added one.
-func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate, pl planned) (_ []candidate, _ planned, _ *UserBound, grew bool, _ userRefusal) {
+func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate, pl planned, failed ...string) (_ []candidate, _ planned, _ *UserBound, grew bool, _ userRefusal) {
 	if u == nil || len(u.seats) == 0 || slices.ContainsFunc(pl.order, func(w Weighed) bool { return !w.Known || w.Used < provider.SpentShareOf(w.Routing) }) {
 		return cands, pl, u, false, userRefusal{}
 	}
+	// the lapsed, read before the lock (logins.json isn't read under
+	// userBinds), those failed as lapsed in this request (failed: their
+	// who) among them though their mark isn't written yet
+	lapsedWho := lapsedOf(u.pid, pool, poolPl)
+	maps.Copy(lapsedWho, lapsedOf(u.pid, nil, pl))
+	for _, who := range failed {
+		lapsedWho[strings.ToLower(who)] = cmp.Or(lapsedWho[strings.ToLower(who)], failAuth)
+	}
 	out, rests, held, lapsed := true, []Rest{}, []Weighed{}, 0
 	for _, st := range u.seats {
-		if seatLapsed(st, u.pid, pool, poolPl) != "" || seatLapsed(st, u.pid, nil, pl) != "" {
+		if lapsedWho[strings.ToLower(st.Who)] != "" {
 			lapsed++ // out till it is signed in again
 			continue
 		}
@@ -981,7 +1016,9 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 		if len(cands) > 0 {
 			return cands, pl, u, false, userRefusal{}
 		}
-		if lapsed > 0 && len(rests) == 0 && len(held) == 0 {
+		if lapsed == len(u.seats) {
+			// every one of its accounts to be signed in again; with some
+			// only, the others say why (a 400 for one without the model)
 			return nil, pl, u, false, lapsedRefusal(u, note)
 		}
 		return nil, pl, u, false, setRefusal(u, rests, held, pl, note)
@@ -996,9 +1033,31 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 	userBinds.Lock()
 	defer userBinds.Unlock()
 	if loadUsers() != nil || userBinds.stale {
+		if lapsed > 0 && len(cands) == 0 {
+			// unknown, not a limit: its accounts are to be signed in
+			// again, and whether one could be added can't be told
+			return nil, pl, u, false, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: user-accounts.json can't be read, so no other account can be added for %q now; nothing was sent. magpie's log says why", UserHeader, u.User)}
+		}
 		return refuse("user-accounts.json can't be read to add a spare")
 	}
 	now := userBinds.m[u.key][u.pid][u.User].seats()
+	// another request of the user's added a spare since this one was
+	// bound: that one, if it can answer, not another beside it
+	for _, st := range now {
+		if seatIn(u.seats, st.Who) || lapsedWho[strings.ToLower(st.Who)] != "" {
+			continue
+		}
+		i := slices.IndexFunc(pool, func(c candidate) bool { return c.p.ID == u.pid && strings.EqualFold(c.who(), st.Who) && !resting(c) })
+		if i < 0 {
+			continue
+		}
+		added, addedPl := ownedBy([]userSeat{st}, u.pid, pool, poolPl)
+		grown := *u
+		grown.Why = "added"
+		grown.shown(now)
+		grown.left = pl.left
+		return append(added, cands...), planned{order: append(addedPl.order, pl.order...), left: pl.left, held: pl.held, capped: pl.capped, lapsed: pl.lapsed}, &grown, true, userRefusal{}
+	}
 	if len(now) >= u.max {
 		return refuse(u.atTier(len(now)))
 	}
@@ -1154,8 +1213,8 @@ func boundRefusal(user string, b userBinding, pid string, rests []Rest, pl plann
 	}
 	for _, st := range seats {
 		for _, w := range pl.left {
-			if !leftIs(w, pid, st.Who) {
-				continue
+			if !leftIs(w, pid, st.Who) || w.Lapsed != "" {
+				continue // one to be signed in again serves the model, once it is
 			}
 			switch {
 			case w.Held:

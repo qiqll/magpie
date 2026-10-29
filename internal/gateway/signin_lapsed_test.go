@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +25,13 @@ func limitedNotLapsed(t *testing.T, rec *httptest.ResponseRecorder) {
 	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" || rec.Header().Get(UserLimitHeader) == "" || rec.Header().Get(UserUntilHeader) == "" {
 		t.Fatalf("not a limit with a time to try again: %d %v %s", rec.Code, rec.Header(), rec.Body.String())
 	}
+	saysNoLapse(t, rec)
+}
+
+// saysNoLapse fails t when rec's body or headers say anything of a
+// sign-in, or name the lapsed account.
+func saysNoLapse(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
 	all := rec.Body.String()
 	for k, vs := range rec.Header() {
 		all += k + strings.Join(vs, "")
@@ -471,10 +480,11 @@ func TestPinnedLapsedGrowsWhenTheUsersOwnRest(t *testing.T) {
 }
 
 // A pin to a lapsed account of a fallback's provider: under --bind=user
-// with a user, no account of that provider is the user's (one is
-// another user's), so nobody is asked, a 429 that says nothing of a
-// sign-in; bound by session, it goes to that provider's other account
-// (review of df779d95, H2).
+// with a user it is served as if unpinned, on the user's own accounts of
+// the provider asked for (none of the fallback's, one another user's),
+// and a user the header can't take is the 400 any request of it is
+// (review of 966144c7, M5); bound by session, it goes to that provider's
+// other account (review of df779d95, H2).
 func TestPinnedLapsedOnAFallbackProvider(t *testing.T) {
 	setup := func(t *testing.T) (func(bool) []string, *scripted) {
 		codexSignedIn(t, "spare@example.com")
@@ -496,10 +506,15 @@ func TestPinnedLapsedOnAFallbackProvider(t *testing.T) {
 		writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
 			"v": {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC(), Tier: "pro"},
 		}}})
-		rec := postAt(byUser(New()), "/v1/responses", body, map[string]string{AccountHeader: "spare@example.com", UserHeader: "u", UserTierHeader: "pro"})
-		limitedNotLapsed(t, rec)
-		if got := asked(true); len(got) != 0 || fb.n != 0 {
-			t.Fatalf("asked %v and the primary %d times", got, fb.n)
+		s := byUser(New())
+		rec := postAt(s, "/v1/responses", body, map[string]string{AccountHeader: "spare@example.com", UserHeader: "u", UserTierHeader: "pro"})
+		if got := asked(true); rec.Code != 200 || len(got) != 0 || fb.n != 1 {
+			t.Fatalf("%d %s, asked %v and the primary %d times", rec.Code, rec.Body.String(), got, fb.n)
+		}
+		saysNoLapse(t, rec)
+		rec = postAt(s, "/v1/responses", body, map[string]string{AccountHeader: "spare@example.com", UserHeader: "u\x01", UserTierHeader: "pro"})
+		if got := asked(true); rec.Code != http.StatusBadRequest || len(got) != 0 || fb.n != 1 {
+			t.Fatalf("a user the header can't take: %d %s, asked %v and the primary %d times", rec.Code, rec.Body.String(), got, fb.n)
 		}
 	})
 	t.Run("bound by session", func(t *testing.T) {
@@ -579,4 +594,230 @@ func TestPinnedUnlapsedAndGroupPins(t *testing.T) {
 			t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
 		}
 	})
+}
+
+// A user-accounts.json read once and broken since is unknown: a user whose
+// accounts all have to be signed in again is answered 503, no spare added
+// over a file that doesn't read (review of 966144c7, H1).
+func TestUserLapsedUnreadBindingsStay503(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	asked, _ := usersUpstream(t, nil)
+	lapseSaved(t, "spare@example.com")
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: time.Now().UTC(), Tier: "pro"},
+	}}})
+	s := byUser(New())
+	// read once, alice bound alongside
+	if rec := tierPost(s, "alice", "pro", "hi"); rec.Code != 200 {
+		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
+	}
+	asked(true)
+	if err := os.WriteFile(usersPath(), []byte(`{"users": {"codex": {"bob": `), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := tierPost(s, "bob", "pro", "hi")
+	if got := asked(true); rec.Code != http.StatusServiceUnavailable || len(got) != 0 {
+		t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+	}
+	saysNoLapse(t, rec)
+	if b, _ := os.ReadFile(usersPath()); string(b) != `{"users": {"codex": {"bob": ` {
+		t.Fatalf("the file was written over: %s", b)
+	}
+}
+
+// One of a user's accounts lapsed and the other's plan without the model:
+// the 400 that one is, not a limit, and the lapsed one never said not to
+// serve it (review of 966144c7, M4).
+func TestUserLapsedBesideOneWithoutTheModel(t *testing.T) {
+	codexSignedIn(t, "spare@example.com", "third@example.com")
+	asked, _ := usersUpstream(t, nil)
+	lapseSaved(t, "spare@example.com")
+	if err := provider.SetAccountModels("codex", "third@example.com", []string{"gpt-other"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: now, Tier: "pro"},
+		"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: now, Tier: "plus",
+			More: []userSeat{{Who: "codex@third@example.com", Account: "third@example.com", At: now}}},
+	}}})
+	rec := tierPost(byUser(New()), "bob", "plus", "hi")
+	if got := asked(true); rec.Code != http.StatusBadRequest || len(got) != 0 {
+		t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+	}
+	saysNoLapse(t, rec)
+}
+
+// A Claude account whose run fails as a sign-in Anthropic refused, its
+// mark not written (no saved credential of its to mark), is out for the
+// spare all the same: one added in the same request answers (review of
+// 966144c7, M2).
+func TestUserGivenASpareWhenClaudeRefusesTheSignIn(t *testing.T) {
+	claudeMadeFirst(t, false)
+	calls := filepath.Join(t.TempDir(), "calls")
+	claudeRefuses(t, calls, "tok-a")
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"claude": {
+		"bob": {Who: "claude@a@example.com", Account: "a@example.com", At: time.Now().UTC(), Tier: "pro"},
+	}}})
+	s := byUser(New())
+	t.Cleanup(s.subscription.abortAll)
+	rec := postAt(s, "/v1/messages", `{"model":"claude/claude-sonnet-5","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`,
+		map[string]string{UserHeader: "bob", UserTierHeader: "pro"})
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "healthy account") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	saysNoLapse(t, rec)
+	if got := seatsIn(t, "claude")["bob"]; !slices.Equal(got, []string{"a@example.com", "b@example.com"}) {
+		t.Fatalf("seats %v", got)
+	}
+}
+
+// Two requests of one user bound before either adds a spare: the second
+// takes the spare the first added, not one more (review of 966144c7, M3).
+func TestUserLapsedOneSpareForRequestsAtOnce(t *testing.T) {
+	codexSignedIn(t, "spare@example.com", "third@example.com")
+	usersUpstream(t, nil)
+	lapseSaved(t, "spare@example.com")
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: time.Now().UTC(), Tier: "pro"},
+	}}})
+	s := New()
+	p, err := provider.Find("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tier := defaultTiers.Tiers[2] // pro
+	var wg sync.WaitGroup
+	bound := make([]*UserBound, 2)
+	pools := make([][]candidate, 2)
+	pls := make([]planned, 2)
+	for i := range bound {
+		pools[i], pls[i] = s.plan(*p, "gpt-5.5", provider.Responses)
+		var refused userRefusal
+		var opl planned
+		_, opl, bound[i], refused = bindUser("", "bob", tier, *p, pools[i], pls[i])
+		if refused.status != 0 || bound[i].Why != "lapsed" {
+			t.Fatalf("bound %+v %+v", bound[i], refused)
+		}
+		pls[i] = opl
+	}
+	got := make([][]candidate, 2)
+	for i := range bound {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pool, poolPl := s.plan(*p, "gpt-5.5", provider.Responses)
+			got[i], _, _, _, _ = growUser(bound[i], pool, poolPl, nil, pls[i])
+		}()
+	}
+	wg.Wait()
+	if seats := seatsIn(t, "codex")["bob"]; len(seats) != 2 {
+		t.Fatalf("a spare each: %v", seats)
+	}
+	for i, cs := range got {
+		if len(cs) == 0 || cs[0].who() != got[0][0].who() {
+			t.Fatalf("request %d on %v", i, cs)
+		}
+	}
+}
+
+// Codex's web.run for a user whose ChatGPT accounts all have to be signed
+// in again goes to a spare added beside them, as a turn would (review of
+// 966144c7, M1). Kimi Code's search, the other caller of usersOwn, is
+// asked with keys, which never lapse.
+func TestUsersOwnGivesALapsedUserASpare(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	asked, _ := usersUpstream(t, nil)
+	lapseSaved(t, "spare@example.com")
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: time.Now().UTC(), Tier: "pro"},
+	}}})
+	s := byUser(New())
+	p, err := provider.Find("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), askedForKey{}, askedFor{"", "bob", "pro"})
+	own, bound, err := s.usersOwn(ctx, *p, "gpt-5.5", provider.Responses)
+	if err != nil || !bound || len(own) == 0 || own[0].p.Account.User != "me@example.com" {
+		t.Fatalf("own %v bound %v err %v", own, bound, err)
+	}
+	if got := seatsIn(t, "codex")["bob"]; !slices.Equal(got, []string{"spare@example.com", "me@example.com"}) {
+		t.Fatalf("seats %v", got)
+	}
+	_ = asked
+}
+
+// A lapse is logged once a change, by the account, with a stable why: the
+// same again isn't logged, another why is, and one back among the user's
+// accounts is logged again when it lapses again (review of 966144c7, M6).
+func TestSeatLapseLoggedOnceAChange(t *testing.T) {
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	seatLapsedSaid.Clear()
+	lines := func() int { return strings.Count(logged.String(), "has to be signed in again") }
+	noteSeatLapsed("codex@Spare@example.com", "why one")
+	noteSeatLapsed("codex@spare@example.com", "why one")
+	if n := lines(); n != 1 || !strings.Contains(logged.String(), "codex account Spare@example.com has to be signed in again (why one)") {
+		t.Fatalf("%d: %s", n, logged.String())
+	}
+	noteSeatLapsed("codex@spare@example.com", "why two")
+	if n := lines(); n != 2 {
+		t.Fatalf("another why not logged: %s", logged.String())
+	}
+	clearSeatLapsed("codex@SPARE@example.com")
+	noteSeatLapsed("codex@spare@example.com", "why two")
+	if n := lines(); n != 3 {
+		t.Fatalf("lapsed again after it was back, not logged: %s", logged.String())
+	}
+}
+
+// growUser counts an account that failed as lapsed in this request as out
+// though nothing marks it yet (a refresh still mending a revoke, Claude's
+// refusal of a sign-in it can't mark), and adds a spare beside it (review
+// of 966144c7, M2).
+func TestGrowUserCountsTheFailedAsLapsed(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	usersUpstream(t, nil)
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob": {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC(), Tier: "pro"},
+	}}})
+	s := New()
+	p, err := provider.Find("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, poolPl := s.plan(*p, "gpt-5.5", provider.Responses)
+	_, _, ub, refused := bindUser("", "bob", defaultTiers.Tiers[2], *p, pool, poolPl)
+	if refused.status != 0 || ub.Why != "kept" {
+		t.Fatalf("bound %+v %+v", ub, refused)
+	}
+	got, _, _, grew, _ := growUser(ub, pool, poolPl, nil, planned{left: ub.left}, "codex@me@example.com")
+	if !grew || len(got) == 0 || got[0].p.Account.User != "spare@example.com" {
+		t.Fatalf("grew %v on %v", grew, got)
+	}
+}
+
+// A user whose accounts all have to be signed in again keeps its last use
+// stamped as any bound user does, so its binding isn't let go as idle
+// while it waits (review of 966144c7, L1).
+func TestUserLapsedKeepsItsUseStamped(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	usersUpstream(t, nil)
+	lapseSaved(t, "spare@example.com")
+	old := time.Now().UTC().Add(-2 * time.Hour)
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: old, Tier: "pro", Used: old},
+		"bob":   {Who: "codex@spare@example.com", Account: "spare@example.com", At: old, Tier: "pro", Used: old},
+	}}})
+	limitedNotLapsed(t, tierPost(byUser(New()), "bob", "pro", "hi"))
+	b, _ := os.ReadFile(usersPath())
+	var f userFile
+	if err := json.Unmarshal(b, &f); err != nil {
+		t.Fatal(err)
+	}
+	if used := f.Users["codex"]["bob"].Used; time.Since(used) > time.Minute {
+		t.Fatalf("bob's use not stamped: %v", used)
+	}
 }

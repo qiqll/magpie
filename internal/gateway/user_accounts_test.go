@@ -281,9 +281,10 @@ func TestUserKeptBoundWhenItsAccountIsRevoked(t *testing.T) {
 	s := byUser(New())
 	// alice on the first account, the one Codex signed in to, revoked
 	rec := userPost(s, "codex/gpt-5.5", "alice", "ping")
-	if rec.Code != 200 || strings.Contains(rec.Body.String(), "revoked") {
+	if rec.Code != 200 {
 		t.Fatalf("first: %d %s", rec.Code, rec.Body.String())
 	}
+	saysNoLapse(t, rec)
 	if got := strings.Join(tried(true), ","); got != "acct-1,acct-2" {
 		t.Fatalf("first: asked %s", got)
 	}
@@ -341,6 +342,19 @@ func TestUsersKeptBoundToAnAccountRevokedForAnother(t *testing.T) {
 	}
 	if b := boundIn(t, "codex"); b["alice"] != "me@example.com" || b["bob"] != "spare@example.com" {
 		t.Fatalf("%v", b)
+	}
+	// alice's next request goes to a spare added beside the revoked one,
+	// which she stays bound to
+	rec := userPost(s, "codex/gpt-5.5", "alice", "next")
+	if rec.Code != 200 {
+		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
+	}
+	saysNoLapse(t, rec)
+	if got := strings.Join(tried(true), ","); got != "acct-2" {
+		t.Fatalf("alice asked %s", got)
+	}
+	if got := seatsIn(t, "codex")["alice"]; !slices.Equal(got, []string{"me@example.com", "spare@example.com"}) {
+		t.Fatalf("alice's accounts %v", got)
 	}
 }
 

@@ -159,8 +159,17 @@ func (s *Server) usersOwn(ctx context.Context, p provider.Provider, model string
 	if err != nil {
 		return nil, true, fmt.Errorf("%s: magpie can't read user-tiers.json, so it doesn't know how many accounts %q may have; nothing was sent", UserTierHeader, f.user)
 	}
-	cands, pl := s.plan(p, model, from)
-	cands, _, ub, refused := bindUser(f.key, f.user, tier, p, cands, pl)
+	pool, poolPl := s.plan(p, model, from)
+	cands, opl, ub, refused := bindUser(f.key, f.user, tier, p, pool, poolPl)
+	if refused.status == 0 && ub != nil && ub.Why == "lapsed" && len(cands) == 0 {
+		// its accounts all to be signed in again: a spare beside them,
+		// its tier letting it have one, as a turn would be given
+		cands, _, _, _, refused = growUser(ub, pool, poolPl, cands, opl)
+	}
+	if refused.status == http.StatusTooManyRequests && ub != nil && ub.Why == "lapsed" {
+		// told as a limit, never the sign-in (lapsedRefusal)
+		return nil, true, errors.New(userLimitSaid)
+	}
 	if refused.status != 0 {
 		return nil, true, errors.New(refused.msg)
 	}
