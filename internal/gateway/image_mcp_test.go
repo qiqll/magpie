@@ -399,3 +399,25 @@ func TestImageMCPIsServed(t *testing.T) {
 		t.Fatalf("apis: %d %s", w.Code, w.Body.String())
 	}
 }
+
+// Bound by user (--bind=user), the tools refuse a call without its user,
+// as /v1/images and /v1/videos do, and draw nothing; with one they draw.
+func TestImageMCPNeedsTheUserBoundByUser(t *testing.T) {
+	s, e := easeled(t)
+	byUser(s)
+	t.Cleanup(s.imageStore.running.Wait)
+	h := lanGuard(s.Handler())
+	for _, tool := range []string{GenerateImageTool, GenerateVideoTool} {
+		m := readImageReply(t, imagePost(h, "127.0.0.1:5000", imageToolCall(tool, map[string]any{"prompt": "a magpie"})))
+		if !m.Result.IsError || !strings.Contains(m.Result.Content[0].Text, "--bind=user") {
+			t.Fatalf("%s without a user: %+v", tool, m)
+		}
+	}
+	if n := len(e.got("/v1/images/generations")) + len(e.got("/v1/videos")); n != 0 {
+		t.Fatalf("drew %d times without a user", n)
+	}
+	m := readImageReply(t, imagePost(h, "127.0.0.1:5000", imageToolCall(GenerateImageTool, map[string]any{"prompt": "a magpie"}), UserHeader, "u1"))
+	if m.Result.IsError {
+		t.Fatalf("with its user: %+v", m)
+	}
+}

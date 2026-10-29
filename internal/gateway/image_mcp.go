@@ -12,12 +12,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/yetone/magpie/internal/access"
+	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -212,6 +214,12 @@ func (s *Server) imageMCPCall(r *http.Request, m mcpMessage) (any, map[string]an
 			return nil, map[string]any{"code": -32602, "message": "invalid params: " + err.Error()}
 		}
 		switch p.Name {
+		case GenerateImageTool, GenerateVideoTool:
+			if said, ok := s.imageMCPNoUser(r); ok {
+				return said, nil
+			}
+		}
+		switch p.Name {
 		case GenerateImageTool:
 			return s.imageMCPDraw(r, p.Arguments), nil
 		case GenerateVideoTool:
@@ -226,6 +234,17 @@ func (s *Server) imageMCPCall(r *http.Request, m mcpMessage) (any, map[string]an
 		return nil, map[string]any{"code": -32602, "message": "unknown tool " + p.Name + ": this server has " + GenerateImageTool + ", " + GenerateVideoTool + " and " + GenerationResultTool}
 	}
 	return nil, map[string]any{"code": -32601, "message": "method not found: " + m.Method}
+}
+
+// imageMCPNoUser is a drawing's answer, bound by user (--bind=user), to a
+// call without its user: /v1/images and /v1/videos refuse it (userNeeded),
+// so the tools that reach them in process do too.
+func (s *Server) imageMCPNoUser(r *http.Request) (map[string]any, bool) {
+	rec := httptest.NewRecorder()
+	if !s.noUser(rec, r, provider.Chat) {
+		return nil, false
+	}
+	return toolResult(imageMCPSaid(rec.Body.Bytes()), true), true
 }
 
 // imageGenOff is the tools' answer while Settings turned image generation
