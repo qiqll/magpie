@@ -624,6 +624,12 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 			kept = append(kept, st)
 			continue
 		}
+		// one left out as its sign-in has to be made again (leaveLapsed)
+		// is let go as one gone, as a request it failed lets go of it
+		// (unbindTurnedAway): the user is bound to one that can answer
+		if slices.ContainsFunc(pl.left, func(w Weighed) bool { return w.Lapsed != "" && leftIs(w, p.ID, st.Who) }) {
+			continue
+		}
 		if on == nil {
 			on, known = seatsOf(p)
 		}
@@ -769,7 +775,8 @@ func firstOf(pid string, cands []candidate, pl planned, tier Tier, uses seatUses
 
 // spareOf is the account of provider pid in cands to bind a user of tier
 // to, beside seats: of those not among them, with a seat for it
-// (seatUse.takes), not resting, not marked revoked (provider.SignInMarked)
+// (seatUse.takes), not resting, not to be signed in again
+// (provider.SignInLapsed)
 // and, with room, under routes.LowShare of each window counting the
 // model, the one fewest users of every key are bound to; for a tier that
 // shares one with a few (share 2 or more), the one most are, so a user
@@ -780,7 +787,7 @@ func firstOf(pid string, cands []candidate, pl planned, tier Tier, uses seatUses
 func spareOf(pid string, cands []candidate, pl planned, seats []userSeat, room bool, tier Tier, uses seatUses) int {
 	pick := -1
 	for i, c := range cands {
-		if c.p.ID != pid || seatIn(seats, c.who()) || !uses.of(c).takes(tier.Share) || resting(c) || provider.SignInMarked(c.p.Account) {
+		if c.p.ID != pid || seatIn(seats, c.who()) || !uses.of(c).takes(tier.Share) || resting(c) || provider.SignInLapsed(c.p.Account) != "" {
 			continue
 		}
 		if room && i < len(pl.order) && pl.order[i].Known && pl.order[i].Used >= routes.LowShare {
@@ -842,7 +849,7 @@ func fullRefusal(user string, tier Tier, pid string, cands []candidate, pl plann
 				r.limit, r.until, r.model = cmp.Or(userLimit(rest.Why), failQuota), rest.Until, rest.Model
 				why = []string{fmt.Sprintf("rests until %s (%s)", rest.Until.Format(time.RFC3339), rest.Why)}
 			}
-		} else if provider.SignInMarked(c.p.Account) {
+		} else if provider.SignInLapsed(c.p.Account) != "" {
 			marked = true
 		}
 	}

@@ -867,12 +867,13 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 		// its accounts' own lists of models are picked from its chat
 		// models, which its image models are never among: a list keeps
 		// an account from no drawing, as it couldn't name one
+		// (one whose sign-in has to be made again stays out, as for text)
 		for _, c := range barred {
-			if c.capped == nil {
+			if c.capped == nil && c.lapsed == "" {
 				left = append(left, c)
 			}
 		}
-		barred = slices.DeleteFunc(barred, func(c candidate) bool { return c.capped == nil })
+		barred = slices.DeleteFunc(barred, func(c candidate) bool { return c.capped == nil && c.lapsed == "" })
 	}
 	for _, c := range left {
 		if !slices.ContainsFunc(cs, func(o candidate) bool { return o.p.AccountID() == c.p.AccountID() }) {

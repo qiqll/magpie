@@ -108,6 +108,10 @@ type Account struct {
 	// explain adds what the user can do about a refusal the account's
 	// backend answered, "" when there is nothing to add (factory.go).
 	explain func(status int, body []byte) string
+	// lapsed is set on a Copilot account, whose mark goes with the token
+	// GitHub refused (copilot_lapsed.go): why it has to be signed in
+	// again, "" when it needn't (SignInLapsed).
+	lapsed func() string
 
 	// plugin is set on a plugin's provider (plugins.go), and transport
 	// carries its requests: the plugin's fetch.
@@ -1394,6 +1398,7 @@ func copilotProvider(app copilotApp, plan string) Provider {
 	if acct.User == "" {
 		acct.User = "GitHub"
 	}
+	acct.lapsed = func() string { return copilotLapsedFor(app) }
 	acct.sign = func(ctx context.Context, req *http.Request, body []byte) error {
 		s, err := app.session(ctx)
 		if err != nil {

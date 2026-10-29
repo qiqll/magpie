@@ -54,7 +54,8 @@ func askClaudeModel(s *Server, text string) *httptest.ResponseRecorder {
 }
 
 // An account Anthropic refused goes to the next one at once, with no rest
-// to wait out and then fail again: its sign-in is not run again.
+// to wait out and then fail again: its sign-in is not run again, and the
+// next request leaves it out, the route saying why (leaveLapsed).
 func TestClaudeAuthFailureFallsBackWithoutRetryingTheLogin(t *testing.T) {
 	claudeMadeFirst(t, false)
 	s := New()
@@ -71,13 +72,21 @@ func TestClaudeAuthFailureFallsBackWithoutRetryingTheLogin(t *testing.T) {
 	}
 	routes := s.Trace(context.Background(), 0, 0).Routes
 	slices.SortFunc(routes, func(a, b Route) int { return int(a.Seq - b.Seq) })
-	for i, route := range routes {
-		if len(route.Tries) != 2 || route.Tries[0].Fail != failAuth || route.Tries[0].Rest != nil {
-			t.Fatalf("request %d: the refusal not told as one, or rested: %+v", i, route.Tries)
-		}
+	if len(routes) != 2 {
+		t.Fatalf("routes: %d", len(routes))
 	}
-	if !strings.Contains(routes[0].Tries[0].Error, "OAuth session expired") || !strings.Contains(routes[1].Tries[0].Error, "sign in again") {
-		t.Fatalf("errors told: %q, %q", routes[0].Tries[0].Error, routes[1].Tries[0].Error)
+	if first := routes[0]; len(first.Tries) != 2 || first.Tries[0].Fail != failAuth || first.Tries[0].Rest != nil {
+		t.Fatalf("first request: the refusal not told as one, or rested: %+v", first.Tries)
+	}
+	if !strings.Contains(routes[0].Tries[0].Error, "OAuth session expired") {
+		t.Fatalf("error told: %q", routes[0].Tries[0].Error)
+	}
+	second := routes[1]
+	if len(second.Tries) != 1 || second.Tries[0].ID != "claude@b@example.com" {
+		t.Fatalf("second request: the refused account asked again: %+v", second.Tries)
+	}
+	if !slices.ContainsFunc(second.Left, func(w Weighed) bool { return w.Who == "a@example.com" && strings.Contains(w.Lapsed, "sign in again") }) {
+		t.Fatalf("second request: not said why it was left out: %+v", second.Left)
 	}
 }
 

@@ -295,6 +295,9 @@ type Weighed struct {
 	// Held: left out as the gateway key asking may not use its account or
 	// key (#905)
 	Held bool `json:"held,omitempty"`
+	// Lapsed: left out as its sign-in has to be made again while another
+	// account can take the request, why as its row says it (leaveLapsed)
+	Lapsed string `json:"lapsed,omitempty"`
 	// Capped: left out as held at the usage cap the user set on the
 	// account, this cap in percent; Used is then its fullest window's
 	// share, CapBack when the last window at or past it renews

@@ -719,8 +719,9 @@ func compactOn(r *http.Request, model string) *provider.Provider {
 		return nil
 	}
 	others := p.AlsoOn()
-	// one whose sign-in its vendor revoked is the last asked (#1793)
-	revoked := func(o provider.Provider) bool { return provider.SignInMarked(o.Account) }
+	// one whose sign-in has to be made again, its vendor having revoked
+	// it (#1793) or its refresh refused, is the last asked
+	revoked := func(o provider.Provider) bool { return provider.SignInLapsed(o.Account) != "" }
 	for i, o := range others {
 		if !resting(candidate{p: o, model: model, rest: o.ID}) && !revoked(o) {
 			return &others[i]

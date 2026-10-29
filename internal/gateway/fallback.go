@@ -55,6 +55,9 @@ type candidate struct {
 	rank int
 	// capped is set on an account left out as held at its usage cap
 	capped *capHold
+	// lapsed is set on an account left out as its sign-in has to be made
+	// again (provider.SignInLapsed): why, as its row says it
+	lapsed string
 	// noURL is the protocol its provider's keys are all set to that the
 	// provider has no URL for (#1702): the provider is tried whole, on the
 	// URLs it has, and the routing trace says why
@@ -259,6 +262,9 @@ func perKeyBarred(p provider.Provider, model string, from provider.Protocol) (ou
 			barred = append(barred, c)
 			return true
 		})
+		// one whose sign-in has to be made again, while another can
+		// answer (leaveLapsed)
+		all = leaveLapsed(all, &barred)
 		// an account at its usage cap is used up for routing until the
 		// window it filled renews: never tried, so groups, fallbacks and
 		// the other accounts take the request (provider/account_caps.go);
@@ -938,6 +944,36 @@ func capHeldOnly(cs []candidate) []candidate {
 	return out
 }
 
+// leaveLapsed is all less the accounts whose sign-in has to be made again
+// (provider.SignInLapsed: Anthropic refused it, its refresh or its token
+// was refused, its vendor revoked it, its plugin's vendor answered 401),
+// each added to barred with why, while another of all is signed in: such
+// an account can't answer, and asked first it only failed before the one
+// that would, its error all the agent was told when that one failed too.
+// With none other, all is kept: it is tried, and its failure tells the
+// agent to sign in again. Signed in again, it is back.
+func leaveLapsed(all []candidate, barred *[]candidate) []candidate {
+	why := make([]string, len(all))
+	usable := false
+	for i, c := range all {
+		why[i] = provider.SignInLapsed(c.p.Account)
+		usable = usable || why[i] == ""
+	}
+	if !usable || !slices.ContainsFunc(why, func(w string) bool { return w != "" }) {
+		return all
+	}
+	var out []candidate
+	for i, c := range all {
+		if why[i] == "" {
+			out = append(out, c)
+			continue
+		}
+		c.lapsed = why[i]
+		*barred = append(*barred, c)
+	}
+	return out
+}
+
 // barredOf is how the trace tells the accounts or keys the user set not
 // to serve the model: left out, as those not listing it are.
 func barredOf(cs []candidate, q provider.Provider, fallback bool, from provider.Protocol, via []string) []Weighed {
@@ -950,6 +986,8 @@ func barredOf(cs []candidate, q provider.Provider, fallback bool, from provider.
 			if !h.back.IsZero() {
 				w.CapBack = &h.back
 			}
+		} else if c.lapsed != "" {
+			w.Lapsed = c.lapsed
 		} else {
 			w.Barred = true
 		}
@@ -3599,6 +3637,9 @@ func pinTo(want string, cands []candidate, pl planned) ([]candidate, planned, in
 		if match(w) && w.Capped > 0 {
 			msg, _ := cappedError(w.Model, []Weighed{w}, time.Now())
 			return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + msg + "; no other account is tried in its place"
+		}
+		if match(w) && w.Lapsed != "" {
+			return nil, pl, http.StatusForbidden, AccountHeader + ": " + w.Lapsed + "; no other account is tried in its place"
 		}
 		if match(w) {
 			return nil, pl, http.StatusBadRequest, fmt.Sprintf("%s: %s's plan doesn't list %s", AccountHeader, w.Who, w.Model)

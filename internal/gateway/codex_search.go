@@ -94,9 +94,11 @@ func (s *Server) alphaSearchBody(w http.ResponseWriter, r *http.Request, body []
 }
 
 // chatGPTSearchers is the ChatGPT accounts a web search for model may go
-// to, the one it is served on first and those resting or with a revoked
-// sign-in last, with the model as the backend knows it: none when model
-// isn't a ChatGPT account's, or the calling key may use none of them.
+// to, the one it is served on first and those resting last, with the
+// model as the backend knows it: none when model isn't a ChatGPT
+// account's, or the calling key may use none of them. One whose sign-in
+// has to be made again (provider.SignInLapsed) is left out while another
+// can search, as routing leaves it (leaveLapsed), else asked last.
 func chatGPTSearchers(r *http.Request, model string) ([]provider.Provider, string) {
 	p, bare, ok := provider.Resolve(model)
 	if !ok || p.Account == nil || p.Account.Agent != "codex" {
@@ -111,17 +113,24 @@ func chatGPTSearchers(r *http.Request, model string) ([]provider.Provider, strin
 		all = append(all, p)
 	}
 	all = append(all, p.AlsoOn()...)
-	var ready, later []provider.Provider
+	var ready, later, lapsed []provider.Provider
 	for _, o := range all {
 		c := candidate{p: o, model: bare, rest: o.ID}
 		if !accountAllowed(who, c) {
 			continue
 		}
-		if resting(c) || provider.SignInMarked(o.Account) {
+		if provider.SignInLapsed(o.Account) != "" {
+			lapsed = append(lapsed, o)
+			continue
+		}
+		if resting(c) {
 			later = append(later, o)
 			continue
 		}
 		ready = append(ready, o)
+	}
+	if len(ready)+len(later) == 0 {
+		return lapsed, bare
 	}
 	return append(ready, later...), bare
 }

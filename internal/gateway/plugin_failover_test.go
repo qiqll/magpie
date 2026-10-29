@@ -183,6 +183,25 @@ func TestPluginFailover(t *testing.T) {
 			t.Fatalf("%s: no failing account was ever tried", how)
 		}
 	}
+	// the account refused is left out while it is marked (leaveLapsed):
+	// signed in again, it is back
+	for _, l := range provider.Logins("fakeco") {
+		if l.Lapsed == "" {
+			continue
+		}
+		st, err := provider.StartPluginSignIn("fakeco", 1, map[string]string{"where": "work", "team": strings.TrimSuffix(l.User, "@fake")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := provider.SubmitSignInCallback(st.ID, "good"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, l := range provider.Logins("fakeco") {
+		if l.Lapsed != "" {
+			t.Fatalf("%s still marked, signed in again: %q", l.User, l.Lapsed)
+		}
+	}
 
 	// full@fake, switched to, is the account in use
 	if err := provider.SwitchLogin("fakeco", "full@fake"); err != nil {

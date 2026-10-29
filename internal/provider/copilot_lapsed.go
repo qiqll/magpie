@@ -40,6 +40,17 @@ func copilotLapsedOn(l savedLogin, token string) bool {
 	return l.Lapsed != "" && token != "" && slices.Contains(strings.Split(l.Refused, ","), copilotTokenMark(token))
 }
 
+// copilotLapsedFor is why the Copilot account of app has to be signed in
+// again: GitHub refused the token it has now, as its row says
+// (copilotLogins); "" when it didn't.
+func copilotLapsedFor(app copilotApp) string {
+	l, ok := savedLoginOf(func(l savedLogin) bool { return l.Agent == "copilot" && strings.EqualFold(l.User, app.User) })
+	if ok && copilotLapsedOn(l, app.Token) {
+		return l.Lapsed
+	}
+	return ""
+}
+
 // copilotLapsedSeen is the Copilot accounts known marked lapsed, by
 // accountKey: a request served on one clears its mark without reading
 // logins.json at every request.

@@ -568,7 +568,8 @@ function routingPage(part) {
   // from its vendor does — relays list each key its own group's models
   // or the user set the account or key to serve other models only (#474)
   // or it is held at the usage cap the user set on the account
-  const unlistedWord = (w) => w.held ? t("not an account the gateway key may use") : w.noCredits ? t("held: its allowance used up, set not to spend credits") : w.capped ? t("held at its {cap}% usage cap", { cap: w.capped }) : w.barred ? t("set to serve other models, not {model}", { model: w.model }) : w.kind === "key" ? t("{name}'s list for this key has no {model}", { name: w.name, model: w.model }) : t("its plan doesn't list {model}", { model: w.model });
+  // or its sign-in has to be made again, while another account can answer
+  const unlistedWord = (w) => w.held ? t("not an account the gateway key may use") : w.lapsed ? t("to be signed in again in magpie") : w.noCredits ? t("held: its allowance used up, set not to spend credits") : w.capped ? t("held at its {cap}% usage cap", { cap: w.capped }) : w.barred ? t("set to serve other models, not {model}", { model: w.model }) : w.kind === "key" ? t("{name}'s list for this key has no {model}", { name: w.name, model: w.model }) : t("its plan doesn't list {model}", { model: w.model });
   // noURLWord: its keys are all set to a protocol its provider has no URL
   // for, so it went out on the URLs it has (#1702)
   const noURLWord = (w) => t("key set to {api} only, no {api} URL · sent on the others", { api: API[w.noURL] || w.noURL });
@@ -840,6 +841,8 @@ function routingPage(part) {
   // leftWhy is why a member was skipped before it was tried (r.left)
   const leftWhy = (x) => x.held
     ? t("{who} is left out: the gateway key asking may not use its account.", { who: who(x) })
+    : x.lapsed
+    ? t("{who} is left out: its sign-in has to be made again, so it can't answer until it is signed in again in magpie.", { who: who(x) })
     : x.window
     ? t("{who} is left out: this request is longer than its {n} context window, so it would only refuse it. It's asked only once every one with room is out of its allowance.", { who: who(x), n: ctxShort(x.window) })
     : x.noCredits
