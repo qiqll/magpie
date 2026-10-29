@@ -48,7 +48,7 @@
 
 | ID | 任务 | 模块 | 状态 | 依赖 | 备注 |
 |----|------|------|------|------|------|
-| T-001 | `--bind=user` 下 search / vision MCP 内部再发给模型的请求不带用户头，会从整个账号池取账号；须把调用方的用户带到内部请求上，按该用户的账号选取 | gateway（search/vision MCP、bind.go、user_accounts.go） | 待开始 | — | 审查发现；同类修复见 03352af6（image MCP 无用户即拒绝）。须覆盖 search 与 vision 两个兄弟，并测试：绑定用户 A 的调用不会落到用户 B 的账号 |
+| T-001 | `--bind=user` 下 search / vision MCP 内部再发给模型的请求不带用户头，会从整个账号池取账号；须把调用方的用户带到内部请求上，按该用户的账号选取 | gateway（search/vision MCP、bind.go、user_accounts.go） | 进行中 | — | 审查发现；同类修复见 03352af6（image MCP 无用户即拒绝）。须覆盖 search 与 vision 两个兄弟，并测试：绑定用户 A 的调用不会落到用户 B 的账号 |
 
 ## P2 — 增强 / 技术债
 
