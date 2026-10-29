@@ -176,9 +176,9 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 			return
 		}
 	}
-	tries = probeOne(tries) // of those resting, only the one back soonest (#1799)
-	var skipped []string
-	went := asked // the model the last try asked for
+	tries = probeOne(tries)    // of those resting, only the one back soonest (#1799)
+	var skipped, told []string // the tries before the last; those the caller is told of
+	went := asked              // the model the last try asked for
 	// unless every try is on this machine or the local network, set
 	// to go unmasked (provider.SkipsRedaction)
 	if slices.ContainsFunc(tries, func(c candidate) bool { return !c.p.SkipsRedaction() }) {
@@ -248,8 +248,14 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 		}
 		if err != nil && !last && r.Context().Err() == nil {
 			skipped = append(skipped, c.label()+": "+err.Error())
+			if !lapsedTry(c, code, []byte(err.Error())) {
+				// a lapse is the operator's, never among those the caller
+				// is told were tried
+				told = append(told, c.label()+": "+err.Error())
+			}
 			continue
 		}
+		code, err = lapsedAs(c, code, err)
 		call.Status = code
 		in, outTokens := retrievedTokens(b), answeredTokens(b)
 		call.Usage.Input, call.Usage.Output = in, outTokens
@@ -263,11 +269,7 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 		if err != nil {
 			call.Error = err.Error()
 			s.record(call)
-			msg := err.Error()
-			if len(skipped) > 0 {
-				msg += " (tried first: " + call.Fallback + ")"
-			}
-			writeError(w, provider.Chat, code, msg)
+			writeError(w, provider.Chat, code, saidOf(w.Header(), err, told))
 			return
 		}
 		s.record(call)

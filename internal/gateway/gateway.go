@@ -2881,12 +2881,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// error halfway to go to the next candidate (#2274)
 		hw.wantWhole = wantWhole
 		// a user's error is held to its end, its limit said on it
-		hw.holdErrors = userBound != nil
-		if c.p.Account != nil && c.p.Account.User != "" {
-			// and an account's, for a sign-in to be made again to be
-			// told as a limit (lapsedTry), not as the vendor said it
-			hw.holdErrors = true
-		}
+		// and any account's, for a lapse to be told as a limit
+		hw.holdErrors = holdsErrors(userBound, c)
 		// Claude's and GPT's reasoning is held for a refusal after it only
 		// while another candidate could answer instead: the last one's
 		// refusal isn't asked again, so holding it only kept a lone relay's
@@ -3709,7 +3705,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			failTo(w, kept, from, refused.status, said)
 			break
 		}
-		if last && userBound == nil && !hw.passing && hw.code() >= 400 && lapsedTry(c, hw.code(), hw.errBody()) {
+		lastFail := "" // the last try's failure, read once, when it may be a lapse
+		if last && userBound == nil && !hw.passing && hw.code() >= 400 {
+			lastFail = failureOf(c, hw.code(), hw.errBody())
+		}
+		if lastFail != "" && lapsedFail(c, lastFail, hw.code()) {
 			// the last account left has to be signed in again (a lapsed
 			// one brought back as none other could answer, lapsedBack, or
 			// one whose sign-in failed just now) and no user is bound:
@@ -3717,7 +3717,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// or magpie's words to sign in again (the owner's decision,
 			// 2026-10-29, as a user's is). Why is the call's error, the
 			// trace's and the log's
-			if failureOf(c, hw.code(), hw.errBody()) == failAuth {
+			if lastFail == failAuth {
 				try.Fail = failAuth
 			}
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })

@@ -26,7 +26,6 @@ import (
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1035,7 +1034,12 @@ func lapsedBack(cs []candidate, pl planned, keep func(candidate) bool) ([]candid
 // again (read after the try, which may have marked it), turned away
 // (401, 403) or not sent (502: its refresh refused).
 func lapsedTry(c candidate, status int, body []byte) bool {
-	if failureOf(c, status, body) == failAuth {
+	return lapsedFail(c, failureOf(c, status, body), status)
+}
+
+// lapsedFail is lapsedTry of a try failureOf has read as fail already.
+func lapsedFail(c candidate, fail string, status int) bool {
+	if fail == failAuth {
 		return true
 	}
 	if c.p.Account == nil || c.p.Account.User == "" {
@@ -1050,11 +1054,61 @@ func lapsedTry(c candidate, status int, body []byte) bool {
 
 // lapsedRetryAfter marks h, a 429 a caller with no user bound is told
 // when the account its request would go to has to be signed in again (the
-// owner's decision, 2026-10-29, as a user's is: userLimitSaid), back in
-// lapsedRetry; nothing of a sign-in or the account is said. Why is the
-// call's error, the account's row and the log the operator's.
+// owner's decision, 2026-10-29), as a user's is (lapsedRefusal): its
+// limit headers and Retry-After, back in lapsedRetry, and userLimitSaid;
+// nothing of a sign-in or the account is said. Why is the call's error,
+// the account's row and the log the operator's.
 func lapsedRetryAfter(h http.Header) {
-	h.Set("Retry-After", strconv.Itoa(int(lapsedRetry/time.Second)))
+	userLimited(h, failQuota, time.Now().Add(lapsedRetry), "")
+}
+
+// holdsErrors says a try on c has its error held whatever else holds
+// it: a user's (u, for its limit to be said on it, userLimitedAfter), or
+// any account's, keyed or not, for a sign-in to be made again to be told
+// as a limit (lapsedTry), not as the vendor said it.
+func holdsErrors(u *UserBound, c candidate) bool {
+	return u != nil || c.p.Account != nil
+}
+
+// lapsedErr is the error of a request that isn't a turn (a drawing, a
+// video, an embedding) whose account has to be signed in again
+// (lapsedAs): the operator's words, the call's error; its caller is
+// told only a limit (saidOf).
+type lapsedErr struct{ who, said string }
+
+func (e *lapsedErr) Error() string { return "sign-in lapsed: " + e.who + ": " + e.said }
+
+// lapsedAs is err, the failure of the try on c, as a lapsedErr with a
+// 429 when the account has to be signed in again (lapsedTry), logged
+// (noteLapseRefused); else code and err as they are.
+func lapsedAs(c candidate, code int, err error) (int, error) {
+	if err == nil || isLapsed(err) || !lapsedTry(c, code, []byte(err.Error())) {
+		return code, err
+	}
+	noteLapseRefused(c.who(), provider.SignInLapsed(c.p.Account))
+	return http.StatusTooManyRequests, &lapsedErr{c.who(), err.Error()}
+}
+
+// isLapsed says err is a lapsedErr.
+func isLapsed(err error) bool {
+	var l *lapsedErr
+	return errors.As(err, &l)
+}
+
+// saidOf is what the caller of a request that isn't a turn is told of
+// err, its last failure, with told those tried before it: for a lapse
+// only userLimitSaid, Retry-After set on h; else err, and the tries
+// before it (" (tried first: …)").
+func saidOf(h http.Header, err error, told []string) string {
+	if isLapsed(err) {
+		lapsedRetryAfter(h)
+		return userLimitSaid
+	}
+	msg := err.Error()
+	if len(told) > 0 {
+		msg += " (tried first: " + strings.Join(told, "; ") + ")"
+	}
+	return msg
 }
 
 // lapseRefusedSaid is the lapse logged of each account a request was
@@ -2205,12 +2259,25 @@ func (h *holdWriter) Write(b []byte) (int, error) {
 		h.sent(b)
 		return h.w.Write(b)
 	}
+	if !h.hold && h.status >= 400 {
+		// an error held only for what it says (holdErrors): its head is
+		// kept, the rest let go, as no error needs more to be read
+		if room := heldErrorMost - h.held.Len(); room < len(b) {
+			h.held.Write(b[:max(room, 0)])
+			return len(b), nil
+		}
+	}
 	n, err := h.held.Write(b)
 	if h.stream && h.failure == 0 {
 		h.scan()
 	}
 	return n, err
 }
+
+// heldErrorMost is the most of an error held only for what it says
+// (holdErrors) that is kept: a vendor's error reply is a few KB, and one
+// far longer isn't kept whole in memory for each request.
+const heldErrorMost = 1 << 20
 
 // cutLoop ends a reply found stuck in a loop (loopGuard): what came of it
 // goes to the agent as it would have, the held part of it too, and then

@@ -900,6 +900,7 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 		v       videoStart
 		code    int
 		skipped []string
+		told    []string // of skipped, those the caller is told of: no lapse
 	)
 	for i, m := range tries {
 		model = m.Model
@@ -912,6 +913,9 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		skipped = append(skipped, m.Provider.ID+"/"+m.Model+": "+err.Error())
+		if !isLapsed(err) {
+			told = append(told, skipped[len(skipped)-1])
+		}
 	}
 	call.Fallback = strings.Join(skipped, "; ")
 	if err != nil && !v.asked {
@@ -921,11 +925,7 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 			s.record(call)
 			return
 		}
-		msg := err.Error()
-		if len(skipped) > 0 {
-			msg += " (tried first: " + call.Fallback + ")"
-		}
-		fail(code, msg)
+		fail(code, saidOf(w.Header(), err, told))
 		return
 	}
 	b, remote, custom, field, onKey, own := v.answer, v.remote, v.custom, v.field, v.onKey, v.own
@@ -944,11 +944,7 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		call.Error = err.Error()
 		s.record(call)
-		msg := err.Error()
-		if len(skipped) > 0 {
-			msg += " (tried first: " + call.Fallback + ")"
-		}
-		writeError(w, provider.Chat, code, msg)
+		writeError(w, provider.Chat, code, saidOf(w.Header(), err, told))
 		return
 	}
 	s.record(call)
@@ -1099,6 +1095,10 @@ func (s *Server) startVideo(ctx context.Context, r *http.Request, p provider.Pro
 		}
 	}
 	v.p, v.answer = p, b
+	if p.Account != nil {
+		// an account to be signed in again: told only as a limit
+		code, err = lapsedAs(candidate{p: p, rest: p.ID}, code, err)
+	}
 	return v, code, err
 }
 
@@ -1181,7 +1181,7 @@ func (s *Server) videosGet(w http.ResponseWriter, r *http.Request) {
 	if filmsOpenAI(p) {
 		obj, model, code, err := s.openAIVideo(ctx, p, vendorID, id)
 		if err != nil {
-			writeError(w, provider.Chat, code, err.Error())
+			videoAskFailed(w, p, code, err)
 			return
 		}
 		if held := videoModelHeld(r, p, model); held != "" {
@@ -1193,7 +1193,7 @@ func (s *Server) videosGet(w http.ResponseWriter, r *http.Request) {
 	}
 	st, code, err := s.videoStatus(ctx, p, vendorID)
 	if err != nil {
-		writeError(w, provider.Chat, code, err.Error())
+		videoAskFailed(w, p, code, err)
 		return
 	}
 	model := st.Model
@@ -1231,7 +1231,7 @@ func (s *Server) videosContent(w http.ResponseWriter, r *http.Request) {
 			// the bytes say no model: the video's own answer does
 			_, model, code, err := s.openAIVideo(ctx, p, vendorID, id)
 			if err != nil {
-				writeError(w, provider.Chat, code, err.Error())
+				videoAskFailed(w, p, code, err)
 				return
 			}
 			if held := videoModelHeld(r, p, model); held != "" {
@@ -1244,7 +1244,7 @@ func (s *Server) videosContent(w http.ResponseWriter, r *http.Request) {
 	}
 	st, code, err := s.videoStatus(ctx, p, vendorID)
 	if err != nil {
-		writeError(w, provider.Chat, code, err.Error())
+		videoAskFailed(w, p, code, err)
 		return
 	}
 	if held := videoModelHeld(r, p, cmp.Or(st.Model, "grok-imagine-video")); held != "" {
@@ -1371,4 +1371,13 @@ func maskStrings(ctx context.Context, v any, h *maskHits) error {
 		}
 	}
 	return nil
+}
+
+// videoAskFailed answers a failed ask after a video on p: err as it is,
+// or, on an account to be signed in again, only a limit (lapsedAs).
+func videoAskFailed(w http.ResponseWriter, p provider.Provider, code int, err error) {
+	if p.Account != nil {
+		code, err = lapsedAs(candidate{p: p, rest: p.ID}, code, err)
+	}
+	writeError(w, provider.Chat, code, saidOf(w.Header(), err, nil))
 }

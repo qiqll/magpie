@@ -501,6 +501,7 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 			capBack time.Time
 			skipped []string
 		)
+		var told []string // of skipped, those the caller is told of: no lapse
 		for i, m := range tries {
 			call.Provider, model = m.Provider.ID, m.Model
 			drew, out, code, capBack, err = s.drawOnAccounts(ctx, r, m.Provider, m.Model, d, !isGroup)
@@ -511,6 +512,9 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 				break
 			}
 			skipped = append(skipped, m.Provider.ID+"/"+m.Model+": "+err.Error())
+			if !isLapsed(err) {
+				told = append(told, skipped[len(skipped)-1])
+			}
 		}
 		p = drew
 		call.Fallback = strings.Join(skipped, "; ")
@@ -540,11 +544,7 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 			if d := time.Until(capBack); d > 0 {
 				w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
 			}
-			msg := err.Error()
-			if len(skipped) > 0 {
-				msg += " (tried first: " + call.Fallback + ")"
-			}
-			writeError(w, provider.Chat, code, msg)
+			writeError(w, provider.Chat, code, saidOf(w.Header(), err, told))
 			return
 		}
 		s.record(call)
@@ -956,7 +956,9 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 				continue
 			}
 		}
-		if err == nil || ctx.Err() != nil || i+1 == len(cs) || !accountRefusedDrawing(code) && !keyLacksModel(code, err) {
+		if err == nil || ctx.Err() != nil || i+1 == len(cs) || !accountRefusedDrawing(code) && !keyLacksModel(code, err) && !lapsedTry(c, code, []byte(err.Error())) {
+			// the last one's lapse is told only as a limit (lapsedAs)
+			code, err = lapsedAs(c, code, err)
 			break
 		}
 	}
