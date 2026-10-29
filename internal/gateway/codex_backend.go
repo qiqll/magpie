@@ -232,6 +232,14 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if gone != "" {
+				if cp, _ := checkpointOf(body); checkpointLapsed(cp) != "" {
+					// its writer to be signed in again: a limit, as on
+					// /responses
+					noteLapseRefused(cp.Who, checkpointLapsed(cp))
+					lapsedRetryAfter(w.Header())
+					writeError(w, provider.Responses, http.StatusTooManyRequests, userLimitSaid)
+					return
+				}
 				writeError(w, provider.Responses, 400, gone)
 				return
 			}
@@ -1133,14 +1141,22 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 				accept := req.Header.Values("Accept")
 				if err := on.Sign(ctx, req, provider.Responses, body); err != nil {
 					msg := "OpenAI (" + on.Account.User + "): " + err.Error()
+					if why := provider.SignInLapsed(on.Account); why != "" {
+						// its refresh refused: to be signed in again, told
+						// only as a limit
+						lapsedCompact(w, on, why)
+						end(http.StatusTooManyRequests, "sign-in lapsed: "+msg, 0, 0)
+						return
+					}
 					writeError(w, provider.Responses, 502, msg)
 					end(502, msg, 0, 0)
 					return
 				}
-				// a sign-in its vendor revoked isn't sent again (#1793)
+				// a sign-in its vendor revoked isn't sent again (#1793),
+				// and its caller is told only a limit
 				if why, ok := provider.RevokedSignIn(on.Account, req); ok {
-					writeError(w, provider.Responses, 401, why)
-					end(401, why, 0, 0)
+					lapsedCompact(w, on, why)
+					end(http.StatusTooManyRequests, "sign-in lapsed: "+why, 0, 0)
 					return
 				}
 				req.Header.Del("Accept")
@@ -1166,6 +1182,18 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 				// one of magpie's accounts: a revoked sign-in shows on its
 				// row, to sign in again (#1793)
 				noteSignIn(ctx, on.Account, req, res)
+				if res.StatusCode == http.StatusUnauthorized {
+					if why := provider.SignInLapsed(on.Account); why != "" {
+						// marked to be signed in again by that 401: its
+						// caller is told only a limit, never the vendor's
+						// words (the owner's decision, 2026-10-29)
+						said, _ := io.ReadAll(io.LimitReader(res.Body, 4<<10))
+						res.Body.Close()
+						lapsedCompact(w, on, why)
+						end(http.StatusTooManyRequests, "sign-in lapsed: OpenAI ("+on.Account.User+"): "+res.Status+": "+strings.TrimSpace(string(said)), 0, 0)
+						return
+					}
+				}
 			}
 			if !creditsAsked && rest == "/responses" && base != codexAPIBase && res.StatusCode == http.StatusTooManyRequests && relayOnCredits(on) {
 				// the account holds credits and was refused as out of its
@@ -3386,3 +3414,12 @@ type recorder struct {
 func (r *recorder) Header() http.Header         { return r.header }
 func (r *recorder) WriteHeader(status int)      { r.status = status }
 func (r *recorder) Write(b []byte) (int, error) { return r.body.Write(b) }
+
+// lapsedCompact answers a compaction on, the account it went to, has to
+// be signed in again (why): a 429 that says nothing of it (the owner's
+// decision, 2026-10-29), why in the log.
+func lapsedCompact(w http.ResponseWriter, on *provider.Provider, why string) {
+	noteLapseRefused(candidate{p: *on, rest: on.ID}.who(), why)
+	lapsedRetryAfter(w.Header())
+	writeError(w, provider.Responses, http.StatusTooManyRequests, userLimitSaid)
+}

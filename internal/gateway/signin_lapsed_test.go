@@ -38,7 +38,7 @@ func saysNoLapse(t *testing.T, rec *httptest.ResponseRecorder) {
 	for k, vs := range rec.Header() {
 		all += k + strings.Join(vs, "")
 	}
-	for _, w := range []string{"sign in", "sign-in", "signed in", "expired", "revoked", "authenticate", "spare@"} {
+	for _, w := range []string{"sign in", "sign-in", "signed in", "expired", "revoked", "authenticate", "spare@", "@example.com"} {
 		if strings.Contains(strings.ToLower(all), w) {
 			t.Fatalf("the caller is told %q: %v %s", w, rec.Header(), rec.Body.String())
 		}

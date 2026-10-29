@@ -233,6 +233,19 @@ func TestPluginFailover(t *testing.T) {
 	if code, body, seen := ask("fakeco/fake-claude"); code != 200 || !strings.Contains(body, "claude from full") || strings.Join(seen, " ") != "a b full" {
 		t.Fatalf("fake-claude with the others out: %d %s (tried %v)", code, body, seen)
 	}
+	// one refused before the last (its 401 marks it lapsed, which
+	// failureOf doesn't call failAuth) and the last out of its allowance:
+	// the agent is told the allowance, never the sign-in (T-011, review of
+	// ba9789dc, H1). Signed in again for what follows
+	reset(map[string]string{"a": "gone", "b": "quota", "full": "quota"})
+	if code, body, seen := ask("fakeco/fake-claude"); code != 429 || strings.Join(seen, " ") != "a b full" || strings.Contains(body, "token expired") || strings.Contains(strings.ToLower(body), "sign") {
+		t.Fatalf("one lapsed before the last out of its allowance: %d %s (tried %v)", code, body, seen)
+	}
+	if st, err := provider.StartPluginSignIn("fakeco", 1, map[string]string{"where": "work", "team": "a"}); err != nil {
+		t.Fatal(err)
+	} else if err := provider.SubmitSignInCallback(st.ID, "good"); err != nil {
+		t.Fatal(err)
+	}
 	reset(map[string]string{})
 	if code, body, seen := ask("fakeco/fake-1"); code != 200 || len(seen) == 0 || seen[0] != "full" {
 		t.Fatalf("fake-1 is held back on full@fake: %d %s (tried %v)", code, body, seen)

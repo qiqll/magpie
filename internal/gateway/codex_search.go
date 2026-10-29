@@ -82,13 +82,19 @@ func (s *Server) alphaSearchBody(w http.ResponseWriter, r *http.Request, body []
 		}
 	}
 	if len(ons) > 0 {
-		answered, why := s.alphaSearchOn(w, r, withModel(body, model), model, ons)
+		answered, why, told := s.alphaSearchOn(w, r, withModel(body, model), model, ons)
 		if answered {
 			return
 		}
 		// a failure would end the turn: magpie searches in its place
 		log.Printf("web search on ChatGPT for %s: %s", q.Model, why)
-		note = "ChatGPT's web search failed (" + why + "); magpie searched in its place.\n\n"
+		if told == "" {
+			// every account failed as one to be signed in again: that
+			// is the log's alone
+			note = "ChatGPT's web search failed; magpie searched in its place.\n\n"
+		} else {
+			note = "ChatGPT's web search failed (" + told + "); magpie searched in its place.\n\n"
+		}
 	}
 	s.alphaSearchHere(w, r, q, note)
 }
@@ -169,22 +175,34 @@ func (s *Server) usersSearchers(r *http.Request, id string, ons []provider.Provi
 // turn, the next asked when one is refused, limited or fails, and relays
 // the backend's answer as it is. It says whether one answered: when none
 // did, nothing is written, and the search is magpie's (alphaSearchHere),
-// with why returned.
-func (s *Server) alphaSearchOn(w http.ResponseWriter, r *http.Request, body []byte, model string, ons []provider.Provider) (bool, string) {
+// with why returned, and told, of why, the failures of accounts that
+// needn't be signed in again, for the caller's output.
+func (s *Server) alphaSearchOn(w http.ResponseWriter, r *http.Request, body []byte, model string, ons []provider.Provider) (answered bool, why, told string) {
 	start := time.Now()
 	w, body, unmask, hits, err := redactedHits(r.Context(), w, body)
 	defer unmask()
 	if err != nil {
-		return false, err.Error()
+		return false, err.Error(), err.Error()
 	}
 	noteMasked(r, "search", hits, sentOf(hits, body), 0, "openai", model)
-	var errs []string
+	var errs, said []string
 	for _, on := range ons {
 		who := "OpenAI (" + on.Account.User + "): "
+		// each failure is the log's; the caller's output has those of
+		// accounts that needn't be signed in again (the owner's
+		// decision, 2026-10-29), as any lapse is the operator's
+		fail := func(msg string) {
+			errs = append(errs, who+msg)
+			if provider.SignInLapsed(on.Account) == "" && !provider.SignInRevoked(http.StatusUnauthorized, []byte(msg)) {
+				said = append(said, who+msg)
+			} else {
+				noteLapseRefused(candidate{p: on, rest: on.ID}.who(), provider.SignInLapsed(on.Account))
+			}
+		}
 		ctx := on.Via(r.Context())
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.CodexBase+AlphaSearchPath, bytes.NewReader(body))
 		if err != nil {
-			errs = append(errs, who+err.Error())
+			fail(err.Error())
 			continue
 		}
 		for k, vs := range r.Header {
@@ -195,20 +213,20 @@ func (s *Server) alphaSearchOn(w http.ResponseWriter, r *http.Request, body []by
 		req.Header.Set("Content-Type", "application/json")
 		// a nil body: the search is answered in JSON, not streamed
 		if err := on.Sign(ctx, req, provider.Responses, nil); err != nil {
-			errs = append(errs, who+err.Error())
+			fail(err.Error())
 			continue
 		}
 		// a sign-in its vendor revoked isn't sent again (#1793)
 		if why, revoked := provider.RevokedSignIn(on.Account, req); revoked {
-			errs = append(errs, who+why)
+			fail(why)
 			continue
 		}
 		res, err := s.client.Do(req)
 		if err != nil {
 			if r.Context().Err() != nil {
-				return true, ""
+				return true, "", ""
 			}
-			errs = append(errs, who+err.Error())
+			fail(err.Error())
 			continue
 		}
 		noteSignIn(ctx, on.Account, req, res)
@@ -217,7 +235,7 @@ func (s *Server) alphaSearchOn(w http.ResponseWriter, r *http.Request, body []by
 		if res.StatusCode < 200 || res.StatusCode > 299 {
 			msg, _ := io.ReadAll(io.LimitReader(res.Body, 4<<10))
 			res.Body.Close()
-			errs = append(errs, who+res.Status+": "+strings.TrimSpace(string(msg)))
+			fail(res.Status + ": " + strings.TrimSpace(string(msg)))
 			c.Millis, c.Error = time.Since(start).Milliseconds(), res.Status
 			s.record(c)
 			continue
@@ -232,9 +250,9 @@ func (s *Server) alphaSearchOn(w http.ResponseWriter, r *http.Request, body []by
 		res.Body.Close()
 		c.Millis = time.Since(start).Milliseconds()
 		s.record(c)
-		return true, ""
+		return true, "", ""
 	}
-	return false, strings.Join(errs, "; ")
+	return false, strings.Join(errs, "; "), strings.Join(said, "; ")
 }
 
 // alphaSearchHere answers a search for a model no ChatGPT account serves:

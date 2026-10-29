@@ -426,6 +426,31 @@ func checkpointError(model string, cp checkpointWriter) string {
 	return msg
 }
 
+// checkpointLapsed is why the account that sealed cp has to be signed in
+// again (its row's lapsed), "" when it needn't or cp is a key's: such a
+// conversation can go on only once it is, and its caller is told only a
+// limit (the owner's decision, 2026-10-29), the why the operator's.
+func checkpointLapsed(cp checkpointWriter) string {
+	if strings.Contains(cp.Who, "#") {
+		return ""
+	}
+	p, err := provider.Find(cp.Provider)
+	if err != nil {
+		return ""
+	}
+	agent := cp.Provider
+	if p.Account != nil && p.Account.Agent != "" {
+		agent = p.Account.Agent
+	}
+	user := strings.TrimPrefix(cp.Who, cp.Provider+"@")
+	for _, l := range provider.Logins(agent) {
+		if strings.EqualFold(l.User, user) {
+			return l.Lapsed
+		}
+	}
+	return ""
+}
+
 // checkpointGone is why the key or account that sealed cp can't be asked
 // for model, and what would let it be: removed, signed out, its sign-in
 // lapsed, paused or switched off, the model kept from it, or the model or

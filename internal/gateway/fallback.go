@@ -954,7 +954,8 @@ func capHeldOnly(cs []candidate) []candidate {
 // are out of all already). Such an account can't answer, and asked first
 // it only failed before the one that would, its error all the agent was
 // told when that one failed too. With none other, all is kept: it is
-// tried, and its failure tells the agent to sign in again. One the
+// tried, and its failure is told the agent as a limit, nothing of the
+// sign-in (lapsedTry; the owner's decision, 2026-10-29). One the
 // calling key may not use doesn't count either: allowedCandidates brings
 // the lapsed back when the key may use none of the others
 // (lapsedBack). Signed in again, it is back.
@@ -1001,8 +1002,8 @@ func lapsedOnly(cs []candidate) []candidate {
 // lapsedBack is cs with the accounts leaveLapsed left out of pl brought
 // back, those keep allows, for each provider of whose accounts none is
 // left in cs: the others it left them out for are ones the calling key
-// may not use. They are tried last, and their failure tells the agent to
-// sign in again, as with no other account at all.
+// may not use. They are tried last, and their failure is told the agent
+// as a limit (lapsedTry), as with no other account at all.
 func lapsedBack(cs []candidate, pl planned, keep func(candidate) bool) ([]candidate, planned) {
 	var back []candidate
 	for _, c := range pl.lapsed {
@@ -1034,23 +1035,34 @@ func lapsedBack(cs []candidate, pl planned, keep func(candidate) bool) ([]candid
 // again (read after the try, which may have marked it), turned away
 // (401, 403) or not sent (502: its refresh refused).
 func lapsedTry(c candidate, status int, body []byte) bool {
-	return lapsedFail(c, failureOf(c, status, body), status)
+	return lapsedFail(c, failureOf(c, status, body), status, body)
 }
 
-// lapsedFail is lapsedTry of a try failureOf has read as fail already.
-func lapsedFail(c candidate, fail string, status int) bool {
+// lapsedFail is lapsedTry of a try failureOf has read as fail already,
+// its body body. A proxy down, a check to pass or an account restricted
+// is what it says, marked or not; a 403 is a lapse only when it speaks of
+// the sign-in (lapseWords), as a region's or a policy's doesn't.
+func lapsedFail(c candidate, fail string, status int, body []byte) bool {
 	if fail == failAuth {
 		return true
 	}
-	if c.p.Account == nil || c.p.Account.User == "" {
+	if c.p.Account == nil || c.p.Account.User == "" || fail == failProxy || fail == failVerify || fail == failRestricted {
 		return false
 	}
 	switch status {
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusBadGateway:
+	case http.StatusForbidden:
+		if !lapseWords.Match(wordsOf(body)) {
+			return false
+		}
+		fallthrough
+	case http.StatusUnauthorized, http.StatusBadGateway:
 		return provider.SignInLapsed(c.p.Account) != ""
 	}
 	return false
 }
+
+// lapseWords are a vendor's words of a sign-in gone, in a 403.
+var lapseWords = regexp.MustCompile(`(?i)\btoken_(revoked|invalidated|expired)\b|invalid_grant|unauthori[sz]ed|authenticat|oauth|sign(ed)?[- ]?in|(token|session|credential)s? (has |have )?(expired|been revoked|was revoked)`)
 
 // lapsedRetryAfter marks h, a 429 a caller with no user bound is told
 // when the account its request would go to has to be signed in again (the
@@ -3782,9 +3794,10 @@ func streamStatus(msg string) int {
 // (its user, or its id in the routing trace), and pl with them. Nothing
 // else is tried in its place: a caller that names one account asks about
 // that one. The error says why none is left: no such account, one that
-// doesn't list the model, or one resting; lapsed is why when it has to
-// be signed in again, which the caller isn't told (lapsedRetryAfter).
-func pinTo(want string, cands []candidate, pl planned) ([]candidate, planned, int, string, string) {
+// doesn't list the model, or one resting; lapsed is the account left out
+// when it has to be signed in again (its Lapsed, its provider and ID the
+// log's), which the caller isn't told (lapsedRetryAfter).
+func pinTo(want string, cands []candidate, pl planned) ([]candidate, planned, int, string, Weighed) {
 	match := func(w Weighed) bool { return strings.EqualFold(want, w.Who) || want == w.ID }
 	var out []candidate
 	var order []Weighed
@@ -3804,24 +3817,24 @@ func pinTo(want string, cands []candidate, pl planned) ([]candidate, planned, in
 		out, order = append(out, c), append(order, pl.order[i])
 	}
 	if len(out) > 0 {
-		return out, planned{order: order}, 0, "", ""
+		return out, planned{order: order}, 0, "", Weighed{}
 	}
 	if len(rests) > 0 {
-		return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + strings.Join(rests, "; ") + "; no other account is tried in its place", ""
+		return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + strings.Join(rests, "; ") + "; no other account is tried in its place", Weighed{}
 	}
 	for _, w := range pl.left {
 		if match(w) && w.Held {
-			return nil, pl, http.StatusForbidden, fmt.Sprintf("%s: the gateway key may not use %s's account", AccountHeader, w.Who), ""
+			return nil, pl, http.StatusForbidden, fmt.Sprintf("%s: the gateway key may not use %s's account", AccountHeader, w.Who), Weighed{}
 		}
 		if match(w) && w.Capped > 0 {
 			msg, _ := cappedError(w.Model, []Weighed{w}, time.Now())
-			return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + msg + "; no other account is tried in its place", ""
+			return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + msg + "; no other account is tried in its place", Weighed{}
 		}
 		if match(w) && w.Lapsed != "" {
-			return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + w.Lapsed + "; no other account is tried in its place", w.Lapsed
+			return nil, pl, http.StatusTooManyRequests, AccountHeader + ": " + w.Lapsed + "; no other account is tried in its place", w
 		}
 		if match(w) {
-			return nil, pl, http.StatusBadRequest, fmt.Sprintf("%s: %s's plan doesn't list %s", AccountHeader, w.Who, w.Model), ""
+			return nil, pl, http.StatusBadRequest, fmt.Sprintf("%s: %s's plan doesn't list %s", AccountHeader, w.Who, w.Model), Weighed{}
 		}
 	}
 	var have []string
@@ -3834,52 +3847,52 @@ func pinTo(want string, cands []candidate, pl planned) ([]candidate, planned, in
 	if len(have) > 0 {
 		msg += "; its accounts are " + strings.Join(have, ", ")
 	}
-	return nil, pl, http.StatusNotFound, msg, ""
+	return nil, pl, http.StatusNotFound, msg, Weighed{}
 }
 
 // pinnedLapsed is why the account pin (AccountHeader) names, of cands
 // or left out of pl, has to be signed in again, and its provider; "" when
 // it needn't, or pin names none, or the calling key may not use it (pinTo
-// says so).
-func pinnedLapsed(pin string, cands []candidate, pl planned) (why, pid string) {
+// says so); who is the account's, as the log keys it (candidate.who).
+func pinnedLapsed(pin string, cands []candidate, pl planned) (why, pid, who string) {
 	if pin == "" {
-		return "", ""
+		return "", "", ""
 	}
 	match := func(w Weighed) bool { return strings.EqualFold(pin, w.Who) || pin == w.ID }
 	for _, w := range pl.left {
 		if match(w) && w.Held {
-			return "", ""
+			return "", "", ""
 		}
 	}
 	// one of that name among the candidates and not lapsed (the same
 	// email signed in at a fallback's provider) takes the pin, as before;
 	// one there that is lapsed was brought back as none other could
 	// answer (lapsedBack)
-	why, pid = "", ""
+	why, pid, who = "", "", ""
 	for i, c := range cands {
 		if i >= len(pl.order) || !match(pl.order[i]) {
 			continue
 		}
 		if c.p.Account == nil {
-			return "", ""
+			return "", "", ""
 		}
 		w := provider.SignInLapsed(c.p.Account)
 		if w == "" {
-			return "", ""
+			return "", "", ""
 		}
 		if why == "" {
-			why, pid = w, c.p.ID
+			why, pid, who = w, c.p.ID, c.who()
 		}
 	}
 	if why != "" {
-		return why, pid
+		return why, pid, who
 	}
 	for _, w := range pl.left {
 		if match(w) && w.Lapsed != "" {
-			return w.Lapsed, w.Provider
+			return w.Lapsed, w.Provider, w.ID
 		}
 	}
-	return "", ""
+	return "", "", ""
 }
 
 // ofProvider is cands narrowed to provider pid's, pl's order with them.

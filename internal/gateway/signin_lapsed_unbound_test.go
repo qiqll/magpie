@@ -2,13 +2,16 @@ package gateway
 
 import (
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
@@ -93,12 +96,13 @@ func TestUnboundLapsedToldAsALimit(t *testing.T) {
 // serve, which tells the caller only a limit (lapsedRetryAfter).
 func TestPinToSaysLapsed(t *testing.T) {
 	pl := planned{left: []Weighed{{Who: "spare@example.com", Model: "gpt-5.5", Lapsed: "spare@example.com's sign-in has expired"}}}
-	if _, _, status, msg, lapsed := pinTo("spare@example.com", nil, pl); status != http.StatusTooManyRequests || lapsed != pl.left[0].Lapsed || !strings.Contains(msg, "has expired") {
-		t.Fatalf("%d %q %q", status, msg, lapsed)
+	pl.left[0].ID, pl.left[0].Provider = "codex@spare@example.com", "codex"
+	if _, _, status, msg, lapsed := pinTo("spare@example.com", nil, pl); status != http.StatusTooManyRequests || lapsed.Lapsed != pl.left[0].Lapsed || lapsed.ID != "codex@spare@example.com" || !strings.Contains(msg, "has expired") {
+		t.Fatalf("%d %q %+v", status, msg, lapsed)
 	}
 	pl.left[0].Lapsed = ""
-	if _, _, _, _, lapsed := pinTo("spare@example.com", nil, pl); lapsed != "" {
-		t.Fatalf("not lapsed, said %q", lapsed)
+	if _, _, _, _, lapsed := pinTo("spare@example.com", nil, pl); lapsed.Lapsed != "" {
+		t.Fatalf("not lapsed, said %+v", lapsed)
 	}
 }
 
@@ -206,5 +210,189 @@ func TestHeldErrorKeptToItsHead(t *testing.T) {
 	}
 	if got := h.held.Len(); got != heldErrorMost {
 		t.Fatalf("held %d bytes, not %d", got, heldErrorMost)
+	}
+}
+
+// codexAnswers stands in for the ChatGPT backend answering the account
+// acct status with body, after wait, and every other account served;
+// asked is the accounts asked.
+func codexAnswers(t *testing.T, acct string, status int, body string, wait time.Duration) (asked func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var got []string
+	done := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.ReadAll(r.Body)
+		mu.Lock()
+		got = append(got, r.Header.Get("chatgpt-account-id"))
+		mu.Unlock()
+		if r.Header.Get("chatgpt-account-id") == acct {
+			select {
+			case <-time.After(wait):
+			case <-r.Context().Done():
+				return
+			case <-done:
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			io.WriteString(w, body)
+			return
+		}
+		io.WriteString(w, sse(
+			`data: {"type":"response.created","response":{"id":"r1","model":"gpt-5.5"}}`,
+			`data: {"type":"response.completed","response":{"id":"r1","usage":{"input_tokens":7,"output_tokens":1}}}`))
+	}))
+	t.Cleanup(func() { close(done); up.Close() })
+	was := provider.CodexBase
+	provider.CodexBase = up.URL + "/backend-api/codex"
+	t.Cleanup(func() { provider.CodexBase = was })
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(got)
+	}
+}
+
+// An account marked to be signed in again that fails for another reason
+// says that reason, as any account's failure does: a proxy down (502) or
+// a region its vendor doesn't serve (403) is no lapse, and isn't told as
+// a limit (review of ba9789dc, M5).
+func TestLapsedAccountsOtherFailuresToldAsThemselves(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"a proxy down", http.StatusBadGateway, `proxyconnect tcp: dial tcp 127.0.0.1:9: connect: connection refused`},
+		{"a region refused", http.StatusForbidden, `{"error":{"message":"Country, region, or territory not supported","code":"unsupported_country_region_territory"}}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			codexSignedIn(t, "spare@example.com")
+			asked := codexAnswers(t, "acct-2", c.status, c.body, 0)
+			lapseSaved(t, "spare@example.com")
+			keys, secrets := newCaller(t, "Spare only")
+			if _, err := access.Update("accounts-key", access.Change{Key: keys[0].ID, Accounts: []string{"codex/spare@example.com"}}); err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"codex/gpt-5.5","stream":true,"input":"ping"}`))
+			req.Header.Set("Authorization", "Bearer "+secrets[0])
+			New().Handler().ServeHTTP(rec, req)
+			if got := asked(); len(got) == 0 || slices.Contains(got, "acct-1") {
+				t.Fatalf("asked %v", got)
+			}
+			if rec.Code != c.status || strings.Contains(rec.Body.String(), userLimitSaid) {
+				t.Fatalf("told %d %s, not its own %d", rec.Code, rec.Body.String(), c.status)
+			}
+		})
+	}
+}
+
+// A request kept alive while its last account is asked (the stream's
+// headers sent) is told the lapse found then as a limit in the stream,
+// nothing of the sign-in.
+func TestUnboundLapseKeptAliveToldAsALimit(t *testing.T) {
+	k, w := keepHeldAfter, watchEvery
+	keepHeldAfter, watchEvery = 20*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { keepHeldAfter, watchEvery = k, w })
+	codexSignedIn(t)
+	codexAnswers(t, "acct-1", http.StatusUnauthorized, `{"error":{"message":"Encountered invalidated oauth token for user, failing request","code":"token_revoked"},"status":401}`, 150*time.Millisecond)
+	rec := postAt(New(), "/v1/responses", `{"model":"codex/gpt-5.5","stream":true,"input":"ping"}`, nil)
+	if !strings.Contains(rec.Body.String(), ": keepalive") || !strings.Contains(rec.Body.String(), userLimitSaid) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	saysNoLapse(t, rec)
+}
+
+// A fallback whose last member is an account to be signed in again is
+// told a limit, as a provider of its own is (the member before it busy).
+func TestUnboundFallbacksLastMemberLapsed(t *testing.T) {
+	codexSignedIn(t)
+	revokedUpstream(t, codexAccessToken(t))
+	pause := retryPause
+	retryPause = time.Millisecond
+	t.Cleanup(func() { retryPause = pause })
+	fb := &scripted{replies: []reply{{503, "application/json", `{"error":{"message":"the primary is busy"}}`}}}
+	up := httptest.NewServer(fb)
+	t.Cleanup(up.Close)
+	if err := provider.Save(provider.Provider{ID: "fb", Name: "FB", Key: "k", Models: []string{"m"}, Responses: up.URL + "/v1", Fallback: []string{"codex/gpt-5.5"}}); err != nil {
+		t.Fatal(err)
+	}
+	rec := postAt(New(), "/v1/responses", `{"model":"fb/m","stream":true,"input":"ping"}`, nil)
+	if fb.n == 0 {
+		t.Fatalf("the primary wasn't asked: %d %s", rec.Code, rec.Body.String())
+	}
+	limitedNotLapsed(t, rec)
+}
+
+// A conversation natively compacted by an account to be signed in again
+// can go on only once it is: its turns and its compacts are told a limit
+// until then, nothing of the sign-in or the account, and nothing is asked
+// (the owner's decision B, 2026-10-29; review of ba9789dc, H2).
+func TestCompactionSealedByALapsedAccountToldAsALimit(t *testing.T) {
+	enc := "gAAAAB-sealed-by-lapsed"
+	said := func(t *testing.T, code int, body string) {
+		t.Helper()
+		if code != http.StatusTooManyRequests || !strings.Contains(body, userLimitSaid) {
+			t.Fatalf("%d %s", code, body)
+		}
+		for _, w := range []string{"sign", "lapsed", "expired", "@example.com", "an account"} {
+			if strings.Contains(strings.ToLower(body), w) {
+				t.Fatalf("told %q: %s", w, body)
+			}
+		}
+	}
+	t.Run("a turn", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com")
+		b := newResetBackend(t)
+		lapseSaved(t, "spare@example.com")
+		wroteCheckpoint(enc, sealedBy("spare@example.com"))
+		code, body := codexPost(t, `{"model":"gpt-5.5","stream":true,"input":[{"type":"compaction","encrypted_content":"`+enc+`"},{"type":"message","role":"user","content":[{"type":"input_text","text":"go on"}]}]}`)
+		if tried, _ := b.seen(); tried != "" {
+			t.Fatalf("asked %q", tried)
+		}
+		said(t, code, body)
+	})
+	t.Run("a compact", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com")
+		nativeOn(t, "codex")
+		lapseSaved(t, "spare@example.com")
+		wroteCheckpoint(enc, sealedBy("spare@example.com"))
+		code, body, seen := sealedCompactAsked(t, enc, "chatgpt-token", "")
+		if seen != "" {
+			t.Fatalf("asked %q", seen)
+		}
+		said(t, code, body)
+	})
+}
+
+// A web search whose ChatGPT account the vendor answers revoked, searched
+// by magpie in its place, says only that ChatGPT's search failed: why is
+// the log's (review of ba9789dc, M3).
+func TestWebSearchKeepsALapseOutOfItsOutput(t *testing.T) {
+	codexSignedIn(t)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"error":{"message":"Encountered invalidated oauth token for user, failing request","code":"token_revoked"},"status":401}`)
+	}))
+	t.Cleanup(up.Close)
+	was := provider.CodexBase
+	provider.CodexBase = up.URL + "/backend-api/codex"
+	t.Cleanup(func() { provider.CodexBase = was })
+	apis := newSearchAPIs(t)
+	if err := provider.SetSearchAPI(apis.api("tavily", "tvly-k")); err != nil {
+		t.Fatal(err)
+	}
+	got := readSearchReply(t, codexSearchPost(New().Handler(), "/v1/alpha/search", codexSearchBody("codex/gpt-5.5")))
+	if !strings.Contains(got.Output, "ChatGPT's web search failed") {
+		t.Fatalf("answered %q", got.Output)
+	}
+	for _, w := range []string{"revoked", "invalidated", "oauth", "me@example.com", "sign"} {
+		if strings.Contains(strings.ToLower(got.Output), w) {
+			t.Fatalf("told %q: %q", w, got.Output)
+		}
 	}
 }

@@ -1552,6 +1552,13 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 			if seated && r.Context().Err() == nil {
 				break
 			}
+			if r.Context().Err() == nil && lapsedTry(c, http.StatusBadGateway, []byte(err.Error())) {
+				// its sign-in to be made again: never told, the estimate
+				// in its place, as for a user's (the owner's decision,
+				// 2026-10-29)
+				noteLapseRefused(c.who(), provider.SignInLapsed(c.p.Account))
+				break
+			}
 			writeError(w, provider.Anthropic, 502, c.p.Name+": "+err.Error())
 			return
 		}
@@ -1566,6 +1573,15 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 				if i+1 < len(counts) {
 					continue
 				}
+			}
+			if lapsedTry(c, res.StatusCode, b) {
+				// one to be signed in again: the next counts, else the
+				// estimate, never the vendor's words of it
+				noteLapseRefused(c.who(), provider.SignInLapsed(c.p.Account))
+				if i+1 < len(counts) {
+					continue
+				}
+				break
 			}
 			if seated {
 				// a user's: never the vendor's words (a sign-in to make
@@ -2345,6 +2361,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			var left bool
 			if cands, pl, left = checkpointReaders(cands, pl, cp); !left {
 				call.Status, call.Error = 400, "native compaction sealed elsewhere"
+				if why := checkpointLapsed(cp); why != "" {
+					// sealed by an account to be signed in again: told
+					// only as a limit, as any lapse is; it goes on once
+					// that account is signed in again
+					call.Status, call.Error = http.StatusTooManyRequests, call.Error+": sign-in lapsed: "+cp.Who+": "+why
+					noteLapseRefused(cp.Who, why)
+					lapsedRetryAfter(w.Header())
+					writeError(w, from, http.StatusTooManyRequests, userLimitSaid)
+					turnedAway()
+					return
+				}
 				writeError(w, from, 400, checkpointError(call.Model, cp))
 				turnedAway()
 				return
@@ -2381,7 +2408,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// as a limit, why (pinnedLapsed) the operator's. An account the key
 	// may not use is told so by pinTo first, as before
 	pin := strings.TrimSpace(r.Header.Get(AccountHeader))
-	pinLapsed, pinProvider := pinnedLapsed(pin, cands, pl)
+	pinLapsed, pinProvider, pinWho := pinnedLapsed(pin, cands, pl)
 	if pinLapsed != "" && pinProvider != p.ID && s.bind.byUser() && !isGroup {
 		// pinned to a lapsed account of a fallback's provider, with a
 		// user (or one the header can't take, a 400 below): served as if
@@ -2409,7 +2436,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// call's error, and the log says it
 	lapsedRefused := func(more string) {
 		call.Status, call.Error = http.StatusTooManyRequests, "account pinned: "+strings.TrimSpace(r.Header.Get(AccountHeader))+": "+pinLapsed+"; "+more
-		noteLapseRefused(pinProvider+"@"+strings.TrimSpace(r.Header.Get(AccountHeader)), pinLapsed)
+		noteLapseRefused(pinWho, pinLapsed)
 		lapsedRetryAfter(w.Header())
 		writeError(w, from, http.StatusTooManyRequests, userLimitSaid)
 		finishCapture()
@@ -2685,13 +2712,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	}
 	if pin != "" {
 		var status int
-		var msg, lapsed string
+		var msg string
+		var lapsed Weighed
 		if cands, pl, status, msg, lapsed = pinTo(pin, cands, pl); status != 0 {
 			call.Status, call.Error = status, "account pinned: "+pin
-			if lapsed != "" {
+			if lapsed.Lapsed != "" {
 				// one to be signed in again: told as a limit, as above
 				call.Error += ": " + msg
-				noteLapseRefused(p.ID+"@"+pin, lapsed)
+				noteLapseRefused(lapsed.ID, lapsed.Lapsed)
 				lapsedRetryAfter(w.Header())
 				msg = userLimitSaid
 			}
@@ -2881,7 +2909,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// error halfway to go to the next candidate (#2274)
 		hw.wantWhole = wantWhole
 		// a user's error is held to its end, its limit said on it
-		// and any account's, for a lapse to be told as a limit
+		// and any account's, for a lapse to be told as a limit. Only the
+		// last try's after its same-one retries are spent is held by this
+		// alone (hold covers the others), and so it also lets the
+		// !hw.passing rewrites below (effortRefused's, the floor's and
+		// the reseal's) read that try's error
 		hw.holdErrors = holdsErrors(userBound, c)
 		// Claude's and GPT's reasoning is held for a refusal after it only
 		// while another candidate could answer instead: the last one's
@@ -3709,7 +3741,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		if last && userBound == nil && !hw.passing && hw.code() >= 400 {
 			lastFail = failureOf(c, hw.code(), hw.errBody())
 		}
-		if lastFail != "" && lapsedFail(c, lastFail, hw.code()) {
+		if lastFail != "" && lapsedFail(c, lastFail, hw.code(), hw.errBody()) {
 			// the last account left has to be signed in again (a lapsed
 			// one brought back as none other could answer, lapsedBack, or
 			// one whose sign-in failed just now) and no user is bound:
@@ -3890,7 +3922,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			var nextW []Weighed
 			next, nextW, unlisted, unlistedW = unlistedNext(unlisted, unlistedW, key)
 			if len(next) > 0 && last {
-				if f := failure(hw.code(), hw.errBody()); other == nil && f != failQuota && f != failCredit {
+				// a lapse is never the error told (lapsedTry), as no
+				// caller is told a sign-in lapsed
+				if f := failure(hw.code(), hw.errBody()); other == nil && f != failQuota && f != failCredit && !lapsedTry(c, hw.code(), hw.errBody()) {
 					other = &Try{Status: call.Status, Error: call.Error}
 				}
 				rest := s.restAfterMarked(c, hw.code(), hw.header, hw.errBody(), hw.sharedPool)
@@ -3910,7 +3944,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 		}
 		if !last && hw.failed() {
-			if f := failure(hw.code(), hw.errBody()); other == nil && f != failQuota && f != failCredit {
+			// nor here: a plugin's 401, a refused refresh's 502 on an
+			// account marked lapsed, which failureOf doesn't call failAuth
+			if f := failure(hw.code(), hw.errBody()); other == nil && f != failQuota && f != failCredit && !lapsedTry(c, hw.code(), hw.errBody()) {
 				other = &Try{Status: call.Status, Error: call.Error}
 			}
 			rest := s.restAfterMarked(c, hw.code(), hw.header, hw.errBody(), hw.sharedPool)
