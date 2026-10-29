@@ -2740,6 +2740,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// the key or subscription account the last try went to (#557)
 	providerKeyID, providerKeyName, providerAccount := "", "", ""
 	var other *Try                    // the first failure that wasn't an allowance run out
+	var authFailed []string           // the user's accounts that failed as lapsed so far (growUser's failed)
 	var forbade []forbidden           // the plain 403s rested so far (forbiddenAlike)
 	autoReset := resetFirst != nil    // a Codex or Claude reset looked at, once a request
 	creditsAsked := map[string]bool{} // Codex accounts asked again onto their credits, once each (creditsAgain)
@@ -3623,6 +3624,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 			try.Fail = failAuth
 			s.unbindTurnedAway(c, failAuth)
+			if userBound != nil {
+				// one of the user's accounts failed as lapsed: out for a
+				// spare later in this request, though its mark may not be
+				// written yet
+				authFailed = append(authFailed, c.who())
+				noteTryLapsed(c)
+			}
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 			skipped = append(skipped, c.label()+": "+call.Error)
 			continue
@@ -3636,8 +3644,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			try.Fail = failAuth
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 			skipped = append(skipped, c.label()+": "+call.Error)
-			// a stable why, not the vendor's words, for the log to say once
-			noteSeatLapsed(c.who(), cmp.Or(provider.SignInLapsed(c.p.Account), failAuth))
+			noteTryLapsed(c)
+			authFailed = append(authFailed, c.who())
 			var refused userRefusal
 			if !grew {
 				var next []candidate
@@ -3645,7 +3653,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				// this account counts as lapsed for the spare though its
 				// mark may not be written yet (Claude's, or a revoke a
 				// refresh is still trying to mend)
-				if next, nextPl, userBound, grew, refused = growUser(userBound, pool, poolPl, nil, planned{left: userBound.left}, c.who()); grew {
+				if next, nextPl, userBound, grew, refused = growUser(userBound, pool, poolPl, nil, planned{left: userBound.left}, authFailed...); grew {
 					bound := userBound
 					s.trace.update(tr, func(t *Route) {
 						t.Order = append(slices.Clip(t.Order), nextPl.order...)
@@ -3655,11 +3663,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 					continue
 				}
 			}
-			// growUser's own refusal stands: unknown (503) as it is, a
-			// limit with its note and when; none, the lapse's 429
-			if refused.status == 0 {
-				refused = lapsedRefusal(userBound, "")
-			}
+			// growUser's own refusal stands when it is a limit or unknown
+			// (503); else the lapse's 429, never a refusal naming the
+			// user's accounts
+			refused = userTryRefusal(userBound, refused)
 			said := refused.msg
 			if refused.limit != "" {
 				userLimited(w.Header(), refused.limit, refused.until, refused.model)
@@ -4006,7 +4013,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			try.Fail, try.Rest = rest.Why, &rest
 			var next []candidate
 			var nextPl planned
-			if next, nextPl, userBound, grew, _ = growUser(userBound, pool, poolPl, nil, planned{left: userBound.left}); grew {
+			if next, nextPl, userBound, grew, _ = growUser(userBound, pool, poolPl, nil, planned{left: userBound.left}, authFailed...); grew {
 				bound := userBound
 				s.trace.update(tr, func(t *Route) {
 					t.Tries[len(t.Tries)-1] = try

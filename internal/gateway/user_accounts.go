@@ -116,6 +116,9 @@ type userRefusal struct {
 	limit  string
 	until  time.Time
 	model  string
+	// unknown: what the user is bound to can't be told (the file doesn't
+	// read), a 503 that goes as it is
+	unknown bool
 }
 
 // UserHeaderEnv names another header a caller's user is read from, for a
@@ -661,7 +664,7 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 		// none is asked, a 429 that names no sign-in. With the file not
 		// reading, no spare can be added: unknown, a 503
 		if userBinds.stale {
-			return nil, pl, ub, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: user-accounts.json can't be read, so no other account can be added for %q now; nothing was sent. magpie's log says why", UserHeader, user)}
+			return nil, pl, ub, userRefusal{status: http.StatusServiceUnavailable, unknown: true, msg: fmt.Sprintf("%s: user-accounts.json can't be read, so no other account can be added for %q now; nothing was sent. magpie's log says why", UserHeader, user)}
 		}
 		// its use and tier kept as any bound user's, so it isn't let go
 		// as idle while its accounts wait to be signed in again
@@ -679,13 +682,13 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 			return nil, pl, ub, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: user-accounts.json can't be read, so %q isn't bound to an account now; nothing was sent. magpie's log says why", UserHeader, user)}
 		}
 		uses := seatUsesOf(p.ID, tiers)
-		pick := firstOf(p.ID, cands, pl, tier, uses)
+		pick := firstOf(p.ID, cands, pl, tier, uses, lapsedWho)
 		if pick < 0 {
 			if slices.ContainsFunc(cands, func(c candidate) bool { return c.p.ID == p.ID && !uses.of(c).takes(tier.Share) }) {
 				// some are another's alone, or shared by as many as can:
 				// those others' accounts are never asked for it
 				ub.Why = "full"
-				return nil, pl, ub, fullRefusal(user, tier, p.ID, cands, pl, uses)
+				return nil, pl, ub, fullRefusal(user, tier, p.ID, cands, pl, uses, lapsedWho)
 			}
 			// none can answer now: routed as it would be among the
 			// provider's, bound once one can; never on to another's
@@ -743,6 +746,9 @@ func lapsedOf(pid string, cands []candidate, pl planned) map[string]string {
 			accts, who = append(accts, c.p.Account), append(who, strings.ToLower(c.who()))
 		}
 	}
+	if len(accts) == 0 {
+		return out // none to read logins.json for
+	}
 	for i, why := range provider.SignInLapsedOf(accts) {
 		if why != "" {
 			out[who[i]] = why
@@ -765,6 +771,19 @@ func noteSeatLapsed(who, why string) {
 	}
 	pid, account, _ := strings.Cut(who, "@")
 	log.Printf("user accounts: %s account %s has to be signed in again (%s): its users stay bound to it, and are served by their other accounts or a spare until it is", pid, account, why)
+}
+
+// noteTryLapsed logs c's account as one to be signed in again when a try
+// on it failed so, once its mark says so: a key isn't an account to sign
+// in again, and a 401 that marks nothing (a refresh mended it) or whose
+// mark bindUser logs on the next request isn't logged twice.
+func noteTryLapsed(c candidate) {
+	if c.p.Account == nil || c.p.Account.User == "" {
+		return
+	}
+	if why := provider.SignInLapsed(c.p.Account); why != "" {
+		noteSeatLapsed(c.who(), why)
+	}
 }
 
 // clearSeatLapsed forgets the lapse logged of who, back among the user's
@@ -851,17 +870,17 @@ func (uses seatUses) of(c candidate) seatUse { return uses[strings.ToLower(c.who
 // to first: as spareOf picks, and when every one is past routes.LowShare,
 // the one of those not resting nor marked revoked all the same. -1 for
 // none. Called with userBinds held.
-func firstOf(pid string, cands []candidate, pl planned, tier Tier, uses seatUses) int {
-	if i := spareOf(pid, cands, pl, nil, true, tier, uses); i >= 0 {
+func firstOf(pid string, cands []candidate, pl planned, tier Tier, uses seatUses, lapsedWho map[string]string) int {
+	if i := spareOf(pid, cands, pl, nil, true, tier, uses, lapsedWho); i >= 0 {
 		return i
 	}
-	return spareOf(pid, cands, pl, nil, false, tier, uses)
+	return spareOf(pid, cands, pl, nil, false, tier, uses, lapsedWho)
 }
 
 // spareOf is the account of provider pid in cands to bind a user of tier
 // to, beside seats: of those not among them, with a seat for it
-// (seatUse.takes), not resting, not to be signed in again
-// (provider.SignInLapsed)
+// (seatUse.takes), not resting, not to be signed in again (lapsedWho,
+// lapsedOf's, read before userBinds was locked)
 // and, with room, under routes.LowShare of each window counting the
 // model, the one fewest users of every key are bound to; for a tier that
 // shares one with a few (share 2 or more), the one most are, so a user
@@ -869,10 +888,10 @@ func firstOf(pid string, cands []candidate, pl planned, tier Tier, uses seatUses
 // have theirs alone. The plan's order (Smart's) between those alike.
 // Those held at a cap aren't among cands. -1 for none. Called with
 // userBinds held.
-func spareOf(pid string, cands []candidate, pl planned, seats []userSeat, room bool, tier Tier, uses seatUses) int {
+func spareOf(pid string, cands []candidate, pl planned, seats []userSeat, room bool, tier Tier, uses seatUses, lapsedWho map[string]string) int {
 	pick := -1
 	for i, c := range cands {
-		if c.p.ID != pid || seatIn(seats, c.who()) || !uses.of(c).takes(tier.Share) || resting(c) || provider.SignInLapsed(c.p.Account) != "" {
+		if c.p.ID != pid || seatIn(seats, c.who()) || !uses.of(c).takes(tier.Share) || resting(c) || lapsedWho[strings.ToLower(c.who())] != "" {
 			continue
 		}
 		if room && i < len(pl.order) && pl.order[i].Known && pl.order[i].Used >= routes.LowShare {
@@ -921,7 +940,7 @@ func onlyOf(pid string, cands []candidate, pl planned) ([]candidate, planned) {
 // are never asked for it. A 429, the "quota" of the pool: until the first
 // with a seat is back, a rest's end or a window's renewal, else unknown,
 // as a user leaves an account only when it goes.
-func fullRefusal(user string, tier Tier, pid string, cands []candidate, pl planned, uses seatUses) userRefusal {
+func fullRefusal(user string, tier Tier, pid string, cands []candidate, pl planned, uses seatUses, lapsedWho map[string]string) userRefusal {
 	r := userRefusal{status: http.StatusTooManyRequests, limit: failQuota}
 	var why []string
 	marked := false
@@ -934,7 +953,7 @@ func fullRefusal(user string, tier Tier, pid string, cands []candidate, pl plann
 				r.limit, r.until, r.model = cmp.Or(userLimit(rest.Why), failQuota), rest.Until, rest.Model
 				why = []string{fmt.Sprintf("rests until %s (%s)", rest.Until.Format(time.RFC3339), rest.Why)}
 			}
-		} else if provider.SignInLapsed(c.p.Account) != "" {
+		} else if lapsedWho[strings.ToLower(c.who())] != "" {
 			marked = true
 		}
 	}
@@ -1036,7 +1055,7 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 		if lapsed > 0 && len(cands) == 0 {
 			// unknown, not a limit: its accounts are to be signed in
 			// again, and whether one could be added can't be told
-			return nil, pl, u, false, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: user-accounts.json can't be read, so no other account can be added for %q now; nothing was sent. magpie's log says why", UserHeader, u.User)}
+			return nil, pl, u, false, userRefusal{status: http.StatusServiceUnavailable, unknown: true, msg: fmt.Sprintf("%s: user-accounts.json can't be read, so no other account can be added for %q now; nothing was sent. magpie's log says why", UserHeader, u.User)}
 		}
 		return refuse("user-accounts.json can't be read to add a spare")
 	}
@@ -1062,7 +1081,7 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 		return refuse(u.atTier(len(now)))
 	}
 	uses := seatUsesOf(u.pid, tiers)
-	pick := spareOf(u.pid, pool, poolPl, now, true, u.tier, uses)
+	pick := spareOf(u.pid, pool, poolPl, now, true, u.tier, uses, lapsedWho)
 	if pick < 0 {
 		if !slices.ContainsFunc(pool, func(c candidate) bool {
 			return c.p.ID == u.pid && !seatIn(now, c.who()) && uses.of(c).takes(u.tier.Share)
@@ -1080,6 +1099,19 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 	grown.shown(seats)
 	grown.left = pl.left
 	return append(added, cands...), planned{order: append(addedPl.order, pl.order...), left: pl.left, held: pl.held, capped: pl.capped, lapsed: pl.lapsed}, &grown, true, userRefusal{}
+}
+
+// userTryRefusal is what the caller of a user's request is answered when
+// the last of its accounts tried turned out lapsed and no spare was added:
+// growUser's refusal when it is a limit or unknown (the file not reading),
+// else the lapse's 429 — a refusal naming the user's accounts (paused,
+// not serving the model) isn't the caller's when what failed was a
+// sign-in.
+func userTryRefusal(u *UserBound, refused userRefusal) userRefusal {
+	if refused.status == http.StatusTooManyRequests || refused.unknown {
+		return refused
+	}
+	return lapsedRefusal(u, "")
 }
 
 // lapsedRefusal is why none of the accounts u is bound to is asked when

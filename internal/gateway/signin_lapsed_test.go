@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -820,4 +822,202 @@ func TestUserLapsedKeepsItsUseStamped(t *testing.T) {
 	if used := f.Users["codex"]["bob"].Used; time.Since(used) > time.Minute {
 		t.Fatalf("bob's use not stamped: %v", used)
 	}
+}
+
+// revokedEverywhere has the ChatGPT backend refuse the accounts accts as
+// revoked whatever token they go with, and every saved account's refresh
+// go through: a revoke a refresh is still mending, marked on none of them
+// (NoteRevokedSignIn marks nothing when the refresh goes through).
+func revokedEverywhere(t *testing.T, accts ...string) func(bool) []string {
+	t.Helper()
+	return revokedOrOut(t, accts, nil)
+}
+
+// revokedOrOut is revokedEverywhere, the accounts out answering 429 out of
+// their allowance for two hours.
+func revokedOrOut(t *testing.T, accts, out []string) func(bool) []string {
+	t.Helper()
+	var mu sync.Mutex
+	var asked []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.ReadAll(r.Body)
+		acct := r.Header.Get("chatgpt-account-id")
+		mu.Lock()
+		asked = append(asked, acct)
+		mu.Unlock()
+		if slices.Contains(out, acct) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(429)
+			io.WriteString(w, `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"plus","resets_in_seconds":7200}}`)
+			return
+		}
+		if slices.Contains(accts, acct) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"error":{"message":"Encountered invalidated oauth token for user, failing request","code":"token_revoked"},"status":401}`)
+			return
+		}
+		io.WriteString(w, sse(
+			`data: {"type":"response.created","response":{"id":"r1","model":"gpt-5.5"}}`,
+			`data: {"type":"response.output_text.delta","delta":"from `+acct+`"}`,
+			`data: {"type":"response.completed","response":{"id":"r1","usage":{"input_tokens":7,"output_tokens":1}}}`))
+	}))
+	t.Cleanup(up.Close)
+	was := provider.CodexBase
+	provider.CodexBase = up.URL + "/backend-api/codex"
+	t.Cleanup(func() { provider.CodexBase = was })
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims, _ := json.Marshal(map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "n": time.Now().UnixNano()})
+		json.NewEncoder(w).Encode(map[string]any{"access_token": "h." + base64.RawURLEncoding.EncodeToString(claims) + ".s", "refresh_token": "r-new"})
+	}))
+	t.Cleanup(fake.Close)
+	t.Cleanup(provider.CodexTokenURLForTest(fake.URL))
+	return func(reset bool) []string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := slices.Clone(asked)
+		if reset {
+			asked = nil
+		}
+		return out
+	}
+}
+
+// A user's two accounts both fail as lapsed in one request, neither
+// marked: the first, failed before the last, counts as out too, so a
+// spare is added and answers; at its tier's most, a 429 that names no
+// account, never the 503 of an account "paused or sealed" (review of
+// 70945cfd, Medium-2 and Low-1).
+func TestUserBothAccountsFailLapsedUnmarked(t *testing.T) {
+	for _, c := range []struct {
+		tier string
+		want int
+	}{{"pro", 200}, {"free", 429}} {
+		t.Run(c.tier, func(t *testing.T) {
+			codexSignedIn(t, "spare@example.com", "third@example.com")
+			asked := revokedEverywhere(t, "acct-2", "acct-3")
+			now := time.Now().UTC()
+			writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+				"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: now, Tier: c.tier,
+					More: []userSeat{{Who: "codex@third@example.com", Account: "third@example.com", At: now}}},
+			}}})
+			rec := tierPost(byUser(New()), "bob", c.tier, "hi")
+			got := asked(true)
+			if rec.Code != c.want || !slices.Contains(got, "acct-2") || !slices.Contains(got, "acct-3") {
+				t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+			}
+			if c.want == 200 {
+				if got[len(got)-1] != "acct-1" {
+					t.Fatalf("not answered on the spare: %v", got)
+				}
+				saysNoLapse(t, rec)
+				return
+			}
+			limitedNotLapsed(t, rec)
+			if strings.Contains(rec.Body.String(), "third@") {
+				t.Fatalf("an account named: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+// spareOf and fullRefusal go by the lapses read before the lock, not by
+// reading logins.json under it (review of 70945cfd, Medium-1).
+func TestSpareOfGoesByTheLapsesReadBefore(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	usersUpstream(t, nil)
+	s := New()
+	p, err := provider.Find("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, pl := s.plan(*p, "gpt-5.5", provider.Responses)
+	tier := defaultTiers.Tiers[2]
+	lapsed := map[string]string{"codex@me@example.com": "why"}
+	userBinds.Lock()
+	if err := loadUsers(); err != nil { // this test's file, none: nobody bound
+		userBinds.Unlock()
+		t.Fatal(err)
+	}
+	uses := seatUsesOf("codex", defaultTiers)
+	i := firstOf("codex", pool, pl, tier, uses, lapsed)
+	r := fullRefusal("bob", tier, "codex", pool, pl, uses, lapsed)
+	userBinds.Unlock()
+	if i < 0 || pool[i].p.Account.User != "spare@example.com" {
+		t.Fatalf("picked %d", i)
+	}
+	if !strings.Contains(r.msg, "signed out by its vendor") {
+		t.Fatalf("not said: %s", r.msg)
+	}
+}
+
+// After a try a user's request made on an account that failed as lapsed,
+// only a limit or the file not reading goes to the caller as growUser
+// said it; a refusal naming the user's accounts is the lapse's 429
+// (review of 70945cfd, Low-1).
+func TestUserTryRefusal(t *testing.T) {
+	u := &UserBound{User: "bob", seats: []userSeat{{Who: "codex@a@x", Account: "a@x"}}}
+	for _, c := range []struct {
+		in   userRefusal
+		want int
+	}{
+		{userRefusal{status: 503, msg: "bob is bound to a@x, which can't take this request (paused, or the conversation was sealed by another account)"}, 429},
+		{userRefusal{status: 400, msg: "bound to a@x, which doesn't serve m"}, 429},
+		{userRefusal{status: 503, unknown: true, msg: "user-accounts.json can't be read"}, 503},
+		{userRefusal{status: 429, msg: "rests", limit: failQuota}, 429},
+	} {
+		if got := userTryRefusal(u, c.in); got.status != c.want || got.status == 429 && got.limit == "" {
+			t.Errorf("%+v: %+v", c.in, got)
+		}
+	}
+}
+
+// A try's lapse is logged only for an account whose mark says so: not a
+// key, not a 401 that marks nothing (review of 70945cfd, Low-2 and Low-3).
+func TestTryLapseLoggedOnlyWhenMarked(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	seatLapsedSaid.Clear()
+	noteTryLapsed(candidate{p: provider.Provider{ID: "relay", Key: "k"}, rest: "relay#abc"})
+	p, err := provider.Find("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spare provider.Provider
+	for _, q := range p.AlsoOn() {
+		if q.Account.User == "spare@example.com" {
+			spare = q
+		}
+	}
+	noteTryLapsed(candidate{p: spare, rest: "codex@spare@example.com"})
+	if l := logged.String(); strings.Contains(l, "has to be signed in again") {
+		t.Fatalf("logged with no mark: %s", l)
+	}
+	lapseSaved(t, "spare@example.com")
+	noteTryLapsed(candidate{p: spare, rest: "codex@spare@example.com"})
+	if l := logged.String(); strings.Count(l, "has to be signed in again") != 1 || !strings.Contains(l, "codex account spare@example.com") {
+		t.Fatalf("%s", l)
+	}
+}
+
+// One of a user's accounts fails as lapsed (unmarked) before the last,
+// out of its allowance for hours: both count out, and a spare is added
+// and answers in the same request (review of 70945cfd, Medium-2, the
+// allowance's spare).
+func TestUserLapsedThenOutGivenASpare(t *testing.T) {
+	codexSignedIn(t, "spare@example.com", "third@example.com")
+	asked := revokedOrOut(t, []string{"acct-2"}, []string{"acct-3"})
+	now := time.Now().UTC()
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: now, Tier: "pro",
+			More: []userSeat{{Who: "codex@third@example.com", Account: "third@example.com", At: now}}},
+	}}})
+	rec := tierPost(byUser(New()), "bob", "pro", "hi")
+	got := asked(true)
+	if rec.Code != 200 || len(got) == 0 || got[len(got)-1] != "acct-1" {
+		t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+	}
+	saysNoLapse(t, rec)
 }
