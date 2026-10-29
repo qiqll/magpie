@@ -29,6 +29,8 @@ type Method struct {
 	// Placeholder is the hint an "api" method gives in its key's field
 	// (magpie's own field: OpenCode's says "API key")
 	Placeholder string `json:"placeholder,omitempty"`
+	// Keyless skips personal-key entry; authorize supplies the credential.
+	Keyless bool `json:"keyless,omitempty"`
 }
 
 // KeyTitle is what an "api" method's key is asked as: its label, as
@@ -151,6 +153,8 @@ type Provider struct {
 	// Accounts are the accounts signed in to it, the one kept under its
 	// own id first; SignedIn, AuthType and AccountID are that one's.
 	Accounts []Account `json:"accounts"`
+	// Single is the auth hook declaring that sign-in replaces one identity.
+	Single bool `json:"single,omitempty"`
 	// MaxConcurrency is how many requests the plugin says each of its
 	// accounts takes at once (magpie's own field, which OpenCode ignores:
 	// the auth hook's maxConcurrency, else package.json's
@@ -161,8 +165,8 @@ type Provider struct {
 
 // Option is a switch a plugin declares for its provider (auth.options,
 // #2038): magpie shows it, keeps the user's value in settings'
-// PluginOptions and hands it to the plugin (input.magpie.option). Nothing
-// runs when it changes.
+// PluginOptions and hands it to the plugin (input.magpie.option). A change
+// has the providers listed again (SetProviderOptions); nothing else runs.
 type Option struct {
 	Key         string `json:"key"`
 	Label       string `json:"label"`
@@ -183,12 +187,18 @@ func OptionOn(chosen map[string]map[string]bool, provider string, o Option) bool
 }
 
 // SetProviderOptions hands the user's option values (settings' PluginOptions) to
-// the host running now; a host started later reads them at its start.
+// the host running now; a host started later reads them at its start. The
+// providers kept are asked again after: a models hook may list by an
+// option (WorkBuddy's "Free models only", plugins#430), and the list
+// follows the switch without a restart.
 func SetProviderOptions(ctx context.Context) error {
 	if !Running() {
+		forgetProviders()
 		return nil
 	}
-	return Call(ctx, "setProviderOptions", map[string]any{"options": settings.Load().PluginOptions}, nil)
+	err := Call(ctx, "setProviderOptions", map[string]any{"options": settings.Load().PluginOptions}, nil)
+	forgetProviders()
+	return err
 }
 
 // Account is one account a provider is signed in to: Key is where
@@ -1068,7 +1078,7 @@ type UsageResets struct {
 
 type UsageWindow struct {
 	Name      string   `json:"name"`
-	Used      float64  `json:"used"`     // percent
+	Used      *float64 `json:"used"`     // percent; nil when the plugin didn't say
 	ResetsAt  string   `json:"resetsAt"` // RFC 3339
 	ResetSecs int64    `json:"resetSecs"`
 	Display   string   `json:"display"`
@@ -1085,16 +1095,22 @@ type UsageWindow struct {
 	// apart from the window's reset (WorkBuddy's packages)
 	RunsOutAt string  `json:"runsOutAt"`
 	RunsOut   float64 `json:"runsOut"`
+	// Balance is how much is left in Unit, a prepaid wallet's reading,
+	// with no share to tell (#3950); nil when the plugin didn't say.
+	Balance *float64 `json:"balance"`
 }
 
 // Checkin is what came of an account's daily check-in, as the plugin's
 // auth.checkin said: Outcome is one of claimed, done, ineligible,
-// inactive, captcha and failed.
+// inactive, captcha and failed. Until (RFC 3339, "" when not told) is when
+// the vendor's own day turns and the answer stops holding: Qoder's daily
+// credits open at 10:00 UTC+8, not at Beijing midnight.
 type Checkin struct {
 	Outcome string  `json:"outcome"`
 	Credit  float64 `json:"credit"`
 	Streak  int     `json:"streak"`
 	Message string  `json:"message"`
+	Until   string  `json:"until"`
 }
 
 // AccountCheckin asks the plugin to check account of provider in for the

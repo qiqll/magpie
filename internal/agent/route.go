@@ -114,18 +114,6 @@ func listLabels(agent string) map[string]string {
 	return out
 }
 
-// viaMagpieFor is viaMagpie without the agent's own account: Codex CLI going
-// through magpie to its own ChatGPT login would only add a hop.
-func viaMagpieFor(agentID, prefix string) []Option {
-	var out []Option
-	for _, o := range viaMagpie(agentID, prefix) {
-		if !strings.HasPrefix(o.Value, prefix+agentID+"/") {
-			out = append(out, o)
-		}
-	}
-	return out
-}
-
 // isMagpie reports whether a model value is a catalog reference.
 func isMagpie(v string) bool {
 	if pid, _, ok := strings.Cut(v, "/"); ok && dryProviders[pid] {
@@ -205,6 +193,7 @@ func magpieModels(agent string) []catalog.Model {
 	// a model magpie describes images to takes them (provider.Described)
 	seen := provider.Described != nil && provider.Described()
 	st, find := settings.Load(), provider.GroupFinder()
+	priceOf := provider.EntryPricer(st, find)
 	members := func(id string) []provider.Member {
 		_, ms, _ := find(id)
 		return ms
@@ -217,7 +206,7 @@ func magpieModels(agent string) []catalog.Model {
 		// answers from the settings it is given
 		m.Compact = provider.CompactFor(st, e, find)
 		// what a call costs the user (Pi's cost, #781)
-		if pr, ok := provider.EntryPriceIn(st, find, e); ok {
+		if pr, ok := priceOf(e); ok {
 			m.Price = &pr
 		}
 		if seen && !e.Images {
@@ -241,6 +230,14 @@ func magpieModels(agent string) []catalog.Model {
 		// lists offer them: Fast in the Codex CLI magpie writes
 		// magpie-models.json for (#1530)
 		provider.CodexTiers(&m, e, members)
+		if agent == "codex" {
+			// the entry its vendor lists the model under in Codex's own
+			// shape, handed on as it is (codexcat)
+			m.Codex = e.Codex
+		}
+		// the gateway paths it goes on untranslated, as /v1/models says
+		// them: what an agent plugin's connect is told (cleary5779)
+		m.Endpoints = provider.NativeEndpoints(e)
 		// Codex's /fast on a ChatGPT account's own GPT model, which
 		// OpenCode has no command for and takes as variants (#2379); a
 		// group is sent fast as the group says, as a fast pick is

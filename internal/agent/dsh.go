@@ -43,6 +43,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/beat"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/gateway"
@@ -95,7 +96,12 @@ func dshAt(at place) *Agent {
 	// DeepSeek Harness Desktop, on this machine (a distro has none)
 	desktop := func() bool { return at.spell == nil && (&Agent{ID: "dsh"}).HasApp() }
 	path := filepath.Join(dir, "config.yaml")
-	if files := dshProfiles(dir); len(files) > 0 {
+	// a stopped distro's folder is never listed: that starts it (#3896)
+	var files []string
+	if !at.cold {
+		files = dshProfiles(dir)
+	}
+	if len(files) > 0 {
 		path = files[0]
 	} else if desktop() {
 		path = dshDesktopFile(dir)
@@ -1336,7 +1342,9 @@ type dshPiModel struct {
 
 // dshPiCompat is a model's compat switches. On Anthropic's Messages API
 // pi-ai asks a model for a thinking budget unless forceAdaptiveThinking is
-// set, and a Claude that thinks only adaptively turns a budget away.
+// set, and a Claude that thinks only adaptively turns a budget away. Z.ai's
+// GLM-5.2 and GLM-5.3 are told so too: a budget can't ask them for max
+// (dshKindConfig).
 type dshPiCompat struct {
 	ForceAdaptiveThinking bool `yaml:"forceAdaptiveThinking,omitempty"`
 }
@@ -1453,16 +1461,19 @@ type dshPiLevels struct {
 var dshThinking = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 // dshModelLevels are the levels of dsh's a catalog model takes, each with
-// the effort sent for it: its own, and off for its none.
+// the effort sent for it: the model's own name for it (modelEffort), so a
+// plugin's light and extra_high are dsh's low and xhigh and are sent as
+// light and extra_high, and off for its none.
 func dshModelLevels(efforts []string) ([]string, *dshPiLevels) {
 	var levels []string
 	var out dshPiLevels
 	for _, l := range dshThinking {
-		e := l
+		w := l
 		if l == "off" {
-			e = "none"
+			w = "none"
 		}
-		if !contains(efforts, e) {
+		e := modelEffort(efforts, w)
+		if e == "" {
 			continue
 		}
 		levels = append(levels, l)
@@ -1509,14 +1520,24 @@ func dshLevels(ref string) []string {
 // near its window leaves dsh compacting at a sliver of it, or failing to
 // (#2823): 500000 with 393216 compacted at 41248; 524288 with 524288, and
 // 131072 with 65536, left it no budget at all. So the vendor's figure is
-// held to a quarter of the window, as VS Code's and Copilot's are, while a
-// Max output the user set stays as they set it (outputOr).
+// held to what leaves dsh half the window to compact in (window/2 - 65536),
+// or to a quarter of the window, as VS Code's and Copilot's are, where that
+// is more: a window under 262144 has no half to spare. A quarter alone cut
+// DeepSeek's 393216 on its 1000000 window to 250000, where dsh compacts at
+// 541248 with all of it (#3298); 500000 with 393216 is held to 184464 and
+// compacts at 250000. A Max output the user set stays as they set it
+// (outputOr).
 func dshMaxTokens(m catalog.Model) int {
 	if m.Context <= 0 {
 		return maxTokens(m)
 	}
-	return outputOr(m, min(maxTokens(m), max(1, m.Context/4)))
+	room := max(m.Context/4, m.Context/2-dshHeadroom)
+	return outputOr(m, min(maxTokens(m), max(1, room)))
 }
+
+// dshHeadroom is compaction-basic's default headroomTokens: what dsh keeps
+// free beside a request's maxTokens before it compacts.
+const dshHeadroom = 65536
 
 // dshRouteConfig is magpie's first route with every one of models on it.
 func dshRouteConfig(models []catalog.Model, api, gw string) dshPiRoute {
@@ -1545,7 +1566,10 @@ func dshKindConfig(k dshKind, models []catalog.Model, api, gw string) dshPiRoute
 			e.Input = []string{"text"}
 		}
 		_, e.ReasoningEfforts = dshModelLevels(m.Efforts)
-		if api == "anthropic-messages" && gateway.AdaptiveThinking(m.ID) {
+		// pi-ai's budget path clamps max to high (16384), so a model that
+		// takes adaptive thinking with its level (Z.ai's GLM-5.3) is asked
+		// adaptively too: pi-ai then sends the level itself, max as max
+		if api == "anthropic-messages" && (gateway.AdaptiveThinking(m.ID) || gateway.AdaptiveWithEffort(m.ID)) {
 			e.Compat = &dshPiCompat{ForceAdaptiveThinking: true}
 		}
 		r.Models = append(r.Models, e)
@@ -1833,7 +1857,7 @@ func keepDshWired(ctx context.Context, every time.Duration) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(every):
+		case <-beat.Next(every):
 		}
 	}
 }

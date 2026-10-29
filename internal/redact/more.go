@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // More kinds of personal data, each a category the user turns on or off
@@ -122,10 +123,12 @@ var moreRules = []rule{
 		fold: []string{"users", "documents and settings"}, back: 12, ahead: 100},
 
 	// user@host as a shell prompt has it (user@host:~$, [user@host ~]$) or
-	// as ssh, scp and rsync are given it; git@github.com is no one's
-	{cat: "userhost", groups: []string{"USERNAME", "HOSTNAME"}, groupOK: []func(string) bool{userOK, hostOK}, markers: []string{"@"},
+	// as ssh, scp and rsync are given it; git@github.com is no one's; a
+	// package pinned at its version,
+	// js-tokens@4.0.0: in pnpm-lock.yaml, is no login (notPackagePin)
+	{cat: "userhost", groups: []string{"USERNAME", "HOSTNAME"}, groupOK: []func(string) bool{userOK, hostOK}, markers: []string{"@"}, at: notPackagePin,
 		re: regexp.MustCompile(`(?m)(?:^|[^A-Za-z0-9._%+-])(` + unixUser + `)@(` + hostRe + `)(?::[~/]|:[ \t]*$|[ \t]+[~/]|[ \t]*[$%#>][ \t]|[ \t]*[$%#>]$)`)},
-	{cat: "userhost", groups: []string{"USERNAME", "HOSTNAME"}, groupOK: []func(string) bool{userOK, hostOK}, markers: []string{"@"},
+	{cat: "userhost", groups: []string{"USERNAME", "HOSTNAME"}, groupOK: []func(string) bool{userOK, hostOK}, markers: []string{"@"}, at: notPackagePin,
 		re: regexp.MustCompile(`(?i:\b(?:ssh|scp|sftp|rsync|mosh|ssh-copy-id))\b[^\n@]{0,80}?[ \t"'](` + unixUser + `)@(` + hostRe + `)`)},
 	// hostname: x, HOSTNAME=x, a line with the value alone after it; or
 	// ssh config's HostName x, indented under its Host
@@ -238,12 +241,22 @@ func ibanAt(s string, a, b int) (int, int, bool) {
 
 var dateNums = regexp.MustCompile(`\d+`)
 
+// dateClock is what dateOK takes today from; a test holds it.
+var dateClock = time.Now
+
 // dateOK says v is a date that can be someone's birthday: a real month and
-// day, in a year from 1900 on.
+// day, in a year from 1900 on, and over a year ago. A date in the last year
+// or ahead is the day an agent runs on, a deadline or a log's, which a
+// prompt holds far more often than a baby's birthday (JackyCcao on X: today's
+// date after a birthday field was masked in 122 requests).
 func dateOK(v string) bool {
 	ns := dateNums.FindAllString(v, -1)
 	num := func(s string) int { n, _ := strconv.Atoi(s); return n }
-	valid := func(y, m, d int) bool { return y >= 1900 && y <= 2099 && m >= 1 && m <= 12 && d >= 1 && d <= 31 }
+	yearAgo := dateClock().AddDate(-1, 0, 0)
+	valid := func(y, m, d int) bool {
+		return y >= 1900 && y <= 2099 && m >= 1 && m <= 12 && d >= 1 && d <= 31 &&
+			time.Date(y, time.Month(m), d, 0, 0, 0, 0, time.Local).Before(yearAgo)
+	}
 	if len(ns) == 2 { // March 5, 1990 or 5 March 1990
 		l := strings.ToLower(v)
 		for i, m := range []string{"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"} {
@@ -337,6 +350,38 @@ func inCode(v string) bool {
 	}
 	last := strings.ToLower(v[strings.LastIndexByte(v, '.')+1:])
 	return codeObjects[first] || notUsers[last] || notNames[last] || publicHosts[last] || last == "login" || last == "username"
+}
+
+// notPackagePin says the user or the host of user@host at s[a:b] is not
+// half of a package pinned at its version: pnpm-lock.yaml lists each
+// package as js-tokens@4.0.0: on a line of its own, which is a shell
+// prompt's shape, and the package and its version went as a user and a
+// host (dniray on Discord, v0.1.1917). A host that is an address
+// (alice@10.0.0.5) is a host still.
+func notPackagePin(s string, a, b int) bool {
+	if b < len(s) && s[b] == '@' {
+		// the user: what follows the @ is the host
+		e := b + 1
+		for e < len(s) && strings.IndexByte(alnum+"-.", s[e]) >= 0 {
+			e++
+		}
+		return !versionHost(strings.TrimRight(s[b+1:e], "."))
+	}
+	return !(a > 0 && s[a-1] == '@' && versionHost(s[a:b]))
+}
+
+// versionHostRe is a release's version as a host's characters can
+// spell it: 4.0.0, 18.2.0-rc.0.
+var versionHostRe = regexp.MustCompile(`^v?\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?$`)
+
+// versionHost says h, after a user's @, is a version and not a host: no
+// host's name is numbers and dots alone, but an address is.
+func versionHost(h string) bool {
+	if !versionHostRe.MatchString(h) {
+		return false
+	}
+	_, err := netip.ParseAddr(h)
+	return err != nil
 }
 
 func lineUserOK(v string) bool { return userOK(v) && !inCode(v) && !chatWords[strings.ToLower(v)] }

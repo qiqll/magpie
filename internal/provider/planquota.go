@@ -57,9 +57,12 @@ func planQuotaSourceOf(p Provider) (planQuotaSource, bool) {
 			// preset too, and is told the plan's 5-hour and weekly windows;
 			// a pay-as-you-go key has none, and no card
 			return planQuotaSource{"https://api.commandcode.ai/alpha/billing/credits", true, readCommandCodePlan, false}, true
-		case "api.minimaxi.com", "api.minimax.io":
+		case "api.minimaxi.com", "api.minimax.cn", "api.minimax.io":
 			// a Coding Plan key (sk-cp-…) is told its windows; a
-			// pay-as-you-go key isn't, and gets no card (#387)
+			// pay-as-you-go key isn't, and gets no card (#387).
+			// api.minimax.cn is MiniMax China's host since mmx-cli
+			// 8746d48f (2026-09-28), beside api.minimaxi.com, and
+			// answers the same query
 			return planQuotaSource{"https://" + hostOf(base) + "/v1/token_plan/remains", true, readMiniMaxPlan, false}, true
 		case "ollama.com":
 			// Ollama Cloud's included allowance (#1888); a key with none
@@ -581,6 +584,9 @@ func vendorSaid(b []byte, status string) string {
 		Message string          `json:"message"`
 	}
 	if json.Unmarshal(b, &e) != nil {
+		if said, ok := Unsaid(b); ok {
+			return status + ": " + said
+		}
 		return status
 	}
 	msg := e.Message
@@ -655,26 +661,28 @@ func PlanQuotas(ctx context.Context) []SubscriptionQuota {
 		if p.Hidden || p.Off || p.Account != nil || p.Key == "" {
 			continue
 		}
-		src, ok := planQuotaSourceOf(p)
-		if !ok {
-			continue
-		}
-		keys := []string{p.Key}
-		names := []string{p.KeyName}
+		keys := []KeyAccount{p.first()}
 		for _, k := range p.Keys {
 			if !k.Off && k.Key != "" && k.Key != p.Key {
-				keys, names = append(keys, k.Key), append(names, k.Name)
+				keys = append(keys, k)
 			}
 		}
-		for i, k := range keys {
+		for _, k := range keys {
+			// each key told at its own plan's source: a GLM Coding Plan
+			// key beside a pay-as-you-go one (KeyAccount.Plan)
+			q := p.atKeyPlan(k.Plan)
+			src, ok := planQuotaSourceOf(q)
+			if !ok {
+				continue
+			}
 			user := ""
 			if len(keys) > 1 {
-				if user = names[i]; user == "" {
-					user = Mask(k)
+				if user = k.Name; user == "" {
+					user = Mask(k.Key)
 				}
 			}
 			if wantsCard(ctx, p.ID, user) {
-				jobs = append(jobs, job{p, src, k, user})
+				jobs = append(jobs, job{q, src, k.Key, user})
 			}
 		}
 	}

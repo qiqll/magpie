@@ -123,12 +123,12 @@ func chatGPTSearchers(r *http.Request, model string) ([]provider.Provider, strin
 // with why returned.
 func (s *Server) alphaSearchOn(w http.ResponseWriter, r *http.Request, body []byte, model string, ons []provider.Provider) (bool, string) {
 	start := time.Now()
-	w, body, unmask, hits, err := redactedHits(w, body)
+	w, body, unmask, hits, err := redactedHits(r.Context(), w, body)
 	defer unmask()
 	if err != nil {
 		return false, err.Error()
 	}
-	noteMasked(r, "search", hits, string(body), 0, "openai", model)
+	noteMasked(r, "search", hits, sentOf(hits, body), 0, "openai", model)
 	var errs []string
 	for _, on := range ons {
 		who := "OpenAI (" + on.Account.User + "): "
@@ -164,7 +164,7 @@ func (s *Server) alphaSearchOn(w http.ResponseWriter, r *http.Request, body []by
 		}
 		noteSignIn(ctx, on.Account, req, res)
 		c := Call{Time: start, From: provider.Responses, To: provider.Responses, Model: model, Provider: on.ID,
-			Agent: agentOf(r), Kind: "web_search", Status: res.StatusCode}
+			Agent: callerOf(r).agent, Via: callerOf(r).via, Kind: "web_search", Status: res.StatusCode}
 		if res.StatusCode < 200 || res.StatusCode > 299 {
 			msg, _ := io.ReadAll(io.LimitReader(res.Body, 4<<10))
 			res.Body.Close()

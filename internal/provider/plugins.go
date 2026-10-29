@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,8 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tidwall/gjson"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/plugin"
+	"github.com/yetone/magpie/internal/probelog"
 )
 
 // A plugin's provider (see internal/plugin) is a subscription like the
@@ -41,6 +44,30 @@ const (
 	WorkDirHeader = "X-Magpie-Work-Dir"
 	WorkGitHeader = "X-Magpie-Work-Git"
 )
+
+// FallbackHeader, "1", tells a plugin's fetch that magpie needn't have the
+// answer waited for: a request its vendor queues (Qoder's free models)
+// comes back at once with the queue's 503 and Retry-After instead of being
+// waited out for minutes. Without it the plugin waits. A model's test
+// sends it, so a queued model's test says it is queued instead of running
+// out of time. The plugin host takes it off whatever the plugin sends on
+// (host.js), as it does the two above.
+const FallbackHeader = "X-Magpie-Fallback"
+
+// warmPlugin starts p's plugin host and runs its account's loader, which
+// may renew the sign-in, under ctx and through the account's proxy: what
+// a plugin's first fetch waits for besides its vendor. A failure is left
+// for the fetch to meet and say.
+func (p Provider) warmPlugin(ctx context.Context) {
+	if !p.IsPlugin() {
+		return
+	}
+	id := p.Account.plugin.ID
+	if cur, ok := PluginOf(p.ID); ok {
+		id = cur.ID
+	}
+	_, _ = plugin.LoaderOptions(p.Via(ctx), id, p.Account.pluginKey)
+}
 
 // PluginID is the id magpie gives the provider OpenCode calls id: the same,
 // unless a preset or a built-in subscription has it (google, openai,
@@ -96,6 +123,23 @@ func (p Provider) PluginProvider() string {
 	return p.Account.plugin.ID
 }
 
+// PluginOpenAICompatible is whether p is a plugin's provider that speaks
+// model on an OpenAI-compatible API (@ai-sdk/openai-compatible), whose
+// other routes, the images API among them, its fetch sends under the same
+// base: SenseNova's plugin at token.sensenova.cn/v1. A plugin of a vendor
+// with an API of its own (Cursor's, Kiro's) speaks another package.
+func (p Provider) PluginOpenAICompatible(model string) bool {
+	if !p.IsPlugin() {
+		return false
+	}
+	pp := *p.Account.plugin
+	if cur, ok := PluginOf(p.ID); ok {
+		pp = cur
+	}
+	m, ok := pluginModel(pp, model)
+	return ok && firstOf(m.NPM, pp.NPM) == "@ai-sdk/openai-compatible"
+}
+
 // PluginOf is the plugin provider magpie's provider id is, when it is one.
 func PluginOf(id string) (plugin.Provider, bool) {
 	for _, pp := range heldPlugins() {
@@ -115,7 +159,15 @@ func pluginAccounts() []Provider {
 			continue // shown once the move is through (migrate.go)
 		}
 		if ls := pluginLogins(pp); len(ls) > 0 {
-			out = append(out, pluginProvider(pp, ls[0]))
+			// the provider offers what any account switched on serves, as
+			// the requests reach each through its own list (#2554)
+			keys := []string{ls[0].acct.Key}
+			for _, l := range ls[1:] {
+				if l.On {
+					keys = append(keys, l.acct.Key)
+				}
+			}
+			out = append(out, pluginProviderServing(pp, ls[0], keys))
 		}
 	}
 	return out
@@ -317,6 +369,24 @@ func (p Provider) ListError() string {
 	return PluginListError(pp, p.Account.pluginKey)
 }
 
+// pluginServedCatalog is what the accounts at keys serve between them,
+// in the catalog's order: an account the plugin told no list of, or
+// doesn't know, serves all of it.
+func pluginServedCatalog(pp plugin.Provider, keys []string) []catalog.Model {
+	all := pluginCatalog(pp)
+	listed := map[string]bool{}
+	for _, k := range keys {
+		i := slices.IndexFunc(pp.Accounts, func(a plugin.Account) bool { return a.Key == k })
+		if i < 0 || pp.Accounts[i].Models == nil {
+			return all
+		}
+		for _, m := range pp.Accounts[i].Models {
+			listed[m] = true
+		}
+	}
+	return slices.DeleteFunc(all, func(m catalog.Model) bool { return !listed[m.ID] })
+}
+
 // pluginLists is whether a plugin's account serves model, as the plugin
 // last told its list; one it told none of serves all of the provider's.
 func (a *Account) pluginLists(model string) bool {
@@ -335,7 +405,19 @@ func (a *Account) pluginLists(model string) bool {
 // pluginProvider is the provider as one of its accounts, l as the
 // accounts list has it.
 func pluginProvider(pp plugin.Provider, l pluginLogin) Provider {
+	return pluginProviderServing(pp, l, nil)
+}
+
+// pluginProviderServing is pluginProvider offering the models the
+// accounts at keys serve between them; nil keys, l's own.
+func pluginProviderServing(pp plugin.Provider, l pluginLogin, keys []string) Provider {
 	acct, user := l.acct, l.User
+	serves := func(cur plugin.Provider) []catalog.Model {
+		if keys == nil {
+			return pluginAccountCatalog(cur, acct.Key)
+		}
+		return pluginServedCatalog(cur, keys)
+	}
 	id := PluginID(pp.ID)
 	name := pp.Name
 	if name == "" {
@@ -357,9 +439,9 @@ func pluginProvider(pp plugin.Provider, l pluginLogin) Provider {
 	}
 	a.models = func() []catalog.Model {
 		if cur, ok := PluginOf(id); ok {
-			return pluginAccountCatalog(cur, acct.Key)
+			return serves(cur)
 		}
-		return pluginAccountCatalog(pp, acct.Key)
+		return serves(pp)
 	}
 	a.fetch = func(ctx context.Context) ([]catalog.Model, error) {
 		ps, err := plugin.Providers(ctx)
@@ -374,7 +456,7 @@ func pluginProvider(pp plugin.Provider, l pluginLogin) Provider {
 				if e := PluginListError(cur, acct.Key); e != "" {
 					return nil, fmt.Errorf("%s couldn't list its models: %s", name, e)
 				}
-				return catalog.Chat(pluginAccountCatalog(cur, acct.Key)), nil
+				return catalog.Chat(serves(cur)), nil
 			}
 		}
 		return nil, fmt.Errorf("%s's plugin no longer lists it", name)
@@ -443,7 +525,9 @@ func (p Provider) Origin(ctx context.Context) string {
 			pp = cur
 		}
 		base = pp.API
-		if o, err := plugin.LoaderOptions(ctx, pp.ID, p.Account.pluginKey); err == nil {
+		// the loader may renew the sign-in: through the account's proxy,
+		// as its requests go (#2777)
+		if o, err := plugin.LoaderOptions(p.Via(ctx), pp.ID, p.Account.pluginKey); err == nil {
 			base = firstOf(o.BaseURL, pp.API)
 		}
 	} else {
@@ -467,12 +551,15 @@ func pluginFetch(pp plugin.Provider, account string, req *http.Request) (*http.R
 	ctx := req.Context()
 	var body []byte
 	if req.Body != nil {
-		b, err := io.ReadAll(req.Body)
+		// read into the length said: io.ReadAll grows from 512 bytes, so a
+		// 1 MB request was some 3 MB read (#3472)
+		buf := bytes.NewBuffer(make([]byte, 0, max(req.ContentLength, 0)+bytes.MinRead))
+		_, err := buf.ReadFrom(req.Body)
 		req.Body.Close()
 		if err != nil {
 			return nil, err
 		}
-		body = b
+		body = buf.Bytes()
 	}
 	rest := strings.TrimPrefix(req.URL.String(), pluginBase+pp.ID)
 	model := bodyModel(body)
@@ -558,11 +645,48 @@ func pluginFetch(pp plugin.Provider, account string, req *http.Request) (*http.R
 // clears the mark.
 const SignInHeader = "X-Magpie-Sign-In"
 
+// ModelUnserved are how a vendor says the model isn't one it serves this
+// key, or this way — words another provider, or key, may not answer with
+// (the gateway's unservedWords, read decoded: catalog.Words).
+var ModelUnserved = regexp.MustCompile(`(?i)model.{0,80}(not (supported|accessible|available|found|enabled|allowed)|unsupported|does ?n[o']t exist|unknown|invalid)|(no such|unknown|invalid|unsupported) model|model_not_found|模型.{0,12}(不存在|不支持|无权|未开通)`)
+
+// signInWords are words of a refusal about the sign-in itself, which a
+// model named beside them doesn't make the model's: "model gpt-x: invalid
+// token" is the token.
+var signInWords = regexp.MustCompile(`(?i)token|api.?key|credential|sign.?in|log.?in|expired|session|令牌|密钥|登录|过期`)
+
+// modelOnly401 says a 401 a plugin answered without SignInHeader is about
+// the model, not the account's sign-in: its body says the model isn't
+// served (ModelUnserved) and nothing of the sign-in. A plugin answering
+// "this model isn't available to you" with 401 marked every account the
+// request failed over to as needing a new sign-in (plugins#468), for a
+// credential that was fine. Only the start of the body is read, and given
+// back whole for the gateway to read as before.
+func modelOnly401(resp *http.Response) bool {
+	if resp.StatusCode != http.StatusUnauthorized || resp.Body == nil {
+		return false
+	}
+	head, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(head), resp.Body), resp.Body}
+	if err != nil || len(head) == 0 {
+		return false
+	}
+	words := catalog.Words(head)
+	return ModelUnserved.Match(words) && !signInWords.Match(words)
+}
+
 // notePluginSignIn marks or clears an account's lapse as the plugin's
-// answer says, and takes SignInHeader off it.
+// answer says, and takes SignInHeader off it. A 401 it says nothing of
+// that is about the model alone leaves the account as it is (kept).
 func notePluginSignIn(pp plugin.Provider, account string, resp *http.Response) {
 	said := strings.ToLower(strings.TrimSpace(resp.Header.Get(SignInHeader)))
 	resp.Header.Del(SignInHeader)
+	if said == "" && modelOnly401(resp) {
+		said = "kept"
+	}
 	notePluginSaid(pp, account, said, resp.StatusCode)
 }
 
@@ -620,9 +744,13 @@ func modelAPIID(m plugin.Model) string {
 	return m.ID
 }
 
+// withModel is body asking for model.
 func withModel(body []byte, model string) []byte {
+	if b, ok := replaceModel(body, model); ok {
+		return b
+	}
 	var v map[string]json.RawMessage
-	if json.Unmarshal(body, &v) != nil {
+	if json.Unmarshal(body, &v) != nil || v == nil {
 		return body
 	}
 	v["model"], _ = json.Marshal(model)
@@ -630,6 +758,32 @@ func withModel(body []byte, model string) []byte {
 		return b
 	}
 	return body
+}
+
+// replaceModel is body with its one top-level "model", a string, replaced
+// by model and every other byte as it came; false when body isn't JSON or
+// has no such "model". Decoding a body and marshalling it again to ask
+// a plugin for its model id allocated ten times a 45 MB request (#4004).
+func replaceModel(body []byte, model string) ([]byte, bool) {
+	if !gjson.ValidBytes(body) {
+		return nil, false
+	}
+	n := 0
+	for _, k := range gjson.GetBytes(body, "@keys").Array() {
+		if k.Str == "model" {
+			n++
+		}
+	}
+	was := gjson.GetBytes(body, "model")
+	at := was.Index
+	if n != 1 || was.Type != gjson.String || at <= 0 {
+		return nil, false
+	}
+	name, _ := json.Marshal(model)
+	out := make([]byte, 0, len(body)-len(was.Raw)+len(name))
+	out = append(out, body[:at]...)
+	out = append(out, name...)
+	return append(out, body[at+len(was.Raw):]...), true
 }
 
 func firstOf(ss ...string) string {
@@ -644,7 +798,26 @@ func firstOf(ss ...string) string {
 // Do sends req, through the account's own transport when it has one (a
 // plugin's), the client the account asks for this request when it asks
 // for one (ZCode's Start Plan: zcodeStartClient), and client otherwise.
+//
+// A request sent for magpie's own test (probelog.With) is written into the
+// request log here, whichever way it goes: a plugin's fetch and a client
+// of the account's own pass no transport that would.
 func (p Provider) Do(client *http.Client, req *http.Request) (*http.Response, error) {
+	if ctx := req.Context(); probelog.Pending(ctx) {
+		start := time.Now()
+		req = req.WithContext(probelog.Taken(ctx))
+		res, err := p.do(client, req)
+		status := 0
+		if err == nil {
+			status = res.StatusCode
+		}
+		probelog.Note(ctx, req.URL.String(), req.Method, start, status, err)
+		return res, err
+	}
+	return p.do(client, req)
+}
+
+func (p Provider) do(client *http.Client, req *http.Request) (*http.Response, error) {
 	if p.Account != nil && p.Account.transport != nil {
 		return p.Account.transport(req)
 	}

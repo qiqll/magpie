@@ -17,9 +17,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -79,9 +81,10 @@ func proxied() http.RoundTripper {
 func Latest(ctx context.Context) (*Release, error) { return LatestIn(ctx, "") }
 
 // LatestIn asks the feed for the newest release, its notes in lang (see
-// InLang): the app's language, which What's new follows.
+// InLang): the app's language, which What's new follows. On Settings'
+// Stable channel it is Stable's release (see Stable).
 func LatestIn(ctx context.Context, lang string) (*Release, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", withLang(Feed(), lang), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", withChannel(withLang(Feed(), lang)), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -352,8 +355,105 @@ func InstallAsAdmin(staged, bundle string) error {
 // Relaunch opens bundle again once this process (pid) has exited: with its
 // window when window is set, else only its menu bar icon (`tray`, as a
 // login launch), which a restart by itself uses while no window was up.
+// Each try, and what it came to, is written to relaunch.log in magpie's
+// own folder.
 func Relaunch(bundle string, window bool) error {
-	return runAfterExit(os.Getpid(), relaunchOpen(bundle, window))
+	return runAfterExit(os.Getpid(), relaunchCommand(bundle, window, relaunchLog()))
+}
+
+// openWaits are the pauses, in seconds, between tries of the relaunch's
+// open: about 13s in all. Just after magpie exits, LaunchServices can
+// still hold it as running and send the open to the process that is gone,
+// and open fails (-600, procNotFound; seen with the screen locked). Tried
+// once, nothing started magpie again until the user did, nine hours later.
+var openWaits = []string{"0.5", "1", "1", "2", "2", "3", "4"}
+
+// relaunchLogName is the file in magpie's folder the relaunch writes each
+// try of its open to, and the start it falls back to: the shell that runs
+// them has no output anyone sees, and a magpie that never came back left
+// only the system log to say why.
+const relaunchLogName = "relaunch.log"
+
+// relaunchLog is the relaunch's log file, made ready to append to; once it
+// is past 64KB the last one is kept as relaunch.log.old. "" when magpie's
+// folder can't be made: the tries then go unwritten.
+func relaunchLog() string {
+	h, err := appdir.Home()
+	if err != nil || h == "" {
+		return ""
+	}
+	dir := appdir.Config()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	p := filepath.Join(dir, relaunchLogName)
+	if fi, err := os.Stat(p); err == nil && fi.Size() > 64<<10 {
+		os.Rename(p, p+".old")
+	}
+	return p
+}
+
+// relaunchCommand is the shell command Relaunch runs once magpie has
+// exited: open, tried again while it fails, and, when it never worked,
+// the bundle's own executable run straight, as the login launch agent
+// runs it. With the screen locked, magpie stayed closed after an update
+// even with the 13s of tries (molvqingtai, after fb23bca5c): LaunchServices
+// can go on refusing the open for as long as the session is locked, and a
+// program run by its path needs nothing from it to start.
+func relaunchCommand(bundle string, window bool, log string) string {
+	return relaunchScript(bundle, window, log, openWaits)
+}
+
+// relaunchScript is relaunchCommand with the pauses between opens.
+func relaunchScript(bundle string, window bool, log string, waits []string) string {
+	if log == "" {
+		log = os.DevNull
+	}
+	exe := filepath.Join(bundle, "Contents", "MacOS", bundleExecutable(bundle))
+	run := shellQuote(exe)
+	for _, a := range RelaunchArgs(window, "") {
+		run += " " + shellQuote(a)
+	}
+	var b strings.Builder
+	b.WriteString("log=" + shellQuote(log) + "; ")
+	b.WriteString(`note() { echo "$(date '+%Y-%m-%d %H:%M:%S %z') $*" >> "$log" 2>/dev/null; }; `)
+	// open's own exit status and what it said, on one line
+	b.WriteString(`try() { n=$((n+1)); e=$(` + relaunchOpen(bundle, window) + ` 2>&1 >/dev/null); s=$?; note "open try $n: exit $s $(printf '%s' "$e" | tr '\n' ' ')"; return $s; }; `)
+	b.WriteString("n=0; note " + shellQuote("magpie has exited; opening "+bundle) + "; ")
+	b.WriteString(retried("try", waits))
+	b.WriteString(" || { note \"open gave up after $n tries; starting \"" + shellQuote(run) + "; ")
+	b.WriteString("[ -x " + shellQuote(exe) + " ] || { note \"no executable at \"" + shellQuote(exe) + "; exit 1; }; ")
+	b.WriteString("exec " + run + " </dev/null >/dev/null 2>&1; }")
+	return b.String()
+}
+
+// bundleExecutableKey finds the program an app's Info.plist names.
+var bundleExecutableKey = regexp.MustCompile(`<key>CFBundleExecutable</key>\s*<string>([^<]+)</string>`)
+
+// bundleExecutable is the name of the program in bundle's Contents/MacOS:
+// the one its Info.plist names, else this one's own when it runs from
+// that bundle, else magpie.
+func bundleExecutable(bundle string) string {
+	if b, err := os.ReadFile(filepath.Join(bundle, "Contents", "Info.plist")); err == nil {
+		if m := bundleExecutableKey.FindSubmatch(b); m != nil {
+			if name := strings.TrimSpace(html.UnescapeString(string(m[1]))); name != "" && !strings.ContainsRune(name, '/') {
+				return name
+			}
+		}
+	}
+	if exe, err := Executable(); err == nil && filepath.Dir(exe) == filepath.Join(bundle, "Contents", "MacOS") {
+		return filepath.Base(exe)
+	}
+	return "magpie"
+}
+
+// retried is a shell command that runs command until it succeeds, sleeping
+// each of waits in turn after a failure; the last try's status is its own.
+func retried(command string, waits []string) string {
+	if len(waits) == 0 {
+		return command
+	}
+	return fmt.Sprintf("for w in %s; do %s && exit 0; sleep $w; done; %s", strings.Join(waits, " "), command, command)
 }
 
 // runAfterExit starts a shell that runs command once pid has exited. The
@@ -371,12 +471,21 @@ func runAfterExit(pid int, command string) error {
 	return cmd.Start()
 }
 
-// relaunchOpen is the open command Relaunch runs for bundle.
+// relaunchOpen is the open command Relaunch runs for bundle. -n asks
+// LaunchServices for a new instance: without it, open looks the app up
+// among those running first, and just after magpie exits LaunchServices
+// can still have the gone process registered as magpie. open then sends
+// it a reopen Apple event (aevt/rapp) rather than launching the bundle,
+// and fails with -600, procNotFound ("Specified target process … does
+// not exist", "LAUNCH: Launch failed in CSUI"; Linka's log on Discord,
+// macOS 27.0.1, v0.1.1308), as often as it is tried. A magpie that is in
+// fact up still has the one instance: the new process finds the instance
+// lock held and hands over to it (runningAlready in internal/gui).
 func relaunchOpen(bundle string, window bool) string {
 	if window {
-		return fmt.Sprintf("open %q", bundle)
+		return fmt.Sprintf("open -n %q", bundle)
 	}
-	return fmt.Sprintf("open %q --args tray", bundle)
+	return fmt.Sprintf("open -n %q --args tray", bundle)
 }
 
 // ReplaceBinary puts the release's build for this binary where the
@@ -744,81 +853,166 @@ func WithProgress(ctx context.Context, f func(done, total int64)) context.Contex
 	return context.WithValue(ctx, progressKey{}, f)
 }
 
+// retryWaits are the pauses before each try after the first: a
+// connection that drops at the start or part way (GitHub's asset host from
+// some networks: AIMetaPhD on X, "EOF" at 0.1.1618) is tried again, from
+// where it broke off. A var for tests.
+var retryWaits = []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second}
+
 // download fetches a to path and checks its hash. A connection that drops
-// part way — GitHub from some networks — gets two more tries.
+// is tried again after each of retryWaits, asking with Range for what is
+// still missing; the hash is checked over the whole file, the bytes kept
+// from the tries before included.
 func download(ctx context.Context, a Asset, path string) error {
 	if a.SHA256 == "" {
 		return errors.New("the release lists no checksum for " + filepath.Base(path))
 	}
+	os.Remove(path) // a file left by an earlier run is no part of this one
 	var err error
-	for try := 0; try < 3; try++ {
+	for try := 0; try <= len(retryWaits); try++ {
 		if try > 0 {
 			select {
 			case <-ctx.Done():
 				return err
-			case <-time.After(time.Duration(try) * 2 * time.Second):
+			case <-time.After(retryWaits[try-1]):
 			}
 		}
-		if err = fetch(ctx, a, path); err == nil || ctx.Err() != nil {
+		if err = fetch(ctx, a, path); err == nil || ctx.Err() != nil || !Network(err) {
 			break
 		}
-	}
-	return err
-}
-
-func fetch(ctx context.Context, a Asset, path string) error {
-	// through a mirror when one is given (mirror.go): the hash checked
-	// below is still the feed's
-	u := mirrored(mirrorOf(ctx), a.URL)
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-	if err != nil {
-		return err
-	}
-	res, err := source.Do(client, req)
-	if err != nil {
-		if u != a.URL {
-			return &MirrorError{Mirror: strings.TrimSuffix(u, a.URL), Err: err}
-		}
-		return err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		if u != a.URL {
-			return &MirrorError{Mirror: strings.TrimSuffix(u, a.URL), Err: fmt.Errorf("download %s through the mirror %s: %s", filepath.Base(path), strings.TrimSuffix(u, a.URL), res.Status)}
-		}
-		return fmt.Errorf("download %s: %s", filepath.Base(path), res.Status)
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	h := sha256.New()
-	var body io.Reader = res.Body
-	if report, ok := ctx.Value(progressKey{}).(func(done, total int64)); ok {
-		total := res.ContentLength
-		if total <= 0 {
-			total = a.Size
-		}
-		body = &counter{r: res.Body, total: max(total, 0), report: report}
-		report(0, max(total, 0))
-	}
-	_, err = io.Copy(io.MultiWriter(f, h), body)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil && !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), a.SHA256) {
-		err = fmt.Errorf("%s does not match its checksum", filepath.Base(path))
-		if u != a.URL {
-			err = fmt.Errorf("%s from the mirror %s does not match its checksum from %s; not installed", filepath.Base(path), strings.TrimSuffix(u, a.URL), Site)
-		}
-	}
-	if err != nil && u != a.URL && !errors.As(err, new(*MirrorError)) {
-		err = &MirrorError{Mirror: strings.TrimSuffix(u, a.URL), Err: err}
 	}
 	if err != nil {
 		os.Remove(path)
 	}
 	return err
+}
+
+// NetError is a download the network broke off: the connection failed or
+// dropped part way. It names the file and the cause, never the address:
+// GitHub's redirect is a signed URL, hundreds of characters of signature
+// and token that say nothing to the user.
+type NetError struct {
+	File string
+	Err  error
+}
+
+func (e *NetError) Error() string {
+	cause := e.Err
+	var ue *url.Error
+	if errors.As(cause, &ue) {
+		cause = ue.Err
+	}
+	return fmt.Sprintf("the download of %s broke off (%v)", e.File, cause)
+}
+
+func (e *NetError) Unwrap() error { return e.Err }
+
+// Network reports whether err is a download the network broke off, which
+// trying again may get through.
+func Network(err error) bool { return errors.As(err, new(*NetError)) }
+
+// fetch downloads a to path, or the rest of it when path holds the start
+// already (a try before broke off): what is there is asked for no more
+// (Range), and a host that sends the whole file again has it written from
+// the beginning. A try the network breaks off keeps what came, for the next
+// one; any other failure removes it.
+func fetch(ctx context.Context, a Asset, path string) error {
+	// through a mirror when one is given (mirror.go): the hash checked
+	// below is still the feed's
+	u := mirrored(mirrorOf(ctx), a.URL)
+	mirror := strings.TrimSuffix(u, a.URL)
+	name := filepath.Base(path)
+	var have int64
+	if fi, err := os.Stat(path); err == nil && fi.Mode().IsRegular() {
+		have = fi.Size()
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return err
+	}
+	if have > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", have))
+	}
+	fail := func(err error) error {
+		if !Network(err) {
+			os.Remove(path)
+		}
+		if u != a.URL && !errors.As(err, new(*MirrorError)) {
+			err = &MirrorError{Mirror: mirror, Err: err}
+		}
+		return err
+	}
+	res, err := source.Do(client, req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return fail(err)
+		}
+		return fail(&NetError{File: name, Err: err})
+	}
+	defer res.Body.Close()
+	flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	switch {
+	case res.StatusCode == http.StatusPartialContent && have > 0 && strings.HasPrefix(res.Header.Get("Content-Range"), fmt.Sprintf("bytes %d-", have)):
+		flag = os.O_WRONLY | os.O_APPEND
+	case res.StatusCode == http.StatusOK:
+		have = 0 // the whole file again
+	default:
+		if u != a.URL {
+			return fail(&MirrorError{Mirror: mirror, Err: fmt.Errorf("download %s through the mirror %s: %s", name, mirror, res.Status)})
+		}
+		return fail(fmt.Errorf("download %s: %s", name, res.Status))
+	}
+	f, err := os.OpenFile(path, flag, 0o644)
+	if err != nil {
+		return fail(err)
+	}
+	// a read that fails is the network's; a write that fails (a full
+	// disk) is not, and isn't tried again
+	in := &readErr{r: res.Body}
+	var body io.Reader = in
+	if report, ok := ctx.Value(progressKey{}).(func(done, total int64)); ok {
+		total := res.ContentLength
+		if total > 0 {
+			total += have
+		} else {
+			total = a.Size
+		}
+		body = &counter{r: in, done: have, total: max(total, 0), report: report}
+		report(have, max(total, 0))
+	}
+	_, err = io.Copy(f, body)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		if ctx.Err() == nil && in.err != nil {
+			err = &NetError{File: name, Err: err}
+		}
+		return fail(err)
+	}
+	// the whole file, what earlier tries kept included, against the feed's
+	if !strings.EqualFold(fileHash(path), a.SHA256) {
+		err = fmt.Errorf("%s does not match its checksum", name)
+		if u != a.URL {
+			err = fmt.Errorf("%s from the mirror %s does not match its checksum from %s; not installed", name, mirror, Site)
+		}
+		return fail(err)
+	}
+	return nil
+}
+
+// readErr keeps the error its reader returned, io.EOF aside.
+type readErr struct {
+	r   io.Reader
+	err error
+}
+
+func (r *readErr) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if err != nil && err != io.EOF {
+		r.err = err
+	}
+	return n, err
 }
 
 // counter reports bytes as they are read.
@@ -838,3 +1032,31 @@ func (c *counter) Read(p []byte) (int, error) {
 
 // Alive reports whether the process pid is still running.
 func Alive(pid int) bool { return alive(pid) }
+
+// OpenBeside opens bundle now, a new instance beside this one (open -n),
+// tried again while open fails: a restart that hands the gateway over
+// (internal/handoff) starts the new version before this one quits. With
+// window, its window; else its menu bar icon only, as Relaunch.
+func OpenBeside(bundle string, window bool) error {
+	cmd := proc.Command("/bin/sh", "-c", retried(openBeside(bundle, window), openWaits))
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
+	detach(cmd)
+	return cmd.Start()
+}
+
+// openBeside is the open command OpenBeside runs for bundle.
+func openBeside(bundle string, window bool) string {
+	if window {
+		return fmt.Sprintf("open -n %q", bundle)
+	}
+	return fmt.Sprintf("open -n %q --args tray", bundle)
+}
+
+// StartBeside starts exe now, beside this process, as RelaunchBinary's
+// args say: the new version of a restart that hands the gateway over. It
+// isn't told to wait for this one (MAGPIE_REPLACES): it takes the gateway
+// from it while it runs.
+func StartBeside(exe string, window bool, view string) error {
+	_, _, err := launch(exe, RelaunchArgs(window, view), os.Environ())
+	return err
+}

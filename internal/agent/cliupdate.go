@@ -187,6 +187,21 @@ var cliSpecs = map[string]cliSpec{
 	// MothX: its npm installer package, which brings the native binary
 	// for the platform as an optional dependency
 	"mothx": {npm: []string{"mothx-installer"}},
+	// PenguinHarness: its npm package, or install.sh's tarball in
+	// ~/.penguin (bin, lib, node; ~/.local/bin/penguin links there), which
+	// penguin update re-runs the installer for. On Windows its update
+	// refuses a tarball (update.ts planUpdate, "windows-installer"), so
+	// none is offered there.
+	"penguin": {npm: []string{"@prismshadow/penguin-cli"},
+		self: func(bin, real string) []string {
+			if runtime.GOOS == "windows" {
+				return nil
+			}
+			if l := strings.ToLower(real); strings.Contains(l, "/.penguin/bin/") || strings.Contains(l, "/.penguin/lib/") {
+				return []string{bin, "update", "--yes"}
+			}
+			return nil
+		}},
 	// omo update, however it was installed: OmO's own updater, which moves
 	// the engine it pins (senpi) with it
 	"omo": {npm: []string{"omo-ai"},
@@ -817,8 +832,13 @@ func (a *Agent) CLI() (c CLI, ok bool) {
 
 // InstalledVersion is what the agent's CLI on PATH says its version is: ""
 // for an agent without a CLI magpie knows, one not on PATH, or one that
-// didn't say. Asked once per binary, like CLI's; nothing is fetched.
+// didn't say. Asked once per binary, like CLI's; nothing is fetched. An
+// agent in a WSL distro's is what the distro's own CLI said at its probe,
+// for the kinds that ask (wslKind.version), never this machine's.
 func (a *Agent) InstalledVersion() string {
+	if a.WSL != "" {
+		return a.wslVersion
+	}
 	bin, _ := a.cliBin()
 	if bin == "" {
 		return ""

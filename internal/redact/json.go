@@ -214,7 +214,13 @@ func walk(b []byte, fn func(path, key, s string) string) (out []byte, ok bool) {
 		return b, true
 	}
 	w.out.Write(b[w.last:])
-	return w.out.Bytes(), true
+	out = w.out.Bytes()
+	if cap(out)-len(out) > len(out)/8 {
+		// placeholders longer than what they stand for grew it past the
+		// room made for it: held as it is, a doubled buffer (#3383)
+		out = bytes.Clone(out)
+	}
+	return out, true
 }
 
 type walker struct {
@@ -324,6 +330,12 @@ func (w *walker) value(i int, path, key string) (int, bool) {
 			return i, false
 		}
 		if t := w.fn(path, key, s); t != s {
+			if w.out.Cap() == 0 {
+				// the masked body is about the body's size: grown by
+				// doubling, its buffer was up to twice that, held as the
+				// request's body while it streams (#3383)
+				w.out.Grow(len(w.in) + len(w.in)/16 + 64)
+			}
 			w.out.Write(w.in[w.last:i])
 			w.out.WriteByte('"')
 			w.out.WriteString(jsonEscape(t))
@@ -369,15 +381,26 @@ func jsonEscape(s string) string {
 // placeholder: either way the text no longer matched its signature, and
 // Anthropic answers 400 "Invalid `signature` in `thinking` block".
 func MaskJSON(body []byte, o Options) ([]byte, int) {
+	o.sent = true
 	signed, args, defs := scan(body)
 	masked := func(path, key, s string) bool {
 		return !keepIn(path, key, s, args, defs) && (signed == nil || !under(path, signed))
 	}
+	// What the agent defines (its tools' and schemas' descriptions) is
+	// masked by the rules alone, as with the model off: it is the agent's
+	// or a tool server's text, the same in every request, and no one's
+	// conversation. Read by the model it was most of a request's text,
+	// 52,577 of Claude Code 2.1.296's 67,532 bytes, and on a 4-core
+	// server the first request waited out the gateway's 2 minutes while
+	// the model read it (niuniu_8964 on X); on three real Claude Code
+	// requests the model masked nothing there the rules didn't.
+	defsO := o
+	defsO.Model = nil
 	if o.Model != nil {
 		// the model is asked once, for all of the request's texts
 		var texts []string
 		if _, ok := walk(body, func(path, key, s string) string {
-			if masked(path, key, s) {
+			if masked(path, key, s) && !under(path, defs) {
 				texts = append(texts, s)
 			}
 			return s
@@ -388,18 +411,30 @@ func MaskJSON(body []byte, o Options) ([]byte, int) {
 	total := 0
 	var seen []string // value, placeholder, value, placeholder…
 	put := func(kind, v string) string {
-		p := placeholder(kind, v)
+		p := o.put()(kind, v)
 		seen = append(seen, v, p)
 		return p
 	}
+	// the definitions after the rest, so a value the model found in what
+	// is said is masked in them too, as known
 	out, ok := walk(body, func(path, key, s string) string {
-		if !masked(path, key, s) {
+		if !masked(path, key, s) || under(path, defs) {
 			return s
 		}
-		t, n := mask(s, o, put)
+		t, n := mask(s, o, put, asJSON(key, ""))
 		total += n
 		return t
 	})
+	if ok && len(defs) > 0 {
+		out, ok = walk(out, func(path, key, s string) string {
+			if !masked(path, key, s) || !under(path, defs) {
+				return s
+			}
+			t, n := mask(s, defsO, put, asJSON(key, ""))
+			total += n
+			return t
+		})
+	}
 	if !ok {
 		t, n := Mask(string(body), o)
 		return []byte(t), n
@@ -427,7 +462,7 @@ func MaskJSON(body []byte, o Options) ([]byte, int) {
 		// number or an address the vendor wrote of its own can be one
 		// masked in another conversation (13800138000 is in many), and
 		// masked, its text would no longer match its signature
-		t, n := apply(t, knownSpans(t, Options{Secrets: o.Secrets}), placeholder, o)
+		t, n := apply(t, sentKnownSpans(t, Options{Secrets: o.Secrets}), o.put(), o)
 		total += n
 		return t
 	})
@@ -461,20 +496,37 @@ func asJSON(key, eventType string) bool {
 	return key == "arguments" || key == "partial_json" || key == "delta" && strings.Contains(eventType, "arguments")
 }
 
-// RestoreJSON puts the values back in a response body.
-func RestoreJSON(body []byte) []byte {
-	if !bytes.Contains(body, []byte("{{")) {
-		return body
-	}
+// typeOf is the type a JSON object says it is, wherever its "type" is
+// among its keys. Read as the keys came, a Responses
+// function_call_arguments.delta whose "delta" came before its "type", as
+// a Go map writes them, had its value put back unescaped: a password
+// with a quote in it ended the arguments' string there, and the arguments
+// the agent put together were JSON no longer.
+func typeOf(data []byte) string {
 	typ := ""
-	out, ok := walk(body, func(path, key, s string) string {
+	walk(data, func(path, _, s string) string {
 		if path == "type" {
 			typ = s
 		}
-		return Restore(s, asJSON(key, typ))
+		return s
+	})
+	return typ
+}
+
+// RestoreJSON puts the values back in a response body.
+func RestoreJSON(body []byte) []byte { return restoreJSON(body, nil) }
+
+// restoreJSON is RestoreJSON, counting in put as restore does.
+func restoreJSON(body []byte, put map[string]int) []byte {
+	if !bytes.Contains(body, []byte("{{")) && !hasShapes(body) {
+		return body
+	}
+	typ := typeOf(body)
+	out, ok := walk(body, func(path, key, s string) string {
+		return restore(s, asJSON(key, typ), put)
 	})
 	if !ok {
-		return []byte(Restore(string(body), false))
+		return []byte(restore(string(body), false, put))
 	}
 	return out
 }

@@ -9,9 +9,11 @@ import (
 
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/update"
+	"github.com/yetone/magpie/internal/usage"
 )
 
 // served is the gateway this process serves, nil while another magpie
@@ -40,6 +42,13 @@ func startBackend() (gw *gateway.Server) {
 	gateway.Window = true // the routing this process serves is shown on its page
 	gw = serveGateway()
 	go watchGateway(backendCtx, gatewayWatch)
+	// the usage log parsed now, not when the tray panel first asks for
+	// today's calls (CyberCaius)
+	go func() {
+		// its files looked at once a second, as the warm-up's (#1665)
+		defer filememo.Hold()()
+		usage.ReadAhead()
+	}()
 	// Codex's background app-server, restarted when it has the list from
 	// before a change and no codex session is on it (luci)
 	go agent.KeepCodexDaemonCurrent(backendCtx)
@@ -118,7 +127,9 @@ func serveGateway() *gateway.Server {
 func serveGatewayLocked() *gateway.Server {
 	// handing over, the one there is this one's predecessor, which lets go
 	// once this one listens beside it
-	if !gateway.Handover {
+	// so is the one that handed this one its socket, still finishing its
+	// requests on it (gui/handover.go)
+	if !gateway.Handover && !gateway.Inherited() {
 		if o := gateway.ServedBy(); o.Running {
 			if update.Newer(gateway.Version, o.Version) {
 				log.Printf("gateway: magpie %s serves %s, older than this one (%s); agents' requests go through it until it quits", o.Version, gateway.URL(), gateway.Version)

@@ -40,6 +40,8 @@ func TestPlanQuotaSource(t *testing.T) {
 		{Provider{Chat: "https://api.commandcode.ai/provider/v1", Anthropic: "https://api.commandcode.ai/provider"}, "https://api.commandcode.ai/alpha/billing/credits", true, false},
 		{Provider{Chat: "https://api.minimaxi.com/v1", Anthropic: "https://api.minimaxi.com/anthropic"}, "https://api.minimaxi.com/v1/token_plan/remains", true, false},
 		{Provider{Anthropic: "https://api.minimax.io/anthropic"}, "https://api.minimax.io/v1/token_plan/remains", true, false},
+		// MiniMax China's host since mmx-cli 8746d48f
+		{Provider{Chat: "https://api.minimax.cn/v1", Anthropic: "https://api.minimax.cn/anthropic"}, "https://api.minimax.cn/v1/token_plan/remains", true, false},
 		{Provider{Chat: "https://api.deepseek.com"}, "", false, false},
 		{Provider{Chat: "https://ollama.com/v1", Anthropic: "https://ollama.com"}, "https://ollama.com/api/balance", true, false},
 		{Provider{Chat: "http://localhost:11434/v1"}, "", false, false}, // a local Ollama
@@ -112,7 +114,7 @@ func TestCommandCodeQuotaShowsWindows(t *testing.T) {
 	if err := json.Unmarshal([]byte(cmdCreditsReply), &c); err != nil {
 		t.Fatal(err)
 	}
-	q := cmdQuotaOf(SubscriptionQuota{}, c)
+	q := cmdQuotaOf(SubscriptionQuota{}, c, nil)
 	if q.Balance != "" || q.Plan != "GOAT" || len(q.Windows) != 3 {
 		t.Fatalf("%+v", q)
 	}
@@ -124,7 +126,7 @@ func TestCommandCodeQuotaShowsWindows(t *testing.T) {
 	// no plan and no windows: what is left is all there is to show
 	var none cmdCredits
 	_ = json.Unmarshal([]byte(`{"credits":{"purchasedCredits":"20","freeCredits":1}}`), &none)
-	if q := cmdQuotaOf(SubscriptionQuota{}, none); q.Balance != "$21.00" || len(q.Windows) != 0 {
+	if q := cmdQuotaOf(SubscriptionQuota{}, none, nil); q.Balance != "$21.00" || len(q.Windows) != 0 {
 		t.Errorf("no plan: %+v", q)
 	}
 }

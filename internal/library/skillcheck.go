@@ -32,8 +32,9 @@ var githubAPI = "https://api.github.com"
 type SkillCheck struct {
 	Name string `json:"name"`
 	// Status is current when GitHub has the skill as the library does,
-	// update when it has changed it since, and unknown when it couldn't be
-	// told (Error says why)
+	// update when it has changed it since, gone when it was read without
+	// the skill (removed there, skill_gone.go), and unknown when it
+	// couldn't be told (Error says why)
 	Status  string `json:"status"`
 	Commit  string `json:"commit,omitempty"`  // the last commit to touch the skill's folder
 	Date    string `json:"date,omitempty"`    // when it was made
@@ -128,7 +129,7 @@ func lastCommit(src Source) (*commit, error) {
 		q.Set("sha", src.Ref)
 	}
 	u := githubAPI + "/repos/" + src.Repo + "/commits?" + q.Encode()
-	body, code, token, err := apiGet(u)
+	body, code, token, err := apiGet(u, 8<<20)
 	if err != nil {
 		return nil, err
 	}
@@ -153,12 +154,22 @@ func lastCommit(src Source) (*commit, error) {
 	return &list[0], nil
 }
 
+// cacheBody is the most of an answer kept by URL for a 304 to reuse;
+// bigger ones are read but not kept, so a huge file list isn't held for
+// the process's life.
+const cacheBody = 8 << 20
+
+// errOverCap is an answer over the most its caller reads (apiGet's max).
+var errOverCap = errors.New("over the most magpie reads")
+
 // apiGet asks GitHub's API for u, with the ETag of the answer it had
 // before, if any: GitHub's 304 for an unchanged one doesn't count against
 // the rate limit, and is answered as the 200 it had. It says whether the
 // request carried a GitHub token, and a rate limit used up is an
-// errLimited.
-func apiGet(u string) ([]byte, int, bool, error) {
+// errLimited. A rate limit is told from the status and headers even when
+// the answer can't be read whole. A 200 over max bytes is an error, never
+// a cut-off body handed to a caller, and no answer over cacheBody is kept.
+func apiGet(u string, max int64) ([]byte, int, bool, error) {
 	req, _ := http.NewRequest("GET", u, nil)
 	req.Header.Set("User-Agent", "magpie")
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -168,20 +179,31 @@ func apiGet(u string) ([]byte, int, bool, error) {
 	if cached {
 		req.Header.Set("If-None-Match", had.etag)
 	}
-	c := &http.Client{Timeout: 20 * time.Second}
+	// a file list of tens of MB takes longer than 20s on a slow line
+	timeout := 20 * time.Second
+	if max > cacheBody {
+		timeout = 2 * time.Minute
+	}
+	c := &http.Client{Timeout: timeout}
 	resp, token, err := doGitHub(req, func(r *http.Request) (*http.Response, error) { return source.Do(c, r) })
 	if err != nil {
 		return nil, 0, token, fmt.Errorf("couldn't reach GitHub: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
 	if e, ok := limitedBy(resp, body, token); ok {
 		return nil, resp.StatusCode, token, e
+	}
+	if err != nil {
+		return nil, resp.StatusCode, token, fmt.Errorf("couldn't read GitHub's answer: %w", err)
 	}
 	if resp.StatusCode == 304 && cached {
 		return had.body, 200, token, nil
 	}
-	if et := resp.Header.Get("ETag"); resp.StatusCode == 200 && et != "" {
+	if resp.StatusCode == 200 && int64(len(body)) > max {
+		return nil, resp.StatusCode, token, fmt.Errorf("GitHub's answer was over %s: %w", mb(max), errOverCap)
+	}
+	if et := resp.Header.Get("ETag"); resp.StatusCode == 200 && et != "" && int64(len(body)) <= cacheBody {
 		etags.Lock()
 		etags.m[u] = etagged{etag: et, body: body}
 		etags.Unlock()
@@ -359,6 +381,16 @@ func CheckSkills() ([]SkillCheck, error) {
 		}
 		mu.Unlock()
 	}
+	var gone, there []string
+	for _, c := range out {
+		switch c.Status {
+		case "gone":
+			gone = append(gone, c.Name)
+		case "current", "update":
+			there = append(there, c.Name)
+		}
+	}
+	markGone(gone, there)
 	checks.Lock()
 	for _, c := range out {
 		checks.m[c.Name] = c
@@ -411,6 +443,13 @@ func checkSkill(s *Skill, f *fetcher, asked map[string]*commit, limited *atomic.
 			c.Status = "current"
 			return c, "", ""
 		}
+		if s.Gone != "" {
+			// the last commit to touch its folder may be the one that
+			// removed it: it stays removed till an update finds it there
+			g := goneCheck(&GoneError{Name: s.Name, Source: src.Repo})
+			g.Commit, g.Date, g.Message = c.Commit, c.Date, c.Message
+			return g, "", ""
+		}
 		c.Status, c.URL = "update", "https://github.com/"+src.Repo+"/compare/"+s.Commit+"..."+last.SHA
 		return c, "", ""
 	}
@@ -422,6 +461,9 @@ func checkSkill(s *Skill, f *fetcher, asked map[string]*commit, limited *atomic.
 	}
 	from := filepath.Join(tmp, filepath.FromSlash(src.Path))
 	if _, ok := readMeta(from); !ok {
+		if goneFrom(tmp, src.Path) {
+			return goneCheck(&GoneError{Name: s.Name, Source: src.Repo}), "", ""
+		}
 		c.Error = fmt.Sprintf("%s has no SKILL.md at %s any more", src.Repo, src.Path)
 		return c, "", ""
 	}

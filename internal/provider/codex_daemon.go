@@ -177,6 +177,9 @@ func noteCodexSwitch(from, to string) {
 	}
 	noteLeft(&codexDaemonLeft, findCodexDaemon(ps, codexHome()), from, to)
 	noteLeft(&codexAppLeft, findCodexApp(ps), from, to)
+	if codexAppLeft.pid != 0 {
+		codexAppAccountLeft(codexAppLeft.pid)
+	}
 }
 
 // noteLeft updates what is known of the app-server pid, running as Codex's
@@ -258,31 +261,46 @@ func DismissCodexApp() {
 // Codex desktop app runs for itself: 0 when it isn't open. On macOS that
 // is ChatGPT.app's (or Codex.app's) bundled codex, `…/CodexCLI.app/
 // Contents/MacOS/codex [-c k=v…] app-server --analytics-default-enabled …`;
-// on Windows the Store app's `…\WindowsApps\OpenAI.Codex_…\codex.exe
-// app-server`. Not the managed daemon, nor an app-server's helpers or
-// proxy, nor an editor's codex.
+// on Windows the Store app's (OpenAI.Codex, ChatGPT.exe), which copies its
+// codex out of WindowsApps and runs it from %LOCALAPPDATA%:
+// `C:\Users\…\AppData\Local\OpenAI\Codex\bin\<hash>\codex.exe -c … app-server
+// --analytics-default-enabled …` (26.1021 on the Windows box). Not the
+// managed daemon, nor an app-server's helpers or proxy, nor an editor's
+// codex.
 func findCodexApp(ps []proc.Process) int {
 	for _, p := range ps {
-		if isManagedDaemon(p.Args) {
-			continue
+		if isCodexAppServer(p.Args) {
+			return p.PID
 		}
-		// the program's own path: ps leaves a path's spaces unquoted, so
-		// "…/Codex Computer Use.app/Contents/MacOS/…" reads as one named Codex
-		exe, rest := splitExe(p.Args)
-		if !strings.Contains(exe, ".app/Contents/") && !strings.Contains(exe, `\WindowsApps\OpenAI.`) {
-			continue
-		}
-		if base := strings.ToLower(exe[strings.LastIndexAny(exe, `/\`)+1:]); base != "codex" && base != "codex.exe" {
-			continue
-		}
-		f := strings.Fields(rest)
-		i := slices.Index(f, "app-server")
-		if i < 0 || i+1 < len(f) && !strings.HasPrefix(f[i+1], "-") {
-			continue
-		}
-		return p.PID
 	}
 	return 0
+}
+
+// isCodexAppServer is findCodexApp's test of one command line.
+func isCodexAppServer(args string) bool {
+	if isManagedDaemon(args) {
+		return false
+	}
+	// the program's own path: ps leaves a path's spaces unquoted, so
+	// "…/Codex Computer Use.app/Contents/MacOS/…" reads as one named Codex
+	exe, rest := splitExe(args)
+	if !strings.Contains(exe, ".app/Contents/") && !windowsCodexApp(exe) {
+		return false
+	}
+	if base := strings.ToLower(exe[strings.LastIndexAny(exe, `/\`)+1:]); base != "codex" && base != "codex.exe" {
+		return false
+	}
+	f := strings.Fields(rest)
+	i := slices.Index(f, "app-server")
+	return i >= 0 && (i+1 >= len(f) || strings.HasPrefix(f[i+1], "-"))
+}
+
+// windowsCodexApp is whether exe is the Windows Codex app's codex: the one
+// it runs from %LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\, or one in its
+// package under WindowsApps.
+func windowsCodexApp(exe string) bool {
+	e := strings.ToLower(exe)
+	return strings.Contains(e, `\appdata\local\openai\codex\bin\`) || strings.Contains(e, `\windowsapps\openai.`)
 }
 
 // RestartCodexDaemon has Codex restart its app-server, which reads the
@@ -305,7 +323,11 @@ func restartCodexDaemon(ctx context.Context, home string) error {
 	if err != nil {
 		return err
 	}
-	if out, err := cmd.CombinedOutput(); err != nil {
+	// run as its own responsible process: the daemon it leaves running
+	// works in the folder of every codex attached to it, and macOS would
+	// otherwise ask for ~/Desktop and the like in magpie's name
+	// (reformed9448 on Discord)
+	if out, err := proc.CombinedOutputOwn(ctx, cmd); err != nil {
 		if msg := lastLine(out); msg != "" {
 			return errors.New("codex app-server daemon restart: " + msg)
 		}
@@ -323,10 +345,57 @@ func codexDaemonCommand(ctx context.Context, home, verb string) (*exec.Cmd, erro
 		return nil, errors.New("the codex CLI isn't installed, or magpie can't find it")
 	}
 	cmd := proc.CommandContext(ctx, exe, "app-server", "daemon", verb)
-	env := slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "CODEX_HOME=") })
+	env := slices.DeleteFunc(codexDaemonEnv(os.Environ()), func(kv string) bool { return strings.HasPrefix(kv, "CODEX_HOME=") })
 	cmd.Env = append(env, "CODEX_HOME="+home)
 	cmd.Stdin = nil // os/exec reads it from the null device
 	return cmd, nil
+}
+
+// daemonProxyVars are the proxy variables Codex reads, as proc.ProxyVars
+// names them for the login shell.
+var daemonProxyVars = []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"}
+
+// daemonLoginEnv and daemonLoginPath are the login shell's variables and
+// PATH ("" for none); vars so tests can say.
+var (
+	daemonLoginEnv  = proc.LoginEnv
+	daemonLoginPath = func() string { return strings.Join(proc.LoginPath(), string(os.PathListSeparator)) }
+)
+
+// codexDaemonEnv is env with the PATH and proxy variables a terminal opened
+// now has, from the login shell: the daemon outlives the restart and
+// serves every codex started after it, so it runs as one started from a
+// terminal would. magpie opened from the desktop has neither: on Linux,
+// with the proxy set in .zshrc, the daemon magpie restarted after a
+// ChatGPT sign-in reached chatgpt.com directly, and every codex after it
+// stopped at "account/read failed: workspace routing discovery timed out"
+// until the daemon was restarted from a terminal (guotianci6 on X, Codex
+// 0.164). The proxy variables are taken as a set: when the login shell
+// names any, magpie's own are dropped, so a NO_PROXY only magpie has
+// doesn't ride along; when it names none, env's stay.
+func codexDaemonEnv(env []string) []string {
+	if runtime.GOOS == "windows" {
+		return env // a terminal's environment is the registry's, as magpie's is
+	}
+	var login []string
+	for _, k := range daemonProxyVars {
+		if v := daemonLoginEnv(k); v != "" {
+			login = append(login, k+"="+v)
+		}
+	}
+	path := daemonLoginPath()
+	out := make([]string, 0, len(env)+len(login))
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		if (len(login) > 0 && slices.Contains(daemonProxyVars, k)) || (path != "" && k == "PATH") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	if path != "" {
+		out = append(out, "PATH="+path)
+	}
+	return append(out, login...)
 }
 
 // The daemon also builds Codex's model list once, as it starts, from

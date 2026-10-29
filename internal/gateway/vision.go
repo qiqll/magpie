@@ -228,7 +228,7 @@ func autoVision() (string, bool) {
 		if bestReady && t > bestTier {
 			continue
 		}
-		m, cost, ready := smallModelWhere(p, "sees", sees)
+		m, cost, ready := smallModelWhere(p, "sees", seesAt(p.ID))
 		if m == "" {
 			continue
 		}
@@ -277,6 +277,20 @@ func autoDescribes() bool {
 // sees is whether a model takes images.
 func sees(m catalog.Model) bool {
 	return m.Images && (m.ImageInput == nil || *m.ImageInput)
+}
+
+// seesAt is sees for provider pid's models, the user's answer first
+// (provider.SetModelImage, magpie model spec --vision): a model they
+// marked text-only is never picked to describe images, and one they
+// marked as seeing is. smallKept is stamped by settings.json too, so a
+// change is read on the next pick.
+func seesAt(pid string) func(catalog.Model) bool {
+	return func(m catalog.Model) bool {
+		if v, ok := provider.ImageOverride(pid, m.ID); ok {
+			return v
+		}
+		return sees(m)
+	}
 }
 
 // sight is a description, once it is done.
@@ -367,7 +381,7 @@ func (s *Server) askVisionWith(ctx context.Context, model, src, system, text str
 		}
 	}
 	body, _ := json.Marshal(req)
-	r, err := http.NewRequestWithContext(magpieChose(ctx), http.MethodPost, "http://magpie/v1/chat/completions", nil)
+	r, err := http.NewRequestWithContext(ownAsk(magpieChose(ctx)), http.MethodPost, "http://magpie/v1/chat/completions", nil)
 	if err != nil {
 		return "", err
 	}
@@ -416,6 +430,9 @@ func (s *Server) askVisionWith(ctx context.Context, model, src, system, text str
 // the model would be asked about what it isn't given. One in an older turn
 // or a tool's result is left out, as textOnlyBody leaves it.
 func (s *Server) seenBody(ctx context.Context, proto provider.Protocol, body []byte, model string) ([]byte, error) {
+	// the images described before a route is begun: a wait magpie knows
+	// of (unrouted.go)
+	defer noteWait(ctx)()
 	var srcs []string
 	have := map[string]bool{}
 	walkImages(proto, body, func(im imageAt) (json.RawMessage, error) {

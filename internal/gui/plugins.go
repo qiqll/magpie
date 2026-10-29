@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/ghtoken"
 	"github.com/yetone/magpie/internal/middleware"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
@@ -31,6 +34,7 @@ type pluginSubJSON struct {
 	Spec     string          `json:"spec"` // the plugin
 	Methods  []plugin.Method `json:"methods"`
 	SignedIn bool            `json:"signedIn"`
+	Single   bool            `json:"single,omitempty"`
 	Models   int             `json:"models"`
 	// Options are the switches the plugin declares (auth.options, #2038),
 	// each with where it stands now
@@ -81,7 +85,7 @@ func pluginSubs() []pluginSubJSON {
 		}
 		out = append(out, pluginSubJSON{
 			ID: provider.PluginID(pp.ID), PID: pp.ID, Name: pp.Name, Icon: pluginIcon(pp), Spec: pp.Spec,
-			Methods: pp.Methods, SignedIn: pp.SignedIn, Models: len(pp.Models), Options: opts,
+			Methods: pp.Methods, SignedIn: pp.SignedIn, Single: pp.Single, Models: len(pp.Models), Options: opts,
 		})
 	}
 	return out
@@ -110,6 +114,10 @@ type pluginEntryJSON struct {
 	// Moved are the built-in subscriptions moved onto it, which stop
 	// with it when it is removed or turned off (no built-in to go back to)
 	Moved []string `json:"moved"`
+	// Serves are the names of the other providers it registers, which
+	// the row's "Serves" chip names after Moved's (#3902): only when the
+	// two come to two or more, as one provider alone is the row's title
+	Serves []string `json:"serves,omitempty"`
 	// AutoUpdated is the update magpie made to it by itself lately
 	AutoUpdated *plugin.Updated `json:"autoUpdated,omitempty"`
 	// Middleware is the gateway middleware it has, run in the gateway
@@ -256,8 +264,10 @@ func pluginsState(ctx context.Context, w Windows) pluginsJSON {
 	// which is the whole of the providers RPC; the page here uses none of
 	// those models, only the names, so waiting on them held the Installed
 	// list for one vendor after another every time it was opened.
+	provs := map[string][]plugin.Provider{}
 	for _, p := range plugin.Cached() {
 		names[p.Spec] = append(names[p.Spec], p.Name)
+		provs[p.Spec] = append(provs[p.Spec], p)
 		idName[p.ID] = p.Name
 	}
 	// whether that is the plugins' own answer or what was kept from before
@@ -354,6 +364,7 @@ func pluginsState(ctx context.Context, w Windows) pluginsJSON {
 		if j.Moved == nil {
 			j.Moved = []string{}
 		}
+		j.Serves = servesBeside(j.Moved, provs[e.Spec])
 		s.Plugins = append(s.Plugins, j)
 	}
 	// each plugin's own picture, kept and checked as a listed one's; at
@@ -366,6 +377,30 @@ func pluginsState(ctx context.Context, w Windows) pluginsJSON {
 		s.Plugins[i].Icon = ic
 	}
 	return s
+}
+
+// servesBeside is what a plugin's "Serves" chip names besides the
+// built-ins moved onto it: the providers it registers, each once, but for
+// the moved ones (a moved built-in's id is the plugin's provider id, and
+// the page names it as the built-in). Nothing when none is moved and it
+// registers fewer than two: a lone provider is what the row's title
+// already says (#3902).
+func servesBeside(moved []string, ps []plugin.Provider) []string {
+	var out []string
+	for _, p := range ps {
+		n := strings.TrimSpace(p.Name)
+		if n == "" {
+			n = p.ID
+		}
+		if slices.Contains(moved, p.ID) || slices.ContainsFunc(out, func(o string) bool { return strings.EqualFold(o, n) }) {
+			continue
+		}
+		out = append(out, n)
+	}
+	if len(moved) == 0 && len(out) < 2 {
+		return nil
+	}
+	return out
 }
 
 // npmPlugin is whether npm has the plugin spec's versions: a plugin from a
@@ -407,6 +442,22 @@ func pluginListings(ctx context.Context) []pluginListingJSON {
 	}
 	// at once: a picture still being fetched shows on the next ask
 	npmIcons(ns, 0)
+	return out
+}
+
+// pluginAgents are the suggested agent plugins not installed, by name.
+// One installed and turned off is installed: Plugins turns it on.
+func pluginAgents(ctx context.Context) []string {
+	have := map[string]bool{}
+	for _, e := range plugin.Load().Plugins {
+		have[plugin.Name(e.Spec)] = true
+	}
+	out := []string{}
+	for _, l := range plugin.Market(ctx) {
+		if l.Kind == "agent" && !have[l.Package] {
+			out = append(out, l.Name)
+		}
+	}
 	return out
 }
 
@@ -493,6 +544,11 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 	mux.HandleFunc("GET /api/plugins/listings", func(rw http.ResponseWriter, r *http.Request) {
 		writeJSON(rw, map[string]any{"listings": pluginListings(r.Context())})
 	})
+	// the agents a suggested plugin adds that aren't installed here: the
+	// Agents page's Install another agent says Plugins has them
+	mux.HandleFunc("GET /api/plugins/agents", func(rw http.ResponseWriter, r *http.Request) {
+		writeJSON(rw, pluginAgents(r.Context()))
+	})
 	// repositories on GitHub tagged magpie-plugin: nobody's list, shown
 	// apart as not reviewed, installed from the repository
 	mux.HandleFunc("GET /api/plugins/github", func(rw http.ResponseWriter, r *http.Request) {
@@ -520,6 +576,11 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 			var m *plugin.TaggedMissing
 			if errors.As(err, &m) {
 				out["error"], out["missing"] = m.Why.Error(), m.Missing
+			}
+			// and what kind of why, for the page to say in the reader's
+			// language (the raw error stays its hover)
+			if w := taggedWhyKind(err); w != "" {
+				out["why"] = w
 			}
 		}
 		writeJSON(rw, out)
@@ -791,4 +852,20 @@ func pluginAgentOf(spec string, errs map[string]string) *pluginAgentJSON {
 		}
 	}
 	return nil
+}
+
+// taggedWhyKind is what kind of failure keeps GitHub's list from being
+// whole: "slow" when GitHub didn't answer in time, "limited" when it
+// turned magpie away for its rate limit, "" for anything else (the page
+// shows that error as it is).
+func taggedWhyKind(err error) string {
+	var lim ghtoken.Limited
+	var ne net.Error
+	switch {
+	case errors.As(err, &lim):
+		return "limited"
+	case errors.Is(err, plugin.ErrNoAnswer), errors.Is(err, context.DeadlineExceeded), errors.As(err, &ne) && ne.Timeout():
+		return "slow"
+	}
+	return ""
 }

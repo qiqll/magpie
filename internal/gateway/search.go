@@ -916,7 +916,7 @@ var errNotSearched = fmt.Errorf("answered without searching the web: %w", errFou
 // searching for its own models is sent none.
 func (s *Server) searchWith(ctx context.Context, p provider.Provider, model, query, effort string) (string, []Hit, error) {
 	body, _ := json.Marshal(searchBody(p, model, query, effort))
-	r, err := http.NewRequestWithContext(magpieChose(ctx), http.MethodPost, "http://magpie/v1/messages", nil)
+	r, err := http.NewRequestWithContext(ownAsk(magpieChose(ctx)), http.MethodPost, "http://magpie/v1/messages", nil)
 	if err != nil {
 		return "", nil, err
 	}
@@ -926,9 +926,13 @@ func (s *Server) searchWith(ctx context.Context, p provider.Provider, model, que
 	s.serve(w, r, provider.Anthropic, body)
 	var out struct {
 		Content []struct {
-			Type    string          `json:"type"`
-			Text    string          `json:"text"`
-			Content json.RawMessage `json:"content"`
+			Type      string          `json:"type"`
+			Text      string          `json:"text"`
+			Content   json.RawMessage `json:"content"`
+			Citations []struct {
+				URL       string `json:"url"`
+				CitedText string `json:"cited_text"`
+			} `json:"citations"`
 		} `json:"content"`
 		Error *struct {
 			Message string `json:"message"`
@@ -947,11 +951,17 @@ func (s *Server) searchWith(ctx context.Context, p provider.Provider, model, que
 	var text strings.Builder
 	var sources []string
 	var found []Hit
+	quoted := map[string]string{} // what the searcher's citations quote of each page
 	searched := false
 	for _, b := range out.Content {
 		switch b.Type {
 		case "text":
 			text.WriteString(b.Text)
+			for _, c := range b.Citations {
+				if c.URL != "" && c.CitedText != "" && quoted[c.URL] == "" {
+					quoted[c.URL] = c.CitedText
+				}
+			}
 		case "server_tool_use":
 			searched = true
 		case "web_search_tool_result":
@@ -975,6 +985,9 @@ func (s *Server) searchWith(ctx context.Context, p provider.Provider, model, que
 				found = append(found, Hit{Title: h.Title, URL: h.URL, PageAge: age})
 			}
 		}
+	}
+	for i := range found {
+		found[i].Cited = quoted[found[i].URL]
 	}
 	said := strings.TrimSpace(text.String())
 	if said == "" || (len(found) == 0 && !strings.Contains(said, "://")) {
@@ -1229,7 +1242,20 @@ func (s *Server) askTranslated(p provider.Provider, to provider.Protocol, model 
 			}
 			var failed error
 			told := time.Now() // when the reader was last sent anything
+			// the reader hears that the reply goes on while the
+			// provider says nothing at all, as streamTranslated's client
+			// does (keepThroughSilence)
+			var mu sync.Mutex
+			heard, stopKeep := keepThroughSilence(&mu, func() {
+				if failed == nil && time.Since(told) >= keepaliveEvery/2 {
+					failed = send(Event{Kind: KAlive})
+					told = time.Now()
+				}
+			})
 			err := readSSEAlive(rd, func(_, data string) error {
+				mu.Lock()
+				defer mu.Unlock()
+				heard()
 				if err := dec(data, func(ev Event) {
 					if failed == nil {
 						failed = send(ev)
@@ -1240,6 +1266,9 @@ func (s *Server) askTranslated(p provider.Provider, to provider.Protocol, model 
 				}
 				return failed
 			}, func() {
+				mu.Lock()
+				defer mu.Unlock()
+				heard()
 				// a provider still queued or thinking — keepalives,
 				// response.in_progress — is heard from with nothing to
 				// translate: the reader hears that it goes on (#2316)
@@ -1248,6 +1277,7 @@ func (s *Server) askTranslated(p provider.Provider, to provider.Protocol, model 
 					told = time.Now()
 				}
 			})
+			stopKeep()
 			if err != nil && failed == nil && ctx.Err() == nil {
 				send(Event{Kind: KError, Text: p.Name + ": " + err.Error()})
 			}

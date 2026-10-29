@@ -255,6 +255,20 @@ func Drawers(p provider.Provider) []catalog.Model {
 		}
 		return out
 	}
+	if p.IsPlugin() {
+		// a plugin in front of an OpenAI-compatible API: the image models
+		// its list names that draw on the images API, sent through its
+		// fetch under the base its chat goes to (01huadalang on Discord:
+		// the SenseNova plugin's sensenova-u1.5-lite)
+		var out []catalog.Model
+		for _, m := range p.Available() {
+			if catalog.DrawsID(m.ID) && catalog.ImagesAPI(m.ID) && p.PluginOpenAICompatible(m.ID) && p.ModelKind(m.ID) != provider.KindVideo {
+				m.Provider = p.ID
+				out = append(out, m)
+			}
+		}
+		return out
+	}
 	// any other subscription is asked through its agent's own API, which
 	// draws nothing magpie can ask for yet. A Responses-only relay (a Codex
 	// backend such as sub2api) has no chat base but serves the images API
@@ -469,7 +483,7 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 		}
 		var unmask func()
 		var hits maskHits
-		w, d.Prompt, unmask, hits, err = redactedPromptHits(w, d.Prompt)
+		w, d.Prompt, unmask, hits, err = redactedPromptHits(r.Context(), w, d.Prompt)
 		defer unmask()
 		if err != nil {
 			fail(maskStatus(err), err.Error())
@@ -893,11 +907,61 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 	for i, c := range cs {
 		p = c.p
 		out, code, err = s.draw(ctx, p, model, d)
+		if err != nil && ctx.Err() == nil {
+			restDrawer(c, code, err.Error())
+		}
 		if err == nil || ctx.Err() != nil || i+1 == len(cs) || !accountRefusedDrawing(code) && !keyLacksModel(code, err) {
 			break
 		}
 	}
 	return p, out, code, time.Time{}, err
+}
+
+// restDrawer rests the image model on c's account when the account is out
+// of its quota for it, until the reset the refusal names (Antigravity's
+// "Your quota will reset after 3h19m30s.", resetsAt), else quotaRest. Only
+// the model rests (restID), never the account: its text models draw on
+// allowances of their own. The next drawing then asks the accounts that
+// still have it first (restLast in candidates), and a chat on that image
+// model goes past it too, where before every drawing asked the spent
+// account first again (01huadalang on Discord). A failure of any other
+// kind rests nothing, as before: a key, a request refused, a vendor down;
+// nor does any on a provider set never to rest for a limit (LimitRestOff).
+func restDrawer(c candidate, code int, msg string) {
+	if c.p.Account == nil || c.p.LimitRestOff || c.model == "" || failure(code, []byte(msg)) != failQuota {
+		return
+	}
+	now := time.Now()
+	r := Rest{Why: failQuota, Status: code, By: "quota", Key: c.restID(), Model: c.model,
+		agent: c.p.Account.UsageAgent(), user: c.p.Account.User, said: msg}
+	d := quotaRest
+	if w := resetsAt([]byte(msg), now); w > 0 {
+		d, r.By = min(w, longestQuota), "resets"
+	}
+	r.Until = now.Add(d)
+	restingUntil.Lock()
+	restingUntil.m[r.Key] = r.Until
+	restingUntil.note[r.Key] = r
+	restingUntil.Unlock()
+}
+
+// saidStatus is the status an error said inside a drawing's 200 stands
+// for, which drawOnAccounts goes by: Antigravity tells a model's quota used
+// up as the stream's error event as well as a 429 ("You have exhausted
+// your capacity on this model. Your quota will reset after 3h19m30s."),
+// and told as a 502 it ended the drawing on the spent account while the
+// next one had its quota (01huadalang on Discord). Out of quota, or
+// rate limited, it is the 429 it would have been; out of credit, the 402;
+// anything else the 502 it was, which asks no other account.
+func saidStatus(msg string) int {
+	b := wordsOf([]byte(msg))
+	switch {
+	case usedUpWords.Match(b), quotaCodes.Match(b), rateWords.Match(b):
+		return http.StatusTooManyRequests
+	case creditWords.Match(b):
+		return http.StatusPaymentRequired
+	}
+	return http.StatusBadGateway
 }
 
 // keyLacksModel says a vendor answered 404 that the model isn't one this
@@ -1049,7 +1113,7 @@ func (s *Server) sendWith(ctx context.Context, p provider.Provider, method, url,
 		if drawsCodex(p) && res.StatusCode == http.StatusForbidden {
 			hint = fmt.Sprintf(" — ChatGPT turned %s's images away: its plan or workspace may not draw, or not with this model (Codex CLI draws with %s)", p.Name, codexDrawer)
 		}
-		return b, res.StatusCode, fmt.Errorf("%s: %d %s%s%s", provider.HostOf(url), res.StatusCode, http.StatusText(res.StatusCode), vendorSaid(vendorMessage(b)), hint)
+		return b, res.StatusCode, fmt.Errorf("%s: %d %s%s%s", provider.HostOf(url), res.StatusCode, http.StatusText(res.StatusCode), errorSaid(b), hint)
 	}
 	return b, res.StatusCode, nil
 }
@@ -1125,7 +1189,21 @@ func vendorMessage(b []byte) string {
 			return s
 		}
 	}
+	// a web page is said for what it is, not as markup
+	if said, ok := provider.WebPage(b); ok {
+		return said
+	}
 	return string(b)
+}
+
+// errorSaid is what an HTTP error's body said, for after its status: the
+// vendor's message, a web page by its title, or, for an empty body, that
+// it was refused with no details.
+func errorSaid(b []byte) string {
+	if said, ok := provider.Unsaid(b); ok {
+		return ": " + said
+	}
+	return vendorSaid(vendorMessage(b))
 }
 
 // drawImages asks an images API: generations, or edits with the images
@@ -1177,14 +1255,19 @@ func (s *Server) drawImages(ctx context.Context, p provider.Provider, model stri
 			}
 		}
 		// only dall-e gives a URL unless asked; gpt-image turns the field away
-		if strings.Contains(m, "dall-e") {
+		if strings.Contains(m, "dall-e") || senseNovaDrawer(m) {
 			req["response_format"] = "b64_json"
 		}
 		body, _ = json.Marshal(req)
 		ct, url = "application/json", base+"/images/generations"
-	} else if drawsCodex(p) {
-		// ChatGPT's backend takes an edit only as JSON, each image a data URL
+	} else if drawsCodex(p) || senseNovaDrawer(m) {
+		// ChatGPT's backend takes an edit only as JSON, each image a data URL;
+		// so does SenseNova's for its U1 models, which answer in a URL unless
+		// asked for base64
 		req := map[string]any{"model": model, "prompt": d.Prompt, "n": d.N}
+		if senseNovaDrawer(m) {
+			req["response_format"] = "b64_json"
+		}
 		for k, v := range map[string]string{"size": d.Size, "quality": d.Quality, "background": d.Background, "output_format": d.Format} {
 			if v != "" {
 				req[k] = v
@@ -1245,6 +1328,15 @@ func (s *Server) drawImages(ctx context.Context, p provider.Provider, model stri
 		return drawn{}, code, err
 	}
 	return readImagesAnswer(p, url, b, code)
+}
+
+// senseNovaDrawer is whether model is one of SenseNova's U1 image models
+// (sensenova-u1.5-lite, sensenova-u1.5-fast), whose /images/edits takes
+// JSON alone, the images as [{"image_url": "data:…"}], and whose answer
+// is a link for 24 hours unless response_format asks for b64_json
+// (lileo0668 on Discord).
+func senseNovaDrawer(model string) bool {
+	return strings.Contains(strings.ToLower(model), "sensenova-u1")
 }
 
 // drawOpenRouterImages asks OpenRouter's dedicated Images API, which accepts
@@ -1324,7 +1416,7 @@ func readImagesAnswer(p provider.Provider, url string, b []byte, code int) (draw
 	}
 	if len(out.Images) == 0 {
 		// an answer with no image says why, or is shown as it came
-		return out, 502, fmt.Errorf("%s answered with no image%s", provider.HostOf(url), vendorSaid(vendorMessage(b)))
+		return out, saidStatus(vendorMessage(b)), fmt.Errorf("%s answered with no image%s", provider.HostOf(url), vendorSaid(vendorMessage(b)))
 	}
 	return out, code, nil
 }
@@ -1667,7 +1759,7 @@ func (s *Server) drawCodeAssist(ctx context.Context, p provider.Provider, model 
 		}
 		out.Text = strings.TrimSpace(out.Text)
 		if failed != "" && len(out.Images) == 0 {
-			return out, 502, errors.New(failed)
+			return out, saidStatus(failed), errors.New(failed)
 		}
 		return out, 200, nil
 	})

@@ -1,8 +1,10 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
 // A card's own refresh (Hu9956, #840: 在更新时间左侧加一个刷新按钮，鼠标悬停
-// 在套餐卡片上时显示，可以单独刷新某个套餐的用量): left of "Updated …", or of
-// why a reading failed, or under a balance, opening as the card is hovered;
-// at rest the line starts where the card's others do. A click reads that card alone
+// 在套餐卡片上时显示，可以单独刷新某个套餐的用量): after "Updated …", or
+// after why a reading failed, or under a balance, opening as the card is
+// hovered; at rest the line starts where the card's others do, and the text
+// doesn't move when it opens (opening left of it pushed it right on every
+// hover). A click reads that card alone
 // (POST /api/usage/quotas/refresh?provider=&user=), turns while it does, and
 // draws what came back; no other card is asked, and the page doesn't scroll.
 // Button controls in English and Chinese; refresh ordering, deferred
@@ -137,12 +139,21 @@ function layoutFixtures(now) {
   ] };
 }
 
+// where the line's text starts, line by line
+const textAt = (row) => row.evaluate((e) => {
+  const range = document.createRange();
+  range.selectNodeContents(e);
+  return [...range.getClientRects()].filter((r) => r.width).map((r) => Math.round(r.x * 4) / 4)[0];
+});
+
 async function showRefresh(row) {
+  const was = await textAt(row);
   await row.hover();
   await row.locator(".quota-refresh").evaluate(e => new Promise(done => {
     const tick = () => getComputedStyle(e).opacity === "1" && e.getBoundingClientRect().width >= 14 ? done() : requestAnimationFrame(tick);
     tick();
   }));
+  assert.equal(await textAt(row), was, "the text stays where it was as the refresh opens");
 }
 
 async function assertRefreshAligned(row) {
@@ -152,11 +163,13 @@ async function assertRefreshAligned(row) {
     const range = document.createRange();
     range.selectNodeContents(text);
     const rect = (r) => ({ x: r.x, right: r.right, cy: r.y + r.height / 2 });
-    return { icon: rect(button.querySelector("svg").getBoundingClientRect()), text: rect(range.getClientRects()[0]) };
+    return { icon: rect(button.querySelector("svg").getBoundingClientRect()), text: rect([...range.getClientRects()].at(-1)) };
   });
-  assert.ok(boxes.icon.right <= boxes.text.x, "the refresh icon stays left of the first line");
-  assert.ok(Math.abs(boxes.icon.cy - boxes.text.cy) <= 0.75,
-    "the refresh icon and the first text line must share a vertical center: " + JSON.stringify(boxes));
+  // after the text: on its last line, or on a line of its own below it
+  const below = boxes.icon.cy > boxes.text.cy + 4;
+  assert.ok(below || boxes.icon.x >= boxes.text.right, "the refresh icon comes after the text: " + JSON.stringify(boxes));
+  if (!below) assert.ok(Math.abs(boxes.icon.cy - boxes.text.cy) <= 0.75,
+    "the refresh icon and the text's line must share a vertical center: " + JSON.stringify(boxes));
 }
 
 async function assertInlineSettings(row, multiline) {
@@ -208,7 +221,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     releaseRead();
     await page.evaluate(() => quotasLoading);
     assert.equal(await row.evaluate(e => e.querySelector(".quota-refresh") === window.refreshMotion.button), true, "a background reading replaced the spinning control");
-    assert.equal(await row.evaluate(e => e.querySelector("path").getAnimations()[0] === window.refreshMotion.animation), true, "a background reading restarted the turn");
+    assert.equal(await row.evaluate(e => e.querySelector(".quota-refresh path").getAnimations()[0] === window.refreshMotion.animation), true, "a background reading restarted the turn");
     release();
     await page.locator('.subscription-card[data-provider="codex"] .quota-n', { hasText: "61%" }).waitFor();
     const end = await row.evaluate(e => {
@@ -223,8 +236,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     // A response already available still gets one complete turn.
     state.gate = undefined;
     await row.locator(".quota-refresh").click();
-    await page.waitForFunction(() => document.querySelector('.subscription-card[data-provider="codex"] path').getAnimations()[0]?.effect.getTiming().iterations === 1);
-    await row.evaluate(e => e.querySelector("path").getAnimations()[0].finish());
+    await page.waitForFunction(() => document.querySelector('.subscription-card[data-provider="codex"] .quota-refresh path').getAnimations()[0]?.effect.getTiming().iterations === 1);
+    await row.evaluate(e => e.querySelector(".quota-refresh path").getAnimations()[0].finish());
     await row.locator(".quota-refresh:not(.busy)").waitFor();
     assert.deepEqual(errors, []);
   });
@@ -296,12 +309,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const user = await claude.locator(".subscription-account .user").boundingBox();
       assert.ok(Math.abs((await ago.boundingBox()).x - user.x) < 1, "the time lines up with the card at rest");
 
-      // hovered: left of the time, on its line
+      // hovered: after the time, on its line
       await claude.hover();
       await btn.evaluate((e) => new Promise((done) => { const tick = () => getComputedStyle(e).opacity === "1" && e.getBoundingClientRect().width >= 14 ? done() : requestAnimationFrame(tick); tick(); }));
       assert.equal(await opacity(), "1");
       const [b, when] = [await btn.boundingBox(), await ago.boundingBox()];
-      assert.ok(b.width >= 14 && b.x + b.width <= when.x + 0.5 && Math.abs(b.y + b.height / 2 - (when.y + when.height / 2)) < 4, JSON.stringify({ b, when }));
+      assert.ok(b.width >= 14 && b.x >= when.x + when.width - 0.5 && Math.abs(b.y + b.height / 2 - (when.y + when.height / 2)) < 4, JSON.stringify({ b, when }));
       await assertRefreshAligned(read);
 
       // a failed reading and a balance have one too

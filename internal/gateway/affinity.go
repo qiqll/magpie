@@ -52,6 +52,17 @@ const (
 	// cacheCold is how long a vendor keeps a prompt cached without it being
 	// read: five minutes at Anthropic and at OpenAI, the shortest there is.
 	cacheCold = 5 * time.Minute
+	// chatGPTCold is how long the ChatGPT backend keeps a Codex
+	// conversation's prompt cached without it being read. Measured on a
+	// real account (10-27, gpt-5.6-terra), a Codex thread left 7, 12, 25,
+	// 45 and 60 minutes read back from cache all it had sent before (79–99%
+	// of each request), so it is
+	// held for the hour measured, not cacheCold's five minutes.
+	// Moving a conversation between two ChatGPT accounts after five
+	// minutes sent its whole context to the other uncached, and the
+	// reasoning the first had sealed was refused there (leelantao on X:
+	// two Plus accounts' allowance spent 90% in a day).
+	chatGPTCold = time.Hour
 	// cacheHour is how long Anthropic keeps what was written with
 	// cache_control's ttl "1h" (cache_creation's ephemeral_1h_input_tokens)
 	// without it being read, as Claude Code asks of a subscription (#2302)
@@ -61,6 +72,15 @@ const (
 	// sticksKept is how many conversations, the latest, are kept on disk.
 	sticksKept = 512
 )
+
+// coldAfter is how long p's vendor keeps a prompt cached without it being
+// read: cacheCold, or chatGPTCold for a ChatGPT account.
+func coldAfter(p provider.Provider) time.Duration {
+	if p.Account != nil && p.Account.Agent == "codex" {
+		return chatGPTCold
+	}
+	return cacheCold
+}
 
 // Affinity is what the trace tells of a request's conversation and whether
 // it stayed with who answered it last.
@@ -378,9 +398,9 @@ func strictKeep(scope, mode string, in http.Header, body []byte, cs []candidate,
 		return cs, pl, nil
 	}
 	sticks.Lock()
-	st, had := stickOf(scope + "|" + conversationID(in, body))
+	st, had := stickOf(stickKey(scope, in, body))
 	sticks.Unlock()
-	if !had || time.Since(st.at) > stickKeep || slices.ContainsFunc(cs, func(c candidate) bool { return c.who() == st.who }) {
+	if !had || time.Since(st.at) > stickKeep || slices.ContainsFunc(cs, func(c candidate) bool { return c.sameVendor(st.who, st.model) }) {
 		return cs, pl, nil
 	}
 	// the left's line for c, as it was left out
@@ -392,7 +412,7 @@ func strictKeep(scope, mode string, in http.Header, body []byte, cs []candidate,
 	var back []candidate
 	var order []Weighed
 	for _, c := range pl.capped {
-		if c.who() != st.who {
+		if !c.sameVendor(st.who, st.model) {
 			continue
 		}
 		i := leftAt(c)
@@ -405,12 +425,12 @@ func strictKeep(scope, mode string, in http.Header, body []byte, cs []candidate,
 		back, order = append(back, c), append(order, w)
 	}
 	if len(back) > 0 {
-		pl.capped = slices.DeleteFunc(slices.Clone(pl.capped), func(c candidate) bool { return c.who() == st.who })
+		pl.capped = slices.DeleteFunc(slices.Clone(pl.capped), func(c candidate) bool { return c.sameVendor(st.who, st.model) })
 		return append(back, cs...), planned{order: append(order, pl.order...), left: pl.left, held: pl.held, capped: pl.capped}, nil
 	}
 	var held []Weighed
 	for _, c := range pl.held {
-		if c.who() != st.who {
+		if !c.sameVendor(st.who, st.model) {
 			continue
 		}
 		if i := slices.IndexFunc(pl.left, func(w Weighed) bool { return w.ID == c.rest && w.NoCredits }); i >= 0 {
@@ -419,7 +439,7 @@ func strictKeep(scope, mode string, in http.Header, body []byte, cs []candidate,
 	}
 	if len(held) > 0 {
 		// only its own reset, should it spend one by itself, brings it back
-		pl.held = slices.DeleteFunc(slices.Clone(pl.held), func(c candidate) bool { return c.who() != st.who })
+		pl.held = slices.DeleteFunc(slices.Clone(pl.held), func(c candidate) bool { return !c.sameVendor(st.who, st.model) })
 		return nil, planned{order: nil, left: pl.left, held: pl.held, capped: pl.capped}, held[:1]
 	}
 	return cs, pl, nil
@@ -430,10 +450,10 @@ func strictKeep(scope, mode string, in http.Header, body []byte, cs []candidate,
 // group has on it, which a rule may still pick between. Nobody else is
 // asked, nor a reset spent elsewhere: its error is the agent's.
 func strictOnly(cs []candidate, pl planned, at int) ([]candidate, planned) {
-	who := cs[at].who()
+	who, model := cs[at].who(), cs[at].model
 	keep := []int{at}
 	for i, c := range cs {
-		if i != at && c.who() == who {
+		if i != at && c.sameVendor(who, model) {
 			keep = append(keep, i)
 		}
 	}
@@ -448,16 +468,40 @@ func strictOnly(cs []candidate, pl planned, at int) ([]candidate, planned) {
 		}
 	}
 	pl.order = order
-	pl.held = slices.DeleteFunc(slices.Clone(pl.held), func(c candidate) bool { return c.who() != who })
+	pl.held = slices.DeleteFunc(slices.Clone(pl.held), func(c candidate) bool { return !c.sameVendor(who, model) })
 	return out, pl
 }
 
-// affine puts first whoever answered the conversation last, while its
-// affinity says to keep it there.
-func affine(scope, mode string, rotate bool, in http.Header, from provider.Protocol, body []byte, cs []candidate, pl planned) ([]candidate, planned, *Affinity, string) {
+// stickKey is the conversation a stick is kept for: scope's, by the
+// conversation's id, and a Claude Code subagent's apart from its lead's.
+// Claude Code sends its session's id with every request of the session,
+// its subagents' too, which say only by x-claude-code-agent-id that they
+// are one (subagentOf). Under the session's key, a subagent's answer took
+// the lead's stick over: the lead's next turn was judged by the cache of
+// the subagent's conversation, moved to another account as "no-cache" or
+// "cold" or to wherever the subagent had gone, and the lead's whole
+// conversation written to that account's cache again (slkassinthehood on
+// X: two Pro accounts' 5 hours spent in ten minutes). The lead's key is
+// the session's as before, so what is kept of it, and Codex's leadFirst,
+// which reads a lead's stick by its thread id, are as they were.
+func stickKey(scope string, in http.Header, body []byte) string {
 	key := scope + "|" + conversationID(in, body)
+	if sub := subOf(in); sub != "" {
+		key += "|agent:" + sub
+	}
+	return key
+}
+
+// affine puts first whoever answered the conversation last, while its
+// affinity says to keep it there. Its turn is counted in written, the body
+// as the agent wrote it, which the turn's folder is read from too
+// (dirOf): one parse of a held body serves both (factsOf), where counting
+// it in the masked body parsed the conversation a second time, ~27 MB
+// more for each 4 MB Codex request in flight.
+func affine(scope, mode string, rotate bool, in http.Header, from provider.Protocol, body, written []byte, cs []candidate, pl planned) ([]candidate, planned, *Affinity, string) {
+	key := stickKey(scope, in, body)
 	a := &Affinity{Mode: mode}
-	a.Turn, a.Within = turnOf(from, body)
+	a.Turn, a.Within = turnOf(from, written)
 	sticks.Lock()
 	st, had := stickOf(key)
 	sticks.Unlock()
@@ -470,12 +514,13 @@ func affine(scope, mode string, rotate bool, in http.Header, from provider.Proto
 	// the account and the model that answered: a group with Opus and
 	// Sonnet both on one Claude account, a rule sending the turn to Opus,
 	// had the turn's next request kept to the account and so to Sonnet,
-	// its first member there; the account alone when the model is gone
+	// its first member there; the account alone when the model is gone,
+	// and behind a remote magpie the provider there alone (sameVendor)
 	at := -1
 	for _, same := range []func(candidate) bool{
 		func(c candidate) bool { return c.who() == st.who && c.model == st.model && c.effort == st.effort },
 		func(c candidate) bool { return c.who() == st.who && c.model == st.model },
-		func(c candidate) bool { return c.who() == st.who },
+		func(c candidate) bool { return c.sameVendor(st.who, st.model) },
 	} {
 		for i, c := range cs {
 			if had && at < 0 && same(c) {
@@ -511,8 +556,9 @@ func affine(scope, mode string, rotate bool, in http.Header, from provider.Proto
 		// what it wrote counts with what it read: the cache a first turn
 		// built is there for the next to read
 		a.Why = "no-cache"
-	case time.Since(st.at) > cacheCold && !st.hour.warm(time.Now()):
-		// past five minutes, kept still where the vendor said it
+	case time.Since(st.at) > coldAfter(cs[at].p) && !st.hour.warm(time.Now()):
+		// past what the vendor keeps unread (five minutes, longer at
+		// the ChatGPT backend), kept still where the vendor said it
 		// keeps enough for an hour (#2302)
 		a.Why = "cold"
 	default:
@@ -686,7 +732,7 @@ func opened(key string) {
 func unanswered(key string, c candidate) {
 	sticks.Lock()
 	st, ok := stickOf(key)
-	ok = ok && st.who == c.who()
+	ok = ok && c.sameVendor(st.who, st.model)
 	if ok {
 		delete(sticks.m, key)
 	}
@@ -798,17 +844,17 @@ func withoutRefused(key, who string, body []byte) ([]byte, bool) {
 		return nil, false
 	}
 	var q map[string]json.RawMessage
-	if decodeJSON(body, &q) != nil {
+	if decodeJSONView(body, &q) != nil {
 		return nil, false
 	}
-	var items []json.RawMessage
-	if decodeJSON(q["input"], &items) != nil {
+	items, isList := inputList(q["input"])
+	if !isList {
 		return nil, false
 	}
 	kept := items[:0:0]
 	for _, it := range items {
 		var t sealedItem
-		if decodeJSON(it, &t) == nil && sealedKinds[t.Type] && t.Enc != "" && r.seals[sha256.Sum256([]byte(t.Enc))] {
+		if decodeJSONView(it, &t) == nil && sealedKinds[t.Type] && t.Enc != "" && r.seals[sha256.Sum256([]byte(t.Enc))] {
 			continue
 		}
 		kept = append(kept, it)
@@ -817,7 +863,7 @@ func withoutRefused(key, who string, body []byte) ([]byte, bool) {
 		return nil, false
 	}
 	q["input"], _ = json.Marshal(kept)
-	b, err := json.Marshal(q)
+	b, err := marshalJSON(q)
 	return b, err == nil
 }
 
@@ -852,11 +898,11 @@ func withoutCompaction(body []byte) ([]byte, bool) {
 // types.
 func withoutKinds(body []byte, kinds ...string) ([]byte, bool) {
 	var q map[string]json.RawMessage
-	if decodeJSON(body, &q) != nil {
+	if decodeJSONView(body, &q) != nil {
 		return nil, false
 	}
-	var items []json.RawMessage
-	if decodeJSON(q["input"], &items) != nil {
+	items, isList := inputList(q["input"])
+	if !isList {
 		return nil, false
 	}
 	kept := items[:0:0]
@@ -864,7 +910,7 @@ func withoutKinds(body []byte, kinds ...string) ([]byte, bool) {
 		var t struct {
 			Type string `json:"type"`
 		}
-		if decodeJSON(it, &t) == nil && slices.Contains(kinds, t.Type) {
+		if decodeJSONView(it, &t) == nil && slices.Contains(kinds, t.Type) {
 			continue
 		}
 		kept = append(kept, it)
@@ -873,6 +919,6 @@ func withoutKinds(body []byte, kinds ...string) ([]byte, bool) {
 		return nil, false
 	}
 	q["input"], _ = json.Marshal(kept)
-	b, err := json.Marshal(q)
+	b, err := marshalJSON(q)
 	return b, err == nil
 }

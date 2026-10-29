@@ -48,6 +48,9 @@ var Vars = []string{
 	"STEP_CODING_AGENT_DIR", "STEPCODE_CONFIG_DIR",
 	// MothX's config folder ($MOTHX_DIR/settings.json)
 	"MOTHX_DIR",
+	// PenguinHarness's data root and the Project its CLI works in
+	// ($PENGUIN_HOME/$PENGUIN_PROJECT_ID/.project_config.toml)
+	"PENGUIN_HOME", "PENGUIN_PROJECT_ID",
 	// omp
 	"OMP_PROFILE",
 	// Qoder's two builds, the global site's and China's
@@ -62,10 +65,15 @@ var Vars = []string{
 	"QWEN_HOME",
 	// Ante
 	"ANTE_HOME",
+	// NewMax's data folder (its newmax.db), ~/.newmax without it
+	"NEWMAX_USER_DATA_DIR",
 	// AstrBot's root, the folder holding its data/ (else ~/.astrbot, the desktop app's)
 	"ASTRBOT_ROOT",
 	// jcode's folder, ~/.jcode without it
 	"JCODE_HOME",
+	// OpenClaw: its config file, its state folder (openclaw.json in it), a
+	// named profile's folder (~/.openclaw-<profile>) and its own ~
+	"OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR", "OPENCLAW_PROFILE", "OPENCLAW_HOME",
 	// MiMo Code, MiniMax Code, OpenHanako, Hermes, dsh, WorkBuddy, CodeBuddy Code
 	"MIMOCODE_HOME", "MINIMAX_DATA_DIR", "HANA_HOME", "HERMES_HOME", "DSH_HOME",
 	"WORKBUDDY_CONFIG_DIR", "CODEBUDDY_CONFIG_DIR",
@@ -94,6 +102,9 @@ var Vars = []string{
 	"CURSOR_CONFIG_DIR", "CURSOR_DATA_DIR",
 	// OpenCode and OpenChamber
 	"OPENCODE_CONFIG_DIR", "OPENCODE_DB", "OPENCHAMBER_DATA_DIR",
+	// Kiro Crew's home, and the adapters it runs Codex, Claude Code and Pi
+	// through
+	"KIROCREW_HOME", "CODEX_ACP_BIN", "CLAUDE_AGENT_ACP_BIN", "PI_ACP_BIN",
 	// Droid's home, Windsurf's API server, ZCode's credential seed: what
 	// makes an account or an installation visible that the test didn't make
 	"FACTORY_HOME_OVERRIDE", "WINDSURF_API_SERVER_URL", "ZCODE_CREDENTIAL_SECRET",
@@ -103,6 +114,9 @@ var Vars = []string{
 	// mise's and asdf's folders, whose shims stand for an agent's CLI and
 	// whose installs hold the Node versions it is under
 	"MISE_DATA_DIR", "ASDF_DIR",
+	// cargo's folder, whose bin holds an rtk cargo installed: the Library
+	// finds rtk there and upgrades it with cargo (cargoBins)
+	"CARGO_HOME",
 	// Google Cloud's credentials file and gcloud's folder, which Vertex AI's
 	// tokens are minted from (and Gemini CLI's own, on Vertex AI)
 	"GOOGLE_APPLICATION_CREDENTIALS", "CLOUDSDK_CONFIG",
@@ -119,6 +133,8 @@ var NotPaths = map[string]bool{
 	"PI_CONFIG_DIR": true, "OPENCODE_DB": true,
 	"STEPCODE_CONFIG_DIR": true,
 	"MAGPIE_ZED_BIN":      true, "MAGPIE_ZED_PROCESS_NAMES": true,
+	"PENGUIN_PROJECT_ID": true,
+	"OPENCLAW_PROFILE":   true,
 }
 
 // ClaudeProviders are Claude Code's switches that send its requests to a

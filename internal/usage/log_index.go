@@ -14,6 +14,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,6 +22,10 @@ import (
 const (
 	logBlockRows   = 512
 	logStampSettle = time.Second
+	// logFineSettle is logStampSettle for a change time with a fraction of
+	// a second, from a clock that ticks in milliseconds: APFS's in
+	// nanoseconds, Linux's coarse clock in 1 to 10 ms, NTFS's in ~15.6 ms.
+	logFineSettle = 100 * time.Millisecond
 )
 
 // The blocks are always kept, however long the history: they are the index
@@ -44,6 +49,15 @@ type logSnapshot struct {
 	// reach back to a subscription window's start.
 	firstOwn     time.Time
 	keyProviders map[string]bool
+	// probes are the requests magpie sent on its own (SourceProbe), kept
+	// out of blocks: every reader of those counts what it reads, and the
+	// request log alone lists these (queryPage)
+	probes []probeRow
+	// hosts are the providers by the host their calls went to, as the log
+	// recorded them: "" for a host two providers were on. A probe made
+	// while a provider was being added, under its host, is that
+	// provider's after it is deleted too (probeChunk; cybercaius).
+	hosts map[string]string
 }
 
 var logIndex struct {
@@ -61,6 +75,24 @@ var logAppends struct {
 	sync.Mutex
 	path       string
 	base, last os.FileInfo
+}
+
+// sawHost notes the provider r's call went to by its host. A probe made
+// before its provider had an id names the host for both, and says nothing.
+func (s *logSnapshot) sawHost(r Record) {
+	h, _, _ := strings.Cut(r.Host, " as ") // a subscription's "host as user"
+	h = strings.ToLower(strings.TrimSpace(h))
+	if h == "" || r.Provider == "" || strings.EqualFold(r.Provider, h) || r.IsRejected() {
+		return
+	}
+	if s.hosts == nil {
+		s.hosts = map[string]string{}
+	}
+	if to, ok := s.hosts[h]; !ok {
+		s.hosts[h] = r.Provider
+	} else if to != r.Provider {
+		s.hosts[h] = ""
+	}
 }
 
 func readLogSnapshot() *logSnapshot {
@@ -95,7 +127,7 @@ func readLogSnapshot() *logSnapshot {
 		logIndex.version++
 	}
 
-	next := &logSnapshot{path: path, info: info, settled: settled, version: logIndex.version, keyProviders: map[string]bool{}}
+	next := &logSnapshot{path: path, info: info, settled: settled, version: logIndex.version, keyProviders: map[string]bool{}, hosts: map[string]string{}}
 	if err != nil {
 		logIndex.snapshot = next
 		return next
@@ -112,6 +144,8 @@ func readLogSnapshot() *logSnapshot {
 		next.off, next.first, next.firstOwn = old.off, old.first, old.firstOwn
 		next.blocks = slices.Clone(old.blocks)
 		next.keyProviders = maps.Clone(old.keyProviders)
+		next.probes = slices.Clip(old.probes) // appended to, never written in
+		next.hosts = maps.Clone(old.hosts)
 	}
 	logIndex.reads++
 	f, err := os.Open(path)
@@ -141,6 +175,13 @@ func readLogSnapshot() *logSnapshot {
 		sum.Write(b)
 		var r Record
 		if json.Unmarshal(b, &r) != nil {
+			continue
+		}
+		next.sawHost(r)
+		if r.IsProbe() {
+			if !quietProbe(r) { // a model list answered is no row (ferock)
+				next.probes = append(next.probes, probeRow{r, next.off})
+			}
 			continue
 		}
 		if tail == nil {
@@ -219,15 +260,26 @@ func (o routeRows) handedOn(c *rowChunk, r *Record) {
 	r.Tries = max(r.Tries, 2)
 }
 
-func (s *logSnapshot) visit(since time.Time, fn func(Record)) {
-	for _, packed := range s.blocks {
+// visit hands fn each record of the log since since. The blocks are
+// decoded into one buffer, each over the one before: each decoded into
+// rows of its own, the Sessions, Usage and Routing pages' reads of the
+// log allocated ~800 MB of rows a minute while calls came in (#2278). A
+// record's strings are the block's own, not the buffer's.
+func (s *logSnapshot) visit(since time.Time, fn func(Record)) { visitBlocks(s.blocks, since, fn) }
+
+// blockReader reads blocks as visit reads the log's.
+func blockReader(blocks []*rowChunk, since time.Time) func(func(Record)) {
+	return func(fn func(Record)) { visitBlocks(blocks, since, fn) }
+}
+
+func visitBlocks(blocks []*rowChunk, since time.Time, fn func(Record)) {
+	rows := chunkRows{}
+	defer rows.release()
+	for _, packed := range blocks {
 		if !since.IsZero() && packed.Latest.Before(since) {
 			continue
 		}
-		c := packed.unpack()
-		if c == nil {
-			continue
-		}
+		c := rows.of(packed)
 		for i := range c.Rows {
 			p := &c.Rows[i]
 			if !p.Time.Before(since) {
@@ -259,7 +311,9 @@ func (c *rowChunk) freeze() *rowChunk {
 		c.Bytes -= int64(32 * len(c.Strings))
 	}
 	c.shapeIDs = nil
-	return c.pack()
+	c = c.pack()
+	c.serial = nextChunkSerial()
+	return c
 }
 
 func resumeLogHash(h hash.Hash, state []byte) bool {
@@ -292,9 +346,21 @@ func oldInfo(s *logSnapshot) os.FileInfo {
 
 // A read in the change stamp's clock tick cannot prove that a later equal
 // stamp still names the same bytes. Decide before reading, not at reuse time.
+//
+// A stamp in whole seconds (HFS+, FAT, a share that keeps no fraction) may
+// share its second with a write after the read. One with a fraction comes
+// from a clock that ticks in milliseconds, past which a write has a later
+// stamp, so it settles in logFineSettle. Under steady traffic each read
+// came within a second of the gateway's last append, so each one hashed
+// the whole log again: 1.8 times the log for each append and read, so a
+// 100 MB history cost ~180 MB of SHA-256 for every request (#3394).
 func settledLogStamp(info os.FileInfo, start time.Time) bool {
 	c := logChangeTime(info)
-	return !c.IsZero() && c.Before(start.Add(-logStampSettle))
+	settle := logStampSettle
+	if c.Nanosecond() != 0 {
+		settle = logFineSettle
+	}
+	return !c.IsZero() && c.Before(start.Add(-settle))
 }
 
 func sameLogInfo(a, b os.FileInfo) bool {

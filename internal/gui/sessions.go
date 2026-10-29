@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
+	"runtime/metrics"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/agent"
+	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/sessions"
 	"github.com/yetone/magpie/internal/settings"
@@ -79,6 +81,8 @@ func gatewaySession(g usage.GatewaySession) sessions.Session {
 func sessionRoutes(mux *http.ServeMux, w Windows) {
 	warmSessions()
 	mux.HandleFunc("GET /api/sessions", func(rw http.ResponseWriter, r *http.Request) {
+		// the list and the Codex threads' effort each list every session file
+		defer sessions.OneListing()()
 		n, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		// The page draws a session count taken from every session
 		// (statsFor's Overview) beside this list, so the list is read as
@@ -103,6 +107,10 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 		nativeKeys := map[string]bool{}
 		for _, s := range list {
 			nativeKeys[s.Agent+"|"+s.ID] = true
+			// a copy of its conversation is the agent's own too
+			for _, id := range s.Copies {
+				nativeKeys[s.Agent+"|"+id] = true
+			}
 		}
 		gateway := listedGateway(usage.GatewaySessions(time.Time{}, nativeKeys))
 		ext := make([]sessions.ExternalSession, 0, len(gateway))
@@ -139,12 +147,16 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 			j.Path = tilde(j.Path)
 			out.Sessions = append(out.Sessions, j)
 		}
-		writeJSON(rw, out)
+		writeJSONRows(rw, r, "sessions", out.Sessions, struct {
+			Terminal bool     `json:"terminal"`
+			Dirs     []string `json:"dirs"`
+		}{out.Terminal, out.Dirs})
 	})
 	// stats is every session's usage by day over the last ?days=N days
 	// (every day when 0 or none), cut by agent, folder and model for the
 	// page to filter; names are the agents' as the page shows them.
 	mux.HandleFunc("GET /api/sessions/stats", func(rw http.ResponseWriter, r *http.Request) {
+		defer sessions.ShareListing()()
 		n, _ := strconv.Atoi(r.URL.Query().Get("days"))
 		st := statsFor(n)
 		names := map[string]string{}
@@ -160,7 +172,7 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 				agents[a.Agent] = cmp.Or(names[a.Agent], a.Agent)
 			}
 		}
-		writeJSON(rw, struct {
+		writeJSONSame(rw, r, struct {
 			sessions.Stats
 			Agents map[string]string `json:"agents"`
 		}{st, agents})
@@ -169,6 +181,7 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 	// how many, what the middle one spent, how many each day, and the ones
 	// that spent the most.
 	mux.HandleFunc("GET /api/sessions/overview", func(rw http.ResponseWriter, r *http.Request) {
+		defer sessions.ShareListing()()
 		q := r.URL.Query()
 		n, _ := strconv.Atoi(q.Get("days"))
 		st := statsFor(n)
@@ -335,6 +348,42 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 		}
 		rw.WriteHeader(http.StatusNoContent)
 	})
+	// carry converts a session for another agent (one its Carry offers with
+	// Convert): a new session of that agent's, in its own folder, the
+	// source only read. It runs only when the user picks the agent, never
+	// on a listing. It answers with the line that opens the new one, and,
+	// with Open, opens Terminal on it.
+	mux.HandleFunc("POST /api/sessions/carry", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Agent, ID, To string
+			Open          bool
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if in.Open && (runtime.GOOS != "darwin" || isWeb(w)) {
+			fail(rw, errors.New("opening Terminal is only for the Mac app"))
+			return
+		}
+		s, ok := sessions.Find(in.Agent, in.ID)
+		if !ok {
+			fail(rw, errors.New("no such session"))
+			return
+		}
+		c, err := sessions.CarryOver(s, in.To)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		if in.Open {
+			if err := openTerminal(c.Command, settings.Load().SessionTerminal); err != nil {
+				fail(rw, err)
+				return
+			}
+		}
+		writeJSON(rw, map[string]any{"agent": c.Agent, "id": c.ID, "command": c.Command})
+	})
 }
 
 // sessionMarkdown is a session's conversation as Markdown, and the name its
@@ -427,11 +476,28 @@ func statsFor(days int) sessions.Stats {
 		statsMemo.asks++
 		k.used = statsMemo.asks
 		if !k.busy && time.Since(k.at) > 10*time.Second {
-			k.busy = true
+			// every range kept that is as old is read again with it, in
+			// one pass: the page asks for 7, 30 and every day, and each
+			// read alone listed and summed every session file (#2278)
+			var ranges []int
+			var kept []*statsKept
+			for d, o := range statsMemo.m {
+				if !o.busy && time.Since(o.at) > 10*time.Second {
+					o.busy = true
+					ranges, kept = append(ranges, d), append(kept, o)
+				}
+			}
+			// read beside the page's own reads: with their listing of
+			// the session files, and handed back once they all rest
+			shared, rest := sessions.ShareListing(), readingPage()
 			go func() {
-				st := combinedSessionStats(days)
+				defer rest()
+				defer shared()
+				sts := combinedSessionStatsAll(ranges)
 				statsMemo.Lock()
-				k.at, k.st, k.busy = time.Now(), st, false
+				for i, o := range kept {
+					o.at, o.st, o.busy = time.Now(), sts[i], false
+				}
 				statsMemo.Unlock()
 			}()
 		}
@@ -463,7 +529,20 @@ func statsFor(days int) sessions.Stats {
 }
 
 func combinedSessionStats(days int) sessions.Stats {
-	st, nativeKeys := sessions.StatsAndNative(days)
+	return combinedSessionStatsAll([]int{days})[0]
+}
+
+// combinedSessionStatsAll is combinedSessionStats for each of days, the
+// session files read once for all of them.
+func combinedSessionStatsAll(days []int) []sessions.Stats {
+	sts, nativeKeys := sessions.StatsAndNativeAll(days)
+	for i := range sts {
+		sts[i] = withGatewaySessions(sts[i], days[i], nativeKeys)
+	}
+	return sts
+}
+
+func withGatewaySessions(st sessions.Stats, days int, nativeKeys map[string]bool) sessions.Stats {
 	var since time.Time
 	if days > 0 && st.From != "" {
 		since, _ = time.ParseInLocation(time.DateOnly, st.From, time.Local)
@@ -486,10 +565,18 @@ func combinedSessionStats(days int) sessions.Stats {
 // page opens on the kept index and not on a first read of them all. Usage ›
 // Requests' whole history is read after it, not beside it on the disk: a
 // first All parsing 12k sessions kept that page a skeleton for 40 s.
+// Once a process: the app's page served to a browser (apppage.go) is a
+// second Handler beside the window's.
 func warmSessions() {
 	if testing.Testing() {
 		return
 	}
+	warmOnce.Do(warmStart)
+}
+
+var warmOnce sync.Once
+
+func warmStart() {
 	go func() {
 		time.Sleep(3 * time.Second)
 		// with few readers, as nobody waits on it yet: after an update
@@ -525,6 +612,10 @@ var warmCodexEffort = func() { usage.CodexModelEffort(usage.All) }
 // the next minutes: a magpie that had just started read ~470 MB for its
 // first two minutes at rest.
 func warmUp(steps ...func()) {
+	// each file read looked at once a second, not for each session or row
+	// that asks: an empty sandbox's warm-up looked at settings.json ~300
+	// times on Windows (#1665); a write still reads the disk (edit.Read)
+	defer filememo.Hold()()
 	for _, step := range steps {
 		step()
 	}
@@ -540,13 +631,74 @@ func warmUp(steps ...func()) {
 // and Codex's effort, which reads the whole ledger again while the page
 // still holds its rows, run under it: the warm-up as a whole did too for
 // ~11 s more CPU.
+//
+// It also holds the memory Go asks of the system to what it held when fn
+// began, as a soft limit (a lower one the user set is kept, and GOGC off
+// has none). A build of the request index after an update reads every
+// session again and allocates ~1.2 GB to keep ~40 MB more, and the heap
+// overshot its goal into pages it then kept: 308–323 MB in Activity
+// Monitor for 15.7k sessions, where a start that reads the index peaked at
+// 247–255 MB. Under the limit, 241–251 MB and 211–228 MB, for 1–7 s more
+// CPU in that build.
 func underTightGC(fn func()) {
-	if was := debug.SetGCPercent(tightGCPercent); was < tightGCPercent {
-		debug.SetGCPercent(was)
-	} else {
-		defer debug.SetGCPercent(was)
-	}
+	defer tightenGC(true)()
 	fn()
+}
+
+// tightGC is what the reads under a tight GC hold: the first to begin sets
+// it, and the last to end puts back what was set before it. Each read
+// putting back what it found let two at once leave GOGC at 25 for good,
+// when the first to begin ended before the second.
+var tightGC struct {
+	sync.Mutex
+	n, limits int   // reads under it, and those of them limited
+	was       int   // GOGC before the first
+	limit     int64 // the memory limit before the first limited one
+	limited   bool  // whether that one set one
+}
+
+// tightenGC begins a read under a tight GC, with the memory limit too when
+// limit is set; undo ends it.
+func tightenGC(limit bool) (undo func()) {
+	tightGC.Lock()
+	defer tightGC.Unlock()
+	if tightGC.n == 0 {
+		was := debug.SetGCPercent(tightGCPercent)
+		if was < tightGCPercent {
+			debug.SetGCPercent(was)
+		}
+		tightGC.was = was
+	}
+	tightGC.n++
+	if limit {
+		if tightGC.limits == 0 {
+			tightGC.limited = false
+			if held := heldMemory(); tightGC.was >= 0 && held < debug.SetMemoryLimit(-1) {
+				tightGC.limit, tightGC.limited = debug.SetMemoryLimit(held), true
+			}
+		}
+		tightGC.limits++
+	}
+	return sync.OnceFunc(func() {
+		tightGC.Lock()
+		defer tightGC.Unlock()
+		if limit {
+			if tightGC.limits--; tightGC.limits == 0 && tightGC.limited {
+				debug.SetMemoryLimit(tightGC.limit)
+			}
+		}
+		if tightGC.n--; tightGC.n == 0 {
+			debug.SetGCPercent(tightGC.was)
+		}
+	})
+}
+
+// heldMemory is what Go holds of the system's memory: all it mapped, less
+// the pages it gave back.
+func heldMemory() int64 {
+	s := []metrics.Sample{{Name: "/memory/classes/total:bytes"}, {Name: "/memory/classes/heap/released:bytes"}}
+	metrics.Read(s)
+	return int64(s[0].Value.Uint64() - s[1].Value.Uint64())
 }
 
 const tightGCPercent = 25

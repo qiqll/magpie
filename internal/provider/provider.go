@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
@@ -50,10 +51,14 @@ type Provider struct {
 	Name string `json:"name"`
 	// Was are ids the provider had before it was renamed (see Rename):
 	// a model still picked by one of them reaches it.
-	Was    []string `json:"was,omitempty"`
-	Icon   string   `json:"icon,omitempty"`
-	Preset string   `json:"preset,omitempty"` // preset this was created from, if any
-	Key    string   `json:"key"`              // API key, as typed by the user
+	Was []string `json:"was,omitempty"`
+	// Gave are ids it had that another provider took after it (a rename
+	// onto one, a provider added under one), each with when: the calls
+	// recorded under such an id before then were this one's (Renames).
+	Gave   []Gave `json:"gave,omitempty"`
+	Icon   string `json:"icon,omitempty"`
+	Preset string `json:"preset,omitempty"` // preset this was created from, if any
+	Key    string `json:"key"`              // API key, as typed by the user
 
 	// AccessKeyID and SecretAccessKey are a Volcengine account's access
 	// key (TakesVolcAccessKey), what Ark tells its Coding or Agent Plan's
@@ -75,6 +80,8 @@ type Provider struct {
 	KeyProtocol Protocol `json:"keyProtocol,omitempty"`
 	// KeyWeight is the first key's weight (see KeyAccount.Weight).
 	KeyWeight int `json:"keyWeight,omitempty"`
+	// KeyPlan is the first key's plan (see KeyAccount.Plan).
+	KeyPlan string `json:"keyPlan,omitempty"`
 
 	// Base URLs, one per protocol the vendor serves natively. magpie appends
 	// the usual paths: chat/responses bases end in /v1 (OpenAI style),
@@ -144,7 +151,9 @@ type Provider struct {
 	// own sign-in (auth.json) to the next account with room and back:
 	// Codex's requests then go straight to OpenAI, never through the
 	// gateway for account failover, however many of its accounts are on
-	// (#1907).
+	// (#1907). On Claude's subscription it keeps the accounts to Claude
+	// Code's own sign-in, which magpie still moves: the gateway serves no
+	// request on them (KeptToAgent; myduso on Discord).
 	SwitchOnly bool `json:"switchOnly,omitempty"`
 
 	// MaxConcurrency is how many requests may be out at the vendor at once
@@ -190,6 +199,12 @@ type Provider struct {
 	// still stands over it. RestCapOff (-1): no rest at all after a
 	// failure that says nothing of why, a rate limit's as the gateway's own.
 	RestCap int `json:"restCap,omitempty"`
+	// LimitRestOff keeps its keys and accounts asked when the vendor says
+	// they are out of quota or answers 429 (zoecats on Discord: a local
+	// aggregator says "quota exhausted" for a moment while it switches
+	// upstreams, and a rest of half an hour held every request back until
+	// magpie restarted). Off by default: such a refusal rests it as ever.
+	LimitRestOff bool `json:"limitRestOff,omitempty"`
 
 	// PriceRate is what the provider charges against the official price
 	// (ITea312, #819): a relay that bills 0.8× or 1.5× of it. It scales the
@@ -228,6 +243,17 @@ type Provider struct {
 	// fitting, which a backend that isn't OpenAI's needs (#350).
 	CodexAsSent bool `json:"codexAsSent,omitempty"`
 
+	// PromptAsWritten, on Antigravity's subscription, has the system prompt
+	// go to Google exactly as the agent wrote it. By default the few lines
+	// Google answers with a 429 "Resource has been exhausted" whatever
+	// quota is left (Claude Code's billing line, the Claude Agent SDK's
+	// identity line, Codex's GPT-5 identity lines, Hermes Agent's earlier
+	// default persona) go with a zero-width space inside them, which Google
+	// lets through and the model reads the same (gateway's
+	// antigravityCloak). Set with `magpie provider set antigravity
+	// prompt=as-written`; prompt=default turns it back.
+	PromptAsWritten bool `json:"promptAsWritten,omitempty"`
+
 	// AdditionalTools says the provider's Responses API takes an
 	// additional_tools input item, as OpenAI's does: a deferred tool an
 	// Anthropic client's tool search loaded goes to it in such an item
@@ -236,6 +262,16 @@ type Provider struct {
 	// without it; another vendor isn't unless this is set, since xAI's
 	// turns the item away (#350).
 	AdditionalTools bool `json:"additionalTools,omitempty"`
+
+	// Patience is how many seconds more a request to this provider alone,
+	// not through a group, may be kept once it has failed in a way that
+	// passes (overloaded, unavailable, rate limited for a moment) and the
+	// same-one retries are spent, as a group's Patience is (zoecats on
+	// Discord): 0 keeps it PatienceDefault, PatienceOff hands the agent
+	// the error at once, and it is at most PatienceLongest. Set with
+	// `magpie provider set <id> patience=`; a group it is in keeps the
+	// group's own.
+	Patience int `json:"patience,omitempty"`
 
 	// NativeCompaction has Codex's compaction_trigger go to the provider
 	// as Codex sent it, and the compaction the provider writes back go to
@@ -318,6 +354,17 @@ type Provider struct {
 	// and then the window's WindowCapID: 1–99, or 100 for none on it. A
 	// window not in it takes the account's AccountCaps.
 	AccountWindowCaps map[string]map[string]int `json:"accountWindowCaps,omitempty"`
+	// CapStop, for a subscription whose accounts are capped, ends there
+	// (plugins#349): while every account is held at its cap, a request is
+	// answered 429, as the vendor would, rather than sent on to Fallback.
+	// Off, the default, a fallback takes it. See gateway.Server.plan.
+	CapStop bool `json:"capStop,omitempty"`
+	// CapCareful is a capped account's usage read again before a request
+	// is sent near its cap, and the account held while its usage can't be
+	// told (plugins#349): unknown is not spent. Off, the default, routing
+	// goes by the last reading, read again each minute. See
+	// gateway.carefulDoubt.
+	CapCareful bool `json:"capCareful,omitempty"`
 	// AccountNames is, for a subscription, the name the user gave each
 	// account they named (#1515: a team's seats told apart by who holds
 	// them, not by a masked email), by the account's name in lower case.
@@ -426,6 +473,10 @@ type Provider struct {
 	// Account is set when the provider is an agent the user signed in to
 	// (see account.go); it is derived, never stored.
 	Account *Account `json:"-"`
+
+	// keyView is set on p.WithKey(k): p as that one key is asked with,
+	// at its plan, whose keys no longer tell plans apart (plansMixed)
+	keyView bool
 }
 
 type file struct {
@@ -449,6 +500,9 @@ type file struct {
 	// when it was removed and put back when it is added again (#2057; see
 	// plugin_left.go).
 	PluginLeft []LeftRecord `json:"pluginLeft,omitempty"`
+	// Deleted are the providers the user deleted, so the calls made to
+	// one stay its own when another is added under its id (Renames).
+	Deleted []Deleted `json:"deleted,omitempty"`
 }
 
 // Path is the file the user's providers live in.
@@ -600,6 +654,7 @@ func All() []Provider {
 // clone is p with its settings unshared: slices, maps and pointers copied.
 func (p Provider) clone() Provider {
 	p.Was = slices.Clone(p.Was)
+	p.Gave = slices.Clone(p.Gave)
 	p.Keys = slices.Clone(p.Keys)
 	p.Fallback = slices.Clone(p.Fallback)
 	p.Models = slices.Clone(p.Models)
@@ -648,17 +703,7 @@ var AllBuilt atomic.Int64
 func allProviders() []Provider {
 	AllBuilt.Add(1)
 	f := load()
-	stored := f.Providers
-	picks := map[string]Provider{}
-	var out []Provider
-	for _, p := range stored {
-		p = normalize(p)
-		if !hasEndpoint(p) {
-			picks[p.ID] = p
-			continue
-		}
-		out = append(out, p)
-	}
+	out, picks := ownOf(f)
 	for _, a := range Accounts() {
 		if _, taken := find(out, a.ID); taken || picks[a.ID].Hidden {
 			continue
@@ -675,6 +720,21 @@ func allProviders() []Provider {
 	return ordered(out, f.Order)
 }
 
+// ownOf is f's providers of the user's own, and the model picks it keeps
+// for the signed-in accounts by id.
+func ownOf(f file) (own []Provider, picks map[string]Provider) {
+	picks = map[string]Provider{}
+	for _, p := range f.Providers {
+		p = normalize(p)
+		if !hasEndpoint(p) {
+			picks[p.ID] = p
+			continue
+		}
+		own = append(own, p)
+	}
+	return own, picks
+}
+
 // withPicks is the signed-in account a with what the user set on its
 // provider (pk, as providers.json keeps it): its models, routing, limits
 // and queue. The account the agent is signed in to gets them in All, and
@@ -687,12 +747,17 @@ func withPicks(a, pk Provider) Provider {
 	a.SwitchOnly = pk.SwitchOnly
 	a.Sink, a.NoModels = pk.Sink, pk.NoModels
 	a.NativeCompaction = pk.NativeCompaction
+	a.PromptAsWritten = pk.PromptAsWritten
 	a.Proxy, a.AccountProxies, a.AccountModels = pk.Proxy, pk.AccountProxies, pk.AccountModels
 	a.AccountCaps, a.AccountWindowCaps = pk.AccountCaps, pk.AccountWindowCaps
+	a.CapStop, a.CapCareful = pk.CapStop, pk.CapCareful
 	a.AccountNames = pk.AccountNames
 	a.MaxConcurrency, a.PinUpstream = pk.MaxConcurrency, pk.PinUpstream
 	a.AccountConcurrency, a.QueueLimit, a.QueueWait = pk.AccountConcurrency, pk.QueueLimit, pk.QueueWait
 	a.MaxRPM = pk.MaxRPM
+	// and what it bills against the official price (#819): an account's
+	// editor sets it as a key provider's does (PaulT on Discord, Codex)
+	a.PriceRate = pk.PriceRate
 	// the extra body fields written for it, which a ChatGPT account's
 	// requests take (WithExtraBody, magpie-releases#18)
 	a.ExtraBody = pk.ExtraBody
@@ -728,23 +793,33 @@ func Find(id string) (*Provider, error) {
 }
 
 func findIn(all []Provider, id string) (*Provider, error) {
+	if p := lookIn(all, id); p != nil {
+		return p, nil
+	}
+	return nil, fmt.Errorf("no provider %q — magpie providers lists them%s", id, readElsewhere())
+}
+
+// lookIn is findIn without its error, which looks on disk for where else
+// this magpie's files may be (readElsewhere): a request's model not found
+// among the providers asked it twice, for nothing (#3394).
+func lookIn(all []Provider, id string) *Provider {
 	q := strings.ToLower(strings.TrimSpace(id))
 	// an id before a name: a provider of the user's called WorkBuddy isn't
 	// the workbuddy subscription
 	if i := slices.IndexFunc(all, func(p Provider) bool { return p.ID == q }); i >= 0 {
-		return &all[i], nil
+		return &all[i]
 	}
 	for _, p := range all {
 		if strings.ToLower(p.Name) == q {
-			return &p, nil
+			return &p
 		}
 	}
 	for _, p := range all {
 		if slices.Contains(p.Was, q) {
-			return &p, nil
+			return &p
 		}
 	}
-	return nil, fmt.Errorf("no provider %q — magpie providers lists them%s", id, readElsewhere())
+	return nil
 }
 
 // readElsewhere says, for a provider not found, that this magpie reads its
@@ -813,7 +888,7 @@ func Save(p Provider) error {
 		if p.ID == "kiro" {
 			key = p.Key
 		}
-		p = Provider{ID: p.ID, Key: key, Models: p.Models, NoModels: p.NoModels, PickedFrom: p.PickedFrom, Delisted: p.Delisted, Unlisted: p.Unlisted, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, MaxConcurrency: p.MaxConcurrency, AccountConcurrency: p.AccountConcurrency, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, QuotaRest: p.QuotaRest, QuotaResetAt: p.QuotaResetAt, RestCap: p.RestCap, PinUpstream: p.PinUpstream, NativeCompaction: p.NativeCompaction, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}
+		p = Provider{ID: p.ID, Key: key, Models: p.Models, NoModels: p.NoModels, PickedFrom: p.PickedFrom, Delisted: p.Delisted, Unlisted: p.Unlisted, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, CapStop: p.CapStop, CapCareful: p.CapCareful, AccountNames: p.AccountNames, MaxConcurrency: p.MaxConcurrency, AccountConcurrency: p.AccountConcurrency, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, PriceRate: p.PriceRate, QuotaRest: p.QuotaRest, QuotaResetAt: p.QuotaResetAt, RestCap: p.RestCap, PinUpstream: p.PinUpstream, NativeCompaction: p.NativeCompaction, PromptAsWritten: p.PromptAsWritten, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}
 	} else {
 		p.AccountProxies = keyProxies(p) // a provider of keys proxies each key apart
 		if subscriptionID(p.ID) && !stored(p.ID) {
@@ -855,6 +930,9 @@ func Save(p Provider) error {
 		if p.Was == nil {
 			p.Was = was.Was
 		}
+		if p.Gave == nil {
+			p.Gave = was.Gave
+		}
 		if sameStored(*was, p) {
 			// Save pressed on an editor left as it was: providers.json
 			// would be written byte for byte as it is, and its write
@@ -864,6 +942,9 @@ func Save(p Provider) error {
 		}
 		f.Providers[i] = p
 	} else {
+		// a new provider under an id another had: what was recorded under
+		// it until now stays that one's
+		giveID(f.Providers, -1, p.ID, time.Now())
 		f.Providers = append(f.Providers, p)
 	}
 	if err := store(f); err != nil {
@@ -993,7 +1074,7 @@ func AddCopy(p Provider, from string) (string, error) {
 		return "", fmt.Errorf("%s is a signed-in account, which can't be copied", src.Name)
 	}
 	if p.Key == "" {
-		p.Key, p.KeyName, p.KeyProtocol, p.KeyWeight = src.Key, src.KeyName, src.KeyProtocol, src.KeyWeight
+		p.Key, p.KeyName, p.KeyProtocol, p.KeyWeight, p.KeyPlan = src.Key, src.KeyName, src.KeyProtocol, src.KeyWeight, src.KeyPlan
 		p.Keys = slices.Clone(src.Keys)
 		p.Routing, p.Sink, p.Affinity = src.Routing, src.Sink, src.Affinity
 	}
@@ -1187,6 +1268,9 @@ func Delete(id string) error {
 	for _, p := range f.Providers {
 		if p.ID == id {
 			found = true
+			// its calls stay its own, not a provider's added later under
+			// its id (cybercaius on Discord)
+			f.Deleted = append(f.Deleted, Deleted{ID: p.ID, Name: p.Name, Icon: p.Icon, At: time.Now(), Was: slices.Clone(p.Was), Gave: slices.Clone(p.Gave)})
 			continue
 		}
 		keep = append(keep, p)
@@ -1203,18 +1287,49 @@ func Delete(id string) error {
 	return forgetStepFun(id)
 }
 
-// keyOptional is true for local servers, which usually have no key.
+// keyOptional is true for a server on this computer or on the user's own
+// network — a local model, a company's internal relay at a LAN address —
+// which often takes no key. A keyless Codex relay at 192.168.x.x:8080 was
+// left out of a CC Switch import ("it has no API key") and couldn't be
+// saved by hand, while the same server at 127.0.0.1 could.
 func keyOptional(p Provider) bool {
 	if pr := Preset(p.Preset); pr != nil && pr.NoKey {
 		return true
 	}
 	h := p.Host()
-	return strings.HasPrefix(h, "localhost") || strings.HasPrefix(h, "127.0.0.1") || strings.HasPrefix(h, "0.0.0.0")
+	if strings.HasPrefix(h, "localhost") || strings.HasPrefix(h, "127.0.0.1") || strings.HasPrefix(h, "0.0.0.0") {
+		return true
+	}
+	return ownNetwork(h)
+}
+
+// cgnat is carrier-grade NAT's 100.64/10, where Tailscale puts its peers.
+var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+// ownNetwork is a host[:port] on the user's own network, read from the
+// name alone (no lookup: Ready asks it often): a private, link-local,
+// loopback or carrier-grade NAT address, or a .local name — what
+// netproxy's onLAN sends around a proxy, without resolving names.
+func ownNetwork(hostport string) bool {
+	h := hostport
+	if host, _, err := net.SplitHostPort(hostport); err == nil {
+		h = host
+	}
+	h = strings.ToLower(strings.TrimSuffix(strings.Trim(h, "[]"), "."))
+	if strings.HasSuffix(h, ".local") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || cgnat.Contains(ip))
 }
 
 func normalize(p Provider) Provider {
 	p.ID = strings.ToLower(strings.TrimSpace(p.ID))
 	p.Name = strings.TrimSpace(p.Name)
+	if p.Patience < 0 {
+		p.Patience = PatienceOff
+	}
+	p.Patience = min(p.Patience, PatienceLongest)
 	p.Key = strings.TrimSpace(p.Key)
 	p.Proxy = strings.TrimSpace(p.Proxy)
 	p.AccountProxies = normalAccountProxies(p.AccountProxies)
@@ -1236,7 +1351,7 @@ func normalize(p Provider) Provider {
 		// in for neither that token nor a project, and the provider as
 		// found still saves
 		p.Chat, p.Responses, p.Anthropic, p.Gemini, p.Decide = "", "", "", "", ""
-		p.Key, p.KeyName, p.Keys, p.KeyProtocol, p.KeyWeight = "", "", nil, "", 0
+		p.Key, p.KeyName, p.Keys, p.KeyProtocol, p.KeyWeight, p.KeyPlan = "", "", nil, "", 0, ""
 	}
 	p.remoteMagpieEndpoints()
 	for _, u := range []*string{&p.Chat, &p.Responses, &p.Anthropic, &p.Gemini, &p.Decide, &p.Website, &p.KeysURL} {
@@ -1290,7 +1405,7 @@ func normalize(p Provider) Provider {
 	if (p.Preset == OMLXPreset || p.Preset == MLXServePreset || p.Preset == "ollama" || p.Preset == "ollama-cloud") && p.Decide == "" && p.Chat != "" {
 		p.Decide = p.Chat
 	}
-	if p.Routing != Ordered && p.Routing != Rotate && p.Routing != LeastUsed && p.Routing != Pace && p.Routing != Weighted && p.Routing != FreeFirst && !PluginRouting(p.Routing) {
+	if p.Routing != Ordered && p.Routing != Rotate && p.Routing != LeastUsed && p.Routing != Pace && p.Routing != Weighted && p.Routing != FreeFirst && p.Routing != Fastest && !PluginRouting(p.Routing) {
 		p.Routing = ""
 	}
 	if !slices.Contains(Affinities, p.Affinity) {
@@ -1424,6 +1539,14 @@ func (p Provider) baseOf(api string) string {
 func (p Provider) Base(proto Protocol) string {
 	switch proto {
 	case Chat:
+		// Vertex AI's partner models, on Google's OpenAI-compatible chat
+		// completions at the project (VertexPartner)
+		if p.IsVertex() {
+			if b := p.vertexBase(); b != "" {
+				return b + "/endpoints/openapi"
+			}
+			return ""
+		}
 		return p.Chat
 	case Responses:
 		return p.Responses
@@ -1466,7 +1589,9 @@ func (p Provider) Speaks() []Protocol {
 	// Factory's Gemini models, on generateContent. A model droid didn't
 	// list stays on the other three (factoryAPIs); this is not one of them.
 	// A custom provider's Gemini API comes after the others it has.
-	// Vertex AI's, on generateContent alone, at its project.
+	// Vertex AI's Gemini models, on generateContent at its project, after
+	// the chat completions its partner models are served on (ListedAPIs
+	// gives each model its one).
 	if p.IsVertex() {
 		if p.vertexBase() != "" {
 			out = append(out, Gemini)
@@ -1769,8 +1894,20 @@ func (p Provider) Ready() bool {
 	return p.Account != nil || p.Key != "" || keyOptional(p)
 }
 
-// On is whether the provider takes requests: ready, and not switched off.
-func (p Provider) On() bool { return p.Ready() && !p.Off }
+// On is whether the provider takes requests: ready, not switched off and
+// not kept to its agent's own sign-in (KeptToAgent).
+func (p Provider) On() bool { return p.Ready() && !p.Off && !p.KeptToAgent() }
+
+// KeptToAgent is whether the provider is Claude's subscription with
+// SwitchOnly on: its accounts are Claude Code's own sign-in alone, which
+// magpie moves to the next account with room and back, and the gateway
+// sends no request to them, so none goes through Claude Code's SDK run,
+// which spends more of the allowance than Claude Code's own sessions
+// (myduso on Discord). Codex's SwitchOnly only keeps failover out of its
+// config.
+func (p Provider) KeptToAgent() bool {
+	return p.SwitchOnly && p.ID == "claude" && p.Account != nil && p.Account.Agent == "claude"
+}
 
 // SetOff switches a provider off, or on again (see Provider.Off). Saving
 // it brings the model lists written into agents' files up to date.
@@ -1789,12 +1926,12 @@ func SetOff(id string, off bool) error {
 func SwitchedOff(id string) (Provider, bool) {
 	id = strings.TrimSuffix(strings.TrimSpace(id), "[1m]")
 	if pid, _, ok := strings.Cut(id, "/"); ok {
-		if p, err := Find(pid); err == nil && p.Off {
+		if p, err := Find(pid); err == nil && (p.Off || p.KeptToAgent()) {
 			return *p, true
 		}
 	}
 	for _, p := range All() {
-		if !p.Off || !p.Ready() {
+		if !p.Off && !p.KeptToAgent() || !p.Ready() {
 			continue
 		}
 		if slices.ContainsFunc(p.Exposed(), func(m catalog.Model) bool { return m.ID == id }) {

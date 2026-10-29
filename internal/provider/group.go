@@ -119,6 +119,26 @@ func (g Group) Live() Group {
 	return g
 }
 
+// Within is g, a group in the group in, as in routes it: one left on the
+// default (Smart) is routed as in is, as a provider left on the default
+// is weighed with the group it is in (ownRouting, #3847, mycf_711) —
+// Free first on the outer group reaches the seats of a group in it that
+// says nothing of its own. One that sets a routing keeps it (#576), and
+// so does every one in a group In order, By weight or Manual: those try
+// each member whole, by its own routing, as they do a provider's keys.
+func (g Group) Within(in Group) Group {
+	if g.Routing == "" && pools(in.Routing) {
+		g.Routing = in.Routing
+	}
+	return g
+}
+
+// pools: a group routed so weighs its members' keys and accounts as one
+// pool, a provider left on the default among them.
+func pools(routing string) bool {
+	return routing != "" && routing != Ordered && routing != Weighted && routing != Manual
+}
+
 // PatienceOff, PatienceDefault and PatienceLongest are a group's
 // Patience: none, the seconds a group waits that hasn't set it, and the
 // most it may.
@@ -267,6 +287,11 @@ type Member struct {
 	// asked of the model whatever the agent or the group's classifier
 	// asked; "" follows the group.
 	Effort string
+	// Levels are the reasoning levels the member follows the agent among
+	// ("provider/model:low+high"), lowest first: the agent's effort is
+	// sent at the nearest of them. nil for a member fixed at one (Effort)
+	// or following the group.
+	Levels []string
 	// Fast is set on a member the group sends in its vendor's fast mode
 	// (Group.Fast), where its model has one.
 	Fast bool
@@ -336,7 +361,7 @@ func (m Member) Groups() []string {
 // Below is the member as the group at depth (0 the group itself, 1 the
 // group in it Path[0] names, …) has it.
 func (m Member) Below(depth int) Member {
-	out := Member{ID: m.Path[depth], Path: m.Path[depth:], Via: m.Via[depth:], Provider: m.Provider, Model: m.Model, Effort: m.Effort, Fast: m.Fast, At: m.At}
+	out := Member{ID: m.Path[depth], Path: m.Path[depth:], Via: m.Via[depth:], Provider: m.Provider, Model: m.Model, Effort: m.Effort, Levels: m.Levels, Fast: m.Fast, At: m.At}
 	// its other places in the same group at depth
 	for _, o := range m.Also {
 		if len(o.Path) > depth && slices.Equal(o.Path[:depth], m.Path[:depth]) {
@@ -380,7 +405,7 @@ func cloneGroups(gs []Group) []Group {
 		if g.Rules != nil {
 			rs := make([]Rule, len(g.Rules))
 			for j, r := range g.Rules {
-				r.Agents, r.Folders, r.ExceptFolders = slices.Clone(r.Agents), slices.Clone(r.Folders), slices.Clone(r.ExceptFolders)
+				r.Agents, r.Folders, r.ExceptFolders, r.More = slices.Clone(r.Agents), slices.Clone(r.Folders), slices.Clone(r.ExceptFolders), slices.Clone(r.More)
 				if r.Time != nil {
 					t := *r.Time
 					t.Days = slices.Clone(t.Days)
@@ -459,7 +484,7 @@ func withoutRemoved(g Group, have map[string]bool) Group {
 		if !ok || have[pid] || (g.Routing == Manual && m == g.Picked()) {
 			return false
 		}
-		return !slices.ContainsFunc(g.Rules, func(r Rule) bool { return r.Use == m })
+		return !slices.ContainsFunc(g.Rules, func(r Rule) bool { return r.Names(m) })
 	}
 	if !slices.ContainsFunc(g.Members, gone) {
 		return g
@@ -498,6 +523,7 @@ func (g Group) own() Group {
 		g.Rules[i].Agents = slices.Clone(r.Agents)
 		g.Rules[i].Folders = slices.Clone(r.Folders)
 		g.Rules[i].ExceptFolders = slices.Clone(r.ExceptFolders)
+		g.Rules[i].More = slices.Clone(r.More)
 		if r.Time != nil {
 			w := *r.Time
 			w.Days = slices.Clone(w.Days)
@@ -758,6 +784,46 @@ func FindGroup(id string) (Group, []Member, bool) {
 	return GroupFinder()(id)
 }
 
+// FallbackGroup is the routing group a provider's fallback entry names
+// ("group/<id>", 01huadalang on Discord), as the gateway routes it (Live),
+// with its members ready now. ok is false for an entry naming a model,
+// and for a group removed or switched off: such an entry is passed over.
+func FallbackGroup(id string) (Group, []Member, bool) {
+	if _, ok := GroupIDOf(id); !ok {
+		return Group{}, nil, false
+	}
+	g, ms, ok := FindGroup(id)
+	return g.Live(), ms, ok
+}
+
+// FallbackModels are the models p's fallbacks reach, in order: an entry
+// naming a model, that model as routing reaches it (ResolveRoute); one
+// naming a routing group, the group's members. An entry that reaches
+// nothing is left out, as the gateway passes it over, and a model met
+// again is listed where it was met first.
+func FallbackModels(p Provider) []Member {
+	var out []Member
+	seen := map[string]bool{}
+	add := func(m Member) {
+		if k := m.Provider.ID + "/" + m.Model; !seen[k] {
+			seen[k] = true
+			out = append(out, m)
+		}
+	}
+	for _, id := range p.Fallback {
+		if _, ms, ok := FallbackGroup(id); ok {
+			for _, m := range ms {
+				add(m)
+			}
+			continue
+		}
+		if fp, fm, ok := ResolveRoute(id); ok {
+			add(Member{ID: id, Path: []string{id}, Provider: fp, Model: fm})
+		}
+	}
+	return out
+}
+
 // GroupFor is the group a model's id without a provider in it names, as
 // "group/<id>": the group of that id, else the group of that model however
 // a vendor spells it ("grok-4.7" is the group grok-4-7 or auto-grok-4-7).
@@ -869,6 +935,7 @@ func membersOff(entries []Entry, all []Group, g Group, off func(pid, model strin
 	var out []Member
 	seen := map[string]int{} // where in out
 	at := 0
+	find := entriesBy(entries)
 	var walk func(g Group, path []string, via []Group, in []string)
 	walk = func(g Group, path []string, via []Group, in []string) {
 		for _, id := range g.routes() {
@@ -878,16 +945,18 @@ func membersOff(entries []Entry, all []Group, g Group, off func(pid, model strin
 				if !ok || sub.Disabled || slices.Contains(in, gid) || len(via) >= maxNest {
 					continue // gone, switched off, a loop, or deeper than anyone nests
 				}
+				sub = sub.Within(g)
 				walk(sub, here, append(slices.Clone(via), sub.Live()), append(slices.Clone(in), gid))
 				continue
 			}
 			model, effort := memberEffortIn(entries, id)
 			p, m, ok := resolveIn(entries, model)
 			key := WithMemberEffort(p.ID+"/"+m, effort)
-			if !ok {
-				continue
+			if !ok || unpicked(find, p, m) {
+				continue // none serves it, or the user unchecked it (#3911)
 			}
-			mem := Member{ID: here[0], Path: here, Via: via, Provider: p, Model: m, Effort: effort, Fast: g.IsFast(id), At: at}
+			fixed, levels := MemberLevels(effort)
+			mem := Member{ID: here[0], Path: here, Via: via, Provider: p, Model: m, Effort: fixed, Levels: levels, Fast: g.IsFast(id), At: at}
 			at++
 			if i, ok := seen[key]; ok {
 				// asked once, where it was met first; a rule naming this
@@ -904,6 +973,42 @@ func membersOff(entries []Entry, all []Group, g Group, off func(pid, model strin
 	}
 	walk(g, nil, nil, []string{g.ID})
 	return out
+}
+
+// unpicked reports whether p's model m is one the user unchecked in p's
+// model list since a group took it (timonwong, #3911): p has picks and
+// its served models (entries, as find has them) lack m. resolveIn takes
+// any "provider/model" of a provider that is on, so that a request can
+// name a model its list lacks; a group's member is the user's pick of a
+// model they now said not to serve, and the Routing page strikes it.
+// A provider with no picks still routes a model its list lacks (#2642),
+// and a decision model, never in the catalog, is still a decision
+// group's.
+func unpicked(find entryOf, p Provider, m string) bool {
+	return len(p.Models) > 0 && find(p.ID, m) < 0 && !p.DecidesModel(m)
+}
+
+// ResolveRoute is Resolve for a model a route names, a routing group's
+// member or a provider's fallback, as routing reaches it: not one the
+// user unchecked (unpicked). A request naming the model itself goes by
+// Resolve, which still takes it.
+func ResolveRoute(id string) (Provider, string, bool) {
+	entries := providerEntries()
+	p, m, ok := resolveIn(entries, strings.TrimSuffix(strings.TrimSpace(id), "[1m]"))
+	// one pass for the one model, not a map of every entry (entriesBy):
+	// a request asks it for each fallback it may go to
+	find := func(pid, model string) int {
+		for i := range entries {
+			if entries[i].Provider.ID == pid && entries[i].Model == model {
+				return i
+			}
+		}
+		return -1
+	}
+	if !ok || unpicked(find, p, m) {
+		return Provider{}, "", false
+	}
+	return p, m, true
 }
 
 // groupEntries are the catalog's groups: each with a member ready, named
@@ -1025,9 +1130,13 @@ func buildGroupEntries(entries []Entry) []Entry {
 			} else {
 				e.ImageInput = anyImageInput(e.ImageInput, imageInput)
 			}
+			// a member the user gave several levels of its own offers them
+			// (Garydesu on X: one model at a few efforts, the agent picking);
 			// a group in the group that names its own levels offers them for
 			// its models (the outermost that does)
-			if i := slices.IndexFunc(m.Via, func(v Group) bool { return len(v.Levels) > 0 }); i >= 0 {
+			if len(m.Levels) > 0 && !reasonless {
+				efforts = m.Levels
+			} else if i := slices.IndexFunc(m.Via, func(v Group) bool { return len(v.Levels) > 0 }); i >= 0 {
 				efforts = m.Via[i].Levels
 			} else if reasonless {
 				// the user said it takes no reasoning ask: the gateway sends
@@ -1256,7 +1365,7 @@ func SaveGroup(g Group) error {
 		return fmt.Errorf("every model in %s is switched off: switch one on, or it has nothing to send to", g.Name)
 	}
 	for i := range g.Rules {
-		g.Rules[i].Use = cleanMember(entries, strings.TrimSpace(g.Rules[i].Use))
+		g.Rules[i].MapUses(func(u string) string { return cleanMember(entries, strings.TrimSpace(u)) })
 	}
 	if err := groupsInGroup(g, groupsIn(entries)); err != nil {
 		return err
@@ -1266,7 +1375,7 @@ func SaveGroup(g Group) error {
 	if err := cleanDecisionGroup(&g, groupsIn(entries)); err != nil {
 		return err
 	}
-	if g.Routing != Ordered && g.Routing != Rotate && g.Routing != LeastUsed && g.Routing != Pace && g.Routing != Weighted && g.Routing != FreeFirst && g.Routing != Manual && !PluginRouting(g.Routing) {
+	if g.Routing != Ordered && g.Routing != Rotate && g.Routing != LeastUsed && g.Routing != Pace && g.Routing != Weighted && g.Routing != FreeFirst && g.Routing != Fastest && g.Routing != Manual && !PluginRouting(g.Routing) {
 		g.Routing = ""
 	}
 	if !slices.Contains(Affinities, g.Affinity) {
@@ -1656,10 +1765,13 @@ func RenameGroup(from, to string) error {
 				f.Groups[i].Members[j] = now
 			}
 		}
-		for j, r := range f.Groups[i].Rules {
-			if r.Use == old {
-				f.Groups[i].Rules[j].Use = now
-			}
+		for j := range f.Groups[i].Rules {
+			f.Groups[i].Rules[j].MapUses(func(u string) string {
+				if u == old {
+					return now
+				}
+				return u
+			})
 		}
 		if f.Groups[i].Pick == old {
 			f.Groups[i].Pick = now

@@ -4,6 +4,7 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -38,6 +39,11 @@ type Model struct {
 	// APIs, when the vendor says, are the APIs the model is served on
 	// ("chat", "responses", "anthropic"); empty is not known.
 	APIs []string `json:",omitempty"`
+	// Endpoints, in magpie's own models for an agent, are the gateway
+	// paths a request for it is relayed on as it is
+	// (provider.NativeEndpoints, /v1/models' native_endpoints); none for a
+	// group or a model translated anyway.
+	Endpoints []string `json:"-"`
 	// Images is set on a model that takes images as input.
 	Images bool `json:",omitempty"`
 	// ImageInput is the source's explicit answer; nil means it did not say.
@@ -71,6 +77,14 @@ type Model struct {
 	// provider after it (magpie_label): the name Provider in model names
 	// Off has here (ARNO on Discord).
 	Plain string `json:",omitempty"`
+	// Apart, in a list magpie hands Codex, is what tells the model from
+	// another entry Codex's picker would call the same (two providers
+	// named Codex each serving GPT-6.1-Sol, nb5p on Discord): its
+	// provider's id. Said in the entry's display_name alone
+	// (codexcat.Entries), which stays in Codex's picker; never in its
+	// description or Name, which go upstream in spawn_agent's list of
+	// models. Kept in the list's tag, so a change has Codex ask again.
+	Apart string `json:",omitempty"`
 	// Fast is set on a model Codex may ask for priority processing (its
 	// Fast mode): one a ChatGPT account serves.
 	Fast bool `json:",omitempty"`
@@ -124,6 +138,44 @@ type Model struct {
 	// doesn't, or didn't say. A plugin's model it says searches by itself
 	// (m.searches) is "native" too.
 	WebSearch string `json:",omitempty"`
+	// Codex, on a model a vendor lists the way Codex's own catalog does
+	// (a sub2api asked with Codex's client_version), is that entry as the
+	// vendor gave it (CodexEntry): Codex is handed it as it is, its
+	// instructions and window and all, rather than an entry magpie made up
+	// from models.dev (ctopsc on Discord). Its context_window,
+	// max_context_window, input_modalities and reasoning levels are read
+	// into the fields above too, so the rest of magpie says what it says.
+	Codex json.RawMessage `json:",omitempty"`
+}
+
+// CodexLevels are the efforts of a Codex catalog entry's
+// supported_reasoning_levels; false when raw is no such entry.
+func CodexLevels(raw json.RawMessage) ([]string, bool) {
+	if len(raw) == 0 || !CodexEntry(raw) {
+		return nil, false
+	}
+	var e struct {
+		Levels any `json:"supported_reasoning_levels"`
+	}
+	json.Unmarshal(raw, &e)
+	return levelsOf(e.Levels), true
+}
+
+// CodexEntry reports whether raw, one row of a model list, is a model as
+// Codex's own catalog lists it (/backend-api/codex/models, codex-rs's
+// ModelInfo): a slug, its reasoning levels, its shell and its
+// instructions. A plain OpenAI list's row has none of them.
+func CodexEntry(raw json.RawMessage) bool {
+	var e struct {
+		Slug         string          `json:"slug"`
+		Levels       json.RawMessage `json:"supported_reasoning_levels"`
+		Shell        json.RawMessage `json:"shell_type"`
+		Instructions json.RawMessage `json:"base_instructions"`
+	}
+	if json.Unmarshal(raw, &e) != nil {
+		return false
+	}
+	return e.Slug != "" && len(e.Levels) > 0 && len(e.Shell) > 0 && len(e.Instructions) > 0
 }
 
 func imageInput(modalities []string) *bool {
@@ -464,6 +516,9 @@ var (
 	// listed are the bare ids of every model models.dev lists, whatever it
 	// says of them: an id listed is never taken for another (renamed)
 	listed map[string]bool
+	// labs are the models models.dev lists under their lab alone
+	// (models.json), by bare id: none of its providers lists them
+	labs map[string]mdModel
 	// canonical are the bare ids of every model models.dev says an entry is
 	// (canonical_model_id, #1520): DeepSeek's deepseek-flash is
 	// deepseek/deepseek-v4.1-flash, the id WorkBuddy and the relays serve it
@@ -493,6 +548,13 @@ func Source() string {
 }
 
 func load() map[string]mdProvider {
+	all, _ := loadGen()
+	return all
+}
+
+// loadGen is load with the Reset count it was loaded at, read under the
+// same lock, so what is built of it is kept for that load alone.
+func loadGen() (map[string]mdProvider, int) {
 	loadMu.Lock()
 	defer loadMu.Unlock()
 	if !loaded {
@@ -590,6 +652,31 @@ func load() map[string]mdProvider {
 							}
 						}
 					}
+					// and a model no provider lists at all, only its lab
+					// (models.dev's models.json): a gated one, as Claude
+					// Mythos 5.1 is since models.dev took it out of
+					// anthropic's list, that a vendor's own list or the
+					// account's still serves (iebb on Discord). Its lab
+					// file holds what is the model's on every host — name,
+					// window, reply limit, thinking, images — and no
+					// price. One a provider lists keeps its answers.
+					labs = map[string]mdModel{}
+					for id, x := range readLabs() {
+						b := bareID(id)
+						if listed[b] || canonical[b] {
+							continue
+						}
+						if x.ID == "" {
+							x.ID = id
+						}
+						if _, ok := labs[b]; !ok || id < labs[b].ID {
+							labs[b] = x
+						}
+						vote(b, b, "lab:"+id, x)
+					}
+					for b := range labs {
+						listed[b] = true
+					}
 					windows = map[string]int{}
 					for id, by := range sizes {
 						windows[id] = mostGiven(by)
@@ -618,12 +705,13 @@ func load() map[string]mdProvider {
 							images[id] = true
 						}
 					}
+					labKinEfforts(m)
 					return
 				}
 			}
 		}()
 	}
-	return mdev
+	return mdev, gen
 }
 
 // Reset forgets the loaded catalog so the next call re-reads the cache,
@@ -635,7 +723,7 @@ func Reset() {
 	loaded = false
 	built = nil
 	gen++
-	mdev, images, windows, outputs, efforts, thinks, names, listed, canonical = nil, nil, nil, nil, nil, nil, nil, nil, nil
+	mdev, images, windows, outputs, efforts, thinks, names, listed, canonical, labs = nil, nil, nil, nil, nil, nil, nil, nil, nil, nil
 	loadMu.Unlock()
 	if Forget != nil {
 		Forget()
@@ -692,16 +780,19 @@ func syncLock(ctx context.Context, onlyIfMissing bool) error {
 	if err := os.WriteFile(p, b, 0o644); err != nil {
 		return err
 	}
+	// the lab catalog beside it is best effort: without it the provider
+	// catalog answers alone, and one kept before is kept
+	_ = syncLabs(ctx)
 	Reset()
 	Touched() // names, reasoning levels and context windows may be others
 	return nil
 }
 
 // Stale reports whether no catalog exists or the cache is older than a day
-// (fresh.go).
+// (fresh.go), or magpie's has no lab catalog beside it yet (labs.go).
 func Stale() bool {
 	src := Source()
-	if src == "" {
+	if src == "" || labsMissing() {
 		return true
 	}
 	st, err := os.Stat(src)
@@ -725,7 +816,7 @@ func PriceOf(providerID, modelID string) (Price, bool) {
 // for a dash, then as the model an entry names as its canonical_model_id
 // (DeepSeek's deepseek-flash is deepseek-v4.1-flash).
 func PricedBy(providers []string, id string) (Price, bool) {
-	all := load()
+	all, at := loadGen()
 	for _, pid := range providers {
 		if m, ok := all[pid].Models[id]; ok && m.Cost != nil {
 			return *m.Cost, true
@@ -737,15 +828,8 @@ func PricedBy(providers []string, id string) (Price, bool) {
 	}
 	for _, want := range []string{b, cutAt(b, '('), cutAt(b, ':')} {
 		for _, pid := range providers {
-			keys := make([]string, 0, len(all[pid].Models))
-			for key, m := range all[pid].Models {
-				if m.Cost != nil && bareID(key) == want {
-					keys = append(keys, key)
-				}
-			}
-			if len(keys) > 0 {
-				slices.Sort(keys)
-				return *all[pid].Models[keys[0]].Cost, true
+			if key, ok := priceIndexOf(all, at, pid).bare[want]; ok {
+				return *all[pid].Models[key].Cost, true
 			}
 		}
 	}
@@ -755,15 +839,8 @@ func PricedBy(providers []string, id string) (Price, bool) {
 	// lists the id as given, at a price of its own, is still the one asked.
 	want := dashed(b)
 	for _, pid := range providers {
-		keys := []string{}
-		for key, m := range all[pid].Models {
-			if m.Cost != nil && dashed(bareID(key)) == want {
-				keys = append(keys, key)
-			}
-		}
-		if len(keys) > 0 {
-			slices.Sort(keys)
-			return *all[pid].Models[keys[0]].Cost, true
+		if key, ok := priceIndexOf(all, at, pid).dashed[want]; ok {
+			return *all[pid].Models[key].Cost, true
 		}
 	}
 	// and by what models.dev says an entry is (canonical_model_id): DeepSeek
@@ -771,7 +848,7 @@ func PricedBy(providers []string, id string) (Price, bool) {
 	// deepseek/deepseek-v4.1-flash, the id WorkBuddy and the relays serve it
 	// under, and lists no deepseek-v4.1-flash of its own (#1520). Only where
 	// nothing above priced it, so an id a vendor lists keeps its own price.
-	if pr, ok := canonicallyPriced(all, providers, b); ok {
+	if pr, ok := canonicallyPriced(all, at, providers, b); ok {
 		return pr, true
 	}
 	// and a relay's rename of a model none of them lists as given
@@ -780,6 +857,72 @@ func PricedBy(providers []string, id string) (Price, bool) {
 		return PricedBy(providers, r)
 	}
 	return Price{}, false
+}
+
+// priceIndex is what PricedBy looks a model up by in one models.dev
+// provider, built once a load rather than from every model of the
+// provider at each look-up: a model no catalog prices went through every
+// model of every vendor asked, lower-cased, five times over, and a model
+// list priced row by row (/v1/models' pricing) spent 30ms on it for 250
+// models.
+type priceIndex struct {
+	// bare and dashed are the first key, in key order, of the priced
+	// entries with that bare id, and with that bare id's dots as dashes
+	bare, dashed map[string]string
+	// canon and canonDashed are the price the vendor's own entries under a
+	// canonical id (bare, and dashed) give, nil where they disagree
+	canon, canonDashed map[string]*Price
+}
+
+var priceIndexes struct {
+	sync.Mutex
+	gen int
+	by  map[string]*priceIndex
+}
+
+// priceIndexOf is pid's priceIndex in all, the catalog loaded at Reset
+// count at.
+func priceIndexOf(all map[string]mdProvider, at int, pid string) *priceIndex {
+	priceIndexes.Lock()
+	defer priceIndexes.Unlock()
+	if priceIndexes.by == nil || priceIndexes.gen != at {
+		priceIndexes.gen, priceIndexes.by = at, map[string]*priceIndex{}
+	}
+	if x, ok := priceIndexes.by[pid]; ok {
+		return x
+	}
+	x := &priceIndex{bare: map[string]string{}, dashed: map[string]string{}, canon: map[string]*Price{}, canonDashed: map[string]*Price{}}
+	first := func(by map[string]string, k, key string) {
+		if was, ok := by[k]; !ok || key < was {
+			by[k] = key
+		}
+	}
+	seen := map[*map[string]*Price]map[string]bool{&x.canon: {}, &x.canonDashed: {}}
+	agree := func(by *map[string]*Price, k string, p *Price) {
+		if !seen[by][k] {
+			seen[by][k] = true
+			(*by)[k] = p
+		} else if was := (*by)[k]; was != nil && !was.Same(*p) {
+			(*by)[k] = nil
+		}
+	}
+	for key, m := range all[pid].Models {
+		if m.Cost == nil {
+			continue
+		}
+		b := bareID(key)
+		first(x.bare, b, key)
+		first(x.dashed, dashed(b), key)
+		maker, _, ok := strings.Cut(m.Canonical, "/")
+		if !ok || !strings.EqualFold(maker, pid) || m.Cost.Same(Price{}) {
+			continue
+		}
+		c := bareID(m.Canonical)
+		agree(&x.canon, c, m.Cost)
+		agree(&x.canonDashed, dashed(c), m.Cost)
+	}
+	priceIndexes.by[pid] = x
+	return x
 }
 
 // canonicallyPriced is the list price the first of providers gives the
@@ -793,27 +936,14 @@ func PricedBy(providers []string, id string) (Price, bool) {
 // its id is priced at its maker's, as it was. A vendor listing several
 // entries under one canonical at different prices names none of them:
 // which one was called isn't known.
-func canonicallyPriced(all map[string]mdProvider, providers []string, b string) (Price, bool) {
-	for _, same := range []func(c string) bool{
-		func(c string) bool { return bareID(c) == b },
-		func(c string) bool { return dashed(bareID(c)) == dashed(b) },
+func canonicallyPriced(all map[string]mdProvider, at int, providers []string, b string) (Price, bool) {
+	for _, by := range []func(*priceIndex) (*Price, bool){
+		func(x *priceIndex) (*Price, bool) { p, ok := x.canon[b]; return p, ok },
+		func(x *priceIndex) (*Price, bool) { p, ok := x.canonDashed[dashed(b)]; return p, ok },
 	} {
 		for _, pid := range providers {
-			var got *Price
-			agree := true
-			for _, m := range all[pid].Models {
-				maker, _, ok := strings.Cut(m.Canonical, "/")
-				if !ok || !strings.EqualFold(maker, pid) || m.Cost == nil || m.Cost.Same(Price{}) || !same(m.Canonical) {
-					continue
-				}
-				if got != nil && !got.Same(*m.Cost) {
-					agree = false
-					break
-				}
-				got = m.Cost
-			}
-			if got != nil && agree {
-				return *got, true
+			if p, ok := by(priceIndexOf(all, at, pid)); ok && p != nil {
+				return *p, true
 			}
 		}
 	}
@@ -1246,6 +1376,24 @@ func listedBy(providers []string, id string, providerOverrides bool) ([]string, 
 	return nil, false
 }
 
+// variantSuffix is a word a proxy puts after a model's id to name the
+// level or speed it serves the model at: CLIProxyAPI's Antigravity
+// channel lists gemini-3.8-flash-high, claude-opus-5-5-high,
+// claude-opus-4-6-thinking and gpt-oss-120b-medium, and its xAI channel
+// grok-3-mini-fast. Its "(high)" form is found's.
+var variantSuffix = regexp.MustCompile(`(?i)-(minimal|low|medium|high|xhigh|max|thinking|fast)$`)
+
+// Unsuffixed is id with a proxy's level or speed word taken off
+// (variantSuffix), and whether it had one. It is for borrowing levels a
+// model has no word on alone: the vendor's own list, which may name a
+// model so, goes first.
+func Unsuffixed(id string) (string, bool) {
+	if loc := variantSuffix.FindStringIndex(id); loc != nil && loc[0] > 0 {
+		return id[:loc[0]], true
+	}
+	return "", false
+}
+
 // KinEfforts are the reasoning levels of a model none of the providers
 // named lists, taken from the newest of their thinking models of the same
 // name but for its version (gpt-6.1-sol's from gpt-6-sol, mimo-v2.7-flash's
@@ -1416,10 +1564,11 @@ func draws(m mdModel) bool {
 // DrawsID is whether a model's id names one that makes images, for a model
 // the catalog doesn't know (one typed in, or a vendor's own list's). Banana
 // is the Nano Banana the Gemini image models are called on a relay, whatever
-// its spelling there (#2071).
+// its spelling there (#2071). SenseNova's U1 models (sensenova-u1.5-lite,
+// -fast) draw only, on its images API (lileo0668 on Discord).
 func DrawsID(id string) bool {
 	id = strings.ToLower(id)
-	for _, w := range []string{"image", "imagen", "imagine", "dall-e", "flux", "seedream", "cogview", "stable-diffusion", "sdxl", "wanx", "kolors", "hidream", "banana"} {
+	for _, w := range []string{"image", "imagen", "imagine", "dall-e", "flux", "seedream", "cogview", "stable-diffusion", "sdxl", "wanx", "kolors", "hidream", "banana", "sensenova-u1"} {
 		if strings.Contains(id, w) {
 			return true
 		}
@@ -1432,7 +1581,7 @@ func DrawsID(id string) bool {
 // gemini-*-image or gpt-5-image, which chat.
 func ImagesAPI(id string) bool {
 	id = strings.ToLower(id)
-	for _, w := range []string{"gpt-image", "chatgpt-image", "dall-e", "imagen", "imagine", "qwen-image", "wanx", "wan2", "seedream", "cogview", "flux", "stable-diffusion", "sdxl", "kolors", "hidream"} {
+	for _, w := range []string{"gpt-image", "chatgpt-image", "dall-e", "imagen", "imagine", "qwen-image", "wanx", "wan2", "seedream", "cogview", "flux", "stable-diffusion", "sdxl", "kolors", "hidream", "sensenova-u1"} {
 		if strings.Contains(id, w) {
 			return true
 		}
@@ -1454,6 +1603,87 @@ func PointsToImagesAPI(text string) bool {
 // images API that names chat completions as where the model draws.
 func PointsToChat(text string) bool {
 	return strings.Contains(strings.ToLower(text), "chat/completions")
+}
+
+// WrongEndpoint recognizes the errors OpenAI-compatible servers give when a
+// model exists but isn't served on the endpoint asked: the gateway asks the
+// model on another API the provider has then, and so does a model's test.
+func WrongEndpoint(status int, body []byte) bool {
+	if status < 400 || status >= 500 {
+		return false
+	}
+	// the words are matched decoded, too (#1669)
+	msg := strings.ToLower(string(Words(body)))
+	for _, phrase := range []string{
+		"not a chat model",
+		"not supported in the v1/chat/completions",
+		"not supported in /v1/chat/completions",
+		"not supported in the v1/responses",
+		"not supported in /v1/responses",
+		"only supported in v1/responses",
+		"only supported in /v1/responses",
+		"use v1/completions",
+		"use /v1/completions",
+		"use v1/responses",
+		"use /v1/responses",
+		"use v1/chat/completions",
+		"use /v1/chat/completions",
+		"not accessible via the", // Copilot
+		"unsupported_api_for_model",
+		// Copilot's /v1/messages, for a model it serves on other APIs
+		// alone (GPT-4.1, Gemini, GPT-5.6: #754); a model it doesn't
+		// serve at all is model_not_supported there
+		"no model endpoints available given user constraints",
+		"is not supported for format",    // OpenCode: "Model grok-4.7 is not supported for format anthropic"
+		"does not support this protocol", // OpenCode, with a key: "Model does not support this protocol"
+		// a relay serving a model with tools on Responses alone (#1308:
+		// "gpt-6.1-sol requires Responses for tool calls; this account
+		// only supports Chat Completions")
+		"requires responses",
+		// a relay that says it in Chinese (#3766, char1eslu: AgentRouter's
+		// "模型 gpt-5.6-sol 不支持 /v1/chat/completions 接口，请改用
+		// /v1/responses（OpenAI Responses API）。")
+		"不支持 /v1/chat/completions 接口",
+		"改用 /v1/responses",
+	} {
+		if strings.Contains(msg, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// Words is an error body as its words are matched: a JSON body that
+// escapes what isn't ASCII as \uXXXX (Python's json.dumps does by default)
+// has its strings decoded and put after it, one to a line, so "用量",
+// "频率" or "将在 … 重置" are read whether the vendor escaped them or not
+// (#1669). Any other body is matched as it is.
+func Words(body []byte) []byte {
+	if !bytes.Contains(body, []byte(`\u`)) {
+		return body
+	}
+	var v any
+	if json.Unmarshal(body, &v) != nil {
+		return body
+	}
+	out := append([]byte(nil), body...)
+	var walk func(any)
+	walk = func(x any) {
+		switch x := x.(type) {
+		case string:
+			out = append(append(out, '\n'), x...)
+		case map[string]any:
+			for _, y := range x {
+				walk(y)
+			}
+		case []any:
+			for _, y := range x {
+				walk(y)
+			}
+		}
+	}
+	walk(v)
+	return out
 }
 
 // Drawers are the models of one models.dev provider that make images,
@@ -1488,14 +1718,32 @@ func AtEndpoint(base string) []string {
 	if want == "" {
 		return nil
 	}
-	var ids []string
-	for id, p := range load() {
-		if endpointKey(p.API) == want {
-			ids = append(ids, id)
+	all, at := loadGen()
+	endpoints.Lock()
+	defer endpoints.Unlock()
+	if endpoints.by == nil || endpoints.gen != at {
+		// every provider's API, keyed once a load rather than each
+		// look-up: a provider's price asks for it, and a model list
+		// priced row by row asked it once a model (/v1/models' pricing)
+		endpoints.gen, endpoints.by = at, map[string][]string{}
+		for id, p := range all {
+			if k := endpointKey(p.API); k != "" {
+				endpoints.by[k] = append(endpoints.by[k], id)
+			}
+		}
+		for _, ids := range endpoints.by {
+			slices.Sort(ids)
 		}
 	}
-	slices.Sort(ids)
-	return ids
+	return slices.Clone(endpoints.by[want])
+}
+
+// endpoints are the models.dev providers by the API they serve at
+// (endpointKey), for the load of Reset count gen.
+var endpoints struct {
+	sync.Mutex
+	gen int
+	by  map[string][]string
 }
 
 func endpointKey(u string) string {
@@ -1584,21 +1832,37 @@ func MagpieAdded(etag, slug, description string) bool {
 // first.
 var EffortRank = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
+// EffortAliases are levels some vendors name in words of their own, each
+// with the level of EffortRank's it is: Trae's light and extra_high (its 轻
+// and 极高), which a plugin serving Trae's models (Our Free Model's) lists
+// as they are (nianshou5 on Discord).
+var EffortAliases = map[string]string{"light": "low", "extra_high": "xhigh"}
+
+// EffortLevel is the level of EffortRank's that e names: e itself, or the
+// one a vendor's word for it is (EffortAliases).
+func EffortLevel(e string) string {
+	if l, ok := EffortAliases[strings.ToLower(e)]; ok {
+		return l
+	}
+	return e
+}
+
 // NearestEffort is the level of levels nearest want in EffortRank's order,
 // a tie going up, never "none" unless it is want; want itself when levels
 // are none, hold it, or want is no level EffortRank knows. The gateway
 // fits an effort to a model's levels by it on the way out (fitEffort), and
 // Codex's catalog gives a model the effort set for new sessions by it
 // (codexcat.ModelDefault), so the level a model starts at is the one it
-// would be sent at.
+// would be sent at. A level is placed by the one it names (EffortLevel),
+// so low is a model's light, and a model's levels go in its own words.
 func NearestEffort(want string, levels []string) string {
-	at := slices.Index(EffortRank, want)
+	at := slices.Index(EffortRank, EffortLevel(want))
 	if len(levels) == 0 || at < 0 || slices.Contains(levels, want) {
 		return want
 	}
 	best, dist := want, len(EffortRank)
 	for _, l := range levels {
-		i := slices.Index(EffortRank, l)
+		i := slices.Index(EffortRank, EffortLevel(l))
 		if i < 0 || l == "none" {
 			continue
 		}

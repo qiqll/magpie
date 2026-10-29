@@ -1,8 +1,11 @@
 package redact
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -81,8 +84,12 @@ func reindexKnown() {
 	}
 }
 
-// kindOf is the kind in a placeholder: SECRET of {{SECRET_abcdefgh}}.
+// kindOf is the kind in a placeholder: SECRET of {{SECRET_abcdefgh}}, or
+// a made-up key's (shape.go); called with mu held.
 func kindOf(p string) string {
+	if k, ok := shapes[p]; ok {
+		return k
+	}
 	if i := strings.LastIndexByte(p, '_'); i > 2 {
 		return p[2:i]
 	}
@@ -130,6 +137,47 @@ func (o Options) coversKind(kind string) bool {
 	return false
 }
 
+// A value the model alone found is known at the score it had: it is
+// masked again as known only while the user's slider (Options.MinScore)
+// is at or below that. Moving the slider up did nothing to what the model
+// had found at a lower score, until magpie started again ("即使把匹配拉到
+// 0.95，也是一样行为", _kaichen on X, 10-28). One any other finder found
+// (a rule, the user's words or rules) is known whatever the slider says,
+// as it was.
+
+// ruleFound is a value's score where no model found it.
+const ruleFound = 2
+
+// scores are the values found, with the model's best score for each
+// (ruleFound where anything else found it); guarded by mu.
+var scores = map[string]float64{}
+
+// noteScores keeps what found's values in s were found at.
+func noteScores(s string, found []span) {
+	if len(found) == 0 {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(scores) >= maxValues {
+		// forgotten, a value is known whatever the slider says, as all
+		// were before
+		scores = map[string]float64{}
+	}
+	for _, f := range found {
+		if f.by == ByKnown || f.end-f.start < minKnown {
+			continue
+		}
+		v, sc := s[f.start:f.end], float64(ruleFound)
+		if f.by == ByModel && f.score > 0 {
+			sc = f.score
+		}
+		if old, ok := scores[v]; !ok || sc > old {
+			scores[v] = sc
+		}
+	}
+}
+
 // knownSpans are where s has a known value o masks (coversKind). Where two
 // start at the same place, the longer.
 func knownSpans(s string, o Options) []span {
@@ -151,13 +199,29 @@ func knownSpans(s string, o Options) []span {
 			if !o.coversKind(k.kind) {
 				continue
 			}
+			sc, scored := scores[k.v]
+			if scored && sc < o.MinScore {
+				continue // the model's alone, under the slider
+			}
+			if scored && sc < ruleFound && k.kind == "SECRET" && wordsOnly(k.v) && !assignedSecret(s, i) {
+				// words the model alone took for a secret, as modelFits
+				// lets go now: what a magpie before it had remembered
+				// (drizzle-orm, dniray on Discord, v0.1.1976)
+				continue
+			}
 			if best != nil && len(k.v) <= len(best.v) || !strings.HasPrefix(s[i:], k.v) || !standsAlone(k.kind, s, i, i+len(k.v)) {
+				continue
+			}
+			if packageAt(s, i, i+len(k.v)) {
+				// the module an import loads, a manifest's dependency:
+				// what masked it before had taken a package's name for a
+				// secret (dniray, v0.1.1965)
 				continue
 			}
 			best = &known[s[i:i+minKnown]][j]
 		}
 		if best != nil {
-			out = append(out, span{i, i + len(best.v), best.kind, ByKnown})
+			out = append(out, span{i, i + len(best.v), best.kind, ByKnown, 0, false})
 			i += len(best.v) - 1
 		}
 	}
@@ -165,7 +229,8 @@ func knownSpans(s string, o Options) []span {
 }
 
 // standsAlone says s[a:b] is the known value itself, not a piece of a
-// longer one: a number with no digit beside it, an email that is not part
+// longer one: a number with no letter or digit beside it (as the rules
+// take one: 9f13800138000abc is a hash's piece), an email that is not part
 // of a longer address (though a full stop may end the sentence after it),
 // a secret with no letter or digit against it (twelve hex digits a rule of
 // the user's took are also in the middle of a hash).
@@ -179,9 +244,7 @@ func standsAlone(kind, s string, a, b int) bool {
 	}
 	is := func(c byte, set string) bool { return c != 0 && strings.IndexByte(set, c) >= 0 }
 	switch kind {
-	case "PHONE", "BANK_CARD":
-		return !is(before, digits) && !is(after, digits)
-	case "ID_CARD", "IBAN", "SSN", "PASSPORT", "SERIAL":
+	case "PHONE", "BANK_CARD", "ID_CARD", "IBAN", "SSN", "PASSPORT", "SERIAL":
 		return !is(before, alnum) && !is(after, alnum)
 	case "IP", "MAC":
 		// not a piece of a longer address or a version: 1.2.3.45, 1.2.3.4.5
@@ -197,4 +260,81 @@ func standsAlone(kind, s string, a, b int) bool {
 		return !is(after, ".-") || b+1 >= len(s) || !is(s[b+1], alnum)
 	}
 	return !(is(before, alnum) && is(s[a], alnum)) && !(is(after, alnum) && is(s[b-1], alnum))
+}
+
+// A text sent before goes again as it went: the known values found in it
+// the first time it was masked are the ones masked in it from then on,
+// and a value that became known since is masked in new text only.
+//
+// An agent sends its whole conversation on every turn, and a vendor
+// caches it by its bytes up to a mark (Anthropic's cache_control, the
+// prefix OpenAI and DeepSeek cache on their own). A value found by a rule
+// in a turn's tool output became known, and the next turn masked it again
+// in the system prompt and every earlier message that had it as written:
+// the prefix changed at its first block, and a 400K-token conversation was
+// written to the cache whole instead of read (audie on Discord: cache_read
+// 0 and cache_write 412,081 to 426,782 on four turns, ten seconds apart).
+// Masking it there keeps nothing from the vendor, which was sent that text
+// as written already.
+//
+// What is remembered is a hash of the text and of what o covers, and the
+// places of the known values in it; nothing of a value. A text no longer
+// remembered (sentEntries, or magpie started again) is masked with what is
+// known then.
+const sentEntries = 1 << 16
+
+var sentKnown struct {
+	sync.Mutex
+	cur, old map[[32]byte][]span
+}
+
+// sentKnownSpans is knownSpans for text going to a vendor: the same as the
+// first time s was masked under what o covers.
+func sentKnownSpans(s string, o Options) []span {
+	if !o.Secrets && !o.Personal || len(s) < minKnown {
+		return nil
+	}
+	h := sha256.New()
+	fmt.Fprintf(h, "%t\x00%t\x00", o.Secrets, o.Personal)
+	kinds := make([]string, 0, len(o.Kinds))
+	for k, on := range o.Kinds {
+		kinds = append(kinds, fmt.Sprintf("%s=%t", k, on))
+	}
+	slices.Sort(kinds)
+	fmt.Fprintf(h, "%s\x00", strings.Join(kinds, ","))
+	h.Write([]byte(s))
+	var k [32]byte
+	h.Sum(k[:0])
+	sentKnown.Lock()
+	sp, ok := sentKnown.cur[k]
+	if !ok {
+		if sp, ok = sentKnown.old[k]; ok {
+			sentKnownAdd(k, sp) // still in use: kept past the next turnover
+		}
+	}
+	sentKnown.Unlock()
+	if ok {
+		return slices.Clone(sp)
+	}
+	sp = knownSpans(s, o)
+	sentKnown.Lock()
+	sentKnownAdd(k, slices.Clone(sp))
+	sentKnown.Unlock()
+	return sp
+}
+
+// sentKnownAdd is called with sentKnown held. Two generations, as
+// scrubMemo keeps: when the newer is full it becomes the older.
+func sentKnownAdd(k [32]byte, sp []span) {
+	if sentKnown.cur == nil || len(sentKnown.cur) >= sentEntries {
+		sentKnown.old, sentKnown.cur = sentKnown.cur, make(map[[32]byte][]span)
+	}
+	sentKnown.cur[k] = sp
+}
+
+// resetSent forgets the texts sent (a test starts from nothing).
+func resetSent() {
+	sentKnown.Lock()
+	defer sentKnown.Unlock()
+	sentKnown.cur, sentKnown.old = nil, nil
 }
