@@ -426,7 +426,7 @@ func strictKeep(scope, mode string, in http.Header, body []byte, cs []candidate,
 	}
 	if len(back) > 0 {
 		pl.capped = slices.DeleteFunc(slices.Clone(pl.capped), func(c candidate) bool { return c.sameVendor(st.who, st.model) })
-		return append(back, cs...), planned{order: append(order, pl.order...), left: pl.left, held: pl.held, capped: pl.capped}, nil
+		return append(back, cs...), planned{order: append(order, pl.order...), left: pl.left, held: pl.held, capped: pl.capped, lapsed: pl.lapsed}, nil
 	}
 	var held []Weighed
 	for _, c := range pl.held {
@@ -440,7 +440,7 @@ func strictKeep(scope, mode string, in http.Header, body []byte, cs []candidate,
 	if len(held) > 0 {
 		// only its own reset, should it spend one by itself, brings it back
 		pl.held = slices.DeleteFunc(slices.Clone(pl.held), func(c candidate) bool { return !c.sameVendor(st.who, st.model) })
-		return nil, planned{order: nil, left: pl.left, held: pl.held, capped: pl.capped}, held[:1]
+		return nil, planned{order: nil, left: pl.left, held: pl.held, capped: pl.capped, lapsed: pl.lapsed}, held[:1]
 	}
 	return cs, pl, nil
 }

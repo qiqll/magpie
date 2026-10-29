@@ -262,9 +262,6 @@ func perKeyBarred(p provider.Provider, model string, from provider.Protocol) (ou
 			barred = append(barred, c)
 			return true
 		})
-		// one whose sign-in has to be made again, while another can
-		// answer (leaveLapsed)
-		all = leaveLapsed(all, &barred)
 		// an account at its usage cap is used up for routing until the
 		// window it filled renews: never tried, so groups, fallbacks and
 		// the other accounts take the request (provider/account_caps.go);
@@ -279,6 +276,9 @@ func perKeyBarred(p provider.Provider, model string, from provider.Protocol) (ou
 			barred = append(barred, c)
 			return true
 		})
+		// one whose sign-in has to be made again, while another can
+		// answer (leaveLapsed): judged over those not held at a cap
+		all = leaveLapsed(all, model, &barred)
 		// an account whose plan lacks the model (a Free one behind a Plus)
 		// would only answer 400; it is tried only when none lists it
 		for _, c := range all {
@@ -424,6 +424,7 @@ func (s *Server) planPaused(p provider.Provider, model string, from provider.Pro
 		pl.left = append(pl.left, barredOf(barred, q, fallback, from, nil)...)
 		pl.held = append(pl.held, creditsHeld(barred)...)
 		pl.capped = append(pl.capped, capHeldOnly(barred)...)
+		pl.lapsed = append(pl.lapsed, lapsedOnly(barred)...)
 		cs, wg := weigh(q, cs, m, from)
 		for i, c := range cs {
 			w := weighed(c, q, wg, fallback, from)
@@ -576,6 +577,7 @@ func planLevel(g provider.Group, ms []provider.Member, depth int, from provider.
 		pl.left = append(pl.left, barredOf(barred, m.Provider, false, from, m.Groups())...)
 		pl.held = append(pl.held, creditsHeld(barred)...)
 		pl.capped = append(pl.capped, capHeldOnly(barred)...)
+		pl.lapsed = append(pl.lapsed, lapsedOnly(barred)...)
 		*asides = append(*asides, aside...)
 		for _, w := range asideOf(aside, m.Provider, false, from) {
 			w.Via = m.Groups()
@@ -947,19 +949,29 @@ func capHeldOnly(cs []candidate) []candidate {
 // leaveLapsed is all less the accounts whose sign-in has to be made again
 // (provider.SignInLapsed: Anthropic refused it, its refresh or its token
 // was refused, its vendor revoked it, its plugin's vendor answered 401),
-// each added to barred with why, while another of all is signed in: such
-// an account can't answer, and asked first it only failed before the one
-// that would, its error all the agent was told when that one failed too.
-// With none other, all is kept: it is tried, and its failure tells the
-// agent to sign in again. Signed in again, it is back.
-func leaveLapsed(all []candidate, barred *[]candidate) []candidate {
-	why := make([]string, len(all))
+// each added to barred with why, while another of all could answer: one
+// signed in, not resting, whose own list has model (those held at a cap
+// are out of all already). Such an account can't answer, and asked first
+// it only failed before the one that would, its error all the agent was
+// told when that one failed too. With none other, all is kept: it is
+// tried, and its failure tells the agent to sign in again. One the
+// calling key may not use doesn't count either: allowedCandidates brings
+// the lapsed back when the key may use none of the others
+// (lapsedBack). Signed in again, it is back.
+func leaveLapsed(all []candidate, model string, barred *[]candidate) []candidate {
+	accts := make([]*provider.Account, len(all))
+	for i, c := range all {
+		accts[i] = c.p.Account
+	}
+	why := provider.SignInLapsedOf(accts)
+	if !slices.ContainsFunc(why, func(w string) bool { return w != "" }) {
+		return all
+	}
 	usable := false
 	for i, c := range all {
-		why[i] = provider.SignInLapsed(c.p.Account)
-		usable = usable || why[i] == ""
+		usable = usable || why[i] == "" && !resting(c) && c.p.Account.Lists(model)
 	}
-	if !usable || !slices.ContainsFunc(why, func(w string) bool { return w != "" }) {
+	if !usable {
 		return all
 	}
 	var out []candidate
@@ -972,6 +984,49 @@ func leaveLapsed(all []candidate, barred *[]candidate) []candidate {
 		*barred = append(*barred, c)
 	}
 	return out
+}
+
+// lapsedOnly are those of cs left out as their sign-in has to be made
+// again (leaveLapsed).
+func lapsedOnly(cs []candidate) []candidate {
+	var out []candidate
+	for _, c := range cs {
+		if c.lapsed != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// lapsedBack is cs with the accounts leaveLapsed left out of pl brought
+// back, those keep allows, for each provider of whose accounts none is
+// left in cs: the others it left them out for are ones the calling key
+// may not use. They are tried last, and their failure tells the agent to
+// sign in again, as with no other account at all.
+func lapsedBack(cs []candidate, pl planned, keep func(candidate) bool) ([]candidate, planned) {
+	var back []candidate
+	for _, c := range pl.lapsed {
+		if !keep(c) || slices.ContainsFunc(cs, func(o candidate) bool { return o.p.ID == c.p.ID }) {
+			continue
+		}
+		i := slices.IndexFunc(pl.left, func(w Weighed) bool { return w.ID == c.rest && w.Model == c.model && w.Lapsed != "" })
+		if i < 0 {
+			continue
+		}
+		w := pl.left[i]
+		w.Unlisted, w.Lapsed = false, ""
+		pl.left = slices.Delete(slices.Clone(pl.left), i, i+1)
+		c.lapsed = ""
+		back = append(back, c)
+		pl.order = append(pl.order, w)
+	}
+	if len(back) == 0 {
+		return cs, pl
+	}
+	pl.lapsed = slices.DeleteFunc(slices.Clone(pl.lapsed), func(c candidate) bool {
+		return slices.ContainsFunc(back, func(b candidate) bool { return b.rest == c.rest && b.model == c.model })
+	})
+	return append(cs, back...), pl
 }
 
 // barredOf is how the trace tells the accounts or keys the user set not

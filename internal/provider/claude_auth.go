@@ -127,10 +127,26 @@ func claudeOwnRefused(user string) string {
 	if !ok {
 		return ""
 	}
-	v := c.version()
 	loginsMu.Lock()
-	defer loginsMu.Unlock()
-	for _, l := range readLogins() {
+	ls := readLogins()
+	loginsMu.Unlock()
+	return claudeRefusedOf(ls, user, c.version())
+}
+
+// claudeOwnRefusedIn is claudeOwnRefused with the saved logins read
+// already.
+func claudeOwnRefusedIn(ls []savedLogin, user string) string {
+	c, _, ok := claudeCredential()
+	if !ok {
+		return ""
+	}
+	return claudeRefusedOf(ls, user, c.version())
+}
+
+// claudeRefusedOf is why the saved Claude account user can't be used on
+// the credential version v: Anthropic refused that one; "" when it didn't.
+func claudeRefusedOf(ls []savedLogin, user, v string) string {
+	for _, l := range ls {
 		if l.Agent == "claude" && strings.EqualFold(l.User, user) && l.Refused == v && l.Lapsed != "" {
 			return l.Lapsed
 		}

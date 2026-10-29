@@ -720,15 +720,25 @@ func compactOn(r *http.Request, model string) *provider.Provider {
 	}
 	others := p.AlsoOn()
 	// one whose sign-in has to be made again, its vendor having revoked
-	// it (#1793) or its refresh refused, is the last asked
+	// it (#1793) or its refresh refused, is the last asked; and those the
+	// calling key may use go before those it may not (compactSigninHeld
+	// refuses those), so a lapsed one it may use isn't passed over for one
+	// it may not
+	who, _ := accountHolds(r)
+	allowed := func(o provider.Provider) bool { return accountAllowed(who, candidate{p: o, model: model, rest: o.ID}) }
 	revoked := func(o provider.Provider) bool { return provider.SignInLapsed(o.Account) != "" }
 	for i, o := range others {
-		if !resting(candidate{p: o, model: model, rest: o.ID}) && !revoked(o) {
+		if allowed(o) && !resting(candidate{p: o, model: model, rest: o.ID}) && !revoked(o) {
 			return &others[i]
 		}
 	}
 	for i, o := range others {
-		if !revoked(o) {
+		if allowed(o) && !revoked(o) {
+			return &others[i]
+		}
+	}
+	for i, o := range others {
+		if allowed(o) {
 			return &others[i]
 		}
 	}

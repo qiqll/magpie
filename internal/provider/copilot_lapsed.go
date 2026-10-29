@@ -41,10 +41,12 @@ func copilotLapsedOn(l savedLogin, token string) bool {
 }
 
 // copilotLapsedFor is why the Copilot account of app has to be signed in
-// again: GitHub refused the token it has now, as its row says
-// (copilotLogins); "" when it didn't.
-func copilotLapsedFor(app copilotApp) string {
-	l, ok := savedLoginOf(func(l savedLogin) bool { return l.Agent == "copilot" && strings.EqualFold(l.User, app.User) })
+// again, of the saved logins ls: GitHub refused the token it has now, as
+// its row says (copilotLogins); "" when it didn't. The mark is of the
+// token, so a same-named account on another host, with a token of its
+// own, is never taken for it.
+func copilotLapsedFor(ls []savedLogin, app copilotApp) string {
+	l, ok := loginIn(ls, func(l savedLogin) bool { return l.Agent == "copilot" && strings.EqualFold(l.User, app.User) })
 	if ok && copilotLapsedOn(l, app.Token) {
 		return l.Lapsed
 	}

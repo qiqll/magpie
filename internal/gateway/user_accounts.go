@@ -616,7 +616,7 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 	seats := userBinds.m[keyID][p.ID][user].seats()
 	// an account not among cands may be gone: signed out, switched off or
 	// removed (seatsOf), unknown while the saved accounts can't be read
-	var kept []userSeat
+	var kept, lapsed []userSeat
 	var on map[string]bool
 	known := true
 	for _, st := range seats {
@@ -628,6 +628,7 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 		// is let go as one gone, as a request it failed lets go of it
 		// (unbindTurnedAway): the user is bound to one that can answer
 		if slices.ContainsFunc(pl.left, func(w Weighed) bool { return w.Lapsed != "" && leftIs(w, p.ID, st.Who) }) {
+			lapsed = append(lapsed, st)
 			continue
 		}
 		if on == nil {
@@ -653,6 +654,27 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 		}
 		uses := seatUsesOf(p.ID, tiers)
 		pick := firstOf(p.ID, cands, pl, tier, uses)
+		if pick < 0 && len(lapsed) > 0 {
+			// no other account takes the user: it stays on its own, to
+			// be signed in again, and is told so by its failure
+			mine := func(c candidate) bool { return c.p.ID == p.ID && seatIn(lapsed, c.who()) }
+			var rest []candidate
+			var order []Weighed
+			for i, c := range cands {
+				if c.p.ID != p.ID && i < len(pl.order) {
+					rest, order = append(rest, c), append(order, pl.order[i])
+				}
+			}
+			pl.order = order
+			cands, pl = lapsedBack(rest, pl, mine)
+			setSeats(keyID, p.ID, user, lapsed)
+			saveUsersLogged()
+			ub.Why = "kept"
+			ub.shown(lapsed)
+			out, opl := ownedBy(lapsed, p.ID, cands, pl)
+			ub.left = opl.left
+			return out, opl, ub, userRefusal{}
+		}
 		if pick < 0 {
 			if slices.ContainsFunc(cands, func(c candidate) bool { return c.p.ID == p.ID && !uses.of(c).takes(tier.Share) }) {
 				// some are another's alone, or shared by as many as can:
@@ -955,7 +977,7 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 	grown.Why = "added"
 	grown.shown(seats)
 	grown.left = pl.left
-	return append(added, cands...), planned{order: append(addedPl.order, pl.order...), left: pl.left, held: pl.held, capped: pl.capped}, &grown, true, userRefusal{}
+	return append(added, cands...), planned{order: append(addedPl.order, pl.order...), left: pl.left, held: pl.held, capped: pl.capped, lapsed: pl.lapsed}, &grown, true, userRefusal{}
 }
 
 // atTier says u has n accounts of the provider, as many as its tier lets
@@ -1269,6 +1291,11 @@ func ownedBy(seats []userSeat, pid string, cands []candidate, pl planned) ([]can
 	for _, c := range pl.capped {
 		if mine(c) {
 			n.capped = append(n.capped, c)
+		}
+	}
+	for _, c := range pl.lapsed {
+		if mine(c) {
+			n.lapsed = append(n.lapsed, c)
 		}
 	}
 	for i, c := range pl.unlisted {

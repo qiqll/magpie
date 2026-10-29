@@ -437,6 +437,11 @@ type planned struct {
 	// cap set on them, for a conversation that stays strictly on one to
 	// go on there (provider.AffinityStrict, #1797)
 	capped []candidate
+	// lapsed: the accounts left out (in left) as their sign-in has to be
+	// made again while another could answer (leaveLapsed), for one the
+	// calling key may use to be brought back when it may use none of the
+	// others (lapsedBack)
+	lapsed []candidate
 	// unlisted: the accounts left out (in left) as their own list lacks
 	// the model, their rows beside them in unlistedW, kept for the
 	// checkpoint narrowing: the one that sealed a conversation's compaction

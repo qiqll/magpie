@@ -272,8 +272,25 @@ func allowedCandidates(who access.Identity, cs []candidate, pl planned, members 
 	gone := func(c candidate) bool {
 		return !members[c.p.ID+"/"+c.model] && !modelAllowed(who, c.p, c.model) || !accountAllowed(who, c)
 	}
+	// one left out at its cap or to be signed in again that the key may
+	// not use is said held, as one in the order is: a pin to it is told
+	// the key may not use it, not how the account is
+	for _, c := range append(slices.Clone(pl.capped), pl.lapsed...) {
+		if !accountAllowed(who, c) {
+			for i, w := range pl.left {
+				if w.ID == c.rest && w.Model == c.model && (w.Capped > 0 || w.Lapsed != "") {
+					pl.left[i].Held = true
+				}
+			}
+		}
+	}
 	pl.held = slices.DeleteFunc(slices.Clone(pl.held), gone)
 	pl.capped = slices.DeleteFunc(slices.Clone(pl.capped), gone)
+	// those to be signed in again the key may use come back when it may
+	// use no other account of their provider (leaveLapsed)
+	out, pl = lapsedBack(out, pl, func(c candidate) bool { return !gone(c) })
+	pl.lapsed = slices.DeleteFunc(slices.Clone(pl.lapsed), gone)
+	held = held && len(out) == 0
 	// nor one whose own list lacks the model, asked once those that list
 	// it refused the model (unlistedNext)
 	var unlisted []candidate
@@ -284,7 +301,7 @@ func allowedCandidates(who access.Identity, cs []candidate, pl planned, members 
 		}
 	}
 	pl.unlisted, pl.unlistedW = unlisted, unlistedW
-	return out, pl, held && len(out) == 0
+	return out, pl, held
 }
 
 // accountAllowed says the key may use a candidate's account or key: a

@@ -143,3 +143,35 @@ func TestSignInLapsedClaude(t *testing.T) {
 		t.Fatalf("Claude Code's own refused: %q", got)
 	}
 }
+
+// A revoked sign-in signed in again in magpie, or renewed by the agent
+// itself, is back: routing no longer sends it a request for one it serves
+// to clear the mark, so the mark kept in memory is read against the saved
+// login's, which the sign-in anew cleared. A plugin account with no key of
+// its own is none of the plugin's to match.
+func TestSignInLapsedClearedBySigningInAnAgain(t *testing.T) {
+	signIn(t)
+	resetRevoked()
+	t.Cleanup(resetRevoked)
+	if err := addSideLogin(savedLogin{Agent: "zcode", User: "u@example.com", Auth: json.RawMessage(`{"token":"a"}`)}, "", func(savedLogin) {}); err != nil {
+		t.Fatal(err)
+	}
+	a := &Account{Agent: "zcode", User: "u@example.com"}
+	NoteRevokedSignIn(context.Background(), a, revokedReq(t, "a"))
+	if got := SignInLapsed(a); got == "" {
+		t.Fatal("a revoked sign-in isn't held")
+	}
+	// signed in again in magpie: another credential, and logins.json's
+	// mark gone, though nothing was served since
+	if err := addSideLogin(savedLogin{Agent: "zcode", User: "u@example.com", Auth: json.RawMessage(`{"token":"c"}`)}, "", func(savedLogin) {}); err != nil {
+		t.Fatal(err)
+	}
+	if got := SignInLapsed(a); got != "" {
+		t.Fatalf("signed in again, still held: %q", got)
+	}
+
+	pp := plugin.Provider{ID: "zed"}
+	if got := SignInLapsed(&Account{Agent: "plugin", User: "z", plugin: &pp}); got != "" {
+		t.Fatalf("a plugin account with no key held: %q", got)
+	}
+}

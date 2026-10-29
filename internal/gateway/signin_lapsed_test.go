@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -137,4 +138,76 @@ func TestLapsedAccountNotCompactedOnOrSearchedWith(t *testing.T) {
 	if got := asked(false); len(got) != 0 {
 		t.Fatalf("asked %v", got)
 	}
+}
+
+// Left out only for one that could answer: with the other account at its
+// usage cap, or one the calling gateway key may not use, the lapsed one
+// is tried and the agent told to sign in again, not that every account
+// is at its cap or outside the key (review of the first cut). A pin to a
+// lapsed account the key may not use is told so, not how the account is.
+func TestLapsedAccountKeptWhenNoOtherCanAnswer(t *testing.T) {
+	t.Run("the other at its cap", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com")
+		asked, _ := usersUpstream(t, nil)
+		lapseSaved(t, "spare@example.com")
+		capUsage(t, map[string]float64{"me@example.com": 75, "spare@example.com": 10})
+		if err := provider.SetAccountCap("codex", "me@example.com", 70); err != nil {
+			t.Fatal(err)
+		}
+		s := New()
+		rec := codexPostTo(s, `{"model":"gpt-5.5","stream":true,"input":"ping"}`)
+		if strings.Contains(rec.Body.String(), "usage cap") {
+			t.Fatalf("told the cap, not the lapse: %d %s", rec.Code, rec.Body.String())
+		}
+		if r := lastRoute(s); slices.ContainsFunc(r.Left, func(w Weighed) bool { return w.Lapsed != "" }) {
+			t.Fatalf("left out for a capped one: %+v", r.Left)
+		}
+		if got := asked(true); !slices.Contains(got, "acct-2") {
+			t.Fatalf("the lapsed one isn't tried: asked %v", got)
+		}
+	})
+	t.Run("the other outside the key", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com")
+		asked, _ := usersUpstream(t, nil)
+		lapseSaved(t, "spare@example.com")
+		keys, secrets := newCaller(t, "Spare only")
+		if _, err := access.Update("accounts-key", access.Change{Key: keys[0].ID, Accounts: []string{"codex/spare@example.com"}}); err != nil {
+			t.Fatal(err)
+		}
+		s := New()
+		post := func(pin string) *httptest.ResponseRecorder {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"codex/gpt-5.5","stream":true,"input":"ping"}`))
+			req.Header.Set("Authorization", "Bearer "+secrets[0])
+			if pin != "" {
+				req.Header.Set(AccountHeader, pin)
+			}
+			s.Handler().ServeHTTP(rec, req)
+			return rec
+		}
+		rec := post("")
+		if rec.Code == http.StatusForbidden || slices.Contains(asked(true), "acct-1") {
+			t.Fatalf("held off the account the key may use: %d %s", rec.Code, rec.Body.String())
+		}
+		if r := lastRoute(s); !slices.ContainsFunc(r.Order, func(w Weighed) bool { return w.Who == "spare@example.com" }) {
+			t.Fatalf("the lapsed account the key may use isn't tried: %+v %+v", r.Order, r.Left)
+		}
+	})
+	t.Run("a pin outside the key", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com", "third@example.com")
+		usersUpstream(t, nil)
+		lapseSaved(t, "spare@example.com")
+		keys, secrets := newCaller(t, "Me only")
+		if _, err := access.Update("accounts-key", access.Change{Key: keys[0].ID, Accounts: []string{"codex/me@example.com"}}); err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"codex/gpt-5.5","stream":true,"input":"ping"}`))
+		req.Header.Set("Authorization", "Bearer "+secrets[0])
+		req.Header.Set(AccountHeader, "spare@example.com")
+		New().Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "may not use") || strings.Contains(rec.Body.String(), "has expired") {
+			t.Fatalf("pinned outside the key: %d %s", rec.Code, rec.Body.String())
+		}
+	})
 }
