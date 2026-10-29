@@ -298,7 +298,11 @@ func TestUserBindingCountsWithoutTheUserLocally(t *testing.T) {
 	if got := up.asked(); len(got) != 0 {
 		t.Fatalf(":countTokens without a user asked an account: %v", got)
 	}
-	// with a user, in either header, the provider counts, as before
+	// with a user bound to the provider's key, in either header, the
+	// provider counts, as before (a count reads a binding, never makes
+	// one: T-003, TestUserCountOnTheUsersOwnKey)
+	seat := userBinding{Who: "fake#" + provider.KeyID("k"), Account: "k"}
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"fake": {"alice": seat, "bob": seat}}})
 	for _, h := range []map[string]string{{UserHeader: "alice"}, {"X-User-ID": "bob"}} {
 		if n := estimated(t, postAt(s, "/v1/messages/count_tokens", msg, h)); n != 999 {
 			t.Fatalf("count_tokens with a user %v: %d, want the provider's 999", h, n)

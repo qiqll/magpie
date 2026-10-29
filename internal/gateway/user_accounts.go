@@ -1297,6 +1297,10 @@ func (s *Server) userRefused(w http.ResponseWriter, from provider.Protocol, call
 	call.Status, call.Error = refused.status, "user bound: "+u.accountOr()
 	if refused.limit != "" {
 		userLimited(w.Header(), refused.limit, refused.until, refused.model)
+	} else if d := time.Until(refused.until); d > 0 {
+		// not a limit (a 503 with none of the user's able to answer):
+		// when to try again all the same
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(d.Seconds()))))
 	}
 	msg := refused.msg
 	if refused.status == http.StatusTooManyRequests {

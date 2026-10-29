@@ -836,10 +836,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /audio/translations", s.userNeeded(provider.Chat, s.transcribe("/audio/translations", "translations")))
 	mux.HandleFunc("POST /v1/videos", s.userNeeded(provider.Chat, s.videosCreate))
 	mux.HandleFunc("POST /videos", s.userNeeded(provider.Chat, s.videosCreate))
-	mux.HandleFunc("GET /v1/videos/{id}", s.videosGet)
-	mux.HandleFunc("GET /videos/{id}", s.videosGet)
-	mux.HandleFunc("GET /v1/videos/{id}/content", s.videosContent)
-	mux.HandleFunc("GET /videos/{id}/content", s.videosContent)
+	mux.HandleFunc("GET /v1/videos/{id}", s.userNeeded(provider.Chat, s.videosGet))
+	mux.HandleFunc("GET /videos/{id}", s.userNeeded(provider.Chat, s.videosGet))
+	mux.HandleFunc("GET /v1/videos/{id}/content", s.userNeeded(provider.Chat, s.videosContent))
+	mux.HandleFunc("GET /videos/{id}/content", s.userNeeded(provider.Chat, s.videosContent))
 	mux.HandleFunc("POST "+claudeMCPPath+"{token}", s.subscription.mcpCall)
 	mux.HandleFunc("/mcp/{name}", s.mcpProxy)
 	mux.HandleFunc("/mcp/run/{name}", runMCP)
@@ -1502,6 +1502,7 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 		return
 	}
 	var counts []candidate
+	seated := false // counted on a user's own accounts: never told their failures
 	if ok {
 		// Keep the provider's key order and cooldowns, but never count a
 		// fallback model: it may use a different tokenizer.
@@ -1513,16 +1514,13 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 		if who, held := accountHolds(r); held {
 			cs, pl = keepIn(cs, pl, func(c candidate) bool { return accountAllowed(who, c) })
 		}
-		// a user's, bound by user: counted on its own accounts alone
-		// (usersOn), never on another user's, whose MaxRPM it would take
-		// and which a 429 would rest for every user; refused as its turn
-		// would be when none is left
-		if own, _, bound, err := s.usersOn(r, p, cs, pl); err != nil {
-			s.answerUserRefused(w, provider.Anthropic, &Call{}, err)
-			return
-		} else if bound {
-			cs = own
-		}
+		// a user's, bound by user: counted on the accounts it is on
+		// already alone (usersSeated), never on another user's, whose
+		// MaxRPM it would take and which a 429 would rest for every user;
+		// a count binds nobody, and with none of its own, or one that
+		// fails, the estimate below says the count, as for a count
+		// without a user (T-002)
+		cs, seated = s.usersSeated(r, p, cs, pl)
 		for _, c := range cs {
 			// A relay's OpenAI-only key can't count Anthropic tokens.
 			if c.p.Anthropic != "" && slices.Contains(s.usable(c.p, model), provider.Anthropic) {
@@ -1551,6 +1549,9 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 					continue
 				}
 			}
+			if seated && r.Context().Err() == nil {
+				break
+			}
 			writeError(w, provider.Anthropic, 502, c.p.Name+": "+err.Error())
 			return
 		}
@@ -1565,6 +1566,11 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 				if i+1 < len(counts) {
 					continue
 				}
+			}
+			if seated {
+				// a user's: never the vendor's words (a sign-in to make
+				// again, its account), the estimate in their place
+				break
 			}
 			keepRetryOut(w.Header(), res.Header, b)
 			writeError(w, provider.Anthropic, res.StatusCode, c.p.Explain(c.p.Name+": "+provider.APIError(b, res.Status), res.StatusCode, b))

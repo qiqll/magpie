@@ -142,6 +142,7 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 	// fails: a member that serves no such API (404), one out of quota
 	// (429) or one whose vendor fails; a model is asked on its own
 	tries := []candidate{{p: p, model: model}}
+	var u *userTry // a user's own, bound by user: its tries' spare (onKeys)
 	if isGroup {
 		if cs, _ := s.planGroup(g.Live(), ms, provider.Chat); len(cs) > 0 {
 			tries = cs
@@ -150,7 +151,7 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 		// a model of one provider goes over its keys or accounts as a
 		// chat does, never on one whose own list of models leaves it
 		// out (#1657), its user's alone bound by user (usersOn)
-		cs, code, err := s.onKeys(r, p, model, asked, true)
+		cs, own, code, err := s.onKeys(r, p, model, asked, true)
 		if err != nil {
 			if s.answerUserRefused(w, provider.Chat, &call, err) {
 				s.record(call)
@@ -161,7 +162,7 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 			s.record(call)
 			return
 		}
-		tries = cs
+		tries, u = cs, own
 	}
 	// the accounts or keys the calling key may not use are left out of
 	// the tries too (#905): a group's members through it no less
@@ -202,8 +203,8 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 		_, noted := noteMaskedUntil(r, what, hits, sent, 0, tries[0].p.ID, asked)
 		defer func() { noted(call.Provider, went) }()
 	}
-	for i, c := range tries {
-		last := i == len(tries)-1
+	for i := 0; i < len(tries); i++ {
+		c, last := tries[i], i == len(tries)-1
 		call.Provider, went = c.p.ID, c.model
 		base := strings.TrimRight(c.p.Base(provider.Chat), "/")
 		if base == "" {
@@ -229,6 +230,22 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 		b, got, code, err := s.retrieveAs(ctx, c.p, base+path, ctype, out)
 		cancel()
 		call.Millis = time.Since(start).Milliseconds()
+		if err != nil && r.Context().Err() == nil {
+			// one of a user's accounts whose sign-in has to be made again:
+			// the next of its own, else a spare, as a turn's; the caller
+			// is never told the vendor's words, nor them among the tried
+			if next, refused, lapsed := u.lapsed(c, code, []byte(err.Error()), last); lapsed {
+				if refused != nil {
+					call.Fallback = strings.Join(skipped, "; ")
+					s.answerUserRefused(w, provider.Chat, &call, refused)
+					call.Error += " (" + c.label() + ": " + err.Error() + ")"
+					s.record(call)
+					return
+				}
+				tries = append(tries, next...)
+				continue
+			}
+		}
 		if err != nil && !last && r.Context().Err() == nil {
 			skipped = append(skipped, c.label()+": "+err.Error())
 			continue

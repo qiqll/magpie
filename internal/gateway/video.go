@@ -576,6 +576,7 @@ func videoMaker(id string) (p provider.Provider, vendorID string, started time.T
 	if !ok {
 		return p, "", started, fmt.Errorf("%q isn't the id of a video magpie is making", id)
 	}
+	by, _ = videoBy(by)
 	found, ferr := provider.Find(pid)
 	if ferr == nil && filmsMiniMax(*found) {
 		// a MiniMax task is its key's account's: asked on that key
@@ -604,10 +605,94 @@ func videoMaker(id string) (p provider.Provider, vendorID string, started time.T
 		}
 		return q, vendorID, started, nil
 	}
-	if signer(*found) != by {
+	q, ok := signedBy(*found, by)
+	if !ok {
 		return p, "", started, fmt.Errorf("this video was started with another %s account than the one signed in now: sign back in to it to get the video", found.Name)
 	}
-	return *found, vendorID, started, nil
+	return q, vendorID, started, nil
+}
+
+// startMark is the mark of the key or account p sends with, in the id of
+// a video a user's request started on it (bound by user, usersOn): its
+// sign-in's (signer) for an account, keyMark's for a key, so it is asked
+// after on that one, not the provider's first, another user's.
+func startMark(p provider.Provider) string {
+	if p.Account == nil && p.Key != "" {
+		return keyMark(p)
+	}
+	return signer(p)
+}
+
+// signedBy is p on the key or account a video's id names (by): p itself
+// for its own sign-in's mark (or "0", any started on its first key
+// before), else whichever of its accounts and keys on now startMark
+// marks so.
+func signedBy(p provider.Provider, by string) (provider.Provider, bool) {
+	if signer(p) == by {
+		return p, true
+	}
+	for _, c := range seatCandidates(p) {
+		if startMark(c.p) == by {
+			return c.p, true
+		}
+	}
+	return p, false
+}
+
+// videoOwnerMark separates a video's key or account mark in its id from
+// its owner's (videoOwner).
+const videoOwnerMark = "_u"
+
+// videoBy is a video id's mark of its key or account, and of the user it
+// is for, "" for none.
+func videoBy(by string) (mark, owner string) {
+	mark, owner, _ = strings.Cut(by, videoOwnerMark)
+	return mark, owner
+}
+
+// videoOwner is the mark of r's user, of its gateway key, in a video's
+// id, bound by user: only that user asks after it (videoNotYours). ""
+// bound by session, or without a user.
+func (s *Server) videoOwner(r *http.Request) string {
+	if !s.bind.byUser() {
+		return ""
+	}
+	user, _ := userOf(r.Header)
+	if user == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(userKey(r) + "\x00" + user))
+	return hex.EncodeToString(sum[:6])
+}
+
+// videoIDFor is id, of a video r started on p, as it is handed out: its
+// sign-in's mark put as the key or account it started on (startMark)
+// when own (a user's, on one of its own), and r's user's mark after it
+// (videoOwner), bound by user.
+func (s *Server) videoIDFor(r *http.Request, id string, p provider.Provider, own bool) string {
+	if own {
+		id = strings.TrimSuffix(id, "."+signer(p)) + "." + startMark(p)
+	}
+	if o := s.videoOwner(r); o != "" {
+		id += videoOwnerMark + o
+	}
+	return id
+}
+
+// videoNotYours says, bound by user, that the video id isn't r's user's
+// to ask after: started for another user of its gateway key, or for none
+// (bound by session, or before a video's id named its user). Answered as
+// a video magpie knows nothing of, so its id tells nothing of another's.
+func (s *Server) videoNotYours(r *http.Request, id string) bool {
+	if !s.bind.byUser() {
+		return false
+	}
+	_, _, _, by, ok := parseVideoID(id)
+	if !ok {
+		return false // videoMaker says why
+	}
+	_, owner := videoBy(by)
+	return owner == "" || owner != s.videoOwner(r)
 }
 
 // remoteVideoID is the id of a video another magpie (p) is making, by its
@@ -843,7 +928,7 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 		fail(code, msg)
 		return
 	}
-	b, remote, custom, field, onKey := v.answer, v.remote, v.custom, v.field, v.onKey
+	b, remote, custom, field, onKey, own := v.answer, v.remote, v.custom, v.field, v.onKey, v.own
 	call.Millis, call.Status = time.Since(start).Milliseconds(), code
 	var started map[string]any
 	theirs := ""
@@ -868,12 +953,12 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.record(call)
 	if remote {
-		obj, _ := asOurs(b, p, remoteVideoID(p, theirs, start))
+		obj, _ := asOurs(b, p, s.videoIDFor(r, remoteVideoID(p, theirs, start), p, own))
 		writeJSON(w, 200, obj)
 		return
 	}
 	if custom {
-		obj, _ := asOurs(b, p, customVideoID(p, theirs, start))
+		obj, _ := asOurs(b, p, s.videoIDFor(r, customVideoID(p, theirs, start), p, false))
 		if _, ok := obj["model"]; !ok {
 			obj["model"] = p.ID + "/" + model
 		}
@@ -884,6 +969,7 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 	if onKey {
 		id = strings.TrimSuffix(id, "."+signer(p)) + "." + keyMark(p)
 	}
+	id = s.videoIDFor(r, id, p, own && !onKey)
 	writeJSON(w, 200, videoObject(id, p.ID+"/"+model, start, videoState{}, f))
 }
 
@@ -899,6 +985,9 @@ type videoStart struct {
 	// onKey: started on one of keys on plans of their own, which its id
 	// names (keyMark) to be asked after on, at that plan's endpoint
 	onKey bool
+	// own: started on a key or account of its user's (usersOn), which its
+	// id names (startMark) to be asked after on, whichever is first now
+	own bool
 }
 
 // startVideo starts f's video on p's model: at another magpie's videos
@@ -911,13 +1000,13 @@ func (s *Server) startVideo(ctx context.Context, r *http.Request, p provider.Pro
 	// the provider's other keys to start the video on, when the first
 	// says it doesn't serve the model
 	var keys []candidate
-	onKey := false
+	onKey, own := false, false
 	if !p.IsRemoteMagpie() && filmsCustom(p, model) {
 		// at a provider's own videos API: sent on the first key a chat
 		// for the model would go to (#1657), never one whose own list of
 		// models leaves it out, nor one the calling key may not use
 		// (#905); the video's id names the key, which it is asked after on
-		cs, code, err := s.onKeys(r, p, model, f.Model, alone)
+		cs, _, code, err := s.onKeys(r, p, model, f.Model, alone)
 		if err != nil {
 			return videoStart{p: p}, code, err
 		}
@@ -926,7 +1015,7 @@ func (s *Server) startVideo(ctx context.Context, r *http.Request, p provider.Pro
 		// on the first key a chat for the model would go to that the
 		// calling key may use, the next while one's plan doesn't make H3
 		// (a Token Plan's); the video's id names the key it is asked on
-		cs, code, err := s.onKeys(r, p, model, f.Model, alone)
+		cs, _, code, err := s.onKeys(r, p, model, f.Model, alone)
 		if err != nil {
 			return videoStart{p: p}, code, err
 		}
@@ -936,7 +1025,7 @@ func (s *Server) startVideo(ctx context.Context, r *http.Request, p provider.Pro
 		// keys on plans of their own (KeyAccount.Plan): sent on a key
 		// whose plan makes the model, the Agent Plan's Seedance on the
 		// Agent Plan's key, never a pay-as-you-go key beside it
-		cs, code, err := s.onKeys(r, p, model, f.Model, alone)
+		cs, _, code, err := s.onKeys(r, p, model, f.Model, alone)
 		if err != nil {
 			return videoStart{p: p}, code, err
 		}
@@ -946,11 +1035,12 @@ func (s *Server) startVideo(ctx context.Context, r *http.Request, p provider.Pro
 		// a user's, bound by user: sent on the first key or account of
 		// its own a chat for the model would go to (usersOn), never
 		// another user's, the calling key's holds kept as above
-		cs, code, err := s.onKeys(r, p, model, f.Model, true)
+		cs, _, code, err := s.onKeys(r, p, model, f.Model, true)
 		if err != nil {
 			return videoStart{p: p}, code, err
 		}
 		p = cs[0].p
+		own = true
 	} else if keyWho, held := accountHolds(r); held {
 		// held to some accounts (#905): sent on a key the calling key may
 		// use, of those in use — not the provider's first alone, which a
@@ -960,7 +1050,7 @@ func (s *Server) startVideo(ctx context.Context, r *http.Request, p provider.Pro
 			return videoStart{p: p}, 403, errors.New(keyAccountsError(keyWho, f.Model))
 		}
 	}
-	v := videoStart{p: p, remote: p.IsRemoteMagpie(), onKey: onKey}
+	v := videoStart{p: p, remote: p.IsRemoteMagpie(), onKey: onKey, own: own}
 	v.custom = !v.remote && filmsCustom(p, model)
 	volcengine := p.Preset == "volcengine" && slices.ContainsFunc(p.PlanVideos(), func(m catalog.Model) bool { return m.ID == model })
 	minimax := !v.remote && !v.custom && makesMiniMaxVideo(p, model)
@@ -1072,6 +1162,10 @@ func (s *Server) videosGet(w http.ResponseWriter, r *http.Request) {
 	w, done := restoring(w)
 	defer done()
 	id := r.PathValue("id")
+	if s.videoNotYours(r, id) {
+		writeError(w, provider.Chat, 404, fmt.Sprintf("%q isn't the id of a video magpie is making", id))
+		return
+	}
 	p, vendorID, started, err := videoMaker(id)
 	if err != nil {
 		writeError(w, provider.Chat, 404, err.Error())
@@ -1116,6 +1210,10 @@ func (s *Server) videosGet(w http.ResponseWriter, r *http.Request) {
 // videosContent sends the video's bytes once it is made.
 func (s *Server) videosContent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if s.videoNotYours(r, id) {
+		writeError(w, provider.Chat, 404, fmt.Sprintf("%q isn't the id of a video magpie is making", id))
+		return
+	}
 	p, vendorID, _, err := videoMaker(id)
 	if err != nil {
 		writeError(w, provider.Chat, 404, err.Error())

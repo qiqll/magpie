@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
 )
@@ -130,7 +132,7 @@ func userAt(s *Server, path, ctype string, body []byte, user string) *httptest.R
 
 // Bound by user (--bind=user), each route that asks a model and isn't a
 // turn — a drawing and an edit, an embedding, a rerank, a transcription
-// and a translation, a count of tokens — goes on the keys its user is
+// and a translation — goes on the keys its user is
 // bound to, as the user's turns do (usersOn), never on another user's:
 // alice and bob, each at most one account, are each asked on a key of
 // their own. Before, each went on the provider's first key, whoever's.
@@ -147,7 +149,6 @@ func TestUserRoutesOnTheUsersOwnKeys(t *testing.T) {
 		{"/v1/rerank", "/v1/rerank", "", []byte(`{"model":"twin/rerank-1","query":"birds","documents":["a magpie"]}`)},
 		{"/v1/audio/transcriptions", "/v1/audio/transcriptions", audioType, audio},
 		{"/v1/audio/translations", "/v1/audio/translations", audioType, audio},
-		{"/v1/messages/count_tokens", "/v1/messages/count_tokens", "", []byte(`{"model":"twin/m","messages":[{"role":"user","content":"count me"}]}`)},
 	} {
 		t.Run(c.route, func(t *testing.T) {
 			fresh(t)
@@ -297,7 +298,7 @@ func TestUserVideoAtAnotherMagpieOnTheUsersOwnKey(t *testing.T) {
 
 // A user none of whose keys is free — each another's alone (share 1) —
 // is refused on these routes as its turn would be: a 429 with when to
-// try again, told as a limit, no vendor asked. A user not bound yet while
+// try again, told as a limit, no vendor asked; its count is estimated. A user not bound yet while
 // user-accounts.json can't be read is a 503, nothing asked, as for a turn.
 func TestUserRoutesRefusedAsTheirTurns(t *testing.T) {
 	fresh(t)
@@ -316,13 +317,13 @@ func TestUserRoutesRefusedAsTheirTurns(t *testing.T) {
 	for _, c := range []struct{ path, body string }{
 		{"/v1/embeddings", `{"model":"twin/embed-1","input":"x"}`},
 		{"/v1/images/generations", `{"model":"twin/gpt-image-1","prompt":"a magpie"}`},
-		{"/v1/messages/count_tokens", `{"model":"twin/m","messages":[{"role":"user","content":"count me"}]}`},
 	} {
 		rec := userAt(s, c.path, "", []byte(c.body), "carol")
 		if rec.Code != http.StatusTooManyRequests || !strings.Contains(rec.Body.String(), userLimitSaid) || rec.Header().Get(UserLimitHeader) == "" {
 			t.Fatalf("%s for carol: %d %v %s", c.path, rec.Code, rec.Header(), rec.Body.String())
 		}
 	}
+	estimated(t, userAt(s, "/v1/messages/count_tokens", "", []byte(`{"model":"twin/m","messages":[{"role":"user","content":"count me"}]}`), "carol"))
 	if got := u.all(); len(got) != before {
 		t.Fatalf("carol's refused requests asked %v", got[before:])
 	}
@@ -429,5 +430,273 @@ func TestSessionRoutesIgnoreTheUser(t *testing.T) {
 	}
 	if _, err := os.Stat(usersPath()); err == nil {
 		t.Fatal("bound by session, a user was bound")
+	}
+}
+
+// Bound by user, a count of tokens is counted on the keys its user is on
+// already, never another user's; a user bound to none is estimated, and
+// the count binds nobody (any caller may send one for any user, at no
+// cost, so it takes no seat).
+func TestUserCountOnTheUsersOwnKey(t *testing.T) {
+	fresh(t)
+	noRests()
+	t.Cleanup(noRests)
+	u := newRoutesUp(t)
+	twoKeyed(t, u, "m", "embed-1")
+	s := byUserUpTo(t, New(), 1)
+	count := []byte(`{"model":"twin/m","messages":[{"role":"user","content":"count me"}]}`)
+	estimated(t, userAt(s, "/v1/messages/count_tokens", "", count, "carol"))
+	if got := u.asked("/v1/messages/count_tokens"); len(got) != 0 {
+		t.Fatalf("carol's count asked %v", got)
+	}
+	if _, err := os.Stat(usersPath()); err == nil {
+		if b := boundIn(t, "twin"); len(b) != 0 {
+			t.Fatalf("a count bound %v", b)
+		}
+	}
+	for _, user := range []string{"alice", "bob"} {
+		if rec := userAt(s, "/v1/embeddings", "", []byte(`{"model":"twin/embed-1","input":"x"}`), user); rec.Code != 200 {
+			t.Fatalf("%s: %d %s", user, rec.Code, rec.Body.String())
+		}
+	}
+	eachOnItsOwn(t, u, "/v1/messages/count_tokens", func(user string) *httptest.ResponseRecorder {
+		return userAt(s, "/v1/messages/count_tokens", "", count, user)
+	})
+	if b := boundIn(t, "twin"); len(b) != 2 {
+		t.Fatalf("bound %v, want alice and bob alone", b)
+	}
+}
+
+// keepIn keeps the plan's order index for index with the candidates it
+// leaves, which ownedBy reads by index.
+func TestKeepInKeepsTheOrderInStep(t *testing.T) {
+	cs := []candidate{{p: provider.Provider{ID: "a"}}, {p: provider.Provider{ID: "b"}}, {p: provider.Provider{ID: "c"}}}
+	pl := planned{order: []Weighed{{Provider: "a"}, {Provider: "b"}, {Provider: "c"}}}
+	out, opl := keepIn(cs, pl, func(c candidate) bool { return c.p.ID != "a" })
+	if len(out) != 2 || len(opl.order) != 2 {
+		t.Fatalf("%v %v", out, opl.order)
+	}
+	for i := range out {
+		if out[i].p.ID != opl.order[i].Provider {
+			t.Fatalf("out of step at %d: %s beside %s's weight", i, out[i].p.ID, opl.order[i].Provider)
+		}
+	}
+}
+
+// Bound by user with a gateway key held to some keys (#905), a user's
+// drawing and embedding go on its own of those alone: the key's holds
+// first, then the user's binding, never the key it may not use nor
+// another user's.
+func TestUserRoutesWithAKeyHeldToAccounts(t *testing.T) {
+	fresh(t)
+	noRests()
+	t.Cleanup(noRests)
+	u := newRoutesUp(t)
+	if err := provider.Save(provider.Provider{ID: "twin", Name: "Twin", Chat: u.URL + "/v1", Key: "kA",
+		Keys: []provider.KeyAccount{{Key: "kB"}, {Key: "kC"}}, Models: []string{"gpt-image-1", "embed-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	keys, secrets := newCaller(t, "Held")
+	if _, err := access.Update("accounts-key", access.Change{Key: keys[0].ID, Accounts: []string{"twin/" + provider.KeyID("kB"), "twin/" + provider.KeyID("kC")}}); err != nil {
+		t.Fatal(err)
+	}
+	s := byUserUpTo(t, New(), 1)
+	for _, c := range []struct{ path, body string }{
+		{"/v1/embeddings", `{"model":"twin/embed-1","input":"x"}`},
+		{"/v1/images/generations", `{"model":"twin/gpt-image-1","prompt":"a magpie"}`},
+	} {
+		eachOnItsOwn(t, u, c.path, func(user string) *httptest.ResponseRecorder {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", c.path, strings.NewReader(c.body))
+			req.Header.Set("Authorization", "Bearer "+secrets[0])
+			req.Header.Set(UserHeader, user)
+			s.Handler().ServeHTTP(rec, req)
+			return rec
+		})
+		if slices.Contains(u.asked(c.path), "kA") {
+			t.Fatalf("%s asked with kA, which the key may not use: %v", c.path, u.asked(c.path))
+		}
+	}
+}
+
+// Bound by user, a video is asked after on the key it was started on, the
+// user's own, the second of the provider's included (it used to be asked
+// on the first, another user's), and only by its user: another user of
+// the gateway key, with its id, is told there is no such video and no
+// vendor is asked, and a request with no user is refused.
+func TestUserVideoFetchedByItsUserAlone(t *testing.T) {
+	fresh(t)
+	var mu sync.Mutex
+	var asked []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked = append(asked, r.Method+" "+r.URL.Path+" "+strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		mu.Unlock()
+		switch {
+		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/content"):
+			w.Header().Set("Content-Type", "video/mp4")
+			io.WriteString(w, "fake-mp4")
+		case r.Method == "GET":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"id":"vid-1","object":"video","status":"completed","model":"grok-imagine-video"}`)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"id":"vid-1","object":"video","status":"queued","model":"grok-imagine-video"}`)
+		}
+	}))
+	t.Cleanup(up.Close)
+	if err := provider.Save(provider.Provider{ID: "office", Name: "Office", Preset: provider.RemoteMagpiePreset,
+		Chat: up.URL + "/v1", Key: "kA", Keys: []provider.KeyAccount{{Key: "kB"}}, Models: []string{"grok-imagine-video"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := byUserUpTo(t, New(), 1)
+	last := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return asked[len(asked)-1]
+	}
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(asked)
+	}
+	get := func(path, user string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path, nil)
+		if user != "" {
+			req.Header.Set(UserHeader, user)
+		}
+		s.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	start := func(user string) string {
+		rec := userAt(s, "/v1/videos", "", []byte(`{"model":"office/grok-imagine-video","prompt":"a magpie"}`), user)
+		var v struct{ ID string }
+		if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &v) != nil || v.ID == "" {
+			t.Fatalf("%s's start: %d %s", user, rec.Code, rec.Body.String())
+		}
+		return v.ID
+	}
+	start("alice") // on kA, the first
+	if got := last(); !strings.HasSuffix(got, " kA") {
+		t.Fatalf("alice started on %q", got)
+	}
+	id := start("bob")
+	if got := last(); !strings.HasSuffix(got, " kB") {
+		t.Fatalf("bob started on %q", got)
+	}
+	for _, path := range []string{"/v1/videos/" + id, "/v1/videos/" + id + "/content"} {
+		if rec := get(path, "bob"); rec.Code != 200 {
+			t.Fatalf("bob's %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		if got := last(); !strings.HasPrefix(got, "GET ") || !strings.HasSuffix(got, " kB") {
+			t.Fatalf("bob's %s asked as %q, not on kB", path, got)
+		}
+	}
+	before := count()
+	for _, path := range []string{"/v1/videos/" + id, "/v1/videos/" + id + "/content"} {
+		if rec := get(path, "alice"); rec.Code != 404 || strings.Contains(rec.Body.String(), "bob") {
+			t.Fatalf("alice asked after bob's video %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		if rec := get(path, ""); rec.Code != 400 || !strings.Contains(rec.Body.String(), "--bind=user") {
+			t.Fatalf("no user asked after %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	// its owner's mark taken off the id, it is no one's: still refused
+	bare, _, _ := strings.Cut(id, videoOwnerMark)
+	if rec := get("/v1/videos/"+bare, "bob"); rec.Code != 404 {
+		t.Fatalf("the id without its owner: %d %s", rec.Code, rec.Body.String())
+	}
+	if n := count(); n != before {
+		t.Fatalf("refused asks reached the vendor: %d more", n-before)
+	}
+}
+
+// revokedDrawn is a Codex image backend that answers acct-1's drawing as
+// a sign-in its vendor revoked (a 401 token_revoked), and keeps the
+// account each drawing was asked on.
+func revokedDrawn(t *testing.T) func() []string {
+	t.Helper()
+	var mu sync.Mutex
+	var drew []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		acct := r.Header.Get("chatgpt-account-id")
+		mu.Lock()
+		drew = append(drew, acct)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if acct == "acct-1" {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"error":{"message":"Encountered invalidated oauth token for user, failing request","code":"token_revoked"},"status":401}`)
+			return
+		}
+		io.WriteString(w, `{"created":1,"data":[{"b64_json":"eA=="}]}`)
+	}))
+	t.Cleanup(up.Close)
+	was := provider.CodexBase
+	provider.CodexBase = up.URL + "/backend-api/codex"
+	t.Cleanup(func() { provider.CodexBase = was })
+	if err := provider.Save(provider.Provider{ID: "codex", Models: []string{"gpt-image-2"}}); err != nil {
+		t.Fatal(err)
+	}
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := drew
+		drew = nil
+		return out
+	}
+}
+
+// A user's drawing on its one account, found revoked by the vendor as it
+// is asked, is answered as its turn would be: with room in its tier, a
+// spare beside it draws, the user kept on both; at its tier's most, a 429
+// with when to try again — never the vendor's words of the sign-in.
+func TestUserDrawingOnARevokedAccount(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	drawn := revokedDrawn(t)
+	alice := func() {
+		writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+			"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC(), Tier: "free"},
+		}}})
+	}
+	draw := []byte(`{"model":"codex/gpt-image-2","prompt":"a magpie"}`)
+
+	alice()
+	rec := userAt(byUserUpTo(t, New(), 1), "/v1/images/generations", "", draw, "alice")
+	limitedNotLapsed(t, rec)
+	if got := drawn(); !slices.Equal(got, []string{"acct-1"}) {
+		t.Fatalf("at its tier's most, drew on %v", got)
+	}
+
+	alice()
+	rec = userAt(byUserUpTo(t, New(), 2), "/v1/images/generations", "", draw, "alice")
+	if rec.Code != 200 {
+		t.Fatalf("with room for a spare: %d %s", rec.Code, rec.Body.String())
+	}
+	saysNoLapse(t, rec)
+	if got := drawn(); !slices.Equal(got, []string{"acct-1", "acct-2"}) {
+		t.Fatalf("drew on %v", got)
+	}
+	if got := seatsIn(t, "codex")["alice"]; !slices.Equal(got, []string{"me@example.com", "spare@example.com"}) {
+		t.Fatalf("not kept on the revoked one with a spare beside it: %v", got)
+	}
+}
+
+// A user bound to none while every account of the provider rests is told
+// so with when to try again (Retry-After), its drawing asked of no one:
+// never routed among the provider's, another's among them.
+func TestUserDrawingWithEveryAccountResting(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	drawn := codexDrawn(t)
+	restLong(t, "me@example.com")
+	restLong(t, "spare@example.com")
+	rec := userAt(byUserUpTo(t, New(), 1), "/v1/images/generations", "", []byte(`{"model":"codex/gpt-image-2","prompt":"a magpie"}`), "dave")
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("%d %v %s", rec.Code, rec.Header(), rec.Body.String())
+	}
+	saysNoLapse(t, rec)
+	if got := drawn(); len(got) != 0 {
+		t.Fatalf("drew on %v", got)
 	}
 }

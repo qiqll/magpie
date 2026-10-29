@@ -346,42 +346,42 @@ func allowedKey(who access.Identity, p provider.Provider, model string) (provide
 // model to another only after those that list it, and those the calling
 // key may not use (#905) left out. Asked on its own (alone), not as a
 // group's member, they are its user's alone, bound by user (usersOn), as
-// a turn's are. p's fallback models are not among them. With none left
-// it gives the status and the error the caller is told: 403 when every
-// one is set not to serve the model, or is one the calling key may not
-// use; a userRefusedError (answerUserRefused) when its user's binding
-// refuses it. A provider with no key and no account (a local ollama) is
-// itself.
-func (s *Server) onKeys(r *http.Request, p provider.Provider, model, asked string, alone bool) ([]candidate, int, error) {
+// a turn's are, with the userTry their tries go with (nil when nothing is
+// bound). p's fallback models are not among them. With none left it
+// gives the status and the error the caller is told: 403 when every one
+// is set not to serve the model, or is one the calling key may not use;
+// a userRefusedError (answerUserRefused) when its user's binding refuses
+// it. A provider with no key and no account (a local ollama) is itself.
+func (s *Server) onKeys(r *http.Request, p provider.Provider, model, asked string, alone bool) ([]candidate, *userTry, int, error) {
 	if p.Account == nil && p.Key == "" {
-		return []candidate{{p: p, model: model, rest: p.ID}}, 0, nil
+		return []candidate{{p: p, model: model, rest: p.ID}}, nil, 0, nil
 	}
 	q := p
 	q.Fallback = nil
 	cs, pl := s.plan(q, model, provider.Chat)
 	if len(cs) == 0 && len(pl.left) > 0 && !slices.ContainsFunc(pl.left, func(w Weighed) bool { return !w.Barred }) {
-		return nil, http.StatusForbidden, errors.New(barredError(asked, pl.left))
+		return nil, nil, http.StatusForbidden, errors.New(barredError(asked, pl.left))
 	}
 	if keyWho, held := accountHolds(r); held {
 		cs, pl = keepIn(cs, pl, func(c candidate) bool { return accountAllowed(keyWho, c) })
 		if len(cs) == 0 {
-			return nil, http.StatusForbidden, errors.New(keyAccountsError(keyWho, asked))
+			return nil, nil, http.StatusForbidden, errors.New(keyAccountsError(keyWho, asked))
 		}
 	}
 	if alone {
 		// after the key's holds, as a turn's: bound to none it may not use
-		own, _, bound, err := s.usersOn(r, q, cs, pl)
+		own, _, u, err := s.usersOn(r, q, cs, pl)
 		if err != nil {
-			return nil, userRefusedStatus(err), err
+			return nil, nil, userRefusedStatus(err), err
 		}
-		if bound {
-			return own, 0, nil
+		if u != nil {
+			return own, u, 0, nil
 		}
 	}
 	if len(cs) == 0 {
 		cs = []candidate{{p: p, model: model, rest: p.ID}}
 	}
-	return cs, 0, nil
+	return cs, nil, 0, nil
 }
 
 // keyModelError is what a request for a model its key may not use is told.

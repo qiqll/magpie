@@ -524,8 +524,12 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 		if p.Account == nil && p.Key != "" {
 			providerKeyID, providerKeyName = provider.KeyID(p.Key), p.KeyName
 		}
-		appendUsage(r, usage.Record{Operation: "generate_content", Time: start, Agent: call.Agent, Via: call.Via, Provider: p.ID, Host: p.Where(), Model: model, Requested: call.Model, ProviderKeyID: providerKeyID, ProviderKeyName: providerKeyName, ProviderAccount: accountOf(p),
-			Input: out.Input, Output: out.Output, Millis: call.Millis, Status: call.Status, Session: sessionOf(r.Header)})
+		if userRefusedStatus(err) == 0 {
+			// one its user's binding refused drew nothing on any account:
+			// no usage, under none (p is the provider's then)
+			appendUsage(r, usage.Record{Operation: "generate_content", Time: start, Agent: call.Agent, Via: call.Via, Provider: p.ID, Host: p.Where(), Model: model, Requested: call.Model, ProviderKeyID: providerKeyID, ProviderKeyName: providerKeyName, ProviderAccount: accountOf(p),
+				Input: out.Input, Output: out.Output, Millis: call.Millis, Status: call.Status, Session: sessionOf(r.Header)})
+		}
 		if err != nil {
 			call.Error = err.Error()
 			if s.answerUserRefused(w, provider.Chat, &call, err) {
@@ -886,8 +890,15 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 	}
 	for _, c := range left {
 		if !slices.ContainsFunc(cs, func(o candidate) bool { return o.p.AccountID() == c.p.AccountID() }) {
-			// its weight not known, index for index with the plan's
-			cs, pl.order = append(cs, c), append(pl.order, Weighed{})
+			// its row moved from the plan's left into its order, index for
+			// index, its use as known: growUser reads a user's account
+			// all but used up by it, as a turn's
+			w := Weighed{Provider: c.p.ID}
+			if i := slices.IndexFunc(pl.left, func(w Weighed) bool { return leftIs(w, c.p.ID, c.who()) }); i >= 0 {
+				w = pl.left[i]
+				pl.left = slices.Delete(slices.Clone(pl.left), i, i+1)
+			}
+			cs, pl.order = append(cs, c), append(pl.order, w)
 		}
 	}
 	// the accounts the calling key may not use are left out of the whole
@@ -908,14 +919,16 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 		// every key or account is set not to serve the model (#474)
 		return p, drawn{}, http.StatusForbidden, time.Time{}, errors.New(barredError(d.Model, barredOf(barred, q, false, provider.Chat, nil)))
 	}
+	var u *userTry
 	if alone {
 		// a user's, bound by user: its own accounts alone, after the
 		// key's holds as a turn's, never the provider's first for all
-		own, _, bound, err := s.usersOn(r, q, cs, pl)
-		if err != nil {
+		var err error
+		var own []candidate
+		if own, _, u, err = s.usersOn(r, q, cs, pl); err != nil {
 			return p, drawn{}, userRefusedStatus(err), time.Time{}, err
 		}
-		if bound {
+		if u != nil {
 			cs = own
 		}
 	}
@@ -926,11 +939,22 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 	var out drawn
 	var code int
 	var err error
-	for i, c := range cs {
+	for i := 0; i < len(cs); i++ {
+		c := cs[i]
 		p = c.p
 		out, code, err = s.draw(ctx, p, model, d)
 		if err != nil && ctx.Err() == nil {
 			restDrawer(c, code, err.Error())
+			// one of a user's accounts whose sign-in has to be made again:
+			// the next of its own, else a spare, as a turn's; never the
+			// vendor's words
+			if next, refused, lapsed := u.lapsed(c, code, []byte(err.Error()), i+1 == len(cs)); lapsed {
+				if refused != nil {
+					return p, drawn{}, userRefusedStatus(refused), time.Time{}, refused
+				}
+				cs = append(cs, next...)
+				continue
+			}
 		}
 		if err == nil || ctx.Err() != nil || i+1 == len(cs) || !accountRefusedDrawing(code) && !keyLacksModel(code, err) {
 			break
