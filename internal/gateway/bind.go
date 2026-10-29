@@ -140,7 +140,7 @@ func askedUser(ctx context.Context) string {
 // usersOwn is, for magpie's own ask of p's model made for a user
 // (forUser), the accounts and keys of p that user is on, its first first,
 // bound now when it is on none, as a request of that user to the model
-// would have them (bindUser); for an ask that goes to the vendor without
+// would have them (ownOf); for an ask that goes to the vendor without
 // a request through serve (Codex's web.run on the ChatGPT backend, a Kimi
 // Code plan's search service). bound is false for an ask made for no
 // user: nothing to narrow. With none of the user's to ask, err says why,
@@ -160,12 +160,7 @@ func (s *Server) usersOwn(ctx context.Context, p provider.Provider, model string
 		return nil, true, fmt.Errorf("%s: magpie can't read user-tiers.json, so it doesn't know how many accounts %q may have; nothing was sent", UserTierHeader, f.user)
 	}
 	pool, poolPl := s.plan(p, model, from)
-	cands, opl, ub, refused := bindUser(f.key, f.user, tier, p, pool, poolPl)
-	if refused.status == 0 && ub != nil && ub.Why == "lapsed" && len(cands) == 0 {
-		// its accounts all to be signed in again: a spare beside them,
-		// its tier letting it have one, as a turn would be given
-		cands, _, _, _, refused = growUser(ub, pool, poolPl, cands, opl)
-	}
+	cands, _, ub, refused := ownOf(f.key, f.user, tier, p, pool, poolPl)
 	if refused.status == http.StatusTooManyRequests && ub != nil && ub.Why == "lapsed" {
 		// told as a limit, never the sign-in (lapsedRefusal)
 		return nil, true, errors.New(userLimitSaid)
@@ -179,6 +174,132 @@ func (s *Server) usersOwn(ctx context.Context, p provider.Provider, model string
 		return nil, true, fmt.Errorf("%s: none of %s's accounts %q is on can answer now; no other is asked in its place", UserHeader, p.Name, f.user)
 	}
 	return cands, true, nil
+}
+
+// ownOf narrows pool, p's candidates for a request of user (of the
+// gateway key keyID, at tier) planned as poolPl, index for index, to the
+// accounts the user is on, as serve narrows a turn of its: bindUser's,
+// then growUser's spare when none of them can answer (each to be signed
+// in again, or out a while) and its tier lets it have one more. The
+// refusal is theirs: a 503 while user-accounts.json can't be read, else
+// a 429 that names no sign-in when none is left.
+func ownOf(keyID, user string, tier Tier, p provider.Provider, pool []candidate, poolPl planned) ([]candidate, planned, *UserBound, userRefusal) {
+	cands, pl, ub, refused := bindUser(keyID, user, tier, p, pool, poolPl)
+	if refused.status != 0 {
+		return nil, pl, ub, refused
+	}
+	cands, pl, ub, _, refused = growUser(ub, pool, poolPl, cands, pl)
+	return cands, pl, ub, refused
+}
+
+// userRefusedError is a request refused by its user's binding on a route
+// that isn't a turn (usersOn): answered as serve answers a turn's
+// (userRefused, answerUserRefused), a 429 told as a limit alone.
+type userRefusedError struct {
+	u       *UserBound
+	refused userRefusal
+}
+
+func (e *userRefusedError) Error() string {
+	if e.refused.status == http.StatusTooManyRequests {
+		return userLimitSaid
+	}
+	return e.refused.msg
+}
+
+// userRefusedStatus is the status a userRefusedError is answered with, 0
+// for another error.
+func userRefusedStatus(err error) int {
+	var ur *userRefusedError
+	if !errors.As(err, &ur) {
+		return 0
+	}
+	return ur.refused.status
+}
+
+// refusedFor is the userRefusedError of a refusal of status that says msg.
+func refusedFor(status int, msg string) error {
+	return &userRefusedError{refused: userRefusal{status: status, msg: msg}}
+}
+
+// answerUserRefused answers err, when it is a userRefusedError, as serve
+// answers a turn its user's binding refuses (userRefused), and says so.
+func (s *Server) answerUserRefused(w http.ResponseWriter, from provider.Protocol, call *Call, err error) bool {
+	var ur *userRefusedError
+	if !errors.As(err, &ur) {
+		return false
+	}
+	s.userRefused(w, from, call, ur.u, ur.refused)
+	return true
+}
+
+// usersOn narrows cs, p's candidates for a request r that isn't a turn
+// (a drawing, a video, an embedding or rerank, audio, a System One
+// decision, a count of tokens), planned as pl index for index, to the
+// accounts r's user is on, bound by user, as a turn of that user's is
+// (ownOf): never another user's. bound is false, cs and pl as they are,
+// bound by session, for a request without a user (userNeeded refused it
+// already, and a count is estimated), or for a provider with no key or
+// account. With none of the user's left the error, a userRefusedError,
+// says why, and none of the others' is asked in their place.
+func (s *Server) usersOn(r *http.Request, p provider.Provider, cs []candidate, pl planned) (_ []candidate, _ planned, bound bool, _ error) {
+	if !s.bind.byUser() || p.Account == nil && p.Key == "" {
+		return cs, pl, false, nil
+	}
+	user, bad := userOf(r.Header)
+	if bad != "" {
+		return nil, pl, true, refusedFor(http.StatusBadRequest, bad)
+	}
+	if user == "" {
+		return cs, pl, false, nil
+	}
+	tier, bad, err := tierOf(r.Header)
+	if bad != "" {
+		return nil, pl, true, refusedFor(http.StatusBadRequest, bad)
+	}
+	if err != nil {
+		return nil, pl, true, &userRefusedError{refused: userRefusal{status: http.StatusServiceUnavailable, unknown: true,
+			msg: fmt.Sprintf("%s: magpie can't read user-tiers.json, so it doesn't know how many accounts %q may have; nothing was sent. Its log says why", UserTierHeader, user)}}
+	}
+	own, opl, ub, refused := ownOf(userKey(r), user, tier, p, cs, pl)
+	if refused.status != 0 {
+		return nil, opl, true, &userRefusedError{u: ub, refused: refused}
+	}
+	// "none": no account of p can answer now, and the user is bound to
+	// none of them yet; those are p's, others' among them, not the user's
+	// (a turn is routed among them, a probe: this isn't)
+	if ub != nil && ub.Why == "none" || len(own) == 0 {
+		return nil, opl, true, &userRefusedError{u: ub, refused: userRefusal{status: http.StatusServiceUnavailable,
+			msg: fmt.Sprintf("%s: none of %s's accounts %q is on can take this request now; no other is tried in its place", UserHeader, p.Name, user)}}
+	}
+	return own, opl, true, nil
+}
+
+// usersOwnRoute says r is a request of a user's, bound by user: one whose
+// accounts usersOn narrows.
+func (s *Server) usersOwnRoute(r *http.Request) bool {
+	if !s.bind.byUser() {
+		return false
+	}
+	user, bad := userOf(r.Header)
+	return user != "" || bad != ""
+}
+
+// keepIn is cs with those keep leaves, pl's order index for index with
+// them.
+func keepIn(cs []candidate, pl planned, keep func(candidate) bool) ([]candidate, planned) {
+	out, order := cs[:0:0], pl.order[:0:0]
+	for i, c := range cs {
+		if !keep(c) {
+			continue
+		}
+		out = append(out, c)
+		if i < len(pl.order) {
+			order = append(order, pl.order[i])
+		}
+	}
+	pl.order = order
+	return out, pl
 }
 
 // noUser refuses with a 400, bound by user, a request without a user, or

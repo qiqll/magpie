@@ -818,7 +818,7 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 	)
 	for i, m := range tries {
 		model = m.Model
-		v, code, err = s.startVideo(ctx, r, m.Provider, m.Model, f)
+		v, code, err = s.startVideo(ctx, r, m.Provider, m.Model, f, !isGroup)
 		p, call.Provider = v.p, v.p.ID
 		// a group's next member is asked as a chat's would be: while this
 		// one can't make videos, its vendor fails, is out of quota or
@@ -831,6 +831,11 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 	call.Fallback = strings.Join(skipped, "; ")
 	if err != nil && !v.asked {
 		// turned away before any vendor was asked: nothing was spent
+		if s.answerUserRefused(w, provider.Chat, &call, err) {
+			call.Millis = time.Since(start).Milliseconds()
+			s.record(call)
+			return
+		}
 		msg := err.Error()
 		if len(skipped) > 0 {
 			msg += " (tried first: " + call.Fallback + ")"
@@ -899,8 +904,10 @@ type videoStart struct {
 // startVideo starts f's video on p's model: at another magpie's videos
 // API, a provider's OpenAI-shaped one, Volcengine's tasks or Grok's. A
 // failure before any vendor is asked (the model makes no videos, a key may
-// use none of the provider's keys) has asked unset.
-func (s *Server) startVideo(ctx context.Context, r *http.Request, p provider.Provider, model string, f filming) (videoStart, int, error) {
+// use none of the provider's keys) has asked unset. Asked on its own
+// (alone), not as a group's member, it goes on its user's accounts alone,
+// bound by user (onKeys).
+func (s *Server) startVideo(ctx context.Context, r *http.Request, p provider.Provider, model string, f filming, alone bool) (videoStart, int, error) {
 	// the provider's other keys to start the video on, when the first
 	// says it doesn't serve the model
 	var keys []candidate
@@ -910,18 +917,18 @@ func (s *Server) startVideo(ctx context.Context, r *http.Request, p provider.Pro
 		// for the model would go to (#1657), never one whose own list of
 		// models leaves it out, nor one the calling key may not use
 		// (#905); the video's id names the key, which it is asked after on
-		cs, code, msg := s.onKeys(r, p, model, f.Model)
-		if code != 0 {
-			return videoStart{p: p}, code, errors.New(msg)
+		cs, code, err := s.onKeys(r, p, model, f.Model, alone)
+		if err != nil {
+			return videoStart{p: p}, code, err
 		}
 		p, keys = cs[0].p, cs[1:]
 	} else if makesMiniMaxVideo(p, model) {
 		// on the first key a chat for the model would go to that the
 		// calling key may use, the next while one's plan doesn't make H3
 		// (a Token Plan's); the video's id names the key it is asked on
-		cs, code, msg := s.onKeys(r, p, model, f.Model)
-		if code != 0 {
-			return videoStart{p: p}, code, errors.New(msg)
+		cs, code, err := s.onKeys(r, p, model, f.Model, alone)
+		if err != nil {
+			return videoStart{p: p}, code, err
 		}
 		p, keys = cs[0].p, cs[1:]
 		onKey = true
@@ -929,12 +936,21 @@ func (s *Server) startVideo(ctx context.Context, r *http.Request, p provider.Pro
 		// keys on plans of their own (KeyAccount.Plan): sent on a key
 		// whose plan makes the model, the Agent Plan's Seedance on the
 		// Agent Plan's key, never a pay-as-you-go key beside it
-		cs, code, msg := s.onKeys(r, p, model, f.Model)
-		if code != 0 {
-			return videoStart{p: p}, code, errors.New(msg)
+		cs, code, err := s.onKeys(r, p, model, f.Model, alone)
+		if err != nil {
+			return videoStart{p: p}, code, err
 		}
 		p = cs[0].p
 		onKey = true
+	} else if alone && s.usersOwnRoute(r) {
+		// a user's, bound by user: sent on the first key or account of
+		// its own a chat for the model would go to (usersOn), never
+		// another user's, the calling key's holds kept as above
+		cs, code, err := s.onKeys(r, p, model, f.Model, true)
+		if err != nil {
+			return videoStart{p: p}, code, err
+		}
+		p = cs[0].p
 	} else if keyWho, held := accountHolds(r); held {
 		// held to some accounts (#905): sent on a key the calling key may
 		// use, of those in use — not the provider's first alone, which a

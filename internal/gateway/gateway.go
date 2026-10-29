@@ -1506,17 +1506,28 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 		// Keep the provider's key order and cooldowns, but never count a
 		// fallback model: it may use a different tokenizer.
 		p.Fallback = nil
-		for _, c := range s.candidates(p, model, provider.Anthropic) {
-			// A relay's OpenAI-only key can't count Anthropic tokens.
-			if c.p.Anthropic != "" && slices.Contains(s.usable(c.p, model), provider.Anthropic) {
-				counts = append(counts, c)
-			}
-		}
+		cs, pl := s.plan(p, model, provider.Anthropic)
 		// the accounts or keys the calling key may not use are left out of
 		// the counts too (#905): counted on one it may, and where it may
 		// use none, the local estimate below says the count
 		if who, held := accountHolds(r); held {
-			counts = slices.DeleteFunc(counts, func(c candidate) bool { return !accountAllowed(who, c) })
+			cs, pl = keepIn(cs, pl, func(c candidate) bool { return accountAllowed(who, c) })
+		}
+		// a user's, bound by user: counted on its own accounts alone
+		// (usersOn), never on another user's, whose MaxRPM it would take
+		// and which a 429 would rest for every user; refused as its turn
+		// would be when none is left
+		if own, _, bound, err := s.usersOn(r, p, cs, pl); err != nil {
+			s.answerUserRefused(w, provider.Anthropic, &Call{}, err)
+			return
+		} else if bound {
+			cs = own
+		}
+		for _, c := range cs {
+			// A relay's OpenAI-only key can't count Anthropic tokens.
+			if c.p.Anthropic != "" && slices.Contains(s.usable(c.p, model), provider.Anthropic) {
+				counts = append(counts, c)
+			}
 		}
 		// a count doesn't wait for room in a MaxRPM's minute: one with
 		// none now is left out, and where none has room the estimate

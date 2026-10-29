@@ -149,11 +149,15 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 	} else {
 		// a model of one provider goes over its keys or accounts as a
 		// chat does, never on one whose own list of models leaves it
-		// out (#1657)
-		cs, code, msg := s.onKeys(r, p, model, asked)
-		if code != 0 {
-			call.Status, call.Error = code, msg
-			writeError(w, provider.Chat, code, msg)
+		// out (#1657), its user's alone bound by user (usersOn)
+		cs, code, err := s.onKeys(r, p, model, asked, true)
+		if err != nil {
+			if s.answerUserRefused(w, provider.Chat, &call, err) {
+				s.record(call)
+				return
+			}
+			call.Status, call.Error = code, err.Error()
+			writeError(w, provider.Chat, code, err.Error())
 			s.record(call)
 			return
 		}

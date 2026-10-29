@@ -503,7 +503,7 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 		)
 		for i, m := range tries {
 			call.Provider, model = m.Provider.ID, m.Model
-			drew, out, code, capBack, err = s.drawOnAccounts(ctx, r, m.Provider, m.Model, d)
+			drew, out, code, capBack, err = s.drawOnAccounts(ctx, r, m.Provider, m.Model, d, !isGroup)
 			// a group's next member is asked as a chat's would be: while
 			// this one's vendor fails, is out of quota or doesn't serve the
 			// model; a refusal of the request itself is the request's
@@ -528,6 +528,10 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 			Input: out.Input, Output: out.Output, Millis: call.Millis, Status: call.Status, Session: sessionOf(r.Header)})
 		if err != nil {
 			call.Error = err.Error()
+			if s.answerUserRefused(w, provider.Chat, &call, err) {
+				s.record(call)
+				return
+			}
 			s.record(call)
 			if d := time.Until(capBack); d > 0 {
 				w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
@@ -850,8 +854,10 @@ func viaFor(p provider.Provider, model string) drawVia {
 // are gone over the same way (#1657): a key whose own list of models
 // leaves the image model out never draws, nor is the first key used for
 // one only another lists; with every key or account set not to serve the
-// model, it is refused with why, as a chat is.
-func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider.Provider, model string, d drawing) (provider.Provider, drawn, int, time.Time, error) {
+// model, it is refused with why, as a chat is. Asked on its own (alone),
+// not as a group's member, it goes over its user's accounts alone, bound
+// by user (usersOn), its refusal a userRefusedError.
+func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider.Provider, model string, d drawing, alone bool) (provider.Provider, drawn, int, time.Time, error) {
 	if p.Account == nil && p.Key == "" {
 		// no key and no account (a local ollama): nothing to go over
 		out, code, err := s.draw(ctx, p, model, d)
@@ -859,7 +865,7 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 	}
 	q := p
 	q.Fallback = nil
-	cs := s.candidates(q, model, provider.Chat)
+	cs, pl := s.plan(q, model, provider.Chat)
 	// an account whose list lacks the image model is put aside for text
 	// when another's list is unknown; for drawing it is asked last
 	_, _, left, barred := perKeyBarred(q, model, provider.Chat)
@@ -875,16 +881,20 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 		}
 		barred = slices.DeleteFunc(barred, func(c candidate) bool { return c.capped == nil && c.lapsed == "" })
 	}
+	for len(pl.order) < len(cs) {
+		pl.order = append(pl.order, Weighed{})
+	}
 	for _, c := range left {
 		if !slices.ContainsFunc(cs, func(o candidate) bool { return o.p.AccountID() == c.p.AccountID() }) {
-			cs = append(cs, c)
+			// its weight not known, index for index with the plan's
+			cs, pl.order = append(cs, c), append(pl.order, Weighed{})
 		}
 	}
 	// the accounts the calling key may not use are left out of the whole
 	// fan-out (#905): the next one a refusal hands the request to no less
 	// than the first, so none it may not use draws
 	if keyWho, held := accountHolds(r); held {
-		cs = slices.DeleteFunc(cs, func(c candidate) bool { return !accountAllowed(keyWho, c) })
+		cs, pl = keepIn(cs, pl, func(c candidate) bool { return accountAllowed(keyWho, c) })
 		if len(cs) == 0 {
 			return p, drawn{}, http.StatusForbidden, time.Time{}, errors.New(keyAccountsError(keyWho, d.Model))
 		}
@@ -897,6 +907,17 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 	if len(cs) == 0 && len(barred) > 0 {
 		// every key or account is set not to serve the model (#474)
 		return p, drawn{}, http.StatusForbidden, time.Time{}, errors.New(barredError(d.Model, barredOf(barred, q, false, provider.Chat, nil)))
+	}
+	if alone {
+		// a user's, bound by user: its own accounts alone, after the
+		// key's holds as a turn's, never the provider's first for all
+		own, _, bound, err := s.usersOn(r, q, cs, pl)
+		if err != nil {
+			return p, drawn{}, userRefusedStatus(err), time.Time{}, err
+		}
+		if bound {
+			cs = own
+		}
 	}
 	if len(cs) == 0 {
 		cs = []candidate{{p: p, model: model, rest: p.ID}}

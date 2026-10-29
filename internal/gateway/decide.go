@@ -578,6 +578,14 @@ func (s *Server) serveSystemOne(w http.ResponseWriter, r *http.Request) {
 		writeError(w, provider.Chat, http.StatusForbidden, barredError(asked, pl.left))
 		return
 	}
+	// a user's, bound by user: its own keys or accounts alone (usersOn),
+	// after the key's holds as a turn's, never another user's
+	if own, opl, bound, err := s.usersOn(r, p, cs, pl); err != nil {
+		s.answerUserRefused(w, provider.Chat, &Call{}, err)
+		return
+	} else if bound {
+		cs, pl = own, opl
+	}
 	cs = probeOne(cs) // of those resting, only the one back soonest (#1799)
 	if len(cs) == 0 {
 		writeError(w, provider.Chat, http.StatusServiceUnavailable, fmt.Sprintf("no key or account of %s may be asked %s now", p.Name, model))
