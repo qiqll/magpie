@@ -3713,6 +3713,73 @@ func pinTo(want string, cands []candidate, pl planned) ([]candidate, planned, in
 	return nil, pl, http.StatusNotFound, msg
 }
 
+// pinnedLapsed is why the account pin (AccountHeader) names, of cands
+// or left out of pl, has to be signed in again, and its provider; "" when
+// it needn't, or pin names none, or the calling key may not use it (pinTo
+// says so).
+func pinnedLapsed(pin string, cands []candidate, pl planned) (why, pid string) {
+	if pin == "" {
+		return "", ""
+	}
+	match := func(w Weighed) bool { return strings.EqualFold(pin, w.Who) || pin == w.ID }
+	for _, w := range pl.left {
+		if match(w) && w.Held {
+			return "", ""
+		}
+	}
+	for _, w := range pl.left {
+		if match(w) && w.Lapsed != "" {
+			return w.Lapsed, w.Provider
+		}
+	}
+	// brought back as none other could answer (lapsedBack)
+	for i, c := range cands {
+		if i < len(pl.order) && match(pl.order[i]) && c.p.Account != nil {
+			if why := provider.SignInLapsed(c.p.Account); why != "" {
+				return why, c.p.ID
+			}
+		}
+	}
+	return "", ""
+}
+
+// ofProvider is cands narrowed to provider pid's, pl's order with them.
+func ofProvider(pid string, cands []candidate, pl planned) ([]candidate, planned) {
+	return keepAligned(cands, pl, func(c candidate) bool { return c.p.ID == pid })
+}
+
+// canAnswer is cands less those that can't answer now: an account to be
+// signed in again, one resting, one whose own list lacks its model (those
+// at their cap and those the key may not use are gone already).
+func canAnswer(cands []candidate, pl planned) ([]candidate, planned) {
+	return keepAligned(cands, pl, func(c candidate) bool {
+		if resting(c) {
+			return false
+		}
+		if a := c.p.Account; a != nil && (provider.SignInLapsed(a) != "" || !a.Lists(c.model)) {
+			return false
+		}
+		return true
+	})
+}
+
+// keepAligned is cands less those keep turns down, pl's order in step.
+func keepAligned(cands []candidate, pl planned, keep func(candidate) bool) ([]candidate, planned) {
+	var out []candidate
+	var order []Weighed
+	for i, c := range cands {
+		if !keep(c) {
+			continue
+		}
+		out = append(out, c)
+		if i < len(pl.order) {
+			order = append(order, pl.order[i])
+		}
+	}
+	pl.order = order
+	return out, pl
+}
+
 // unservedTry says c's try failed as the vendor refusing the model as one
 // it doesn't serve the account or key (modelRefused, codeAssistModelMissing):
 // what restAfterMarked rests for that model alone.

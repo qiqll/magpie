@@ -63,19 +63,6 @@ func TestLapsedAccountLeftOutWhileAnotherCanAnswer(t *testing.T) {
 		t.Fatalf("the lapsed account is in the order: %+v", r.Order)
 	}
 
-	// pinned to it, the caller is told it has to be signed in again
-	req := httptest.NewRequest("POST", CodexPath+"/responses", strings.NewReader(`{"model":"gpt-5.5","stream":true,"input":"ping"}`))
-	req.Header.Set("Authorization", "Bearer chatgpt-token")
-	req.Header.Set(AccountHeader, "spare@example.com")
-	pinned := httptest.NewRecorder()
-	s.Handler().ServeHTTP(pinned, req)
-	if pinned.Code != http.StatusForbidden || !strings.Contains(pinned.Body.String(), "has expired") {
-		t.Fatalf("pinned: %d %s", pinned.Code, pinned.Body.String())
-	}
-	if got := asked(true); len(got) != 0 {
-		t.Fatalf("pinned: asked %v", got)
-	}
-
 	// signed in again: asked again
 	path := filepath.Join(filepath.Dir(provider.Path()), "logins.json")
 	var ls []map[string]any
@@ -255,4 +242,101 @@ func TestLapsedCompactionOnAnAccountTheKeyMayUse(t *testing.T) {
 	if got := asked(true); !slices.Equal(got, []string{"acct-2"}) {
 		t.Fatalf("compacted on %v: %d %s", got, rec.Code, rec.Body.String())
 	}
+}
+
+// pinPost asks for codex/gpt-5.5 pinned to account, as user when one is
+// given, on magpie's /v1/responses.
+func pinPost(s *Server, account, user, tier string) *httptest.ResponseRecorder {
+	h := map[string]string{AccountHeader: account}
+	if user != "" {
+		h[UserHeader] = user
+	}
+	if tier != "" {
+		h[UserTierHeader] = tier
+	}
+	return postAt(s, "/v1/responses", `{"model":"codex/gpt-5.5","stream":true,"input":"ping"}`, h)
+}
+
+// A pin to an account to be signed in again goes to another the request
+// may go to that can answer now (the owner's decision, 2026-10-29): of the
+// provider's accounts when no user is bound, the user's own under
+// --bind=user, never another user's (a).
+func TestPinnedLapsedGoesToAnotherThatCanAnswer(t *testing.T) {
+	t.Run("not bound", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com")
+		asked, _ := usersUpstream(t, nil)
+		lapseSaved(t, "spare@example.com")
+		rec := pinPost(New(), "spare@example.com", "", "")
+		if got := asked(true); rec.Code != 200 || !slices.Equal(got, []string{"acct-1"}) {
+			t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+		}
+	})
+	t.Run("the user's own", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com", "third@example.com")
+		asked, _ := usersUpstream(t, nil)
+		lapseSaved(t, "spare@example.com")
+		writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+			"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC(), Tier: "free"},
+			"bob":   {Who: "codex@third@example.com", Account: "third@example.com", At: time.Now().UTC(), Tier: "free"},
+		}}})
+		rec := pinPost(byUser(New()), "spare@example.com", "bob", "free")
+		if got := asked(true); rec.Code != 200 || !slices.Equal(got, []string{"acct-3"}) {
+			t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+		}
+	})
+}
+
+// A user with no account but the lapsed one pinned is bound afresh to a
+// spare its tier has room on, and served there (b).
+func TestPinnedLapsedBindsTheUserASpare(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	asked, _ := usersUpstream(t, nil)
+	lapseSaved(t, "spare@example.com")
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: time.Now().UTC(), Tier: "pro"},
+	}}})
+	rec := pinPost(byUser(New()), "spare@example.com", "bob", "pro")
+	if got := asked(true); rec.Code != 200 || !slices.Equal(got, []string{"acct-1"}) {
+		t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+	}
+	if b := boundIn(t, "codex"); b["bob"] != "me@example.com" {
+		t.Fatalf("not bound to the spare: %v", b)
+	}
+}
+
+// With nothing to take it in its place — the other account one the key
+// may not use, or another user's alone — the pin is refused 403 with why,
+// nobody asked (c). A pin to an account the key may not use is still told
+// so first.
+func TestPinnedLapsedRefusedWithNothingInItsPlace(t *testing.T) {
+	t.Run("the other outside the key", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com")
+		asked, _ := usersUpstream(t, nil)
+		lapseSaved(t, "spare@example.com")
+		keys, secrets := newCaller(t, "Spare only")
+		if _, err := access.Update("accounts-key", access.Change{Key: keys[0].ID, Accounts: []string{"codex/spare@example.com"}}); err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"codex/gpt-5.5","stream":true,"input":"ping"}`))
+		req.Header.Set("Authorization", "Bearer "+secrets[0])
+		req.Header.Set(AccountHeader, "spare@example.com")
+		New().Handler().ServeHTTP(rec, req)
+		if got := asked(true); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "has expired") || len(got) != 0 {
+			t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+		}
+	})
+	t.Run("the other another user's alone", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com")
+		asked, _ := usersUpstream(t, nil)
+		lapseSaved(t, "spare@example.com")
+		writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+			"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC(), Tier: "pro"},
+			"bob":   {Who: "codex@spare@example.com", Account: "spare@example.com", At: time.Now().UTC(), Tier: "pro"},
+		}}})
+		rec := pinPost(byUser(New()), "spare@example.com", "bob", "pro")
+		if got := asked(true); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "has expired") || len(got) != 0 {
+			t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+		}
+	})
 }

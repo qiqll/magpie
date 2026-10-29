@@ -2358,6 +2358,24 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		cands, pl, accountHeld = allowedCandidates(who, cands, pl, members)
 	}
+	// pinned to an account whose sign-in has to be made again: sent to
+	// another of its provider's that can answer now, the user's own under
+	// --bind=user (bound afresh to a spare when it has none), else refused
+	// with why (pinnedLapsed). An account the key may not use is told so
+	// by pinTo first, as before
+	pin := strings.TrimSpace(r.Header.Get(AccountHeader))
+	pinLapsed, pinProvider := pinnedLapsed(pin, cands, pl)
+	if pinLapsed != "" {
+		pin = ""
+		cands, pl = ofProvider(pinProvider, cands, pl)
+	}
+	lapsedRefused := func(more string) {
+		msg := AccountHeader + ": " + pinLapsed + "; " + more
+		call.Status, call.Error = http.StatusForbidden, "account pinned: "+strings.TrimSpace(r.Header.Get(AccountHeader))
+		writeError(w, from, http.StatusForbidden, msg)
+		finishCapture()
+		s.record(call)
+	}
 	// a user is bound to accounts of the provider (bindUser): asked of
 	// those alone, whichever of its models it asks for. After the key's
 	// holds and the sealed narrowing, which bind it to none it may not
@@ -2368,7 +2386,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	var limitedUser string // the user a limit is said to, as UserLimitHeader
 	var userBound *UserBound
 	pool, poolPl := cands, pl // before the user's narrowing, for a spare
-	if s.bind.byUser() && strings.TrimSpace(r.Header.Get(AccountHeader)) == "" && !isGroup {
+	if s.bind.byUser() && pin == "" && !isGroup && (pinLapsed == "" || pinProvider == p.ID) {
 		user, bad := userOf(r.Header)
 		bindsUser, limitedUser = user != "" || bad != "", user
 		if bad != "" {
@@ -2395,11 +2413,23 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 			var refused userRefusal
 			if cands, pl, userBound, refused = bindUser(userKey(r), user, tier, p, cands, pl); refused.status != 0 {
+				if pinLapsed != "" {
+					lapsedRefused("none of the user's accounts can take it in its place, and none is free to bind it to")
+					return
+				}
 				s.userRefused(w, from, &call, userBound, refused)
 				finishCapture()
 				s.record(call)
 				return
 			}
+		}
+	}
+	if pinLapsed != "" {
+		// of those left (the user's own, bound), only one that can
+		// answer now takes it
+		if cands, pl = canAnswer(cands, pl); len(cands) == 0 {
+			lapsedRefused("no other account the request may go to can take it in its place")
+			return
 		}
 	}
 	// a conversation that stays strictly where it is goes on on its
@@ -2423,7 +2453,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// spend its credits; not for a user bound to accounts (bindUser), as
 	// one spent here would be another's
 	var resetFirst *AutoReset
-	if len(cands) == 0 && len(pl.held) > 0 && strings.TrimSpace(r.Header.Get(AccountHeader)) == "" && !bindsUser &&
+	if len(cands) == 0 && len(pl.held) > 0 && pin == "" && !bindsUser &&
 		(strictHeld != nil || !slices.ContainsFunc(pl.left, func(w Weighed) bool { return !w.Barred && !w.Held && w.Capped == 0 && w.Lapsed == "" })) {
 		// every account there is is held, and one held only as it won't
 		// spend its credits is out of its allowance at the vendor's own
@@ -2602,7 +2632,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 		}
 	}
-	pin := strings.TrimSpace(r.Header.Get(AccountHeader))
 	if pin != "" {
 		var status int
 		var msg string
