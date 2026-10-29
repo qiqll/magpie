@@ -48,13 +48,16 @@
 
 | ID | 任务 | 模块 | 状态 | 依赖 | 备注 |
 |----|------|------|------|------|------|
-| T-001 | `--bind=user` 下 search / vision MCP 内部再发给模型的请求不带用户头，会从整个账号池取账号；须把调用方的用户带到内部请求上，按该用户的账号选取 | gateway（search/vision MCP、bind.go、user_accounts.go） | 进行中 | — | 审查发现；同类修复见 03352af6（image MCP 无用户即拒绝）。须覆盖 search 与 vision 两个兄弟，并测试：绑定用户 A 的调用不会落到用户 B 的账号 |
+| T-001 | `--bind=user` 下 search / vision MCP 内部再发给模型的请求不带用户头，会从整个账号池取账号；须把调用方的用户带到内部请求上，按该用户的账号选取 | gateway（search/vision MCP、bind.go、user_accounts.go） | 待验证 | — | 审查发现；同类修复见 03352af6。自动交付（2026-10-29）：commits e2d4774e 82e54e50 3caa0e65；覆盖 search/vision MCP、请求内 web_search、Codex web.run（含 ChatGPT 后端）、Kimi Code 搜索、文本请求里的图片描述；验收：调度员重跑 `go test -count=1 -timeout 45m ./internal/gateway` PASS（452.8s），测试未改弱（新增 11 个测试函数），code-reviewer + security-analyst 发现已修；假设：用户自己的账号都答不了时返回原因、不借别人账号；Codex web.run 无可用 ChatGPT 账号时退回 magpie 自己搜（同样按用户绑定）；group / X-Magpie-Account 请求本身不绑定，但其内部搜索和描述会绑定用户。未用真实 ChatGPT / Kimi 账号跑过。验证：magpie serve --bind=user，同一 provider 两个账号，X-Magpie-User: alice / bob 分别调 web-search MCP、vision MCP、Codex web.run，路由页确认各用自己的账号 |
+| T-003 | `--bind=user` 下画图和其他 /v1 路由不按用户绑定选账号：/v1/images、/v1/videos、image MCP 的 generate_image/generate_video、/v1/embeddings、/v1/rerank、/v1/audio/*、/v1/systemone 要求有用户，却会用到绑给别的用户的账号 | gateway（draw.go:854 drawOnAccounts、image_mcp.go:217、gateway.go） | 待开始 | — | 验收：每条路由一个测试，用户 A 不会用到用户 B 的账号，去掉修复时变红。来源：衍生自 T-001（第 1 层，security-analyst MAJOR-1）；衍生层级：1；建议把 tierOf + bindUser 收窄做成共用函数（可复用 usersOwn） |
 
 ## P2 — 增强 / 技术债
 
 | ID | 任务 | 模块 | 状态 | 依赖 | 备注 |
 |----|------|------|------|------|------|
 | T-002 | `POST /v1/messages/count_tokens`（及无 /v1 前缀的同名路由）未经 `userNeeded` 检查，与 /v1/messages 不一致 | gateway（gateway.go 路由注册） | 待开始 | — | 审查发现；不消耗用量，影响小。补 userNeeded 包裹 + 测试 |
+| T-004 | `--bind=user` 下路由分类器 / 决策模型的 askChat 用 context.Background() 发出，不带用户和 gateway key，会从整个账号池取账号，也绕过调用方 key 的限制 | gateway（classify.go:471） | 待开始 | — | 验收：传入外层 ctx 配合 forUser / askAsUser，测试证明分类请求落在调用方用户的账号上。来源：衍生自 T-001（第 1 层，code-reviewer M2 / security-analyst MINOR-3）；衍生层级：1 |
+| T-005 | 加固：`--bind=user` 下 serve 对没有用户、又不带「magpie 自身请求」标记的请求一律拒绝 | gateway（gateway.go:2359） | 待开始 | T-003, T-004 | 验收：守卫测试覆盖进程内所有 s.serve 调用方。来源：衍生自 T-001（第 1 层，security-analyst MINOR-4）；衍生层级：1；依赖 T-003/T-004 先让各内部调用方都带上用户 |
 
 ## P3 — 想法池
 
@@ -87,5 +90,5 @@
 ## ID 分配规则
 
 - 格式 `T-NNN`，三位数字，全局递增，**永不复用**（即使任务取消）
-- 下一个可用 ID：**T-003**（AI 录入后须更新此行）
+- 下一个可用 ID：**T-006**（AI 录入后须更新此行）
 - 人工阻塞事项用 `H-NNN`，下一个可用：**H-001**
