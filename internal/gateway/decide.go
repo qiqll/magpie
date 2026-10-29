@@ -580,7 +580,8 @@ func (s *Server) serveSystemOne(w http.ResponseWriter, r *http.Request) {
 	}
 	// a user's, bound by user: its own keys or accounts alone (usersOn),
 	// after the key's holds as a turn's, never another user's
-	if own, opl, u, err := s.usersOn(r, p, cs, pl); err != nil {
+	own, opl, u, err := s.usersOn(r, p, cs, pl)
+	if err != nil {
 		s.answerUserRefused(w, provider.Chat, &Call{}, err)
 		return
 	} else if u != nil {
@@ -591,7 +592,7 @@ func (s *Server) serveSystemOne(w http.ResponseWriter, r *http.Request) {
 		writeError(w, provider.Chat, http.StatusServiceUnavailable, fmt.Sprintf("no key or account of %s may be asked %s now", p.Name, model))
 		return
 	}
-	s.serveDecideTries(w, r, body, asked, start, cs, pl, nil)
+	s.serveDecideTries(w, r, body, asked, start, cs, pl, nil, u)
 }
 
 // withEffort asks a request, in the client's own API, for reasoning at

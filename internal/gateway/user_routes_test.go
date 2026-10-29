@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -698,5 +699,85 @@ func TestUserDrawingWithEveryAccountResting(t *testing.T) {
 	saysNoLapse(t, rec)
 	if got := drawn(); len(got) != 0 {
 		t.Fatalf("drew on %v", got)
+	}
+}
+
+// A user's System One decision on its one account, found revoked as it
+// is asked, is answered as its turn would be: a spare beside it decides
+// with room in its tier, else a 429 with when to try again, never the
+// vendor's words of the sign-in. No decision provider has a built-in
+// account to revoke today (deciders are keys or plugins), so the tries
+// are given Codex's accounts with a decision endpoint, as usersOn would
+// hand them over.
+func TestUserSystemOneOnARevokedAccount(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	revoked := codexAccessToken(t)
+	var mu sync.Mutex
+	var asked []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gone := r.Header.Get("Authorization") == "Bearer "+revoked
+		mu.Lock()
+		asked = append(asked, strconv.FormatBool(gone))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if gone {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"error":{"message":"Encountered invalidated oauth token for user, failing request","code":"token_revoked"},"status":401}`)
+			return
+		}
+		io.WriteString(w, `{"answers":{"intent":{"choice":"bug"}},"usage":{"input_tokens":10,"output_tokens":2}}`)
+	}))
+	t.Cleanup(up.Close)
+	took := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := asked
+		asked = nil
+		return out
+	}
+	t.Cleanup(noRests)
+	decide := func(max int) *httptest.ResponseRecorder {
+		t.Helper()
+		noRests() // each case afresh: the one before rested the revoked one
+		writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+			"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC(), Tier: "free"},
+		}}})
+		s := byUserUpTo(t, New(), max)
+		p, err := provider.Find("codex")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cs []candidate
+		var pl planned
+		for _, c := range seatCandidates(*p) {
+			c.p.Decide, c.model = up.URL+"/v1", "jev-latest"
+			cs, pl.order = append(cs, c), append(pl.order, Weighed{Provider: "codex"})
+		}
+		body := []byte(`{"model":"codex/jev-latest","state":{"message":"hi"},"questions":{"intent":{"type":"choice"}}}`)
+		r := httptest.NewRequest("POST", "/v1/systemone", bytes.NewReader(body))
+		r.Header.Set(UserHeader, "alice")
+		own, opl, u, err := s.usersOn(r, *p, cs, pl)
+		if err != nil || u == nil {
+			t.Fatalf("not bound: %v", err)
+		}
+		rec := httptest.NewRecorder()
+		s.serveDecideTries(rec, r, body, "codex/jev-latest", time.Now(), own, opl, nil, u)
+		return rec
+	}
+
+	limitedNotLapsed(t, decide(1))
+	if got := took(); !slices.Equal(got, []string{"true"}) {
+		t.Fatalf("at its tier's most, asked %v (true: the revoked one)", got)
+	}
+
+	rec := decide(2)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "bug") {
+		t.Fatalf("with room for a spare: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := took(); !slices.Equal(got, []string{"true", "false"}) {
+		t.Fatalf("asked %v, want the revoked one, then the spare", got)
+	}
+	if got := seatsIn(t, "codex")["alice"]; !slices.Equal(got, []string{"me@example.com", "spare@example.com"}) {
+		t.Fatalf("not kept on the revoked one with a spare beside it: %v", got)
 	}
 }

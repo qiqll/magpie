@@ -129,7 +129,7 @@ func (s *Server) serveDecisionGroup(w http.ResponseWriter, r *http.Request, body
 		writeError(w, provider.Chat, http.StatusServiceUnavailable, fmt.Sprintf("no key or account of the group %s's decision models may serve them now", g.Name))
 		return
 	}
-	s.serveDecideTries(w, r, body, asked, start, cs, pl, groupRef(g, ms))
+	s.serveDecideTries(w, r, body, asked, start, cs, pl, groupRef(g, ms), nil)
 }
 
 // decideKeys are a decision provider's keys or accounts that may be asked
@@ -148,14 +148,17 @@ func (s *Server) decideKeys(p provider.Provider, model string) ([]candidate, pla
 // group's keys and accounts or one decision provider's, each in turn until
 // one answers, the last one's answer passed on: one that fails as a chat's
 // try would rests, and every try is a Try of one route (group is the
-// group it was asked by, nil for a provider).
-func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body []byte, asked string, start time.Time, cs []candidate, pl planned, group *GroupRef) {
+// group it was asked by, nil for a provider). A user's own (u, usersOn;
+// nil for none) that fails as a sign-in to make again is passed over for
+// the next of its own, else a spare, else the lapse's 429, never the
+// vendor's words, as a turn's (userTry.lapsed).
+func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body []byte, asked string, start time.Time, cs []candidate, pl planned, group *GroupRef, u *userTry) {
 	who := callerOf(r)
 	tr := s.trace.beginFor(r, Route{Time: start, Agent: who.agent, Session: sessionOf(r.Header), Model: asked, Provider: cs[0].p.ID,
 		Group: group, Order: pl.order, Left: pl.left})
 	var skipped []string
-	for i, c := range cs {
-		last := i == len(cs)-1
+	for i := 0; i < len(cs); i++ {
+		c, last := cs[i], i == len(cs)-1
 		at := time.Now()
 		s.trace.update(tr, func(t *Route) {
 			t.Provider = c.p.ID
@@ -211,6 +214,15 @@ func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body [
 		}
 		if status >= 400 {
 			fail, rest = s.decideFailed(c, status, header, b)
+			if next, refused, lapsed := u.lapsed(c, status, b, last); lapsed {
+				tried(status, errMsg, failAuth, rest, used)
+				if refused != nil {
+					s.answerUserRefused(w, provider.Chat, &Call{}, refused)
+					return
+				}
+				cs = append(cs, next...)
+				continue
+			}
 			if !last && retryable(status, b) {
 				tried(status, errMsg, fail, rest, used)
 				skipped = append(skipped, fmt.Sprintf("%s: %s", c.label(), errMsg))
