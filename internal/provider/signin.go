@@ -100,9 +100,6 @@ type SignInState struct {
 	// status is the vendor's HTTP status a sign-in failed on, for the log
 	// (failedWith); 0 for none known
 	status int
-	// logWhy is the failure as the log has it, when it isn't Error: an
-	// address's request failed, said by its host (errReason)
-	logWhy string
 }
 
 type signInFlow struct {
@@ -706,15 +703,12 @@ func (s *signInFlow) finish(out SignInState) bool {
 	// after the lock, as its writer can block
 	switch out.State {
 	case "failed":
-		at, why := SignInState{ID: out.ID, Agent: out.Agent, User: user}, out.Error
-		if out.logWhy != "" {
-			why = out.logWhy
-		}
+		at := SignInState{ID: out.ID, Agent: out.Agent, User: user}
 		if said != "" {
-			log.Print(signInLine(at, "failed", out.status) + ": " + logReason(why) + " (" + said + ")")
+			log.Print(signInLine(at, "failed", out.status) + ": " + logReason(out.Error) + " (" + said + ")")
 			break
 		}
-		logSignIn(at, "failed", out.status, why)
+		logSignIn(at, "failed", out.status, out.Error)
 	case "done":
 		logSignIn(SignInState{ID: out.ID, Agent: out.Agent, User: out.User}, "done", 0, out.Error)
 	case "canceled":

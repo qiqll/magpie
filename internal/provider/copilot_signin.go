@@ -90,15 +90,10 @@ func startCopilotSignIn(s *signInFlow) error {
 	st := s.status()
 	at := "sign-in " + st.Agent + " (" + st.ID + ") on " + site
 	go func() {
-		// fail ends the sign-in on msg, logged as logged when it is given
-		fail := func(msg string, logged ...string) {
-			out := SignInState{State: "failed", Error: msg}
-			if len(logged) > 0 {
-				out.logWhy = logged[0]
-			}
-			if !s.finish(out) {
+		fail := func(msg string) {
+			if !s.finish(SignInState{State: "failed", Error: msg}) {
 				// canceled or replaced first, which finish logged
-				log.Printf("%s: ended after it was over: %s", at, logReason(firstNonEmpty(out.logWhy, msg)))
+				log.Printf("%s: ended after it was over: %s", at, logReason(msg))
 			}
 		}
 		misses := 0
@@ -121,9 +116,9 @@ func startCopilotSignIn(s *signInFlow) error {
 			case err != nil:
 				// a hiccup: ask again, unless it keeps failing
 				misses++
-				log.Printf("%s: asking GitHub for the token failed (%d in a row): %s", at, misses, logReason(errReason(err)))
+				log.Printf("%s: asking GitHub for the token failed (%d in a row): %s", at, misses, logReason(err.Error()))
 				if misses >= copilotPollMisses {
-					fail("couldn't get the token from GitHub: "+err.Error(), "couldn't get the token from GitHub: "+errReason(err))
+					fail("couldn't get the token from GitHub: " + err.Error())
 					return
 				}
 				continue
@@ -156,13 +151,13 @@ func startCopilotSignIn(s *signInFlow) error {
 				if fctx.Err() != nil {
 					err = errors.New("GitHub gave the token, but didn't answer within " + copilotFinishWait.String() + " whose account it is: " + err.Error())
 				}
-				fail(err.Error(), errReason(err))
+				fail(err.Error())
 				return
 			}
 			copilotProbeEditor(fctx, user, host)
 			fcancel()
 			if err := keepLogin(ctx, func() error { return addCopilotLogin(user, plan, tok.Token, host) }); err != nil {
-				fail(err.Error(), errReason(err))
+				fail(err.Error())
 				return
 			}
 			// the one Copilot's editors are signed in to, if it is this

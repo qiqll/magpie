@@ -553,15 +553,17 @@ func TestRefreshFailureLoggedAsTheSignInGoes(t *testing.T) {
 	}
 }
 
-// A request to an address that failed is logged by what was done, its
-// host and the network's error, never its path or query (security review
-// of d1ac61ce, INFO).
-func TestErrReasonKeepsTheNetworkError(t *testing.T) {
+// A failure naming an address is left out whole: not its host, its path
+// or its query, nor the network's words with it (the owner's decision,
+// 2026-10-30: nothing a vendor or the network said that may name where).
+func TestAddressReasonIsLeftOut(t *testing.T) {
+	refreshFailedSaid.Clear()
+	buf := signInLog(t)
 	err := fmt.Errorf("ChatGPT token refresh: %w", &url.Error{Op: "Post", URL: "https://auth.openai.com/oauth/token?code=sekrit&state=st", Err: errors.New("dial tcp: i/o timeout")})
-	got := logReason(errReason(err))
-	if !strings.Contains(got, "Post auth.openai.com: dial tcp: i/o timeout") || strings.Contains(got, "sekrit") || strings.Contains(got, "/oauth/token") {
-		t.Fatalf("logged as %s", got)
-	}
+	logRefreshFailed(ChatGPTAPIID, "me@example.com", err)
+	logSignIn(SignInState{ID: "s1", Agent: "copilot"}, "failed", 0, "couldn't get the token from GitHub: "+err.Error())
+	logSays(t, buf, "refresh failed: (left out", "sign-in copilot (s1) failed: (left out")
+	logHasNoSecret(t, buf, "auth.openai.com", "/oauth/token", "sekrit", "i/o timeout")
 }
 
 // A `claude auth login` that gives no link in linkWait: its start fails
