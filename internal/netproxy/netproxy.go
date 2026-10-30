@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/probelog"
+	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -477,8 +478,21 @@ var (
 	systemKeep = 15 * time.Second
 	noneKeep   = 2 * time.Second
 	readWait   = 2 * time.Second
-	readSystem = system
+	readSystem = systemOwn
 )
+
+// systemOwn is the system's proxy, or none in a test binary testenv
+// isolated, which reads nothing of the machine's own. On a Mac whose proxy
+// app had set the system's (127.0.0.1:7897), plugin's
+// TestHostToldTheGatewayAddress waited the 15 seconds a set proxy is kept
+// and gui's TestProxyCheckSaysAProxyPassedBy went through that proxy, not
+// its own.
+func systemOwn() (Proxy, bool) {
+	if proc.Isolated() {
+		return Proxy{}, true
+	}
+	return system()
+}
 
 // System reads the system proxy, at most every 15 seconds while one is
 // set and every 2 while none is. One read runs at a time, outside the
