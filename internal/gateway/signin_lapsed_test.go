@@ -951,7 +951,7 @@ func TestSpareOfGoesByTheLapsesReadBefore(t *testing.T) {
 		userBinds.Unlock()
 		t.Fatal(err)
 	}
-	uses := seatUsesOf("codex", defaultTiers)
+	uses := seatUsesOf("codex", defaultTiers, "bob")
 	i := firstOf("codex", pool, pl, tier, uses, lapsed)
 	r := fullRefusal("bob", tier, "codex", pool, pl, uses, lapsed)
 	userBinds.Unlock()

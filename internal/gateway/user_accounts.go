@@ -681,7 +681,7 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 		if userBinds.stale {
 			return nil, pl, ub, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: user-accounts.json can't be read, so %q isn't bound to an account now; nothing was sent. magpie's log says why", UserHeader, user)}
 		}
-		uses := seatUsesOf(p.ID, tiers)
+		uses := seatUsesOf(p.ID, tiers, user)
 		pick := firstOf(p.ID, cands, pl, tier, uses, lapsedWho)
 		if pick < 0 {
 			if slices.ContainsFunc(cands, func(c candidate) bool { return c.p.ID == p.ID && !uses.of(c).takes(tier.Share) }) {
@@ -827,10 +827,22 @@ func setSeats(keyID, pid, user string, seats []userSeat) {
 	userBinds.m[keyID][pid][user] = userBinds.m[keyID][pid][user].withSeats(seats)
 }
 
-// seatUse is how an account is taken: by n users of every key, as a
-// first or a spare, the least share of their tiers share (0 for no
-// limit).
-type seatUse struct{ n, share int }
+// seatUse is how an account is taken: by n users of every key other
+// than the one asking, as a first or a spare, one name under several
+// keys counted once, the least share of their tiers share (0 for no
+// limit); own says the one asking is on it too, under another key.
+type seatUse struct {
+	n, share int
+	own      bool
+}
+
+// on is how many users are on the account, the one asking among them.
+func (u seatUse) on() int {
+	if u.own {
+		return u.n + 1
+	}
+	return u.n
+}
 
 // takes says the account has a seat for one more user, of a tier with
 // share: as many as its share and each user's on it let it have.
@@ -841,18 +853,34 @@ func (u seatUse) takes(share int) bool {
 
 // seatUses is how each account of provider pid is taken, lower-cased
 // who → its use, each user's share its tier's in tiers (Tiers.shareOf).
-// Called with userBinds held.
+// user's own seats, under any gateway key, never keep it off an account
+// (the owner's decision, 2026-10-30), and another name bound under
+// several keys is one user. Called with userBinds held.
 type seatUses map[string]seatUse
 
-func seatUsesOf(pid string, tiers Tiers) seatUses {
+func seatUsesOf(pid string, tiers Tiers, user string) seatUses {
 	uses := seatUses{}
+	on := map[string]map[string]bool{} // who → the users counted on it
 	for _, ps := range userBinds.m {
-		for _, b := range ps[pid] {
+		for name, b := range ps[pid] {
 			share := tiers.shareOf(b.Tier)
 			for _, s := range b.seats() {
 				who := strings.ToLower(s.Who)
 				u := uses[who]
-				u.n++
+				if name == user {
+					// its own seat: counted toward which is picked,
+					// never toward its share
+					u.own = true
+					uses[who] = u
+					continue
+				}
+				if on[who] == nil {
+					on[who] = map[string]bool{}
+				}
+				if !on[who][name] {
+					on[who][name] = true
+					u.n++
+				}
 				if share > 0 && (u.share == 0 || share < u.share) {
 					u.share = share
 				}
@@ -897,7 +925,7 @@ func spareOf(pid string, cands []candidate, pl planned, seats []userSeat, room b
 		if room && i < len(pl.order) && pl.order[i].Known && pl.order[i].Used >= routes.LowShare {
 			continue
 		}
-		n, at := uses.of(c).n, uses.of(cands[max(pick, 0)]).n
+		n, at := uses.of(c).on(), uses.of(cands[max(pick, 0)]).on()
 		if pick < 0 || tier.Share >= 2 && n > at || tier.Share < 2 && n < at {
 			pick = i
 		}
@@ -1089,7 +1117,7 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 	if n := len(slices.DeleteFunc(slices.Clone(now), func(st userSeat) bool { return keyHeld(st, u.pid, pool, left) })); n >= u.max {
 		return refuse(u.atTier(n))
 	}
-	uses := seatUsesOf(u.pid, tiers)
+	uses := seatUsesOf(u.pid, tiers, u.User)
 	pick := spareOf(u.pid, pool, poolPl, now, true, u.tier, uses, lapsedWho)
 	if pick < 0 {
 		if !slices.ContainsFunc(pool, func(c candidate) bool {
