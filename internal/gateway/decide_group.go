@@ -152,7 +152,8 @@ func (s *Server) decideKeys(p provider.Provider, model string) ([]candidate, pla
 // group it was asked by, nil for a provider). A user's own (u, usersOn;
 // nil for none) that fails as a sign-in to make again is passed over for
 // the next of its own, else a spare, else the lapse's 429, never the
-// vendor's words, as a turn's (userTry.lapsed).
+// vendor's words, as a turn's (userTry.lapsed); any other account that
+// has to be signed in again, for the next, else that 429 (lapsedAs).
 func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body []byte, asked string, start time.Time, cs []candidate, pl planned, group *GroupRef, u *userTry) {
 	who := callerOf(r)
 	tr := s.trace.beginFor(r, Route{Time: start, Agent: who.agent, Session: sessionOf(r.Header), Model: asked, Provider: cs[0].p.ID,
@@ -223,6 +224,19 @@ func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body [
 				}
 				cs = append(cs, next...)
 				continue
+			}
+			// any other account to be signed in again (lapsedTry), a
+			// request with no user's included: the next, else told only
+			// as a limit (lapsedAs), never the vendor's words, as a
+			// drawing's is
+			if lapsedTry(c, status, b) {
+				tried(status, errMsg, fail, rest, used)
+				if !last {
+					continue
+				}
+				code, err := lapsedAs(c, status, errors.New(string(b)))
+				writeError(w, provider.Chat, code, saidOf(w.Header(), err, nil))
+				return
 			}
 			if !last && retryable(status, b) {
 				tried(status, errMsg, fail, rest, used)

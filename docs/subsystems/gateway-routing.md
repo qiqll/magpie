@@ -439,7 +439,12 @@ a key out of quota, fflake33 on Discord) is asked the same way, at
 `askDecider`): `decideKeys` plans its keys in its routing's order (Smart,
 In order), `probeOne` leaves out all but the resting one back soonest, and
 `serveDecideTries` / `askDecideTries` ask each in turn as for a group, a
-refused one resting. Before, every call went to its first key, whatever the
+refused one resting. An account that has to be signed in again
+(`lapsedTry`) is passed over for the next, and on the last is told only as
+a limit (`lapsedAs`, `saidOf`: 429, its limit headers and Retry-After),
+never the vendor's words, a request with no user's included
+(`TestSystemOneWithoutAUserOnARevokedAccount`); a user's own goes to a
+spare first (`userTry.lapsed`). Before, every call went to its first key, whatever the
 others' state. A gateway key held to some accounts is asked only on those
 (`allowedCandidates`), and refused 403 when none of them serves the model.
 `TestDecisionProviderKeysFailOver`.

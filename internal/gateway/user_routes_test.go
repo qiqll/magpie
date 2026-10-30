@@ -809,3 +809,77 @@ func TestUserSystemOneOnARevokedAccount(t *testing.T) {
 		t.Fatalf("not kept on the revoked one with a spare beside it: %v", got)
 	}
 }
+
+// A System One decision with no user bound (u nil) whose account is found
+// revoked as it is asked goes on to the next account, and on the last is
+// told only as a limit with when to try again (lapsedAs), never the
+// vendor's words of the sign-in: as a drawing with no user is. Codex's
+// accounts are given a decision endpoint, as in the test above.
+func TestSystemOneWithoutAUserOnARevokedAccount(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	revoked := codexAccessToken(t)
+	var mu sync.Mutex
+	var asked []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gone := r.Header.Get("Authorization") == "Bearer "+revoked
+		mu.Lock()
+		asked = append(asked, strconv.FormatBool(gone))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if gone {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"error":{"message":"Encountered invalidated oauth token for user, failing request","code":"token_revoked"},"status":401}`)
+			return
+		}
+		io.WriteString(w, `{"answers":{"intent":{"choice":"bug"}},"usage":{"input_tokens":10,"output_tokens":2}}`)
+	}))
+	t.Cleanup(up.Close)
+	took := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := asked
+		asked = nil
+		return out
+	}
+	t.Cleanup(noRests)
+	decide := func(only bool) *httptest.ResponseRecorder {
+		t.Helper()
+		noRests() // each case afresh: the one before rested the revoked one
+		s := New()
+		p, err := provider.Find("codex")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cs []candidate
+		var pl planned
+		for _, c := range seatCandidates(*p) {
+			if only && c.who() != "codex@me@example.com" {
+				continue
+			}
+			c.p.Decide, c.model = up.URL+"/v1", "jev-latest"
+			cs, pl.order = append(cs, c), append(pl.order, Weighed{Provider: "codex"})
+		}
+		if len(cs) == 0 || cs[0].who() != "codex@me@example.com" {
+			t.Fatalf("the revoked account isn't asked first: %d candidates", len(cs))
+		}
+		body := []byte(`{"model":"codex/jev-latest","state":{"message":"hi"},"questions":{"intent":{"type":"choice"}}}`)
+		r := httptest.NewRequest("POST", "/v1/systemone", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		s.serveDecideTries(rec, r, body, "codex/jev-latest", time.Now(), cs, pl, nil, nil)
+		return rec
+	}
+
+	rec := decide(false)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "bug") {
+		t.Fatalf("with another account: %d %s", rec.Code, rec.Body.String())
+	}
+	saysNoLapse(t, rec)
+	if got := took(); !slices.Equal(got, []string{"true", "false"}) {
+		t.Fatalf("asked %v, want the revoked one, then the other", got)
+	}
+
+	limitedNotLapsed(t, decide(true))
+	if got := took(); !slices.Equal(got, []string{"true"}) {
+		t.Fatalf("asked %v (true: the revoked one)", got)
+	}
+}
