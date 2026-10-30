@@ -167,3 +167,20 @@ func TestSessionRoute(t *testing.T) {
 		t.Fatal("MAGPIE_ADDR, not shared, no key, got", code)
 	}
 }
+
+// For a key held to some accounts, why its route's classifier couldn't
+// say is told without the accounts, as a try's failure is, on a copy:
+// the trace's own words, which the owner's Routing page shows, are kept.
+func TestClassifiedHiddenKeepsTheTrace(t *testing.T) {
+	h := &RuleHit{Classified: &Classified{Error: `The gateway key "Held" may use jev/me@example.com`}}
+	got := classifiedHidden(h)
+	if strings.Contains(got.Classified.Error, "me@example.com") {
+		t.Fatalf("told %q", got.Classified.Error)
+	}
+	if !strings.Contains(h.Classified.Error, "me@example.com") {
+		t.Fatalf("the trace's own was changed: %q", h.Classified.Error)
+	}
+	if classifiedHidden(nil) != nil {
+		t.Fatal("nil")
+	}
+}

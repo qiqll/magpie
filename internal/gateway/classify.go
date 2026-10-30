@@ -111,6 +111,15 @@ type classifyFailure struct {
 // numbers: it is up, so it isn't left to rest for it.
 type answerError struct{ error }
 
+// callerRefused is a classifier ask refused for its caller alone (askFor):
+// its user over its limit, its key with none of the classifier's accounts
+// it may use. It rests that caller's scope (classifyAs), and is neither
+// the classifier's failure on the group's card (ClassifierFailure) nor
+// logged as one: the classifier is up for every other caller.
+type callerRefused struct{ error }
+
+func (e callerRefused) Unwrap() error { return e.error }
+
 // classify is ask's answer for the message, from what was asked before
 // when it can be: the same message and intents within classifyKeep. A
 // classifier that failed is left to rest for classifyRest rather than
@@ -166,6 +175,16 @@ func classifyAs(scope string, ask classifier, model string, intents []string, pr
 		f := classifyFailure{err: err.Error(), at: time.Now()}
 		if !errors.As(err, new(answerError)) {
 			classified.failed[rested] = f
+			if len(classified.failed) > 4096 {
+				for k, was := range classified.failed {
+					if time.Since(was.at) >= classifyRest {
+						delete(classified.failed, k)
+					}
+				}
+			}
+		}
+		if errors.As(err, new(callerRefused)) {
+			return verdict{}, false, err
 		}
 		if was, ok := classified.last[model]; !ok || was.err != f.err {
 			// said once in the log, not at every turn it fails the same way
@@ -413,6 +432,18 @@ func (s *Server) askFor(r *http.Request) context.Context {
 	return s.forUser(access.WithIdentity(context.Background(), access.Caller(r.Context())), r)
 }
 
+// askerRefused says w, serve's answer to a classifier's ask in ctx
+// (askFor), refused its caller rather than failing at the classifier: its
+// user's limit (userRefused sets UserLimitHeader), or its key held to
+// accounts the classifier has none of (keyAccountsError).
+func askerRefused(ctx context.Context, w *httptest.ResponseRecorder, msg string) bool {
+	if askedUser(ctx) != "" && w.Header().Get(UserLimitHeader) != "" {
+		return true
+	}
+	who := access.Caller(ctx)
+	return len(who.Accounts) > 0 && w.Code == http.StatusForbidden && strings.HasPrefix(msg, fmt.Sprintf("The gateway key %q is not allowed to use the accounts", who.KeyName))
+}
+
 // askScope is who a classifier's ask goes out as (askFor): the calling
 // key's id and, bound by user, its user; "" for neither (classifyAs).
 func askScope(ctx context.Context) string {
@@ -553,7 +584,11 @@ func (s *Server) askChat(ctx context.Context, model string, body []byte) (string
 		if out.Error != nil && out.Error.Message != "" {
 			msg = out.Error.Message
 		}
-		return "", fmt.Errorf("%s: %s", model, msg)
+		err := fmt.Errorf("%s: %s", model, msg)
+		if askerRefused(ctx, w, msg) {
+			return "", callerRefused{err}
+		}
+		return "", err
 	}
 	if len(out.Choices) == 0 {
 		return "", answerError{fmt.Errorf("%s gave no answer", model)}

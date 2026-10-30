@@ -217,6 +217,9 @@ func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body [
 		if status >= 400 {
 			fail, rest = s.decideFailed(c, status, header, b)
 			if next, refused, lapsed := u.lapsed(c, status, b, last); lapsed {
+				if refused == nil {
+					last = false // a spare goes next: the route isn't done
+				}
 				tried(status, errMsg, failAuth, rest, used)
 				if refused != nil {
 					s.answerUserRefused(w, provider.Chat, &Call{}, refused)
@@ -230,11 +233,12 @@ func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body [
 			// as a limit (lapsedAs), never the vendor's words, as a
 			// drawing's is
 			if lapsedTry(c, status, b) {
-				tried(status, errMsg, fail, rest, used)
 				if !last {
+					tried(status, errMsg, fail, rest, used)
 					continue
 				}
 				code, err := lapsedAs(c, status, errors.New(string(b)))
+				tried(code, errMsg, fail, rest, used) // the route ends as the caller is told
 				writeError(w, provider.Chat, code, saidOf(w.Header(), err, nil))
 				return
 			}
@@ -303,9 +307,10 @@ func (s *Server) askDecisionGroup(ctx context.Context, model string, intents []s
 	ms, _ = provider.PausedOut(g, ms, RouterAgent, "", ruleClock())
 	cs, pl, _ := s.decideTries(g, ms)
 	if who := access.Caller(ctx); len(who.Accounts) > 0 {
+		who.Models = nil // the group's own pick: its accounts hold it, not its models (magpieChose)
 		var held bool
 		if cs, _, held = allowedCandidates(who, cs, pl, nil); len(cs) == 0 && held {
-			return verdict{}, true, errors.New(keyAccountsError(who, model))
+			return verdict{}, true, callerRefused{errors.New(keyAccountsError(who, model))}
 		}
 	}
 	cs = probeOne(cs) // of those resting, only the one back soonest (#1799)
@@ -330,14 +335,15 @@ func (s *Server) askDecider(ctx context.Context, p provider.Provider, model stri
 	}
 	askAsUser(ctx, r.Header)
 	if who, held := accountHolds(r); held {
+		who.Models = nil // the group's own pick: its accounts hold it, not its models (magpieChose)
 		var kept bool
 		if cs, pl, kept = allowedCandidates(who, cs, pl, nil); len(cs) == 0 && kept {
-			return verdict{}, errors.New(keyAccountsError(who, p.ID+"/"+model))
+			return verdict{}, callerRefused{errors.New(keyAccountsError(who, p.ID+"/"+model))}
 		}
 	}
 	own, _, u, err := s.usersOn(r, p, cs, pl)
 	if err != nil {
-		return verdict{}, err
+		return verdict{}, callerRefused{err}
 	}
 	if u != nil {
 		cs = own

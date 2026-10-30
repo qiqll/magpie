@@ -250,3 +250,29 @@ func TestClassifierRestsInItsScopeAlone(t *testing.T) {
 		t.Fatalf("asked %d times, want alice's, bob's and the unscoped one", n)
 	}
 }
+
+// A caller's own refusal (callerRefused: its user over its limit, its key
+// with none of the classifier's accounts) is not the classifier's failure:
+// the group's card says nothing of it (ClassifierFailure), while a failure
+// at the classifier still shows there.
+func TestCallersRefusalIsNotTheClassifiers(t *testing.T) {
+	resetClassified(t)
+	refused := func(string, []string, before, bool, string) (verdict, error) {
+		return verdict{}, callerRefused{errors.New("over its limit")}
+	}
+	if _, _, err := classifyAs("key\x00alice", refused, t.Name(), nil, before{}, false, "rename"); err == nil {
+		t.Fatal("alice's refusal answered")
+	}
+	if why, _, ok := ClassifierFailure(t.Name()); ok {
+		t.Fatalf("the card says %q of alice's refusal", why)
+	}
+	down := func(string, []string, before, bool, string) (verdict, error) {
+		return verdict{}, errors.New("classifier down")
+	}
+	if _, _, err := classifyAs("key\x00bob", down, t.Name(), nil, before{}, false, "rename"); err == nil {
+		t.Fatal("bob's failure answered")
+	}
+	if why, _, ok := ClassifierFailure(t.Name()); !ok || why != "classifier down" {
+		t.Fatalf("the card says %q %v, want the classifier down", why, ok)
+	}
+}

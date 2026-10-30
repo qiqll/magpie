@@ -764,13 +764,14 @@ func TestUserSystemOneOnARevokedAccount(t *testing.T) {
 		return out
 	}
 	t.Cleanup(noRests)
+	var s *Server
 	decide := func(max int) *httptest.ResponseRecorder {
 		t.Helper()
 		noRests() // each case afresh: the one before rested the revoked one
 		writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
 			"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC(), Tier: "free"},
 		}}})
-		s := byUserUpTo(t, New(), max)
+		s = byUserUpTo(t, New(), max)
 		p, err := provider.Find("codex")
 		if err != nil {
 			t.Fatal(err)
@@ -808,6 +809,10 @@ func TestUserSystemOneOnARevokedAccount(t *testing.T) {
 	if got := seatsIn(t, "codex")["alice"]; !slices.Equal(got, []string{"me@example.com", "spare@example.com"}) {
 		t.Fatalf("not kept on the revoked one with a spare beside it: %v", got)
 	}
+	// the route ends as the spare answered it, not at the revoked one's 401
+	if r := lastRoute(s); !r.Done || r.Status != 200 || len(r.Tries) != 2 || s.trace.totals.Errors != 0 {
+		t.Fatalf("route %d done %v, %d tries, %d errors: want 200 on the spare's try", r.Status, r.Done, len(r.Tries), s.trace.totals.Errors)
+	}
 }
 
 // A System One decision with no user bound (u nil) whose account is found
@@ -842,10 +847,12 @@ func TestSystemOneWithoutAUserOnARevokedAccount(t *testing.T) {
 		return out
 	}
 	t.Cleanup(noRests)
+	var srv *Server
 	decide := func(only bool) *httptest.ResponseRecorder {
 		t.Helper()
 		noRests() // each case afresh: the one before rested the revoked one
 		s := New()
+		srv = s
 		p, err := provider.Find("codex")
 		if err != nil {
 			t.Fatal(err)
@@ -881,5 +888,8 @@ func TestSystemOneWithoutAUserOnARevokedAccount(t *testing.T) {
 	limitedNotLapsed(t, decide(true))
 	if got := took(); !slices.Equal(got, []string{"true"}) {
 		t.Fatalf("asked %v (true: the revoked one)", got)
+	}
+	if r := lastRoute(srv); r.Status != http.StatusTooManyRequests {
+		t.Fatalf("route ended %d, the caller was told 429", r.Status)
 	}
 }

@@ -9,6 +9,7 @@ package gateway
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -138,10 +139,30 @@ func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
 			for i := range sr.Tries {
 				sr.Tries[i].Fail = hideAccounts(sr.Tries[i].Fail)
 			}
+			// and why its classifier couldn't say (a key's or user's
+			// refusal names accounts), on copies: the trace's are shared
+			sr.Rule = classifiedHidden(sr.Rule)
+			sr.Nested = slices.Clone(sr.Nested)
+			for i := range sr.Nested {
+				sr.Nested[i].Rule = classifiedHidden(sr.Nested[i].Rule)
+			}
 		}
 		out["route"] = sr
 	}
 	writeJSON(w, 200, out)
+}
+
+// classifiedHidden is h with its classifier's error told without the
+// accounts (hideAccounts), a copy when there is one to hide; h as it is
+// otherwise.
+func classifiedHidden(h *RuleHit) *RuleHit {
+	if h == nil || h.Classified == nil || h.Classified.Error == "" {
+		return h
+	}
+	hc, c := *h, *h.Classified
+	c.Error = hideAccounts(c.Error)
+	hc.Classified = &c
+	return &hc
 }
 
 // sessionLatest is a copy of session's latest route, and its seq; with
