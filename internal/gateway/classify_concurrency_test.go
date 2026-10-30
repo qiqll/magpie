@@ -218,3 +218,35 @@ func TestConcurrentClassificationPanicReleasesWaiters(t *testing.T) {
 		}
 	})
 }
+
+// A classifier that fails in one scope (a user over its limit, a key held
+// to accounts the classifier has none of) rests in that scope alone: the
+// next ask in another scope, or in none, is asked, while the failed one's
+// next waits out its rest.
+func TestClassifierRestsInItsScopeAlone(t *testing.T) {
+	resetClassified(t)
+	var calls atomic.Int32
+	refused := func(string, []string, before, bool, string) (verdict, error) {
+		calls.Add(1)
+		return verdict{}, errors.New("over its limit")
+	}
+	answers := func(string, []string, before, bool, string) (verdict, error) {
+		calls.Add(1)
+		return verdict{Intent: "refactoring"}, nil
+	}
+	if _, _, err := classifyAs("key\x00alice", refused, t.Name(), []string{"refactoring"}, before{}, false, "rename"); err == nil {
+		t.Fatal("alice's refusal answered")
+	}
+	for _, scope := range []string{"key\x00bob", ""} {
+		v, cached, err := classifyAs(scope, answers, t.Name(), []string{"refactoring"}, before{}, false, "rename")
+		if err != nil || cached || v.Intent != "refactoring" {
+			t.Fatalf("%q after alice's refusal: %+v %v %v", scope, v, cached, err)
+		}
+	}
+	if _, _, err := classifyAs("key\x00alice", answers, t.Name(), []string{"refactoring"}, before{}, false, "rename again"); err == nil || !strings.Contains(err.Error(), "not asked again") {
+		t.Fatalf("alice asked again in its rest: %v", err)
+	}
+	if n := calls.Load(); n != 3 {
+		t.Fatalf("asked %d times, want alice's, bob's and the unscoped one", n)
+	}
+}

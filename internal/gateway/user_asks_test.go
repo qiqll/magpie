@@ -533,3 +533,86 @@ func TestUnboundRequestsDescribeOnTheUsersAccount(t *testing.T) {
 		})
 	}
 }
+
+// Bound by user, a routing group's classifier is asked on the classifier's
+// accounts the turn's user is on, as that user's own request to it would
+// be (askFor), never on the provider's first key for every user; the same
+// words from another user are asked on that user's, not answered from the
+// first's (classifyAs). Before, every ask went with no user and no key, on
+// the provider's first key, and the second user's was the first's answer.
+func TestClassifierAskedOfTheUsersAccounts(t *testing.T) {
+	s, _, _, c := intented(t, provider.Rule{Use: "b/big", Intent: "writing or fixing tests"})
+	c.set("1", 0)
+	up, keys, users := keysSeen(t, c)
+	if err := provider.Save(provider.Provider{ID: "c", Name: "C", Key: "kc", Keys: []provider.KeyAccount{{Key: "kd"}}, Models: []string{"cls"}, Chat: up.URL + "/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SaveLive("c", up.URL+"/v1", []catalog.Model{{ID: "cls", Context: 32000}}); err != nil {
+		t.Fatal(err)
+	}
+	s = byUserUpTo(t, s, 1)
+	turn := func(u, words string) string {
+		t.Helper()
+		before := len(keys("cls"))
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(chat(words, nil, 0, "")))
+		req.Header.Set("x-session-id", u+": "+words)
+		req.Header.Set(UserHeader, u)
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("%s, %q: %d %s", u, words, rec.Code, rec.Body.String())
+		}
+		got := keys("cls")
+		if len(got) != before+1 {
+			t.Fatalf("%s, %q: the classifier was asked with %q, want once more", u, words, got[before:])
+		}
+		return got[before]
+	}
+	var alice, bob []string
+	for _, round := range []string{"first", "second"} {
+		alice = append(alice, turn("alice", "add the "+round+" unit test for alice's parser"))
+		bob = append(bob, turn("bob", "add the "+round+" unit test for bob's parser"))
+	}
+	oneKeyEach(t, "the classifier", alice, bob)
+	// alice's words again, from bob: asked on bob's account, not alice's answer
+	if k := turn("bob", "add the first unit test for alice's parser"); k != bob[0] {
+		t.Fatalf("bob was asked with %q, its account is %q", k, bob[0])
+	}
+	if b := boundIn(t, "c"); len(b) != 2 {
+		t.Fatalf("bound %v, want alice and bob on the classifier's provider", b)
+	}
+	if n := users(); n != 0 {
+		t.Fatalf("%d classifier asks took the user header to the vendor", n)
+	}
+}
+
+// A gateway key held to some accounts asks the classifier on those alone,
+// as its own request to the classifier's model would be: before, the ask
+// went with no key at all, on the provider's first account, which the key
+// may not use.
+func TestClassifierAskedOnTheKeysAccounts(t *testing.T) {
+	s, _, _, c := intented(t, provider.Rule{Use: "b/big", Intent: "writing or fixing tests"})
+	c.set("1", 0)
+	up, keys, _ := keysSeen(t, c)
+	if err := provider.Save(provider.Provider{ID: "c", Name: "C", Key: "kc", Keys: []provider.KeyAccount{{Key: "kd"}}, Models: []string{"cls"}, Chat: up.URL + "/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SaveLive("c", up.URL+"/v1", []catalog.Model{{ID: "cls", Context: 32000}}); err != nil {
+		t.Fatal(err)
+	}
+	// the group's members' keys, and only kd of c's
+	held, secrets := newCaller(t, "Held")
+	if _, err := access.Update("accounts-key", access.Change{Key: held[0].ID, Accounts: []string{"a/" + provider.KeyID("ka"), "b/" + provider.KeyID("kb"), "c/" + provider.KeyID("kd")}}); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(chat("add a unit test for the parser", nil, 0, "")))
+	req.Header.Set("Authorization", "Bearer "+secrets[0])
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if got := keys("cls"); len(got) != 1 || got[0] != "kd" {
+		t.Fatalf("the classifier was asked with %q, want kd, the one account of c the key may use", got)
+	}
+}

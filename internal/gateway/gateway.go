@@ -2207,7 +2207,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// and the second, its verdict kept or the classifier resting, passed
 	// (CyberCaius on Discord, v0.1.1847). It goes by the group's order,
 	// as a model's check does.
-	ask := s.askClassifier
+	//
+	// It is asked as the turn's key and, bound by user, its user (askFor):
+	// on accounts they may use, never the provider's whole pool.
+	asking := s.askFor(r)
+	ask, scope := s.classifierFor(asking), askScope(asking)
 	if r.Header.Get("User-Agent") == RouterAgent || desktopCheck {
 		ask = nil
 	} else {
@@ -2222,7 +2226,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 	}
 	if ruleReq != nil && g.Ruled() {
-		hit = ruleFor(ruleAt, g, ms, ruleReq, agent, ask)
+		hit = ruleFor(ruleAt, g, ms, ruleReq, agent, ask, scope)
 	}
 	// Some clients send images even when the selected model is known to
 	// accept text only. Reject a new image and omit images from history.
@@ -2649,7 +2653,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	var nested []NestedRule
 	var nestedAt []string
 	if ruleReq != nil && !modelRuled(hit, ms, cands) {
-		nested, nestedAt, cands, pl = s.nestedRules(ruleAt, ruleReq, agent, ask, ruled, cands, pl, aff)
+		nested, nestedAt, cands, pl = s.nestedRules(ruleAt, ruleReq, agent, ask, scope, ruled, cands, pl, aff)
 	}
 	// the effort a group's decision model picked for the turn: the
 	// outermost group's that did

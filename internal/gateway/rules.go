@@ -174,8 +174,9 @@ func firstWords(req *Request) string {
 // sends it to one with more room. A group whose decision model picks the
 // effort (provider.EffortAuto) has it pick as the turn begins, when the
 // agent asked for reasoning, and the turn keeps it. It returns nil for a
-// group that decides nothing.
-func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, agent string, ask classifier) *RuleHit {
+// group that decides nothing. The classifier is asked in scope (askScope,
+// classifyAs).
+func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, agent string, ask classifier, scope string) *RuleHit {
 	if !g.Ruled() || req == nil {
 		return nil
 	}
@@ -311,7 +312,7 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 			c.Error = "the message has no words to classify"
 		default:
 			t0 := time.Now()
-			v, cached, err := classify(ask, g.Classifier, intents, prev, effort, text)
+			v, cached, err := classifyAs(scope, ask, g.Classifier, intents, prev, effort, text)
 			c.Intent, c.Cached, c.Ms = v.Intent, cached, int(time.Since(t0).Milliseconds())
 			if effort {
 				c.Effort, c.Score = v.Effort, v.Score
@@ -478,9 +479,9 @@ func keepsEffort(tr turnRule, pick string, tokens int, now time.Time) bool {
 // going first is of, outermost first: a group's rules pick among its own
 // members as the group's do, keeping what they decided for the turn by
 // their own key (at, the group's, and the group's way down), asking ask
-// of the message as the group's own rules do. It gives what each decided
-// and their keys.
-func (s *Server) nestedRules(at string, req *Request, agent string, ask classifier, ms []provider.Member, cands []candidate, pl planned, aff *Affinity) ([]NestedRule, []string, []candidate, planned) {
+// of the message, in scope, as the group's own rules do. It gives what
+// each decided and their keys.
+func (s *Server) nestedRules(at string, req *Request, agent string, ask classifier, scope string, ms []provider.Member, cands []candidate, pl planned, aff *Affinity) ([]NestedRule, []string, []candidate, planned) {
 	var out []NestedRule
 	var keys []string
 	for depth := 0; ; depth++ { // as deep as the one going first is
@@ -500,7 +501,7 @@ func (s *Server) nestedRules(at string, req *Request, agent string, ask classifi
 				subMs = append(subMs, m.Below(depth+1))
 			}
 		}
-		h := ruleFor(at, sub, subMs, req, agent, ask)
+		h := ruleFor(at, sub, subMs, req, agent, ask, scope)
 		keys = append(keys, at)
 		out = append(out, NestedRule{Group: sub.ID, Name: sub.Name, Rule: h})
 		if h == nil || h.Use == "" {
