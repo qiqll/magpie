@@ -27,6 +27,8 @@ const logins = (signedIn) => [
   { user: "me@example.com", plan: "Plus", active: true, on: true },
   { user: "spare@example.com", plan: "Pro", on: true, ...(signedIn ? {} : { lapsed: lapse("spare@example.com") }) },
   { user: "old@example.com", plan: "Plus", lapsed: lapse("old@example.com") },
+  // the agent's own, paused: not in use, so no line
+  { user: "rest@example.com", plan: "Plus", active: true, paused: true, lapsed: lapse("rest@example.com") },
 ];
 const codex = (signedIn) => ({
   id: "codex", name: "Codex", icon: "openai", chat: "", responses: "https://chatgpt.com/backend-api/codex", anthropic: "", catalog: "",
