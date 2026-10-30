@@ -424,11 +424,11 @@ func (g googleAccount) token(ctx context.Context) (string, error) {
 		if g.own {
 			how = "run gemini and sign in again"
 		}
-		msg := "no token"
-		if err != nil {
-			msg = err.Error()
+		if err == nil {
+			err = errors.New("no token")
 		}
-		return "", fmt.Errorf("%s is signed out (%s); %s", g.app.name, msg, how)
+		logRefreshFailed(g.app.agent, g.user, err)
+		return "", fmt.Errorf("%s is signed out (%s); %s", g.app.name, err.Error(), how)
 	}
 	t = googleAuth{AccessToken: fresh.AccessToken, RefreshToken: g.auth.RefreshToken,
 		Expiry: time.Now().Add(time.Duration(fresh.ExpiresIn) * time.Second).UnixMilli()}

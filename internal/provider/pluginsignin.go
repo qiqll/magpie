@@ -26,21 +26,28 @@ func StartPluginSignIn(id string, method int, inputs map[string]string) (SignInS
 // StartPluginSignInWith is StartPluginSignIn through the proxy o picks,
 // else the one the provider's requests go through (#1663).
 func StartPluginSignInWith(id string, method int, inputs map[string]string, o SignInOptions) (SignInState, error) {
-	if settings.AccountDiscoveryOff() {
-		return SignInState{}, errAccountDiscoveryOff
-	}
 	s := &signInFlow{done: make(chan struct{})}
-	if err := s.pickProxy(PluginID(id), o); err != nil {
+	s.st = SignInState{ID: randomToken(9), Agent: PluginID(id), State: "waiting"}
+	logSignIn(SignInState{ID: s.st.ID, Agent: s.st.Agent, User: strings.TrimSpace(o.User)}, "started", 0, "")
+	// one that couldn't start ends here, logged as failed by finish
+	failed := func(err error) (SignInState, error) {
+		s.finish(failedWith(err))
 		return SignInState{}, err
 	}
-	s.st = SignInState{ID: randomToken(9), Agent: PluginID(id), State: "waiting", Proxy: s.proxy}
+	if settings.AccountDiscoveryOff() {
+		return failed(errAccountDiscoveryOff)
+	}
+	if err := s.pickProxy(PluginID(id), o); err != nil {
+		return failed(err)
+	}
+	s.st.Proxy = s.proxy
 	cli, install := pluginCLI(id)
 	var installing context.Context
 	if install {
 		s.st.State, s.st.Installing = "installing", cli.Name
 		installing, s.stop = context.WithCancel(context.Background())
 	} else if err := s.pluginBegin(id, method, inputs); err != nil {
-		return SignInState{}, err
+		return failed(err)
 	}
 	signIns.Lock()
 	for sid, o := range signIns.m {
@@ -59,7 +66,7 @@ func StartPluginSignInWith(id string, method int, inputs map[string]string, o Si
 				err = s.pluginBegin(id, method, inputs)
 			}
 			if err != nil {
-				s.finish(SignInState{State: "failed", Error: err.Error()})
+				s.finish(failedWith(err))
 			}
 		}()
 	}
@@ -202,7 +209,7 @@ func (s *signInFlow) pluginDone(saved plugin.Saved, err error) {
 	case errors.Is(err, context.DeadlineExceeded):
 		s.finish(SignInState{State: "failed", Error: "the sign-in timed out; start it again"})
 	case err != nil:
-		s.finish(SignInState{State: "failed", Error: err.Error()})
+		s.finish(failedWith(err))
 	default:
 		clearPluginLapse(saved)
 		user := pluginUser(saved)
@@ -214,18 +221,32 @@ func (s *signInFlow) pluginDone(saved plugin.Saved, err error) {
 // method does, beside the accounts signed in already; it gives the
 // provider's magpie id.
 func PluginAPIKey(ctx context.Context, id string, method int, inputs map[string]string, key string) (string, error) {
+	// logged as a sign-in with no session ("key"); the key never is
+	at := SignInState{Agent: PluginID(id)}
+	logSignIn(at, "started", 0, "")
 	if strings.TrimSpace(key) == "" {
 		pp, ok := PluginOf(PluginID(id))
 		if !ok || method < 0 || method >= len(pp.Methods) || pp.Methods[method].Type != "api" || !pp.Methods[method].Keyless {
-			return "", errors.New("enter the key")
+			err := errors.New("enter the key")
+			logSignIn(at, "failed", 0, err.Error())
+			return "", err
 		}
 	}
 	// through the proxy the provider's requests go through (#1663)
 	saved, err := plugin.APIKey(Via(ctx, PluginID(id)), id, method, inputs, strings.TrimSpace(key), plugin.NewAccount)
 	if err != nil {
+		why := err.Error()
+		if k := strings.TrimSpace(key); len(k) >= 4 {
+			// a plugin's error may repeat the key it was given
+			why = strings.ReplaceAll(why, k, "…")
+		}
+		logSignIn(at, "failed", httpStatusOf(err), why)
 		return "", err
 	}
-	return PluginSignedIn(saved), nil
+	id = PluginSignedIn(saved)
+	at.User = pluginUser(saved)
+	logSignIn(at, "done", 0, "")
+	return id, nil
 }
 
 // PluginSignedIn finishes a sign-in to a plugin's provider that magpie

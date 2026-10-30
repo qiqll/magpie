@@ -86,10 +86,15 @@ func startCopilotSignIn(s *signInFlow) error {
 	s.stop = cancel
 	interval := devicePoll(dc.Interval)
 	site := firstNonEmpty(host, "github.com")
+	// the sign-in's lines in the log are finish's (signin_log.go) and these
+	st := s.status()
+	at := "sign-in " + st.Agent + " (" + st.ID + ") on " + site
 	go func() {
 		fail := func(msg string) {
-			log.Printf("copilot sign-in on %s failed: %s", site, msg)
-			s.finish(SignInState{State: "failed", Error: msg})
+			if !s.finish(SignInState{State: "failed", Error: msg}) {
+				// canceled or replaced first, which finish logged
+				log.Printf("%s: ended after it was over: %s", at, logReason(msg))
+			}
 		}
 		misses := 0
 		for {
@@ -111,7 +116,7 @@ func startCopilotSignIn(s *signInFlow) error {
 			case err != nil:
 				// a hiccup: ask again, unless it keeps failing
 				misses++
-				log.Printf("copilot sign-in on %s: asking GitHub for the token failed (%d in a row): %v", site, misses, err)
+				log.Printf("%s: asking GitHub for the token failed (%d in a row): %s", at, misses, logReason(err.Error()))
 				if misses >= copilotPollMisses {
 					fail("couldn't get the token from GitHub: " + err.Error())
 					return
@@ -135,7 +140,7 @@ func startCopilotSignIn(s *signInFlow) error {
 				fail("GitHub: " + strings.TrimSpace(tok.Error+" "+tok.Desc))
 				return
 			}
-			log.Printf("copilot sign-in on %s: GitHub gave the token; asking whose account it is", site)
+			log.Printf("%s: GitHub gave the token; asking whose account it is", at)
 			fctx, fcancel := context.WithTimeout(ctx, copilotFinishWait)
 			user, plan, err := copilotUser(fctx, tok.Token, host)
 			if err != nil {

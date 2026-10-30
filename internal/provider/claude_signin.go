@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -267,17 +266,19 @@ func startClaudeSignIn(s *signInFlow) error {
 			msg = lerr.Error()
 		}
 		cleanup()
-		exited <- msg
-		if !s.finish(SignInState{State: "failed", Error: msg}) {
-			return // canceled or replaced: not a failure to log
-		}
-		// the window shows only the last line: the log has the lines before
-		// it and how Claude Code ended
+		// the window shows only the last line: the failure's one line in
+		// the log has the lines before it and how Claude Code ended, kept
+		// before either end of the sign-in (this one or the start's, given
+		// msg) can log it. A sign-in canceled or replaced logs no failure.
 		ended := "exit 0"
 		if err != nil {
 			ended = err.Error()
 		}
-		log.Printf("claude sign-in: `%s auth login` ended (%s); it printed: %q", cli.path, ended, claudeSaidSafe(tail))
+		s.mu.Lock()
+		s.said = fmt.Sprintf("`%s auth login` ended (%s); it printed: %q", cli.path, ended, claudeSaidSafe(tail))
+		s.mu.Unlock()
+		exited <- msg
+		s.finish(SignInState{State: "failed", Error: msg})
 	}()
 
 	var link string

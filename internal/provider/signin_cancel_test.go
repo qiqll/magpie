@@ -166,7 +166,7 @@ func TestCanceledDeviceSignInAddsNoAccount(t *testing.T) {
 		}
 		return false
 	}
-	for i := 0; !added() && !strings.Contains(logged.String(), "sign-in on github.com failed"); i++ {
+	for i := 0; !added() && !strings.Contains(logged.String(), "on github.com: ended after it was over"); i++ {
 		if i > 3000 {
 			t.Fatalf("the sign-in never ended; log: %s", logged.String())
 		}

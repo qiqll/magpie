@@ -243,7 +243,9 @@ func renewSaved(ctx context.Context, agent, user string, force bool, stale strin
 		// (万贤凯 on Discord). So it is renewed where Codex keeps it, as
 		// Codex's own (codexTokenRenewing), and the copy is left as it is:
 		// a switch away saves it afresh from Codex's.
-		return codexTokenRenewing(ctx, codexHome(), stale)
+		tok, accountID, err := codexTokenRenewing(ctx, codexHome(), stale)
+		logRefreshFailed(agent, user, err)
+		return tok, accountID, err
 	}
 	if home := codexHeldIn(*l); home != "" {
 		// the same for an account Codex is signed in to in another of
@@ -252,6 +254,7 @@ func renewSaved(ctx context.Context, agent, user string, force bool, stale strin
 		// whose refresh token would sign that Codex out
 		tok, accountID, err := codexTokenRenewing(ctx, home, stale)
 		if err != nil {
+			logRefreshFailed(agent, user, err)
 			return "", "", fmt.Errorf("%s, signed in to Codex in %s: %w; to sign in again there, run CODEX_HOME=%s codex login", user, home, err, home)
 		}
 		return tok, accountID, nil
@@ -285,16 +288,22 @@ func renewSaved(ctx context.Context, agent, user string, force bool, stale strin
 		return "", "", fmt.Errorf("%s accounts can't be used side by side", agent)
 	}
 	loginsMu.Lock()
-	defer loginsMu.Unlock()
 	ls := readLogins()
+	lapsed := false
 	for i := range ls {
 		if ls[i].Agent == agent && strings.EqualFold(ls[i].User, user) {
+			lapsed = lapsed || ls[i].Lapsed != ""
 			ls[i].Auth = auth
 			ls[i].Renewed = time.Now().UTC().Truncate(time.Second)
 			ls[i].Lapsed = ""
 		}
 	}
-	return tok, accountID, writeLogins(ls)
+	err = writeLogins(ls)
+	loginsMu.Unlock()
+	if err == nil && lapsed {
+		logUnlapsed(agent, user, "its sign-in was refreshed")
+	}
+	return tok, accountID, err
 }
 
 // heldByCodex says the saved ChatGPT account l is the one Codex is signed
@@ -317,19 +326,27 @@ func heldByCodex(l savedLogin) bool {
 // made again, in magpie; the agent's own login command would sign the agent
 // in, not this account. A refresh that never got an answer marks nothing.
 func savedRefreshFailed(agent, user string, err error) error {
+	logRefreshFailed(agent, user, err)
 	var refused refreshRefused
 	if !errors.As(err, &refused) {
 		return fmt.Errorf("%s: %w", user, err)
 	}
 	msg := user + "'s sign-in has expired — add the account again to use it"
 	loginsMu.Lock()
-	defer loginsMu.Unlock()
 	ls := readLogins()
+	marked := false
 	for i := range ls {
 		if ls[i].Agent == agent && strings.EqualFold(ls[i].User, user) {
+			marked = marked || ls[i].Lapsed != msg
 			ls[i].Lapsed = msg
 		}
 	}
-	_ = writeLogins(ls)
+	if writeLogins(ls) != nil {
+		marked = false
+	}
+	loginsMu.Unlock()
+	if marked {
+		logLapsed(agent, user, msg, 0, "its vendor refused the refresh of its sign-in")
+	}
 	return refreshRefused(msg)
 }

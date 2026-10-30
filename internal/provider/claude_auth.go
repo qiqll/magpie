@@ -14,7 +14,6 @@ package provider
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"log"
 	"strings"
 )
 
@@ -97,7 +96,7 @@ func NoteClaudeSignInFailure(user, version, message string) {
 	}
 	if who := refuseClaudeVersion(user, version); who != "" {
 		// after the lock: the log's writer can block (a journal's pipe)
-		log.Printf("claude %s: Anthropic refused its sign-in, so it is passed over until it is signed in again; Claude Code said: %s", who, logText(message))
+		logLapsed("claude", who, claudeAuthLapse, 0, "Anthropic refused its sign-in; Claude Code said: "+logReason(message))
 	}
 }
 

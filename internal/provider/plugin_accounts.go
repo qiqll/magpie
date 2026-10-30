@@ -394,6 +394,14 @@ func notePluginLapseOf(agent, key string, status int, began uint64, text func(us
 	if !refused && (status < 200 || status > 299) {
 		return
 	}
+	// a mark put on or taken off is logged once loginsMu is let go: the
+	// log's writer can block
+	var logged func()
+	defer func() {
+		if logged != nil {
+			logged()
+		}
+	}()
 	loginsMu.Lock()
 	defer loginsMu.Unlock()
 	said := agent + "/" + key
@@ -414,7 +422,16 @@ func notePluginLapseOf(agent, key string, status int, began uint64, text func(us
 			}
 			if l.Lapsed != want {
 				ls[i].Lapsed = want
-				_ = writeLogins(ls)
+				if writeLogins(ls) == nil {
+					user := l.User
+					if want != "" {
+						logged = func() { logLapsed(agent, user, want, status, "its vendor refused a request with its sign-in") }
+					} else if status == http.StatusOK && text == nil {
+						logged = func() { logUnlapsed(agent, user, "signed in again through the plugin") }
+					} else {
+						logged = func() { logUnlapsed(agent, user, "its vendor served it") }
+					}
+				}
 			}
 			return
 		}

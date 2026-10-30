@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -367,7 +366,7 @@ func claudeLoggedOut(ls []savedLogin) (changed bool, lapsed []string) {
 // was written, after loginsMu: the log's writer can block.
 func logClaudeLoggedOut(users []string) {
 	for _, u := range users {
-		log.Printf("claude %s: Claude Code on this computer no longer holds its sign-in (a /logout, or Anthropic refused it), so magpie's copy is passed over until it is signed in again", u)
+		logLapsed("claude", u, claudeLogoutLapse, 0, "Claude Code on this computer no longer holds its sign-in (a /logout, or Anthropic refused it)")
 	}
 }
 

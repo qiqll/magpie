@@ -97,6 +97,9 @@ type SignInState struct {
 	// Proxy is the one the sign-in goes through ("" the global one,
 	// "direct" none): the one the account's requests will (#1663)
 	Proxy string `json:"proxy,omitempty"`
+	// status is the vendor's HTTP status a sign-in failed on, for the log
+	// (failedWith); 0 for none known
+	status int
 }
 
 type signInFlow struct {
@@ -139,6 +142,10 @@ type signInFlow struct {
 	chosen bool
 	// user is the account signed in to again, "" for a new one
 	user string
+	// said is what the log has beyond a failure's reason: how Claude
+	// Code's `claude auth login` ended and what it printed, its lines that
+	// may hold a code left out (claudeSaidSafe)
+	said string
 }
 
 // SignInOptions are a sign-in's choices beyond its subscription.
@@ -242,20 +249,26 @@ func StartSignInAt(agent, site string) (SignInState, error) {
 // StartSignInWith is StartSignIn with the sign-in's choices: its site and
 // the proxy it goes through.
 func StartSignInWith(agent string, o SignInOptions) (SignInState, error) {
-	site := o.Site
+	s := &signInFlow{verifier: randomToken(48), state: randomToken(24), done: make(chan struct{}), site: o.Site}
+	s.st = SignInState{ID: randomToken(9), Agent: agent, State: "waiting"}
+	logSignIn(SignInState{ID: s.st.ID, Agent: agent, User: strings.TrimSpace(o.User)}, "started", 0, "")
+	// one that couldn't start ends here, logged as failed by finish
+	failed := func(err error) (SignInState, error) {
+		s.finish(failedWith(err))
+		return SignInState{}, err
+	}
 	if settings.AccountDiscoveryOff() {
-		return SignInState{}, errAccountDiscoveryOff
+		return failed(errAccountDiscoveryOff)
 	}
 	// one moved onto its plugin signs in there: an account signed in to
 	// here would be the built-in's, which nothing serves now
 	if PluginServes(agent) {
-		return SignInState{}, fmt.Errorf("%s runs on its plugin: sign in through the plugin (magpie plugin login %s)", agent, agent)
+		return failed(fmt.Errorf("%s runs on its plugin: sign in through the plugin (magpie plugin login %s)", agent, agent))
 	}
-	s := &signInFlow{verifier: randomToken(48), state: randomToken(24), done: make(chan struct{}), site: site}
 	if err := s.pickProxy(agent, o); err != nil {
-		return SignInState{}, err
+		return failed(err)
 	}
-	s.st = SignInState{ID: randomToken(9), Agent: agent, State: "waiting", Proxy: s.proxy}
+	s.st.Proxy = s.proxy
 	cli, install := missingCLI(agent)
 	var installing context.Context
 	if install {
@@ -263,7 +276,7 @@ func StartSignInWith(agent string, o SignInOptions) (SignInState, error) {
 		// canceling the sign-in stops the installer
 		installing, s.stop = context.WithCancel(context.Background())
 	} else if err := s.begin(); err != nil {
-		return SignInState{}, err
+		return failed(err)
 	}
 	timeout := signInTimeout
 	if install {
@@ -304,7 +317,7 @@ func (s *signInFlow) installThenBegin(ctx context.Context, cli agentCLI) {
 		err = s.begin()
 	}
 	if err != nil {
-		s.finish(SignInState{State: "failed", Error: err.Error()})
+		s.finish(failedWith(err))
 		return
 	}
 	s.mu.Lock()
@@ -674,11 +687,22 @@ func (s *signInFlow) finish(out SignInState) bool {
 	}
 	out.ID, out.Agent, out.URL, out.Code, out.Proxy = s.st.ID, s.st.Agent, s.st.URL, s.st.Code, s.st.Proxy
 	s.st = out
-	stop, srv := s.stop, s.srv
+	stop, srv, said, user := s.stop, s.srv, s.said, s.user
 	s.mu.Unlock()
-	if out.State == "failed" {
-		// the window says it only while it is open
-		log.Printf("sign-in %s (%s) failed: %s", out.Agent, out.ID, logText(out.Error))
+	// the window says how it ended only while it is open: the log keeps it,
+	// after the lock, as its writer can block
+	switch out.State {
+	case "failed":
+		at := SignInState{ID: out.ID, Agent: out.Agent, User: user}
+		if said != "" {
+			log.Print(signInLine(at, "failed", out.status) + ": " + logReason(out.Error) + " (" + said + ")")
+			break
+		}
+		logSignIn(at, "failed", out.status, out.Error)
+	case "done":
+		logSignIn(SignInState{ID: out.ID, Agent: out.Agent, User: out.User}, "done", 0, out.Error)
+	case "canceled":
+		logSignIn(SignInState{ID: out.ID, Agent: out.Agent, User: user}, "canceled", 0, "")
 	}
 	close(s.done)
 	if stop != nil {
@@ -751,7 +775,7 @@ func (s *signInFlow) callback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.finish(SignInState{State: "failed", Error: err.Error()})
+	s.finish(failedWith(err))
 	signInPage(w, false, "Sign-in didn't finish", err.Error())
 }
 
@@ -763,7 +787,7 @@ func (s *signInFlow) googleDone(ctx context.Context, w http.ResponseWriter, app 
 		err = keepLogin(ctx, func() error { return addGoogleLogin(app.agent, g.user, plan, g.auth) })
 	}
 	if err != nil {
-		s.finish(SignInState{State: "failed", Error: err.Error()})
+		s.finish(failedWith(err))
 		signInPage(w, false, "Sign-in didn't finish", err.Error())
 		return
 	}

@@ -124,6 +124,9 @@ func copilotLapse(app copilotApp) {
 	if err == nil || errors.Is(err, errUnchanged) {
 		copilotLapsedNote(app.User, true)
 	}
+	if err == nil {
+		logLapsed("copilot", app.User, copilotLapsedText, 0, "GitHub refused its token")
+	}
 }
 
 // copilotUnlapse clears the mark of the account of app: GitHub served it.
@@ -143,6 +146,9 @@ func copilotUnlapse(app copilotApp) {
 	})
 	if err == nil || errors.Is(err, errUnchanged) {
 		copilotLapsedNote(app.User, false)
+	}
+	if err == nil {
+		logUnlapsed("copilot", app.User, "GitHub served it")
 	}
 }
 

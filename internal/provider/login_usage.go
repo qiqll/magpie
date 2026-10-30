@@ -435,7 +435,7 @@ func codexSignInRead(l Login, tok string, err error) error {
 	if m == "" {
 		return err
 	}
-	markRevoked(l.Agent, l.User, m)
+	markRevoked(l.Agent, l.User, m, "its vendor refused a usage read with its sign-in")
 	return errors.New(revokedText(l.User))
 }
 

@@ -193,7 +193,7 @@ func siwcAuthorize(redirect, state, nonce, challenge, hostID string) string {
 func (s *signInFlow) siwcDone(ctx context.Context, w http.ResponseWriter, q url.Values) {
 	user, plan, err := siwcSignedIn(ctx, q.Get("code"), strings.TrimSpace(q.Get("client_id")), s.verifier, s.redirect, s.nonce, s.hostID)
 	if err != nil {
-		s.finish(SignInState{State: "failed", Error: err.Error()})
+		s.finish(failedWith(err))
 		signInPage(w, false, "Sign-in didn't finish", err.Error())
 		return
 	}
@@ -400,13 +400,19 @@ func siwcFresh(ctx context.Context, user string, force bool) (siwcCreds, error) 
 	defer cancel()
 	tok, err := siwcPostToken(ctx, url.Values{"grant_type": {"refresh_token"}, "client_id": {c.ClientID},
 		"refresh_token": {c.Refresh}, "resource": {siwcResource}})
+	logRefreshFailed(ChatGPTAPIID, user, err)
 	var te *siwcTokenError
 	if errors.As(err, &te) && slices.Contains(siwcDead, te.Code) {
 		msg := user + "'s ChatGPT sign-in has expired — sign in again"
-		_ = editSideLogin(ChatGPTAPIID, user, func(ls []savedLogin, i int) ([]savedLogin, error) {
+		if editSideLogin(ChatGPTAPIID, user, func(ls []savedLogin, i int) ([]savedLogin, error) {
+			if ls[i].Lapsed == msg {
+				return nil, errUnchanged
+			}
 			ls[i].Lapsed = msg
 			return ls, nil
-		})
+		}) == nil {
+			logLapsed(ChatGPTAPIID, user, msg, te.Status, "OpenAI refused the refresh of its sign-in ("+te.Code+")")
+		}
 		return siwcCreds{}, fmt.Errorf("%s: %w", user, ErrSIWCSignIn)
 	}
 	if errors.As(err, &te) && te.Code == "invalid_client" {
@@ -419,13 +425,16 @@ func siwcFresh(ctx context.Context, user string, force bool) (siwcCreds, error) 
 		return siwcCreds{}, fmt.Errorf("ChatGPT token refresh: %w", err)
 	}
 	if c, err = siwcFromToken(tok, c); err != nil {
+		logRefreshFailed(ChatGPTAPIID, user, err)
 		return siwcCreds{}, fmt.Errorf("ChatGPT token refresh: %w", err)
 	}
 	auth, err := json.Marshal(c)
 	if err != nil {
 		return siwcCreds{}, err
 	}
+	lapsed := false
 	if err := editSideLogin(ChatGPTAPIID, user, func(ls []savedLogin, i int) ([]savedLogin, error) {
+		lapsed = ls[i].Lapsed != ""
 		ls[i].Auth, ls[i].Lapsed = auth, ""
 		if p := siwcPlan(c); p != "" {
 			ls[i].Plan = p
@@ -433,6 +442,9 @@ func siwcFresh(ctx context.Context, user string, force bool) (siwcCreds, error) 
 		return ls, nil
 	}); err != nil {
 		return siwcCreds{}, err
+	}
+	if lapsed {
+		logUnlapsed(ChatGPTAPIID, user, "its sign-in was refreshed")
 	}
 	return c, nil
 }

@@ -165,7 +165,7 @@ func TestClaudeRefusalIsLoggedOnce(t *testing.T) {
 	buf := signInLog(t)
 	v := ClaudeLoginVersion(side.User)
 	NoteClaudeSignInFailure(side.User, v, "Failed to authenticate: OAuth session expired and could not be refreshed")
-	logSays(t, buf, "claude "+side.User+": Anthropic refused its sign-in", `Claude Code said: "Failed to authenticate: OAuth session expired`)
+	logSays(t, buf, "sign-in: claude account "+side.User+" has to be signed in again", "Anthropic refused its sign-in", `Claude Code said: "Failed to authenticate: OAuth session expired`)
 	NoteClaudeSignInFailure(side.User, v, "Failed to authenticate: OAuth session expired and could not be refreshed")
 	if n := strings.Count(buf.String(), "Anthropic refused its sign-in"); n != 1 {
 		t.Fatalf("logged %d times:\n%s", n, buf)
@@ -183,7 +183,7 @@ func TestClaudeLoggedOutIsLogged(t *testing.T) {
 		t.Fatalf("not marked: %+v, lapsed %q", ls[0], lapsed)
 	}
 	logClaudeLoggedOut(lapsed)
-	logSays(t, buf, "claude held@example.com: Claude Code on this computer no longer holds its sign-in")
+	logSays(t, buf, "sign-in: claude account held@example.com has to be signed in again", "Claude Code on this computer no longer holds its sign-in")
 }
 
 // What `claude auth login` printed is logged without a line that may hold

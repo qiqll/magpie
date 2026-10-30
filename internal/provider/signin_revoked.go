@@ -157,23 +157,28 @@ func NoteRevokedSignIn(ctx context.Context, a *Account, req *http.Request) {
 			return
 		}
 	}
-	markRevoked(a.Agent, a.User, m)
+	markRevoked(a.Agent, a.User, m, "its vendor refused a request with its sign-in")
 }
 
 // markRevoked marks the account of agent and user revoked for the
 // credential whose mark is m: the gateway passes over it while it has
-// that credential, and its row says to sign in again.
-func markRevoked(agent, user, m string) {
+// that credential, and its row says to sign in again. by is what was
+// refused, for the log, which has a mark once, when it is new.
+func markRevoked(agent, user, m, by string) {
 	why := revokedText(user)
 	revoked.Lock()
 	revokedLoad()
 	k := revokedKey(agent, user)
-	if was, ok := revoked.accounts[k]; ok && was != m {
+	was, ok := revoked.accounts[k]
+	if ok && was != m {
 		delete(revoked.marks, was) // logins.json keeps one mark an account
 	}
 	revoked.marks[m] = why
 	revoked.accounts[k] = m
 	revoked.Unlock()
+	if !ok || was != m {
+		logLapsed(agent, user, why, http.StatusUnauthorized, by)
+	}
 	_ = editSideLogin(agent, user, func(ls []savedLogin, i int) ([]savedLogin, error) {
 		ls[i].Lapsed, ls[i].Refused = why, revokedPrefix+m
 		return ls, nil
@@ -215,6 +220,7 @@ func ServedSignIn(a *Account) {
 		ls[i].Lapsed, ls[i].Refused = "", ""
 		return ls, nil
 	})
+	logUnlapsed(a.Agent, a.User, "its vendor served it")
 }
 
 // sameAuth says two credential blobs are the same sign-in, however each
