@@ -125,12 +125,90 @@ func (s *Server) serveDecisionGroup(w http.ResponseWriter, r *http.Request, body
 			return
 		}
 	}
+	// a user's, bound by user: each member's provider on its user's own
+	// alone (usersInGroup), after the key's holds as a turn's, never
+	// another user's
+	cs, pl, us, err := s.usersInGroup(r, ms, cs, pl)
+	if err != nil {
+		s.answerUserRefused(w, provider.Chat, &Call{}, err)
+		return
+	}
 	cs = probeOne(cs) // of those resting, only the one back soonest (#1799)
 	if len(cs) == 0 {
 		writeError(w, provider.Chat, http.StatusServiceUnavailable, fmt.Sprintf("no key or account of the group %s's decision models may serve them now", g.Name))
 		return
 	}
-	s.serveDecideTries(w, r, body, asked, start, cs, pl, groupRef(g, ms), nil)
+	s.serveDecideUsers(w, r, body, asked, start, cs, pl, groupRef(g, ms), us)
+}
+
+// userTries are a request's userTry of each provider usersOn bound it on,
+// by the provider's id: a decision group's members may be of several.
+type userTries map[string]*userTry
+
+// usersInGroup narrows cs, a decision group's keys and accounts for r
+// planned as pl index for index, bound by user, to r's user's own of each
+// of its members' providers (usersOn), as a decision provider asked alone
+// is (serveSystemOne, askDecider): never another user's. Each provider's
+// own go where its first was in the group's order, and us holds the
+// userTry of each bound. A provider whose binding refuses the user is
+// left out, the others' own still asked; with none left at any, err is
+// the first refusal (a userRefusedError), and no other user's is asked in
+// their place. A user or tier the request can't name is refused at once.
+func (s *Server) usersInGroup(r *http.Request, ms []provider.Member, cs []candidate, pl planned) ([]candidate, planned, userTries, error) {
+	if !s.bind.byUser() {
+		return cs, pl, nil, nil
+	}
+	members := map[string]provider.Provider{}
+	for _, m := range ms {
+		members[m.Provider.ID] = m.Provider
+	}
+	var out []candidate
+	var order, left []Weighed
+	us := userTries{}
+	seen := map[string]bool{}
+	var refused error
+	for _, c := range cs {
+		pid := c.p.ID
+		if seen[pid] {
+			continue
+		}
+		seen[pid] = true
+		p, ok := members[pid]
+		if !ok {
+			p = c.p
+		}
+		of, ofPl := keepIn(cs, pl, func(c candidate) bool { return c.p.ID == pid })
+		own, opl, u, err := s.usersOn(r, p, of, ofPl)
+		if err != nil {
+			if userRefusedStatus(err) == http.StatusBadRequest {
+				return nil, pl, nil, err // the request's user or tier: the same at each
+			}
+			if refused == nil {
+				refused = err
+			}
+			continue
+		}
+		if u != nil {
+			us[pid] = u
+		}
+		out, order = append(out, own...), append(order, opl.order...)
+		for _, w := range opl.left {
+			if w.Provider == pid {
+				left = append(left, w)
+			}
+		}
+	}
+	if len(out) == 0 && refused != nil {
+		return nil, pl, nil, refused
+	}
+	// those left out of a provider none of cs is of, as before
+	for _, w := range pl.left {
+		if !seen[w.Provider] {
+			left = append(left, w)
+		}
+	}
+	pl.order, pl.left = order, left
+	return out, pl, us, nil
 }
 
 // decideKeys are a decision provider's keys or accounts that may be asked
@@ -155,6 +233,16 @@ func (s *Server) decideKeys(p provider.Provider, model string) ([]candidate, pla
 // vendor's words, as a turn's (userTry.lapsed); any other account that
 // has to be signed in again, for the next, else that 429 (lapsedAs).
 func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body []byte, asked string, start time.Time, cs []candidate, pl planned, group *GroupRef, u *userTry) {
+	var us userTries
+	if u != nil && len(cs) > 0 {
+		us = userTries{cs[0].p.ID: u} // one provider's, each of cs
+	}
+	s.serveDecideUsers(w, r, body, asked, start, cs, pl, group, us)
+}
+
+// serveDecideUsers is serveDecideTries with the userTry of each provider
+// of cs bound (us, usersInGroup): a decision group's, of several.
+func (s *Server) serveDecideUsers(w http.ResponseWriter, r *http.Request, body []byte, asked string, start time.Time, cs []candidate, pl planned, group *GroupRef, us userTries) {
 	who := callerOf(r)
 	tr := s.trace.beginFor(r, Route{Time: start, Agent: who.agent, Session: sessionOf(r.Header), Model: asked, Provider: cs[0].p.ID,
 		Group: group, Order: pl.order, Left: pl.left})
@@ -216,7 +304,7 @@ func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body [
 		}
 		if status >= 400 {
 			fail, rest = s.decideFailed(c, status, header, b)
-			if next, refused, lapsed := u.lapsed(c, status, b, last); lapsed {
+			if next, refused, lapsed := us[c.p.ID].lapsed(c, status, b, last); lapsed {
 				if refused == nil {
 					last = false // a spare goes next: the route isn't done
 				}
@@ -293,8 +381,9 @@ func (e decideRefused) Unwrap() error { return e.err }
 // accounts in the group's order, each asked as Jev is (askJev) until one
 // answers, the one that failed resting as it would for a chat. ok is false
 // when model names no decision group. Those a gateway key held to some
-// accounts (ctx, askFor) may not use are left out, as at /v1/systemone
-// (serveDecisionGroup); a group's aren't narrowed to a user's.
+// accounts (ctx, askFor) may not use are left out, and bound by user only
+// the user's own of each member's provider are asked (usersInGroup), as
+// at /v1/systemone (serveDecisionGroup): never another user's.
 func (s *Server) askDecisionGroup(ctx context.Context, model string, intents []string, prev before, effort bool, text string) (v verdict, ok bool, err error) {
 	if !provider.IsGroupRef(model) {
 		return verdict{}, false, nil
@@ -305,13 +394,21 @@ func (s *Server) askDecisionGroup(ctx context.Context, model string, intents []s
 	}
 	g = g.Live()
 	ms, _ = provider.PausedOut(g, ms, RouterAgent, "", ruleClock())
-	cs, pl, _ := s.decideTries(g, ms)
+	cs, pl, ms := s.decideTries(g, ms)
 	if who := access.Caller(ctx); len(who.Accounts) > 0 {
 		who.Models = nil // the group's own pick: its accounts hold it, not its models (magpieChose)
 		var held bool
-		if cs, _, held = allowedCandidates(who, cs, pl, nil); len(cs) == 0 && held {
+		if cs, pl, held = allowedCandidates(who, cs, pl, nil); len(cs) == 0 && held {
 			return verdict{}, true, callerRefused{errors.New(keyAccountsError(who, model))}
 		}
+	}
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://magpie/v1/systemone", nil)
+	if err != nil {
+		return verdict{}, true, err
+	}
+	askAsUser(ctx, r.Header)
+	if cs, _, _, err = s.usersInGroup(r, ms, cs, pl); err != nil {
+		return verdict{}, true, callerRefused{err}
 	}
 	cs = probeOne(cs) // of those resting, only the one back soonest (#1799)
 	if len(cs) == 0 {

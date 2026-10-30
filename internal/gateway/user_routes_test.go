@@ -183,6 +183,64 @@ func TestUserSystemOneOnTheUsersOwnKey(t *testing.T) {
 	})
 }
 
+// Bound by user, System One asks a decision group on its user's keys of
+// each member's provider alone, as a decision model of one provider is
+// asked: alice and bob, each at most one account a provider, on a key of
+// their own, and failed over to the next member, on their own key of
+// that one too, never the other's. Before, a group's keys went in the
+// group's order whoever the request was of.
+func TestUserDecisionGroupOnTheUsersOwnKeys(t *testing.T) {
+	fresh(t)
+	noRests()
+	t.Cleanup(noRests)
+	f := &decideFleet{status: map[string]int{}}
+	a, b := f.serve(), f.serve()
+	defer a.Close()
+	defer b.Close()
+	for _, p := range []provider.Provider{
+		{ID: "jc", Name: "JC", Key: "kc1", Keys: []provider.KeyAccount{{Key: "kc2"}}, Decide: a.URL + "/v1", Models: []string{"jev-latest"}},
+		{ID: "jd", Name: "JD", Key: "kd1", Keys: []provider.KeyAccount{{Key: "kd2"}}, Decide: b.URL + "/v1", Models: []string{"jev-latest"}},
+	} {
+		if err := provider.Save(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := provider.SaveGroup(provider.Group{ID: "judges", Name: "Judges", Members: []string{"jc/jev-latest", "jd/jev-latest"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := byUserUpTo(t, New(), 1)
+	body := []byte(`{"model":"group/judges","state":{"message":"hi"},"questions":{"intent":{"type":"choice"}}}`)
+	ask := func(user string) []string {
+		t.Helper()
+		if rec := userAt(s, "/v1/systemone", "", body, user); rec.Code != 200 {
+			t.Fatalf("%s: %d %s", user, rec.Code, rec.Body.String())
+		}
+		return f.took()
+	}
+	var alice, bob []string
+	for i := 0; i < 2; i++ {
+		alice, bob = append(alice, ask("alice")...), append(bob, ask("bob")...)
+	}
+	oneKeyEach(t, "the decision group", alice, bob)
+	if !strings.HasPrefix(alice[0], "kc") || !strings.HasPrefix(bob[0], "kc") {
+		t.Fatalf("alice asked %q, bob %q: want the group's first member's keys", alice, bob)
+	}
+	// each one's key of the first member out of capacity: on to the next
+	// member's, its user's own there too
+	f.set("kc1", 503)
+	f.set("kc2", 503)
+	aliceNext, bobNext := ask("alice"), ask("bob")
+	if len(aliceNext) != 2 || aliceNext[0] != alice[0] || len(bobNext) != 2 || bobNext[0] != bob[0] {
+		t.Fatalf("failed over: alice asked %q, bob %q", aliceNext, bobNext)
+	}
+	if aliceNext[1] == bobNext[1] || !strings.HasPrefix(aliceNext[1], "kd") || !strings.HasPrefix(bobNext[1], "kd") {
+		t.Fatalf("failed over: alice asked %q, bob %q: want each on a key of jd's of its own", aliceNext, bobNext)
+	}
+	if b := boundIn(t, "jd"); len(b) != 2 {
+		t.Fatalf("bound on jd %v, want alice and bob", b)
+	}
+}
+
 // Bound by user, generate_image of magpie's image MCP server draws on
 // the keys of the call's user, as /v1/images does.
 func TestUserImageMCPDrawsOnTheUsersOwnKey(t *testing.T) {

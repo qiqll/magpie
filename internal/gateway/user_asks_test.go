@@ -665,6 +665,56 @@ func TestDecisionClassifierAskedOfTheUsersKeys(t *testing.T) {
 	}
 }
 
+// Bound by user, a routing group's classifier that is a decision group is
+// asked on the keys the turn's user is on of its members' provider, as
+// the user's own /v1/systemone to the group is (usersInGroup), never on
+// the group's first key for every user. Before, askDecisionGroup asked
+// the group's keys in its order whoever the turn was of.
+func TestDecisionGroupClassifierAskedOfTheUsersKeys(t *testing.T) {
+	s, _, _, _ := intented(t, provider.Rule{Use: "b/big", Intent: "writing or fixing tests"})
+	u := newRoutesUp(t)
+	if err := provider.Save(provider.Provider{ID: "jev", Name: "Jev", Key: "kA", Keys: []provider.KeyAccount{{Key: "kB"}},
+		Decide: u.URL + "/v1", Models: []string{"jev-latest"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SaveGroup(provider.Group{ID: "judges", Name: "Judges", Members: []string{"jev/jev-latest"}}); err != nil {
+		t.Fatal(err)
+	}
+	g, _, _ := provider.FindGroup("group/r")
+	g.Classifier = "group/judges"
+	if err := provider.SaveGroup(g); err != nil {
+		t.Fatal(err)
+	}
+	s = byUserUpTo(t, s, 1)
+	var alice, bob []string
+	for _, round := range []string{"first", "second"} {
+		for _, user := range []string{"alice", "bob"} {
+			before := len(u.asked("/v1/systemone"))
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(chat("add the "+round+" unit test for "+user+"'s parser", nil, 0, "")))
+			req.Header.Set("x-session-id", user+"-"+round)
+			req.Header.Set(UserHeader, user)
+			s.Handler().ServeHTTP(rec, req)
+			if rec.Code != 200 {
+				t.Fatalf("%s, %s turn: %d %s", user, round, rec.Code, rec.Body.String())
+			}
+			got := u.asked("/v1/systemone")
+			if len(got) <= before {
+				t.Fatalf("%s, %s turn: the decision group wasn't asked", user, round)
+			}
+			if user == "alice" {
+				alice = append(alice, got[before:]...)
+			} else {
+				bob = append(bob, got[before:]...)
+			}
+		}
+	}
+	oneKeyEach(t, "the decision group classifier", alice, bob)
+	if b := boundIn(t, "jev"); len(b) != 2 {
+		t.Fatalf("bound %v, want alice and bob on the decision group's provider", b)
+	}
+}
+
 // A gateway key held to some accounts asks a decision classifier on those
 // alone, as its own /v1/systemone would be: before, askDecider asked the
 // provider's first key, which the key may not use.

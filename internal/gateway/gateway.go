@@ -2222,8 +2222,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	//
 	// It is asked as the turn's key and, bound by user, its user (askFor):
 	// on accounts the key may use and, for a model or decision provider,
-	// the user's own. A decision group's members aren't narrowed to a
-	// user, as at /v1/systemone (serveDecisionGroup).
+	// the user's own, of each provider of a decision group's members too,
+	// as at /v1/systemone (serveDecisionGroup).
 	asking := s.askFor(r)
 	ask, scope := s.classifierFor(asking), askScope(asking)
 	if r.Header.Get("User-Agent") == RouterAgent || desktopCheck {
