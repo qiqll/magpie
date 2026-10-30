@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -245,5 +247,41 @@ func TestDecisionProviderKeysFailOver(t *testing.T) {
 				t.Fatalf("classifier after the rest asked %v, want c2 first", asked)
 			}
 		})
+	}
+}
+
+// A decision group as a chat group's classifier, asked for a gateway key
+// held to some accounts (askFor), asks those alone, as the key's own
+// /v1/systemone of the group would (serveDecisionGroup): jc's ke, never
+// its kc, which the key may not use, though it is asked first.
+func TestDecisionGroupClassifierKeepsTheKeysAccounts(t *testing.T) {
+	fresh(t)
+	f := &decideFleet{status: map[string]int{}}
+	a, b := f.serve(), f.serve()
+	defer a.Close()
+	defer b.Close()
+	for _, p := range []provider.Provider{
+		{ID: "jc", Name: "JC", Key: "kc", Keys: []provider.KeyAccount{{Key: "ke"}}, Decide: a.URL + "/v1"},
+		{ID: "jd", Name: "JD", Key: "kd", Decide: b.URL + "/v1"},
+	} {
+		if err := provider.Save(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := provider.SaveGroup(provider.Group{ID: "judges", Name: "Judges", Members: []string{"jc/jev-latest", "jd/jev-latest"}}); err != nil {
+		t.Fatal(err)
+	}
+	held := access.WithIdentity(context.Background(), access.Identity{KeyID: "held", KeyName: "Held", Accounts: []string{"jc/" + provider.KeyID("ke")}})
+	if v, err := New().classifierFor(held)("group/judges", []string{"feature", "bug"}, before{}, false, "fix this"); err != nil || v.Intent != "bug" {
+		t.Fatalf("classify: %+v %v", v, err)
+	}
+	asked := f.took()
+	if len(asked) == 0 {
+		t.Fatal("asked none")
+	}
+	for _, k := range asked {
+		if k != "ke" {
+			t.Fatalf("asked %v, want ke alone", asked)
+		}
 	}
 }

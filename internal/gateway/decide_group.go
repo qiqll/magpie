@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/usage"
 )
@@ -273,8 +274,10 @@ func (e decideRefused) Unwrap() error { return e.err }
 // askDecisionGroup is askClassifier for a decision group: its keys and
 // accounts in the group's order, each asked as Jev is (askJev) until one
 // answers, the one that failed resting as it would for a chat. ok is false
-// when model names no decision group.
-func (s *Server) askDecisionGroup(model string, intents []string, prev before, effort bool, text string) (v verdict, ok bool, err error) {
+// when model names no decision group. Those a gateway key held to some
+// accounts (ctx, askFor) may not use are left out, as at /v1/systemone
+// (serveDecisionGroup); a group's aren't narrowed to a user's.
+func (s *Server) askDecisionGroup(ctx context.Context, model string, intents []string, prev before, effort bool, text string) (v verdict, ok bool, err error) {
 	if !provider.IsGroupRef(model) {
 		return verdict{}, false, nil
 	}
@@ -284,7 +287,13 @@ func (s *Server) askDecisionGroup(model string, intents []string, prev before, e
 	}
 	g = g.Live()
 	ms, _ = provider.PausedOut(g, ms, RouterAgent, "", ruleClock())
-	cs, _, _ := s.decideTries(g, ms)
+	cs, pl, _ := s.decideTries(g, ms)
+	if who := access.Caller(ctx); len(who.Accounts) > 0 {
+		var held bool
+		if cs, _, held = allowedCandidates(who, cs, pl, nil); len(cs) == 0 && held {
+			return verdict{}, true, errors.New(keyAccountsError(who, model))
+		}
+	}
 	cs = probeOne(cs) // of those resting, only the one back soonest (#1799)
 	if len(cs) == 0 {
 		return verdict{}, true, fmt.Errorf("no decision model of the group %s can be asked now", g.Name)
@@ -295,9 +304,30 @@ func (s *Server) askDecisionGroup(model string, intents []string, prev before, e
 
 // askDecider is askClassifier for one decision provider's model: its keys
 // or accounts in its routing's order (decideKeys), each asked until one
-// answers, as a decision group's are.
-func (s *Server) askDecider(p provider.Provider, model string, intents []string, prev before, effort bool, text string) (verdict, error) {
-	cs, _ := s.decideKeys(p, model)
+// answers, as a decision group's are. As at /v1/systemone
+// (serveSystemOne), those a gateway key held to some accounts may not use
+// are left out, and bound by user only the user's own are asked (usersOn,
+// for ctx's key and user, askFor): never another user's.
+func (s *Server) askDecider(ctx context.Context, p provider.Provider, model string, intents []string, prev before, effort bool, text string) (verdict, error) {
+	cs, pl := s.decideKeys(p, model)
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://magpie/v1/systemone", nil)
+	if err != nil {
+		return verdict{}, err
+	}
+	askAsUser(ctx, r.Header)
+	if who, held := accountHolds(r); held {
+		var kept bool
+		if cs, pl, kept = allowedCandidates(who, cs, pl, nil); len(cs) == 0 && kept {
+			return verdict{}, errors.New(keyAccountsError(who, p.ID+"/"+model))
+		}
+	}
+	own, _, u, err := s.usersOn(r, p, cs, pl)
+	if err != nil {
+		return verdict{}, err
+	}
+	if u != nil {
+		cs = own
+	}
 	cs = probeOne(cs) // of those resting, only the one back soonest (#1799)
 	if len(cs) == 0 {
 		return verdict{}, fmt.Errorf("no key or account of %s may be asked %s now", p.Name, model)

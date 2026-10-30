@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -614,5 +615,83 @@ func TestClassifierAskedOnTheKeysAccounts(t *testing.T) {
 	}
 	if got := keys("cls"); len(got) != 1 || got[0] != "kd" {
 		t.Fatalf("the classifier was asked with %q, want kd, the one account of c the key may use", got)
+	}
+}
+
+// Bound by user, a routing group's classifier that is a decision model
+// (Jev, System One) is asked on the decision provider's keys the turn's
+// user is on, as the user's own /v1/systemone would be (askDecider), never
+// on its first key for every user. Before, askDecider asked every key in
+// the provider's order whoever the turn was of.
+func TestDecisionClassifierAskedOfTheUsersKeys(t *testing.T) {
+	s, _, _, _ := intented(t, provider.Rule{Use: "b/big", Intent: "writing or fixing tests"})
+	u := newRoutesUp(t)
+	if err := provider.Save(provider.Provider{ID: "jev", Name: "Jev", Key: "kA", Keys: []provider.KeyAccount{{Key: "kB"}},
+		Decide: u.URL + "/v1", Models: []string{"jev-latest"}}); err != nil {
+		t.Fatal(err)
+	}
+	g, _, _ := provider.FindGroup("group/r")
+	g.Classifier = "jev/jev-latest"
+	if err := provider.SaveGroup(g); err != nil {
+		t.Fatal(err)
+	}
+	s = byUserUpTo(t, s, 1)
+	var alice, bob []string
+	for _, round := range []string{"first", "second"} {
+		for _, user := range []string{"alice", "bob"} {
+			before := len(u.asked("/v1/systemone"))
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(chat("add the "+round+" unit test for "+user+"'s parser", nil, 0, "")))
+			req.Header.Set("x-session-id", user+"-"+round)
+			req.Header.Set(UserHeader, user)
+			s.Handler().ServeHTTP(rec, req)
+			if rec.Code != 200 {
+				t.Fatalf("%s, %s turn: %d %s", user, round, rec.Code, rec.Body.String())
+			}
+			got := u.asked("/v1/systemone")
+			if len(got) <= before {
+				t.Fatalf("%s, %s turn: Jev wasn't asked", user, round)
+			}
+			if user == "alice" {
+				alice = append(alice, got[before:]...)
+			} else {
+				bob = append(bob, got[before:]...)
+			}
+		}
+	}
+	oneKeyEach(t, "the decision classifier", alice, bob)
+	if b := boundIn(t, "jev"); len(b) != 2 {
+		t.Fatalf("bound %v, want alice and bob on the decision provider", b)
+	}
+}
+
+// A gateway key held to some accounts asks a decision classifier on those
+// alone, as its own /v1/systemone would be: before, askDecider asked the
+// provider's first key, which the key may not use.
+func TestDecisionClassifierAskedOnTheKeysAccounts(t *testing.T) {
+	s, _, _, _ := intented(t, provider.Rule{Use: "b/big", Intent: "writing or fixing tests"})
+	u := newRoutesUp(t)
+	if err := provider.Save(provider.Provider{ID: "jev", Name: "Jev", Key: "kA", Keys: []provider.KeyAccount{{Key: "kB"}},
+		Decide: u.URL + "/v1", Models: []string{"jev-latest"}}); err != nil {
+		t.Fatal(err)
+	}
+	g, _, _ := provider.FindGroup("group/r")
+	g.Classifier = "jev/jev-latest"
+	if err := provider.SaveGroup(g); err != nil {
+		t.Fatal(err)
+	}
+	held, secrets := newCaller(t, "Held")
+	if _, err := access.Update("accounts-key", access.Change{Key: held[0].ID, Accounts: []string{"a/" + provider.KeyID("ka"), "b/" + provider.KeyID("kb"), "jev/" + provider.KeyID("kB")}}); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(chat("add a unit test for the parser", nil, 0, "")))
+	req.Header.Set("Authorization", "Bearer "+secrets[0])
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if got := u.asked("/v1/systemone"); len(got) == 0 || slices.Contains(got, "kA") {
+		t.Fatalf("Jev was asked with %q, want kB alone, the one key of jev the key may use", got)
 	}
 }

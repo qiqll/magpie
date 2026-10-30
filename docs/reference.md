@@ -707,7 +707,8 @@ logins renamed — is kept as it is, matching nothing, so the key is held
 closer, never wider. A routing group the key names is its members'
 through the accounts it may use only: naming a group is not naming its
 accounts, and magpie's own calls for the key — a web search, a picture
-described, a Codex title — are of the models the user picked, but their
+described, a Codex title, a routing group's classifier — are of the
+models the user picked, but their
 spend lands on an account, so the accounts hold them too. When every
 account or key behind a model is one the key may not use, the request is
 refused with a 403 in the API's own error shape naming the model and the
@@ -2072,8 +2073,10 @@ well, and refuse a call without it. The web searches and image
 descriptions magpie makes for a request go to the accounts that
 request's user is bound to, never to another user's: its web search MCP
 tool, a model's web_search, Codex's web.run (on a ChatGPT account too),
-a Kimi Code plan's search service, its image recognition MCP tool, and
-the image a model that can't see is sent. A routing group's request and
+a Kimi Code plan's search service, its image recognition MCP tool, the
+image a model that can't see is sent, and the question a routing group's
+classifier is asked as each turn begins (its model's accounts, or a
+decision model's keys). A routing group's request and
 one with `X-Magpie-Account` are bound for these too, though the request
 itself isn't.
 A value either can't take refuses to start, saying why, and so does

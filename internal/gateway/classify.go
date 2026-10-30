@@ -391,9 +391,11 @@ func (s *Server) askClassifier(model string, intents []string, prev before, effo
 	return s.askClassifierAs(context.Background(), model, intents, prev, effort, text)
 }
 
-// classifierFor is askClassifier for a turn: a model asked through the
-// gateway is asked as ctx (askFor) says, its key's holds and its user's
-// accounts kept.
+// classifierFor is askClassifier for a turn, asked as ctx (askFor) says,
+// its key's holds and its user's accounts kept: a model through the
+// gateway (askChat), and a decision model's keys or accounts narrowed as
+// /v1/systemone narrows them for that caller (askDecider,
+// askDecisionGroup).
 func (s *Server) classifierFor(ctx context.Context) classifier {
 	return func(model string, intents []string, prev before, effort bool, text string) (verdict, error) {
 		return s.askClassifierAs(ctx, model, intents, prev, effort, text)
@@ -422,10 +424,10 @@ func askScope(ctx context.Context) string {
 
 func (s *Server) askClassifierAs(ctx context.Context, model string, intents []string, prev before, effort bool, text string) (verdict, error) {
 	if p, m, ok := provider.Resolve(model); ok && p.DecidesModel(m) {
-		return s.askDecider(p, m, intents, prev, effort, text)
+		return s.askDecider(ctx, p, m, intents, prev, effort, text)
 	}
 	// a group of decision models: each in turn (decide_group.go)
-	if v, ok, err := s.askDecisionGroup(model, intents, prev, effort, text); ok {
+	if v, ok, err := s.askDecisionGroup(ctx, model, intents, prev, effort, text); ok {
 		return v, err
 	}
 	var v verdict
