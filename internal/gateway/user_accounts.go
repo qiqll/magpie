@@ -995,7 +995,8 @@ func fullRefusal(user string, tier Tier, pid string, cands []candidate, pl plann
 // usage cap, all but used up), it has fewer than its tier's max_accounts
 // (u.max; a user with as many or more, its tier lowered since, keeps them
 // and is given none), and one of pool not among them has room and a seat
-// for its tier (spareOf).
+// for its tier (spareOf). Its accounts the gateway key may not use
+// (keyHeld) are neither out nor in, nor counted toward max_accounts.
 // cands are those of its accounts left, all but used up, asked after the
 // spare; the refusal is why none is asked, with none left. Once a
 // request: grew says it added one.
@@ -1011,8 +1012,16 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 	for _, who := range failed {
 		lapsedWho[strings.ToLower(who)] = cmp.Or(lapsedWho[strings.ToLower(who)], failAuth)
 	}
-	out, rests, held, lapsed := true, []Rest{}, []Weighed{}, 0
+	// those the gateway key may not use (keyHeld) are the user's still,
+	// kept for a key that may, but neither serve it here nor count toward
+	// its tier's max_accounts under this key: mine are the others
+	left := append(slices.Clone(poolPl.left), pl.left...)
+	out, rests, held, lapsed, mine := true, []Rest{}, []Weighed{}, 0, 0
 	for _, st := range u.seats {
+		if keyHeld(st, u.pid, pool, left) {
+			continue
+		}
+		mine++
 		if lapsedWho[strings.ToLower(st.Who)] != "" {
 			lapsed++ // out till it is signed in again
 			continue
@@ -1035,7 +1044,7 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 		if len(cands) > 0 {
 			return cands, pl, u, false, userRefusal{}
 		}
-		if lapsed == len(u.seats) {
+		if lapsed > 0 && lapsed == mine {
 			// every one of its accounts to be signed in again; with some
 			// only, the others say why (a 400 for one without the model)
 			return nil, pl, u, false, lapsedRefusal(u, note)
@@ -1045,8 +1054,8 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 	if !out {
 		return refuse("")
 	}
-	if len(u.seats) >= u.max {
-		return refuse(u.atTier(len(u.seats)))
+	if mine >= u.max {
+		return refuse(u.atTier(mine))
 	}
 	tiers, _ := loadTiers()
 	userBinds.Lock()
@@ -1077,8 +1086,8 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 		grown.left = pl.left
 		return append(added, cands...), planned{order: append(addedPl.order, pl.order...), left: pl.left, held: pl.held, capped: pl.capped, lapsed: pl.lapsed}, &grown, true, userRefusal{}
 	}
-	if len(now) >= u.max {
-		return refuse(u.atTier(len(now)))
+	if n := len(slices.DeleteFunc(slices.Clone(now), func(st userSeat) bool { return keyHeld(st, u.pid, pool, left) })); n >= u.max {
+		return refuse(u.atTier(n))
 	}
 	uses := seatUsesOf(u.pid, tiers)
 	pick := spareOf(u.pid, pool, poolPl, now, true, u.tier, uses, lapsedWho)
@@ -1140,9 +1149,19 @@ func (u *UserBound) atTier(n int) string {
 	return fmt.Sprintf("it has %d of the provider's accounts, %s its tier %s's %d %s (%s)", n, at, u.Tier, u.max, accounts, UserTierHeader)
 }
 
+// keyHeld says the account st of provider pid is one the gateway key
+// asking may not use: not among pool, and left out of the plan held
+// (allowedCandidates, left). It stays the user's, bound as it was.
+func keyHeld(st userSeat, pid string, pool []candidate, left []Weighed) bool {
+	if slices.ContainsFunc(pool, func(c candidate) bool { return c.p.ID == pid && strings.EqualFold(c.who(), st.Who) }) {
+		return false
+	}
+	return slices.ContainsFunc(left, func(w Weighed) bool { return w.Held && leftIs(w, pid, st.Who) })
+}
+
 // How one of a user's accounts stands, for growUser.
 const (
-	seatOther = iota // paused, held from the key, not serving the model, narrowed away (sealed elsewhere)
+	seatOther = iota // paused, not serving the model, narrowed away (sealed elsewhere)
 	seatSpent        // asked, all but used up
 	seatRests        // resting
 	seatHeld         // left out at a usage cap, or held as it won't spend its credits
@@ -1346,10 +1365,11 @@ func (s *Server) userLimitedAfter(h http.Header, u *UserBound, c candidate, stat
 		}
 	}
 	// of several accounts, the user is back when the first of them is:
-	// at once, with one not resting nor held, when nothing is said
+	// at once, with one not resting nor held, when nothing is said. One
+	// the gateway key may not use is never back for it (keyHeld)
 	if rested && len(u.seats) > 1 {
 		for _, st := range u.seats {
-			if strings.EqualFold(st.Who, c.who()) {
+			if strings.EqualFold(st.Who, c.who()) || keyHeld(st, u.pid, nil, u.left) {
 				continue
 			}
 			r, ok := seatRest(st, c.model)
