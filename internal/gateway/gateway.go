@@ -1940,6 +1940,18 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		s.record(call)
 		logged()
 	}
+	// bound by user, a request is placed by its user whoever sent it: a
+	// route's own check (userNeeded) let it through, or magpie's own ask
+	// for one (askAsUser, a Codex title on the agent's request) carries
+	// it. One that names none here is refused before anything is sent,
+	// never drawn from every user's accounts: a caller that forgot the
+	// check, or an ask made outside any user's request
+	if bad := s.userMissing(r); bad != "" {
+		call.Status, call.Error = http.StatusBadRequest, bad
+		writeError(w, from, http.StatusBadRequest, bad)
+		turnedAway()
+		return
+	}
 	// a model's id without a provider in it that names a routing group is
 	// the group's, as "group/<id>" is, rather than one provider's that
 	// serves it: the Routing view shows the group it went to

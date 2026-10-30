@@ -396,20 +396,27 @@ func keepIn(cs []candidate, pl planned, keep func(candidate) bool) ([]candidate,
 // with AccountHeader need it too, though neither is bound. Tiers that
 // can't be read are left to the binding to refuse.
 func (s *Server) noUser(w http.ResponseWriter, r *http.Request, from provider.Protocol) bool {
+	if bad := s.userMissing(r); bad != "" {
+		writeError(w, from, http.StatusBadRequest, bad)
+		return true
+	}
+	return false
+}
+
+// userMissing is why noUser refuses r, "" when it doesn't: bound by user,
+// no user, one UserHeader can't take, or a tier that isn't one of
+// user-tiers.json's. serve asks it too, of whoever sent the request.
+func (s *Server) userMissing(r *http.Request) string {
 	if !s.bind.byUser() {
-		return false
+		return ""
 	}
 	user, bad := userOf(r.Header)
 	if user != "" {
-		if _, bad, _ := tierOf(r.Header); bad != "" {
-			writeError(w, from, http.StatusBadRequest, bad)
-			return true
-		}
-		return false
+		_, bad, _ := tierOf(r.Header)
+		return bad
 	}
 	if bad == "" {
 		bad = fmt.Sprintf("magpie binds accounts by user (--bind=user): name the request's user in %s", strings.Join(userHeaders(), " or "))
 	}
-	writeError(w, from, http.StatusBadRequest, bad)
-	return true
+	return bad
 }
