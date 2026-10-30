@@ -352,6 +352,34 @@ func tierOf(h http.Header) (tier Tier, bad string, err error) {
 	return Tier{}, fmt.Sprintf("%s: %q is none of user-tiers.json's tiers: %s", UserTierHeader, v, t.said()), nil
 }
 
+// userTierOf is the tier of a request of user, of the gateway key keyID,
+// to provider pid: UserTierHeader's, as tierOf says; without it, the tier
+// its binding to pid's accounts keeps (the last one a request named), so
+// a user bound at max isn't held to the default's accounts and share by
+// a request that leaves the header out. A user bound to none of them, or
+// whose binding keeps no tier or one user-tiers.json no longer has, is of
+// the default. user-accounts.json that doesn't read leaves it the
+// default, for bindUser to refuse.
+func userTierOf(h http.Header, keyID, pid, user string) (tier Tier, bad string, err error) {
+	if tier, bad, err = tierOf(h); bad != "" || err != nil || strings.TrimSpace(h.Get(UserTierHeader)) != "" {
+		return tier, bad, err
+	}
+	t, _ := loadTiers() // read already by tierOf
+	userBinds.Lock()
+	var kept string
+	if loadUsers() == nil {
+		kept = userBinds.m[keyID][pid][user].Tier
+	}
+	userBinds.Unlock()
+	if kept == "" {
+		return tier, "", nil
+	}
+	if bound, ok := t.find(kept); ok {
+		return bound, "", nil
+	}
+	return tier, "", nil
+}
+
 // callerOnly says name is a header that tells magpie of the caller's
 // user, never sent on: one of userHeaders, or UserTierHeader.
 func callerOnly(name string) bool {

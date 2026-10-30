@@ -2165,8 +2165,10 @@ A user's tier is named in `X-Magpie-User-Tier: <tier>`, read only bound
 by user and never sent on to the vendor, a remote MCP server or Codex's
 backend. As with `X-Magpie-User`, magpie takes the tier as the caller
 sends it: send it from your own service, which knows each user's tier,
-never as your users set it. A request without it is of the default tier,
-not of the tier last sent; one with a tier
+never as your users set it. A request without it is of the tier its
+user's binding to the provider's accounts keeps under that gateway key,
+the last one sent (the default for a user bound to none of them, or whose
+binding keeps a tier no longer in the file); one with a tier
 that isn't one of `user-tiers.json`'s (compared whatever its case), or a
 value longer than 128 bytes or with control or format characters, is a
 400 that lists the tiers there are, and nothing is sent. The tiers are in

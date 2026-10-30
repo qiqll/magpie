@@ -181,8 +181,8 @@ type userSeat struct {
 // userBinding is the accounts a user is bound to, of one provider: its
 // first in Who, Account and At, as a magpie before spares reads it, then
 // its spares in More, in the order they were added. Tier is the tier its
-// last request named (UserTierHeader, the default without it), for the
-// Gateway page; "" from a magpie before tiers.
+// last request named (UserTierHeader), for the Gateway page and for a
+// request that names none (userTierOf); "" from a magpie before tiers.
 type userBinding struct {
 	Who     string     `json:"who"`
 	Account string     `json:"account"`
@@ -411,7 +411,8 @@ type UserBound struct {
 	// could be bound now), "full" (none has a seat for its tier, or those
 	// that have rest)
 	Why string `json:"why"`
-	// Tier: the request's tier (UserTierHeader, the default without it)
+	// Tier: the request's tier (UserTierHeader; without it its binding's,
+	// else the default: userTierOf)
 	Tier string `json:"tier,omitempty"`
 
 	// what growUser adds a spare to: the gateway key, the provider, the

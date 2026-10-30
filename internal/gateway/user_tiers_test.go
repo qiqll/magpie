@@ -159,6 +159,44 @@ func TestUserTierSetsItsAccounts(t *testing.T) {
 	}
 }
 
+// A request that leaves the tier out is of the tier its user's binding
+// keeps: a user bound at pro is given pro's accounts, not the default's,
+// and the binding keeps pro. A user bound to none is of the default, as
+// is one whose binding keeps a tier user-tiers.json no longer has.
+func TestUserTierKeptWithoutTheHeader(t *testing.T) {
+	codexSignedIn(t, "b@example.com", "c@example.com", "d@example.com", "e@example.com", "f@example.com", "g@example.com")
+	out, asked := limitUpstream(t)
+	s := byUser(New())
+	if rec := tierPost(s, "alice", "pro", "bound"); rec.Code != 200 {
+		t.Fatalf("pro: %d %s", rec.Code, rec.Body.String())
+	}
+	asked(true)
+
+	got, rec := spend(t, s, "alice", "", out, asked)
+	if len(got) != 4 || rec.Code != 429 || !strings.Contains(refusedWhy(s), "at its tier pro's 4 accounts") {
+		t.Fatalf("no header: answered by %v, then %d %s (%s)", got, rec.Code, rec.Body.String(), refusedWhy(s))
+	}
+	if r := lastRoute(s); r.User == nil || r.User.Tier != "pro" {
+		t.Fatalf("route %+v", r.User)
+	}
+	if tiers := tierIn(t, "codex"); tiers["alice"] != "pro" {
+		t.Fatalf("kept tiers %v", tiers)
+	}
+
+	got, rec = spend(t, s, "bob", "", out, asked)
+	if len(got) != 2 || rec.Code != 429 || !strings.Contains(refusedWhy(s), "at its tier free's 2 accounts") {
+		t.Fatalf("bob: answered by %v, then %d %s", got, rec.Code, rec.Body.String())
+	}
+	if tiers := tierIn(t, "codex"); tiers["bob"] != "free" {
+		t.Fatalf("kept tiers %v", tiers)
+	}
+
+	writeTiers(t, `{"default": "free", "tiers": {"free": {"max_accounts": 2}}}`)
+	if rec := tierPost(s, "alice", "", "pro gone"); rec.Code != 429 || !strings.Contains(refusedWhy(s), "past its tier free's 2 accounts") {
+		t.Fatalf("pro gone: %d %s (%s)", rec.Code, rec.Body.String(), refusedWhy(s))
+	}
+}
+
 // A tier that isn't user-tiers.json's, or one the header can't take, is
 // a 400 that lists the tiers there are, and asks nobody, on each route
 // that needs a user, a pinned request's too; another case of one is that
@@ -400,7 +438,7 @@ func TestUserTierLoweredKeepsItsAccounts(t *testing.T) {
 	userBinds.m[""]["codex"]["alice"] = b.withSeats(b.seats()[:3])
 	saveUsersLogged()
 	userBinds.Unlock()
-	for _, tier := range []string{"", "plus"} {
+	for _, tier := range []string{"free", "plus"} {
 		rec := tierPost(s, "alice", tier, "lowered "+tier)
 		if got := asked(true); rec.Code != 429 || len(got) != 0 {
 			t.Fatalf("%q: %d asked %v %s", tier, rec.Code, got, rec.Body.String())
@@ -455,12 +493,16 @@ func TestUserTierWrittenWhenItChanges(t *testing.T) {
 			t.Fatalf("%q written again", tier)
 		}
 	}
-	for _, c := range []struct{ tier, want string }{{"plus", "plus"}, {"", "free"}} {
+	// none named: the binding's tier, kept and not written again
+	for _, c := range []struct {
+		tier, want string
+		written    bool
+	}{{"plus", "plus", true}, {"", "plus", false}, {"free", "free", true}} {
 		if rec := tierPost(s, "alice", c.tier, "other "+c.tier); rec.Code != 200 {
 			t.Fatalf("%d %s", rec.Code, rec.Body.String())
 		}
-		if still() || tierIn(t, "codex")["alice"] != c.want {
-			t.Fatalf("%q: kept %q", c.tier, tierIn(t, "codex")["alice"])
+		if still() == c.written || tierIn(t, "codex")["alice"] != c.want {
+			t.Fatalf("%q: written %v, kept %q", c.tier, !still(), tierIn(t, "codex")["alice"])
 		}
 		os.Chtimes(usersPath(), old, old)
 	}

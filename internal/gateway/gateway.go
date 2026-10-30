@@ -2463,9 +2463,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			return
 		}
 		if user != "" {
-			// its tier says how many accounts it may have: one not among
-			// user-tiers.json's is a 400, tiers not known a 503
-			tier, bad, err := tierOf(r.Header)
+			// its tier says how many accounts it may have, its binding's
+			// without the header: one not among user-tiers.json's is a
+			// 400, tiers not known a 503
+			tier, bad, err := userTierOf(r.Header, userKey(r), p.ID, user)
 			if bad != "" || err != nil {
 				status, msg := 400, bad
 				if bad == "" {

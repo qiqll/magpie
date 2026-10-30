@@ -155,7 +155,7 @@ func (s *Server) usersOwn(ctx context.Context, p provider.Provider, model string
 	}
 	h := http.Header{}
 	askAsUser(ctx, h)
-	tier, bad, err := tierOf(h)
+	tier, bad, err := userTierOf(h, f.key, p.ID, f.user)
 	if bad != "" {
 		return nil, true, errors.New(bad)
 	}
@@ -257,7 +257,7 @@ func (s *Server) usersOn(r *http.Request, p provider.Provider, cs []candidate, p
 	if user == "" {
 		return cs, pl, nil, nil
 	}
-	tier, bad, err := tierOf(r.Header)
+	tier, bad, err := userTierOf(r.Header, userKey(r), p.ID, user)
 	if bad != "" {
 		return nil, pl, nil, refusedFor(http.StatusBadRequest, bad)
 	}
