@@ -47,7 +47,12 @@ func TestCombinedOutputOwnAnswersForItself(t *testing.T) {
 	}
 	// started the plain way, what is left running is this process's
 	// responsibility
-	if got := Responsible(startsLeft(t, (*exec.Cmd).CombinedOutput)); got != self {
+	plain := startsLeft(t, (*exec.Cmd).CombinedOutput)
+	if got := Responsible(plain); got == plain && self == os.Getpid() {
+		// under a terminal started through /usr/bin/login (Orca's), every
+		// process answers for itself, so one of its own can't be told apart
+		t.Skipf("macOS has each process here answer for itself (this one %d, a plain child's sleep %d)", self, got)
+	} else if got != self {
 		t.Fatalf("a plain child's sleep answers to %d, want %d as this process does", got, self)
 	}
 	got := Responsible(startsLeft(t, func(c *exec.Cmd) ([]byte, error) { return CombinedOutputOwn(context.Background(), c) }))
