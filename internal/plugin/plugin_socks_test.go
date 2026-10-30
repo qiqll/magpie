@@ -143,7 +143,7 @@ func TestPluginSOCKSProxy(t *testing.T) {
 	for _, url := range []string{"http://vendor.invalid/v1/chat/completions", "https://vendor.invalid/v1/chat/completions"} {
 		code, b, err := fetch(deadSOCKS, url)
 		if err != nil {
-			if !strings.HasPrefix(err.Error(), "proxyconnect tcp: 502 Bad Gateway") {
+			if !strings.HasPrefix(url, "https:") || !strings.HasPrefix(err.Error(), "proxyconnect tcp: 502 Bad Gateway") || !strings.Contains(err.Error(), "socks connect") {
 				t.Fatalf("%s through a SOCKS proxy that refuses: %d %q, %v", url, code, b, err)
 			}
 			continue

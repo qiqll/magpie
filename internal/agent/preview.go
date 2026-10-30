@@ -322,8 +322,10 @@ func previewEnv(home, tmp string) []string {
 		}
 	}
 	// The test binary recognizes this marker and keeps the fixture HOME
-	// instead of creating a second isolated home. Production binaries ignore
-	// the variable.
+	// instead of creating a second isolated home. A production binary reads
+	// it as proc.Isolated: nothing of the machine's own (its system folders,
+	// its registry, its system proxy), which a dry run's Disconnect, writing
+	// files only, doesn't reach for.
 	return append(out, "HOME="+tmp, "USERPROFILE="+tmp, "TMPDIR="+tmp, "MAGPIE_TEST_SANDBOX="+tmp)
 }
 
