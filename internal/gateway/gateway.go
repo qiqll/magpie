@@ -2466,7 +2466,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// its tier says how many accounts it may have, its binding's
 			// without the header: one not among user-tiers.json's is a
 			// 400, tiers not known a 503
-			tier, bad, err := userTierOf(r.Header, userKey(r), p.ID, user)
+			tier, bad, err := tierOf(r.Header)
 			if bad != "" || err != nil {
 				status, msg := 400, bad
 				if bad == "" {
@@ -2482,7 +2482,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// its refusal goes as it is, a pin to a lapsed account or not:
 			// user-accounts.json unread is unknown (503), and the pool
 			// full keeps its limit headers (429)
-			if cands, pl, userBound, refused = bindUser(userKey(r), user, tier, p, cands, pl); refused.status != 0 {
+			if cands, pl, userBound, refused = bindUser(userKey(r), user, tier, tierNamed(r.Header), p, cands, pl); refused.status != 0 {
 				s.userRefused(w, from, &call, userBound, refused)
 				finishCapture()
 				s.record(call)

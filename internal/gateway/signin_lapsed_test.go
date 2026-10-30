@@ -709,7 +709,7 @@ func TestUserLapsedOneSpareForRequestsAtOnce(t *testing.T) {
 		pools[i], pls[i] = s.plan(*p, "gpt-5.5", provider.Responses)
 		var refused userRefusal
 		var opl planned
-		_, opl, bound[i], refused = bindUser("", "bob", tier, *p, pools[i], pls[i])
+		_, opl, bound[i], refused = bindUser("", "bob", tier, true, *p, pools[i], pls[i])
 		if refused.status != 0 || bound[i].Why != "lapsed" {
 			t.Fatalf("bound %+v %+v", bound[i], refused)
 		}
@@ -803,7 +803,7 @@ func TestGrowUserCountsTheFailedAsLapsed(t *testing.T) {
 		t.Fatal(err)
 	}
 	pool, poolPl := s.plan(*p, "gpt-5.5", provider.Responses)
-	_, _, ub, refused := bindUser("", "bob", defaultTiers.Tiers[2], *p, pool, poolPl)
+	_, _, ub, refused := bindUser("", "bob", defaultTiers.Tiers[2], true, *p, pool, poolPl)
 	if refused.status != 0 || ub.Why != "kept" {
 		t.Fatalf("bound %+v %+v", ub, refused)
 	}

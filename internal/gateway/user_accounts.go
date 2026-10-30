@@ -182,7 +182,8 @@ type userSeat struct {
 // first in Who, Account and At, as a magpie before spares reads it, then
 // its spares in More, in the order they were added. Tier is the tier its
 // last request named (UserTierHeader), for the Gateway page and for a
-// request that names none (userTierOf); "" from a magpie before tiers.
+// request that names none (bindUser); "" from a magpie before tiers, or
+// for a user whose requests never named one: the default.
 type userBinding struct {
 	Who     string     `json:"who"`
 	Account string     `json:"account"`
@@ -412,7 +413,7 @@ type UserBound struct {
 	// that have rest)
 	Why string `json:"why"`
 	// Tier: the request's tier (UserTierHeader; without it its binding's,
-	// else the default: userTierOf)
+	// else the default: bindUser)
 	Tier string `json:"tier,omitempty"`
 
 	// what growUser adds a spare to: the gateway key, the provider, the
@@ -601,8 +602,13 @@ func leftIs(w Weighed, pid, who string) bool {
 // refused a 429 (fullRefusal). One whose
 // accounts are all out is given a spare by growUser, up to tier's
 // max_accounts, after strictKeep: narrowed to none here, the refusal is
-// its. The binding keeps tier's name, written only when it changed.
-func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candidate, pl planned) ([]candidate, planned, *UserBound, userRefusal) {
+// its. tier is the one the request named (named), kept as the binding's,
+// written only when it changed; one that named none (tier the default)
+// is of the tier its binding keeps instead, the default for a binding
+// that keeps none or one user-tiers.json no longer has, and the binding
+// is left as it is: the default never written, so a binding follows
+// the file's default as it changes.
+func bindUser(keyID, user string, tier Tier, named bool, p provider.Provider, cands []candidate, pl planned) ([]candidate, planned, *UserBound, userRefusal) {
 	tiers, _ := loadTiers() // read already by tierOf: what it said
 	// which of p's accounts have to be signed in again, read before the
 	// lock: logins.json isn't read while userBinds is held
@@ -612,6 +618,13 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 	if loadUsers() != nil {
 		return nil, pl, nil, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know which account %q is bound to; nothing was sent. Its log says why", UserHeader, user)}
 	}
+	if !named {
+		if kept, ok := tiers.find(userBinds.m[keyID][p.ID][user].Tier); ok {
+			tier = kept
+		}
+	}
+	// the tier the request named, kept as the binding's
+	keepTier := func() bool { return named && setTier(keyID, p.ID, user, tier.Name) }
 	ub := &UserBound{User: user, Tier: tier.Name, key: keyID, pid: p.ID, max: tier.MaxAccounts, tier: tier}
 	// users idle for days let go of their seats before any are counted;
 	// never written over a file that doesn't read, but this request seen
@@ -655,7 +668,7 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 		}
 		// the first gone, its first spare is its first
 		setSeats(keyID, p.ID, user, slices.DeleteFunc(slices.Clone(seats), func(st userSeat) bool { return !seatIn(kept, st.Who) && !seatIn(lapsed, st.Who) }))
-		setTier(keyID, p.ID, user, tier.Name)
+		keepTier()
 		saveUsersLogged()
 		ub.Why = "gone"
 	}
@@ -669,7 +682,7 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 		}
 		// its use and tier kept as any bound user's, so it isn't let go
 		// as idle while its accounts wait to be signed in again
-		if tiered, used := setTier(keyID, p.ID, user, tier.Name), touchUsed(keyID, p.ID, user, now); tiered || used {
+		if tiered, used := keepTier(), touchUsed(keyID, p.ID, user, now); tiered || used {
 			saveUsersLogged()
 		}
 		ub.Why = "lapsed"
@@ -700,7 +713,7 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 		}
 		kept = []userSeat{{Who: cands[pick].who(), Account: shownAs(cands[pick]), At: time.Now().UTC()}}
 		setSeats(keyID, p.ID, user, kept)
-		setTier(keyID, p.ID, user, tier.Name)
+		keepTier()
 		saveUsersLogged()
 		if ub.Why == "" {
 			ub.Why = "bound"
@@ -712,7 +725,7 @@ func bindUser(keyID, user string, tier Tier, p provider.Provider, cands []candid
 	// another tier than its last request's, or its last use an hour or
 	// more ago: kept, never written over a file that doesn't read
 	if !userBinds.stale {
-		if tiered, used := setTier(keyID, p.ID, user, tier.Name), touchUsed(keyID, p.ID, user, now); tiered || used {
+		if tiered, used := keepTier(), touchUsed(keyID, p.ID, user, now); tiered || used {
 			saveUsersLogged()
 		}
 	}

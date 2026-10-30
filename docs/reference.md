@@ -2168,7 +2168,9 @@ sends it: send it from your own service, which knows each user's tier,
 never as your users set it. A request without it is of the tier its
 user's binding to the provider's accounts keeps under that gateway key,
 the last one sent (the default for a user bound to none of them, or whose
-binding keeps a tier no longer in the file); one with a tier
+binding keeps a tier no longer in the file), and changes nothing kept:
+to lower a user's tier, send the lower one. A user whose requests never
+sent one is kept with none, and follows `default` as you change it; one with a tier
 that isn't one of `user-tiers.json`'s (compared whatever its case), or a
 value longer than 128 bytes or with control or format characters, is a
 400 that lists the tiers there are, and nothing is sent. The tiers are in

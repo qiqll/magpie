@@ -155,7 +155,7 @@ func (s *Server) usersOwn(ctx context.Context, p provider.Provider, model string
 	}
 	h := http.Header{}
 	askAsUser(ctx, h)
-	tier, bad, err := userTierOf(h, f.key, p.ID, f.user)
+	tier, bad, err := tierOf(h)
 	if bad != "" {
 		return nil, true, errors.New(bad)
 	}
@@ -163,7 +163,7 @@ func (s *Server) usersOwn(ctx context.Context, p provider.Provider, model string
 		return nil, true, fmt.Errorf("%s: magpie can't read user-tiers.json, so it doesn't know how many accounts %q may have; nothing was sent", UserTierHeader, f.user)
 	}
 	pool, poolPl := s.plan(p, model, from)
-	cands, _, ub, refused := ownOf(f.key, f.user, tier, p, pool, poolPl)
+	cands, _, ub, refused := ownOf(f.key, f.user, tier, tierNamed(h), p, pool, poolPl)
 	if refused.status == http.StatusTooManyRequests {
 		// told as a limit, never the sign-in (lapsedRefusal) nor the
 		// user's accounts and their rests (setRefusal, boundRefusal)
@@ -181,14 +181,15 @@ func (s *Server) usersOwn(ctx context.Context, p provider.Provider, model string
 }
 
 // ownOf narrows pool, p's candidates for a request of user (of the
-// gateway key keyID, at tier) planned as poolPl, index for index, to the
+// gateway key keyID, at tier, or its binding's when the request named
+// none: named, as bindUser) planned as poolPl, index for index, to the
 // accounts the user is on, as serve narrows a turn of its: bindUser's,
 // then growUser's spare when none of them can answer (each to be signed
 // in again, or out a while) and its tier lets it have one more. The
 // refusal is theirs: a 503 while user-accounts.json can't be read, else
 // a 429 that names no sign-in when none is left.
-func ownOf(keyID, user string, tier Tier, p provider.Provider, pool []candidate, poolPl planned) ([]candidate, planned, *UserBound, userRefusal) {
-	cands, pl, ub, refused := bindUser(keyID, user, tier, p, pool, poolPl)
+func ownOf(keyID, user string, tier Tier, named bool, p provider.Provider, pool []candidate, poolPl planned) ([]candidate, planned, *UserBound, userRefusal) {
+	cands, pl, ub, refused := bindUser(keyID, user, tier, named, p, pool, poolPl)
 	if refused.status != 0 {
 		return nil, pl, ub, refused
 	}
@@ -257,7 +258,7 @@ func (s *Server) usersOn(r *http.Request, p provider.Provider, cs []candidate, p
 	if user == "" {
 		return cs, pl, nil, nil
 	}
-	tier, bad, err := userTierOf(r.Header, userKey(r), p.ID, user)
+	tier, bad, err := tierOf(r.Header)
 	if bad != "" {
 		return nil, pl, nil, refusedFor(http.StatusBadRequest, bad)
 	}
@@ -265,7 +266,7 @@ func (s *Server) usersOn(r *http.Request, p provider.Provider, cs []candidate, p
 		return nil, pl, nil, &userRefusedError{refused: userRefusal{status: http.StatusServiceUnavailable, unknown: true,
 			msg: fmt.Sprintf("%s: magpie can't read user-tiers.json, so it doesn't know how many accounts %q may have; nothing was sent. Its log says why", UserTierHeader, user)}}
 	}
-	own, opl, ub, refused := ownOf(userKey(r), user, tier, p, cs, pl)
+	own, opl, ub, refused := ownOf(userKey(r), user, tier, tierNamed(r.Header), p, cs, pl)
 	if refused.status != 0 {
 		return nil, opl, nil, &userRefusedError{u: ub, refused: refused}
 	}

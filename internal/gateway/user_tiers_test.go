@@ -151,7 +151,8 @@ func TestUserTierSetsItsAccounts(t *testing.T) {
 	if r := lastRoute(s); r.User == nil || r.User.Tier != "pro" || len(r.User.Spares) != 3 {
 		t.Fatalf("route %+v", r.User)
 	}
-	if tiers := tierIn(t, "codex"); tiers["alice"] != "free" || tiers["bob"] != "pro" {
+	// alice named none: kept with none, the default's
+	if tiers := tierIn(t, "codex"); tiers["alice"] != "" || tiers["bob"] != "pro" {
 		t.Fatalf("kept tiers %v", tiers)
 	}
 	if _, err := os.Stat(tiersPath()); !os.IsNotExist(err) {
@@ -162,7 +163,9 @@ func TestUserTierSetsItsAccounts(t *testing.T) {
 // A request that leaves the tier out is of the tier its user's binding
 // keeps: a user bound at pro is given pro's accounts, not the default's,
 // and the binding keeps pro. A user bound to none is of the default, as
-// is one whose binding keeps a tier user-tiers.json no longer has.
+// is one whose binding keeps a tier user-tiers.json no longer has; and
+// neither is written, so the binding follows the default as it changes
+// and has its tier again when the file does.
 func TestUserTierKeptWithoutTheHeader(t *testing.T) {
 	codexSignedIn(t, "b@example.com", "c@example.com", "d@example.com", "e@example.com", "f@example.com", "g@example.com")
 	out, asked := limitUpstream(t)
@@ -187,13 +190,31 @@ func TestUserTierKeptWithoutTheHeader(t *testing.T) {
 	if len(got) != 2 || rec.Code != 429 || !strings.Contains(refusedWhy(s), "at its tier free's 2 accounts") {
 		t.Fatalf("bob: answered by %v, then %d %s", got, rec.Code, rec.Body.String())
 	}
-	if tiers := tierIn(t, "codex"); tiers["bob"] != "free" {
-		t.Fatalf("kept tiers %v", tiers)
+	if r := lastRoute(s); r.User == nil || r.User.Tier != "free" {
+		t.Fatalf("bob's route %+v", r.User)
+	}
+	if tiers := tierIn(t, "codex"); tiers["bob"] != "" {
+		t.Fatalf("the default written: %v", tiers)
 	}
 
+	// the default raised: bob, who never named one, is given plus's third
+	writeTiers(t, `{"default": "plus", "tiers": {"free": {"max_accounts": 2, "share": 2}, "plus": {"max_accounts": 3, "share": 1}, "pro": {"max_accounts": 4, "share": 1}}}`)
+	if rec := tierPost(s, "bob", "", "default raised"); rec.Code != 200 {
+		t.Fatalf("default raised: %d %s", rec.Code, rec.Body.String())
+	}
+	asked(true)
+	if r := lastRoute(s); r.User == nil || r.User.Tier != "plus" || len(r.User.Spares) != 2 {
+		t.Fatalf("default raised: route %+v", r.User)
+	}
+
+	// pro gone from the file: alice is of the default, pro kept for when
+	// it is back
 	writeTiers(t, `{"default": "free", "tiers": {"free": {"max_accounts": 2}}}`)
 	if rec := tierPost(s, "alice", "", "pro gone"); rec.Code != 429 || !strings.Contains(refusedWhy(s), "past its tier free's 2 accounts") {
 		t.Fatalf("pro gone: %d %s (%s)", rec.Code, rec.Body.String(), refusedWhy(s))
+	}
+	if tiers := tierIn(t, "codex"); tiers["alice"] != "pro" {
+		t.Fatalf("pro gone: kept tiers %v", tiers)
 	}
 }
 
@@ -511,7 +532,14 @@ func TestUserTierWrittenWhenItChanges(t *testing.T) {
 	if rows, err := UserBindings(); err != nil || len(rows) != 1 || rows[0].Tier != "" {
 		t.Fatalf("%+v %v", rows, err)
 	}
+	// named none, it is left as it is; named, it is given that one
 	if rec := tierPost(s, "bob", "", "bob"); rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if rows, _ := UserBindings(); len(rows) != 1 || rows[0].Tier != "" {
+		t.Fatalf("%+v", rows)
+	}
+	if rec := tierPost(s, "bob", "free", "bob free"); rec.Code != 200 {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	if rows, _ := UserBindings(); len(rows) != 1 || rows[0].Tier != "free" {

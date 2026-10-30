@@ -414,6 +414,34 @@ func TestUserDrawingWithItsAccountLapsed(t *testing.T) {
 	}
 }
 
+// A user's drawing that names no tier is of the tier its binding keeps,
+// as its turn is: bob, bound at pro to two accounts to be signed in
+// again, is given a third (pro's 4), not refused at free's 2.
+func TestUserDrawingKeepsItsTierWithoutTheHeader(t *testing.T) {
+	codexSignedIn(t, "spare@example.com", "third@example.com")
+	drawn := codexDrawn(t)
+	lapseSaved(t, "spare@example.com")
+	lapseSaved(t, "third@example.com")
+	now := time.Now().UTC()
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: now, Tier: "pro",
+			More: []userSeat{{Who: "codex@third@example.com", Account: "third@example.com", At: now}}},
+	}}})
+	draw := []byte(`{"model":"codex/gpt-image-2","prompt":"a magpie"}`)
+	if rec := userAt(byUser(New()), "/v1/images/generations", "", draw, "bob"); rec.Code != 200 {
+		t.Fatalf("bound at pro: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := drawn(); len(got) != 1 {
+		t.Fatalf("drew on %v", got)
+	}
+	if got := seatsIn(t, "codex")["bob"]; !slices.Equal(got, []string{"spare@example.com", "third@example.com", "me@example.com"}) {
+		t.Fatalf("no spare beside the two: %v", got)
+	}
+	if got := tierIn(t, "codex")["bob"]; got != "pro" {
+		t.Fatalf("tier kept %q", got)
+	}
+}
+
 // Bound by session, the routes go on the provider's keys as they always
 // did, whatever user a request names, and nothing is bound.
 func TestSessionRoutesIgnoreTheUser(t *testing.T) {
