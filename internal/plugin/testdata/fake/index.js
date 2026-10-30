@@ -180,7 +180,11 @@ export const FakePlugin = async ({ client }) => ({
               ? { type: "success", refresh: "r-" + (inputs.team ?? "none"), access: "stale", expires: 0, ...fakeWho(inputs.team) }
               : code === "expired"
                 ? { type: "failed", error: "the sign-in page expired" }
-                : { type: "failed" },
+                // a code "leak-…": the vendor's refusal says it back, with
+                // its address, as a token endpoint's error body can
+                : code.startsWith("leak-")
+                  ? { type: "failed", error: `FakeCo refused ${code} at https://fake.invalid/token?code=${code}` }
+                  : { type: "failed" },
         }),
       },
     ],

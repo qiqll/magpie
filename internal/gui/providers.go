@@ -2260,20 +2260,22 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		}
 		st, err := provider.StartSignInWith(in.Agent, provider.SignInOptions{Site: in.Site, Proxy: in.Proxy, User: in.User})
 		if err != nil {
-			fail(rw, err)
+			failSignIn(rw, err)
 			return
 		}
 		// one that installs a CLI first has no URL yet: the window opens it
 		// once there is one
-		writeJSON(rw, signInOpened{st, openError(w, st.URL)})
+		writeJSON(rw, signInOpened{st.Said(), openError(w, st.URL)})
 	})
+	// where a sign-in stands; a failed one's reason as the page may say it
+	// (no token, code or address in it, as the log has it)
 	mux.HandleFunc("GET /api/signin/{id}", func(rw http.ResponseWriter, r *http.Request) {
 		st, ok := provider.SignInStatus(r.PathValue("id"))
 		if !ok {
 			http.NotFound(rw, r)
 			return
 		}
-		writeJSON(rw, st)
+		writeJSON(rw, st.Said())
 	})
 	mux.HandleFunc("POST /api/signin/{id}/cancel", func(rw http.ResponseWriter, r *http.Request) {
 		provider.CancelSignIn(r.PathValue("id"))
@@ -2286,7 +2288,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			return
 		}
 		if err := provider.SubmitSignInCallback(r.PathValue("id"), in.URL); err != nil {
-			fail(rw, err)
+			failSignIn(rw, err, in.URL)
 			return
 		}
 		rw.WriteHeader(http.StatusNoContent)

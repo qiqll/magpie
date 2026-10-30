@@ -2760,6 +2760,24 @@ func writeJSONRows[T any](rw http.ResponseWriter, r *http.Request, key string, r
 	_, _ = rw.Write(body(items))
 }
 
+// failSignIn is fail for a sign-in: its reason as the page may say it
+// (provider.SignInFailSaid), secrets the key or answers the user gave it.
+func failSignIn(rw http.ResponseWriter, err error, secrets ...string) {
+	if said := provider.SignInFailSaid(err, secrets...); said != err.Error() {
+		err = saidErr{said, err}
+	}
+	fail(rw, err)
+}
+
+// saidErr is an error told in other words, still what it wraps.
+type saidErr struct {
+	said string
+	err  error
+}
+
+func (e saidErr) Error() string { return e.said }
+func (e saidErr) Unwrap() error { return e.err }
+
 func fail(rw http.ResponseWriter, err error) {
 	rw.Header().Set("Content-Type", "application/json")
 	rw.WriteHeader(http.StatusBadRequest)

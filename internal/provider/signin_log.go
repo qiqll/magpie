@@ -69,6 +69,50 @@ func logReason(why string) string {
 	return logText(why)
 }
 
+// SignInSaid is a sign-in's failure reason as the page says it: as it is,
+// unless it may hold a token, a code or an address (logSecret, as the log
+// leaves it out) or one of secrets (the key or answer the user gave it,
+// 8 characters or more, said back by its vendor or plugin); then a
+// sentence saying it is left out, with the vendor's HTTP status when
+// status names one.
+//
+// magpie's own words naming a bare scheme or a loopback address with no
+// path ("paste the address … starting with http://", "proxy must look like
+// http://127.0.0.1:7890") hold nothing of a sign-in's, and are said.
+func SignInSaid(why string, status int, secrets ...string) string {
+	held := logSecret.MatchString(plainAddress.ReplaceAllString(why, " "))
+	for _, s := range secrets {
+		if s = strings.TrimSpace(s); len(s) >= 8 && strings.Contains(why, s) {
+			held = true
+		}
+	}
+	switch {
+	case !held:
+		return why
+	case status != 0:
+		return fmt.Sprintf("The vendor answered HTTP %d; its answer is left out here, as it may hold the sign-in's code or key", status)
+	}
+	return "The answer is left out here, as it may hold the sign-in's code or key"
+}
+
+// plainAddress is an address that can hold no secret: a scheme alone, or
+// one to this computer by its loopback name and port, nothing after it.
+var plainAddress = regexp.MustCompile(`(?i)\b(?:https?|socks5h?)://(?:(?:127\.0\.0\.1|localhost|\[::1\])(?::[0-9]{1,5})?)?/?(?:[\s,;)]|$)`)
+
+// SignInFailSaid is SignInSaid of err, its HTTP status read from it.
+func SignInFailSaid(err error, secrets ...string) string {
+	return SignInSaid(err.Error(), httpStatusOf(err), secrets...)
+}
+
+// Said is st as the page is told it: its failure reason as SignInSaid
+// says it.
+func (st SignInState) Said() SignInState {
+	if st.Error != "" {
+		st.Error = SignInSaid(st.Error, st.status)
+	}
+	return st
+}
+
 // logSecret matches a reason that may hold a secret: what claudeSaidSecret
 // does, and a token by its vendor's shape (a JWT, a bearer, sk-, gho_,
 // Google's AIza and ya29.), a field naming a key, a state or a password,

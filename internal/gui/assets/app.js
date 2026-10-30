@@ -6218,6 +6218,7 @@ function renderProviders() {
   renderExcluded();
   renderFileError();
   renderMovable();
+  renderLapsed();
   renderProviderDiscovery();
   dialog = renderAdd() || dialog;
   if (importing) dialog = renderImport(importing);
@@ -6544,6 +6545,57 @@ function unmovedLine(p) {
       unmovedSaid[p.id] = { why: moveWhy({ why: e.why, error: e.message }, p) };
       renderMovable();
     }
+  };
+  acts.append(b);
+  card.append(el("span", "dep-dot"), body, acts);
+  return card;
+}
+
+// renderLapsed: over the list, each account in use whose sign-in has to be
+// made again, as its row in the editor says Sign-in required: the gateway
+// leaves it out till then, so it is said where the providers are, with
+// its Sign in again. The editor opens with it, where the sign-in shows how
+// it goes. Never hidden: it goes once the account is signed in again.
+function renderLapsed() {
+  const box = $("#lapsedAccounts");
+  if (!box) return;
+  const lines = [];
+  for (const p of providers.providers) {
+    if (p.off || !p.account) continue;
+    for (const l of p.account.logins || []) if ((l.on || l.active) && signInLapsed(p.account.agent, l)) lines.push(lapsedLine(p, l));
+  }
+  box.replaceChildren(...lines);
+  box.hidden = !lines.length;
+}
+
+// signInLapsed: account l of agent has to be signed in again, as its row
+// reads its mark (renderAccounts' unusable and signedOut)
+function signInLapsed(agent, l) {
+  return !!l.lapsed && (agent === "claude" || agent === "copilot" || !!subOf(agent)?.plugin || SIGN_IN_GONE.test(l.lapsed));
+}
+
+// signInAgainSite: where account user of agent signs in again — a Copilot
+// account on an enterprise's GHE.com is named login@host, and signs in
+// again there
+function signInAgainSite(agent, user) {
+  return !subOf(agent)?.plugin && agent === "copilot" && String(user).includes("@") ? String(user).split("@").pop() : undefined;
+}
+
+function lapsedLine(p, l) {
+  const card = el("div", "deprecation lapsed");
+  card.setAttribute("role", "note");
+  card.dataset.id = p.id;
+  card.dataset.user = l.user;
+  const body = el("div", "dep-body");
+  const head = el("div", "dep-head", t("{name}: {user} has to be signed in again", { name: p.name, user: l.user }));
+  head.title = t(l.lapsed);
+  body.append(head, el("p", "dep-why", t("magpie leaves it out of requests until it is signed in again.")));
+  const acts = el("div", "dep-acts");
+  const b = el("button", "text action", t("Sign in again"));
+  b.onclick = () => {
+    // the editor opens over the list, the sign-in under way in it
+    editing = p.id; draft = null; adding = false;
+    startSignIn(p.account.agent, false, signInAgainSite(p.account.agent, l.user), { user: l.user });
   };
   acts.append(b);
   card.append(el("span", "dep-dot"), body, acts);
@@ -12110,6 +12162,7 @@ async function startSignIn(agent, risky, site, o = {}) {
   } catch (e) {
     signing = { agent, ...keep, proxy: o.proxy ?? signInProxyOf(agent, o.user), state: "failed", error: e.message };
     renderProviders();
+    saySignInFailed();
   }
 }
 
@@ -12133,7 +12186,26 @@ async function followSignIn(id) {
     // a failed one keeps its site and way, for Try again
     signing = st.state === "canceled" ? null : { ...st, ...signingKept() };
     renderProviders();
+    saySignInFailed();
   }
+}
+
+// signInWhy: a sign-in's failure reason in the reader's language. The
+// server leaves out one that may hold the sign-in's code or key
+// (provider.SignInSaid) and says so in one of two sentences.
+function signInWhy(err) {
+  const held = /^The vendor answered HTTP (\d+); its answer is left out here, as it may hold the sign-in's code or key$/.exec(err || "");
+  if (held) return t("The vendor answered HTTP {status}; its answer is left out here, as it may hold the sign-in's code or key", { status: held[1] });
+  return t(err || "");
+}
+
+// saySignInFailed: a sign-in that failed where its box isn't on the page
+// (the editor closed, another page open) says so on the status line, as
+// one done says it is.
+function saySignInFailed() {
+  if (signing?.state !== "failed" || document.querySelector(".signing.failed")) return;
+  const name = subOf(signing.agent)?.name || signing.agent;
+  status(signing.error ? t("Sign-in to {name} didn't finish: {error}", { name, error: signInWhy(signing.error) }) : t("Sign-in to {name} didn't finish", { name }), "err");
 }
 
 // signingKept: what a sign-in under way keeps across its updates, for Try
@@ -12215,6 +12287,7 @@ async function startPluginSignIn(sub, method, inputs = {}, o = {}) {
     if (signing?.agent !== sub.agent) return;
     signing = { agent: sub.agent, ...keep, proxy: o.proxy ?? signInProxyOf(sub.agent, o.user), state: "failed", error: e.message };
     renderProviders();
+    saySignInFailed();
   }
 }
 
@@ -12244,7 +12317,7 @@ async function pluginKey(sub, key) {
     const st = await api("plugin-signin", { provider: sub.pid, method: flow.method, inputs: flow.inputs, key });
     if (signing?.agent === sub.agent) signedIn(st);
   } catch (e) {
-    if (signing?.agent === sub.agent) { signing = { ...flow, state: flow.state === "starting" ? "failed" : flow.state, error: e.message }; renderProviders(); }
+    if (signing?.agent === sub.agent) { signing = { ...flow, state: flow.state === "starting" ? "failed" : flow.state, error: e.message }; renderProviders(); saySignInFailed(); }
   }
 }
 
@@ -12272,7 +12345,7 @@ function renderPluginAsk(sub) {
   }
   const q = signing.prompt;
   const form = el("form", "callback-form");
-  const why = el("span", "s why", flow.error || "");
+  const why = el("span", "s why", flow.error ? signInWhy(flow.error) : "");
   if (flow.state === "prompt" && q.type === "select") {
     tt.append(el("span", "n", q.message), why);
     const ch = el("div", "choices");
@@ -12615,7 +12688,7 @@ function renderSigning(sub) {
   if (signing.state === "method" || signing.state === "prompt" || signing.state === "key") return renderPluginAsk(sub);
   if (signing.state === "failed") {
     box.append(el("span", "mark", "!"));
-    tt.append(el("span", "n", t("Sign-in didn't finish")), el("span", "s", signing.error || ""));
+    tt.append(el("span", "n", t("Sign-in didn't finish")), el("span", "s", signing.error ? signInWhy(signing.error) : ""));
     box.append(tt);
     const again = el("button", "text primary", t("Try again"));
     const o = { user: signing.forUser, proxy: signing.picked };
@@ -12956,7 +13029,7 @@ function renderAccounts(a, p) {
   const signedOut = (l) => !unusable(l) && (sub?.plugin ? !!l.lapsed || SIGN_IN_GONE.test(quota?.[l.user]?.error || "") : (a.agent === "copilot" && !!l.lapsed) || SIGN_IN_GONE.test(l.lapsed || ""));
   // a Copilot account on an enterprise's GHE.com is named login@host, and
   // signs in again there
-  const againSite = (l) => !sub?.plugin && a.agent === "copilot" && String(l.user).includes("@") ? String(l.user).split("@").pop() : undefined;
+  const againSite = (l) => signInAgainSite(a.agent, l.user);
   const several = ls.filter((l) => !unusable(l) && ((l.active && !l.paused) || l.on)).length > 1;
   // kept signed in to one of the user's choosing (#524), the first is the
   // first in use in the order, which Make first sets without a sign-in

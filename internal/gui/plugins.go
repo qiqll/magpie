@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"regexp"
@@ -744,18 +745,18 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 		if in.Key != "" {
 			msg, err := plugin.Validate(ctx, in.Provider, in.Method, in.Key, in.Value)
 			if err != nil {
-				fail(rw, err)
+				failSignIn(rw, err, in.Value)
 				return
 			}
 			if msg != "" {
-				writeJSON(rw, map[string]any{"error": msg})
+				writeJSON(rw, map[string]any{"error": provider.SignInSaid(msg, 0, in.Value)})
 				return
 			}
 			in.Inputs[in.Key] = in.Value
 		}
 		q, err := plugin.NextPrompt(ctx, in.Provider, in.Method, in.Inputs)
 		if err != nil {
-			fail(rw, err)
+			failSignIn(rw, err, slices.Collect(maps.Values(in.Inputs))...)
 			return
 		}
 		writeJSON(rw, map[string]any{"prompt": q, "inputs": in.Inputs})
@@ -783,7 +784,7 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 			defer cancel()
 			id, err := provider.PluginAPIKey(ctx, in.Provider, in.Method, in.Inputs, in.Key)
 			if err != nil {
-				fail(rw, err)
+				failSignIn(rw, err, append(slices.Collect(maps.Values(in.Inputs)), in.Key)...)
 				return
 			}
 			writeJSON(rw, provider.SignInState{Agent: id, State: "done", User: pp.Name})
@@ -791,14 +792,14 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 		}
 		st, err := provider.StartPluginSignInWith(in.Provider, in.Method, in.Inputs, provider.SignInOptions{Proxy: in.Proxy, User: in.User})
 		if err != nil {
-			fail(rw, err)
+			failSignIn(rw, err, slices.Collect(maps.Values(in.Inputs))...)
 			return
 		}
 		var failed string
 		if w != nil && !st.Opened {
 			failed = openError(w, st.URL)
 		}
-		writeJSON(rw, signInOpened{st, failed})
+		writeJSON(rw, signInOpened{st.Said(), failed})
 	})
 }
 
