@@ -242,9 +242,20 @@ func TestGitSignInRefusedSaysSo(t *testing.T) {
 		w.WriteHeader(401)
 	}))
 	t.Cleanup(srv.Close)
+	// git as it asks by default: none of the caller's settings by environment
+	t.Setenv("GIT_CONFIG_COUNT", "0")
 	_, err := ProbeSkills(srv.URL + "/team/private-skills.git")
 	if err == nil || !strings.Contains(err.Error(), "git couldn't sign in to 127.0.0.1") {
 		t.Fatalf("got %v", err)
+	}
+	// a git told never to ask (credential.interactive=false, git 2.46 on;
+	// Claude Code runs git so) says only "unable to get password from user"
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "credential.interactive")
+	t.Setenv("GIT_CONFIG_VALUE_0", "false")
+	_, err = ProbeSkills(srv.URL + "/team/private-skills.git")
+	if err == nil || !strings.Contains(err.Error(), "git couldn't sign in to 127.0.0.1") {
+		t.Fatalf("with credential.interactive=false: got %v", err)
 	}
 }
 
@@ -275,6 +286,7 @@ func TestGitErrorsSaid(t *testing.T) {
 		"fatal: could not read Username for 'https://git.corp.example': terminal prompts disabled\n":                        "git couldn't sign in to git.corp.example",
 		"remote: HTTP Basic: Access denied\nfatal: Authentication failed for 'https://git.corp.example/team/skills.git/'\n": "git couldn't sign in",
 		"git@git.corp.example: Permission denied (publickey).\nfatal: Could not read from remote repository.\n":             "git couldn't sign in",
+		"fatal: unable to get password from user\n":                                                                         "git couldn't sign in to git.corp.example",
 		"Host key verification failed.\nfatal: Could not read from remote repository.\n":                                    "host key",
 		"fatal: couldn't find remote ref dev\n":                                                                             "has no branch or tag dev",
 		"fatal: unable to access 'https://git.corp.example/team/skills.git/': Could not resolve host: git.corp.example\n":   "couldn't reach git.corp.example",

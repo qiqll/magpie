@@ -249,6 +249,8 @@ func gitError(src Source, msg string) error {
 		return fmt.Errorf("SSH doesn't know %s's host key yet: connect to it once with ssh or git in a terminal to accept it, then try again (git said: %s)", host, said)
 	case strings.Contains(low, "could not read username") || strings.Contains(low, "could not read password") ||
 		strings.Contains(low, "terminal prompts disabled") || strings.Contains(low, "authentication failed") ||
+		// git 2.46 on, told never to ask (credential.interactive=false)
+		strings.Contains(low, "unable to get password from user") ||
 		strings.Contains(low, "permission denied") || strings.Contains(low, "access denied") ||
 		strings.Contains(low, "the requested url returned error: 401") || strings.Contains(low, "the requested url returned error: 403"):
 		return fmt.Errorf("git couldn't sign in to %s. magpie runs your own git, so sign in the way git does there (a credential helper or an SSH key that can read the repository), check `git clone %s` works in a terminal, and try again (git said: %s)", host, src.Repo, said)
