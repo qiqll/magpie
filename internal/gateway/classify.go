@@ -112,8 +112,8 @@ type classifyFailure struct {
 type answerError struct{ error }
 
 // callerRefused is a classifier ask refused for its caller alone (askFor):
-// its user over its limit, its key with none of the classifier's accounts
-// it may use. It rests that caller's scope (classifyAs), and is neither
+// its user or its key over its limit, its key with none of the
+// classifier's accounts it may use. It rests that caller's scope (classifyAs), and is neither
 // the classifier's failure on the group's card (ClassifierFailure) nor
 // logged as one: the classifier is up for every other caller.
 type callerRefused struct{ error }
@@ -561,6 +561,16 @@ func (s *Server) askChat(ctx context.Context, model string, body []byte) (string
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("User-Agent", RouterAgent)
 	askAsUser(ctx, r.Header)
+	// serve is called past keyLimited, so the key's limit holds the ask
+	// here as it holds the turn: refused once the key, its turn's
+	// reservation counted, has nothing left, which is the key's own
+	// refusal (callerRefused); the turn goes on as for any classifier that
+	// couldn't say
+	release, err := reserveFor(access.Caller(ctx), int64(len(body)), model, limitClock())
+	if err != nil {
+		return "", callerRefused{fmt.Errorf("%s: %w", model, err)}
+	}
+	defer release()
 	w := httptest.NewRecorder()
 	s.serve(w, r, provider.Chat, body)
 	if ctx.Err() != nil {

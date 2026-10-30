@@ -689,3 +689,44 @@ func TestKeyLimitWindowsThatStartTogetherCountACallOnce(t *testing.T) {
 		}
 	}
 }
+
+// A routing group's classifier, asked for a key's turn through serve
+// past keyLimited, is held to the key's limit too: with the turn's own
+// reservation leaving the key nothing, it isn't asked, and the turn goes
+// on as for a classifier that couldn't say, to the group's first member.
+// Another key's turn asks it as before. Before, the key's limit only
+// counted the classifier's spend and never refused it.
+func TestKeyLimitHoldsTheClassifiersAsk(t *testing.T) {
+	s, _, _, c := intented(t, provider.Rule{Use: "b/big", Intent: "writing or fixing tests"})
+	c.set("1", 0)
+	budget.Forget()
+	pinLimitClock(t)
+	keys, secrets := newCaller(t, "Capped", "Free")
+	setLimit(t, keys[0].ID, &access.Limit{Period: "day", Tokens: 1000})
+	budget.Append(usage.Record{Time: time.Now(), Provider: "a", Model: "small", Input: 999, Status: 200, CallerKeyID: keys[0].ID})
+	post := func(secret, text string) (int, string, Route) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(chat(text, nil, 0, "")))
+		req.Header.Set("Authorization", "Bearer "+secret)
+		s.Handler().ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String(), lastRoute(s)
+	}
+	code, out, r := post(secrets[0], "add a unit test for the parser")
+	if code != 200 || !strings.Contains(out, "from ka") {
+		t.Fatalf("the capped key's turn: %d %s", code, out)
+	}
+	if c.n() != 0 {
+		t.Fatalf("the classifier was asked %d times for a key with nothing left", c.n())
+	}
+	if r.Rule == nil || r.Rule.Classified == nil || !strings.Contains(r.Rule.Classified.Error, `"Capped"`) || r.Rule.N != 0 {
+		t.Fatalf("route %+v", r.Rule)
+	}
+	if fail, _, ok := ClassifierFailure("c/cls"); ok {
+		t.Fatalf("a key's own limit is on the classifier's card: %s", fail)
+	}
+	code, out, r = post(secrets[1], "add a unit test for the lexer")
+	if code != 200 || !strings.Contains(out, "from kb") || c.n() != 1 || r.Rule == nil || r.Rule.N != 1 {
+		t.Fatalf("another key's turn: %d %s, asked %d, %+v", code, out, c.n(), r.Rule)
+	}
+}
