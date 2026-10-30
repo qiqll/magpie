@@ -155,13 +155,18 @@ func askedUser(ctx context.Context) string {
 // would have them (ownOf: a spare added too when each of its accounts is
 // out a while, as for a turn); for an ask that goes to the vendor without
 // a request through serve (Codex's web.run on the ChatGPT backend, a Kimi
-// Code plan's search service). bound is false for an ask made for no
-// user: nothing to narrow. With none of the user's to ask, err says why,
-// and none of p's other accounts is asked in their place.
+// Code plan's search service). bound is false bound by session: nothing
+// to narrow. Bound by user, an ask made for no user is refused as noUser
+// refuses its request, never asked of every account of p. With none of
+// the user's to ask, err says why, and none of p's other accounts is
+// asked in their place.
 func (s *Server) usersOwn(ctx context.Context, p provider.Provider, model string, from provider.Protocol) (own []candidate, bound bool, err error) {
+	if !s.bind.byUser() {
+		return nil, false, nil
+	}
 	f, ok := ctx.Value(askedForKey{}).(askedFor)
 	if !ok {
-		return nil, false, nil
+		return nil, true, errors.New(noUserSaid())
 	}
 	h := http.Header{}
 	askAsUser(ctx, h)
@@ -252,11 +257,12 @@ func (s *Server) answerUserRefused(w http.ResponseWriter, from provider.Protocol
 // (a drawing, a video, an embedding or rerank, audio, a System One
 // decision), planned as pl index for index, to the accounts r's user is
 // on, bound by user, as a turn of that user's is (ownOf): never another
-// user's. The userTry, nil when nothing is bound — bound by session, a
-// request without a user (userNeeded refused it already), a provider
-// with no key or account — goes with the tries (userTry.lapsed). With
-// none of the user's left the error, a userRefusedError, says why, and
-// none of the others' is asked in their place.
+// user's. A request without a user is refused with a 400, as noUser
+// refuses it, whoever let it through: never given the whole pool. The
+// userTry, nil when nothing is bound — bound by session, a provider with
+// no key or account — goes with the tries (userTry.lapsed). With none of
+// the user's left the error, a userRefusedError, says why, and none of
+// the others' is asked in their place.
 func (s *Server) usersOn(r *http.Request, p provider.Provider, cs []candidate, pl planned) ([]candidate, planned, *userTry, error) {
 	if !s.bind.byUser() || p.Account == nil && p.Key == "" {
 		return cs, pl, nil, nil
@@ -266,7 +272,7 @@ func (s *Server) usersOn(r *http.Request, p provider.Provider, cs []candidate, p
 		return nil, pl, nil, refusedFor(http.StatusBadRequest, bad)
 	}
 	if user == "" {
-		return cs, pl, nil, nil
+		return nil, pl, nil, refusedFor(http.StatusBadRequest, noUserSaid())
 	}
 	tier, bad, err := tierOf(r.Header)
 	if bad != "" {
@@ -426,7 +432,13 @@ func (s *Server) userMissing(r *http.Request) string {
 		return bad
 	}
 	if bad == "" {
-		bad = fmt.Sprintf("magpie binds accounts by user (--bind=user): name the request's user in %s", strings.Join(userHeaders(), " or "))
+		bad = noUserSaid()
 	}
 	return bad
+}
+
+// noUserSaid is why, bound by user, a request or one of magpie's own asks
+// that names no user is refused.
+func noUserSaid() string {
+	return fmt.Sprintf("magpie binds accounts by user (--bind=user): name the request's user in %s", strings.Join(userHeaders(), " or "))
 }

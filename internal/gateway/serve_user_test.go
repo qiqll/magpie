@@ -255,3 +255,60 @@ func TestClaudeRunSearchesAsItsTurnsUser(t *testing.T) {
 		t.Fatalf("%d searches took the user header to the vendor", n)
 	}
 }
+
+// Bound by user, usersOn and usersOwn refuse a request or an ask that
+// names no user, as noUser does, whichever route let it through: never
+// the whole pool of the provider, and nobody bound. With the user each
+// gives that user's accounts; bound by session, the pool as it is.
+func TestUsersOnAndOwnRefuseNoUser(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	p, err := provider.Find("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := seatCandidates(*p)
+	var pl planned
+	for range cs {
+		pl.order = append(pl.order, Weighed{Provider: "codex"})
+	}
+	if len(cs) < 2 {
+		t.Fatalf("%d accounts, want two to tell a pool from a user's", len(cs))
+	}
+	s := byUser(New())
+	none := httptest.NewRequest("POST", "/v1/images/generations", nil)
+	own, _, u, err := s.usersOn(none, *p, cs, pl)
+	if err == nil || len(own) != 0 || u != nil {
+		t.Fatalf("usersOn with no user: %d accounts, try %v, err %v", len(own), u, err)
+	}
+	if st := userRefusedStatus(err); st != http.StatusBadRequest || !strings.Contains(err.Error(), "--bind=user") {
+		t.Fatalf("usersOn with no user: %d %v", st, err)
+	}
+	mine, bound, err := s.usersOwn(context.Background(), *p, "gpt-5.5", provider.Responses)
+	if err == nil || !bound || len(mine) != 0 || !strings.Contains(err.Error(), "--bind=user") {
+		t.Fatalf("usersOwn with no user: %d accounts, bound %v, err %v", len(mine), bound, err)
+	}
+	if _, err := os.Stat(usersPath()); !os.IsNotExist(err) {
+		t.Fatalf("user-accounts.json written with no user: %v", err)
+	}
+
+	alice := httptest.NewRequest("POST", "/v1/images/generations", nil)
+	alice.Header.Set(UserHeader, "alice")
+	if own, _, u, err := s.usersOn(alice, *p, cs, pl); err != nil || len(own) != 1 || u == nil {
+		t.Fatalf("usersOn for alice: %d accounts, try %v, err %v", len(own), u, err)
+	}
+	if mine, bound, err := s.usersOwn(s.forUser(context.Background(), alice), *p, "gpt-5.5", provider.Responses); err != nil || !bound || len(mine) != 1 {
+		t.Fatalf("usersOwn for alice: %d accounts, bound %v, err %v", len(mine), bound, err)
+	}
+
+	if b := boundIn(t, "codex"); len(b) != 1 || b["alice"] == "" {
+		t.Fatalf("bound %v", b)
+	}
+
+	sess := New()
+	if own, _, u, err := sess.usersOn(none, *p, cs, pl); err != nil || len(own) != len(cs) || u != nil {
+		t.Fatalf("bound by session, usersOn: %d of %d, try %v, err %v", len(own), len(cs), u, err)
+	}
+	if _, bound, err := sess.usersOwn(context.Background(), *p, "gpt-5.5", provider.Responses); bound || err != nil {
+		t.Fatalf("bound by session, usersOwn: bound %v err %v", bound, err)
+	}
+}
