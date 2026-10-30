@@ -105,7 +105,9 @@ func copilotLapse(app copilotApp) {
 			marks = append(marks, copilotTokenMark(cli.Token))
 		}
 	}
+	marked := false
 	err := editSideLogin("copilot", app.User, func(ls []savedLogin, i int) ([]savedLogin, error) {
+		marked = ls[i].Lapsed != copilotLapsedText
 		was := strings.Split(ls[i].Refused, ",")
 		if ls[i].Lapsed == copilotLapsedText && !slices.ContainsFunc(marks, func(m string) bool { return !slices.Contains(was, m) }) {
 			return nil, errUnchanged
@@ -124,7 +126,7 @@ func copilotLapse(app copilotApp) {
 	if err == nil || errors.Is(err, errUnchanged) {
 		copilotLapsedNote(app.User, true)
 	}
-	if err == nil {
+	if err == nil && marked {
 		logLapsed("copilot", app.User, copilotLapsedText, 0, "GitHub refused its token")
 	}
 }

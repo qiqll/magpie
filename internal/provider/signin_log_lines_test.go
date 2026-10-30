@@ -29,7 +29,7 @@ func logHasNoSecret(t *testing.T, buf *syncBuffer, secrets ...string) {
 
 // linesOf counts the log's lines matching re.
 func linesOf(buf *syncBuffer, re string) int {
-	return len(regexp.MustCompile(`(?m)` + re).FindAllString(buf.String(), -1))
+	return len(regexp.MustCompile(`(?m)`+re).FindAllString(buf.String(), -1))
 }
 
 // A built-in sign-in that can't start logs its start and its failure, one
@@ -243,5 +243,111 @@ func TestRefreshFailureLoggedOnceAWhile(t *testing.T) {
 	logRefreshFailed("gemini", "g@example.com", errors.New("no token"))
 	if n := strings.Count(buf.String(), "refresh failed"); n != 3 {
 		t.Fatalf("not logged again after a while:\n%s", buf)
+	}
+}
+
+// A reason holding a token of any vendor's shape is left out of the log;
+// a vendor's words that only name one are kept (security review of
+// d1ac61ce).
+func TestLogReasonLeavesTokensOut(t *testing.T) {
+	for _, leak := range []string{
+		"invalid token eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2lnbmF0dXJlc2ln",
+		"Authorization: Bearer ya29.a0AfH6SMBxyz",
+		`{"error":"invalid_grant","code": "4/0AX4XfWh-abcdefghijklmnopqrstuv"}`,
+		"callback state=Zk3x9q&code_challenge=abc",
+		"invalid api key sk-ant-api03-AbCdEfGhIjKlMnOp",
+		"bad credentials gho_16C7e42F292c6912E7710c838347Ae178B4a",
+		`{"device_code":"3584d83530557fdd1f46af8289938c8ef79f9dc5"}`,
+		"api_key: AIzaSyD-abcdefghijklmnop",
+		`{"key":"sk-abc123def456ghi789"}`,
+		"password=hunter2",
+	} {
+		if got := logReason(leak); !strings.HasPrefix(got, "(left out") {
+			t.Errorf("%q logged as %q", leak, got)
+		}
+	}
+	for _, kept := range []string{
+		`{"error":{"code":"invalid_api_key","message":"Incorrect API key provided"}}`,
+		"invalid_grant: Token has been expired or revoked.",
+		"OAuth token revoked",
+		"the code expired; start again",
+		"exit status 1",
+		`401 Unauthorized: {"error":"unauthorized","error_description":"Bad credentials"}`,
+	} {
+		if got := logReason(kept); strings.HasPrefix(got, "(left out") {
+			t.Errorf("%q left out", kept)
+		}
+	}
+}
+
+// An account's name can't start a line of its own in the log.
+func TestLogNameIsOneLine(t *testing.T) {
+	buf := signInLog(t)
+	logSignIn(SignInState{ID: "s1", Agent: "codex", User: "a\n2026/10/30 12:00:00 sign-in codex (x) done account victim"}, "started", 0, "")
+	logLapsed("codex", "b\nforged", "why", 0, "by")
+	if n := strings.Count(strings.TrimSpace(buf.String()), "\n"); n != 1 {
+		t.Fatalf("%d line breaks:\n%s", n, buf)
+	}
+	if got := logName("me@example.com"); got != "me@example.com" {
+		t.Fatalf("a plain name quoted: %s", got)
+	}
+}
+
+// A plugin's key sign-in that failed with an error repeating the key, or
+// an answer given with it, logs neither.
+func TestKeyFailureLeavesWhatWasEnteredOut(t *testing.T) {
+	inputs := map[string]string{"region": "us", "secretKey": "wJalrXUtnFEMI/K7MDENG"}
+	for _, err := range []error{
+		errors.New("bad key abc"),
+		errors.New("bad secret_key wJalrXUtnFEMI/K7MDENG"),
+	} {
+		if got := keyFailure(err, "abc", inputs); strings.Contains(got, "abc") || strings.Contains(got, "wJalr") {
+			t.Errorf("%v logged as %q", err, got)
+		}
+	}
+	if got := keyFailure(errors.New("not available in region us"), "abc", inputs); got != "not available in region us" {
+		t.Errorf("an answer of two letters left out: %q", got)
+	}
+}
+
+// A sign-in replaced by a newer one of the same agent is logged canceled.
+func TestReplacedSignInIsLoggedCanceled(t *testing.T) {
+	claudeHome(t)
+	fakeCodexTokens(t, nil)
+	buf := signInLog(t)
+	first, err := StartSignIn("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := StartSignIn("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer CancelSignIn(second.ID)
+	logSays(t, buf, "sign-in codex ("+first.ID+") canceled")
+}
+
+// A `claude auth login` that gives no link in linkWait: its start fails
+// with what it printed last, and the failure's one line has how it ended
+// and what it printed before (review of d1ac61ce, M5: the start's failure
+// came first and the rest was lost).
+func TestClaudeSignInEndedBeforeItsLinkIsLogged(t *testing.T) {
+	claudeHome(t)
+	noAnthropic(t)
+	shellFakes(t)
+	exe := filepath.Join(t.TempDir(), "claude")
+	testenv.Program(t, exe, "#!/bin/sh\necho 'Something went wrong'\necho 'Port in use'\nexec sleep 30\n")
+	oldExe, was := claudeExecutable, linkWait
+	claudeExecutable, linkWait = func() string { return exe }, time.Second
+	t.Cleanup(func() { claudeExecutable, linkWait = oldExe, was })
+	endClaudeSignIns(t)
+	buf := signInLog(t)
+	if _, err := StartSignIn("claude"); err == nil {
+		t.Fatal("started")
+	}
+	claudeLogins.Wait()
+	logSays(t, buf, `failed: "Port in use" (`, "auth login` ended (", `"Something went wrong"`)
+	if n := linesOf(buf, `^.*(?:failed|auth login. ended).*$`); n != 1 {
+		t.Fatalf("%d lines say it failed:\n%s", n, buf)
 	}
 }

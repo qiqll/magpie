@@ -148,6 +148,8 @@ func inSavedClaudeDir(user string, f func(dir string) error) error {
 // syncSavedClaude brings the saved Claude account user in logins.json up
 // to what Claude Code keeps in its config directory, making nothing there.
 func syncSavedClaude(user string) {
+	var logged func()
+	defer func() { runLogged(logged) }()
 	savedTokenMu.Lock()
 	defer savedTokenMu.Unlock()
 	loginsMu.Lock()
@@ -155,8 +157,9 @@ func syncSavedClaude(user string) {
 	ls := readLogins()
 	for i := range ls {
 		if ls[i].Agent == "claude" && strings.EqualFold(ls[i].User, user) {
-			if _, changed, err := syncClaudeDir(&ls[i]); err == nil && changed {
-				_ = writeLogins(ls)
+			was := ls[i].Lapsed
+			if _, changed, err := syncClaudeDir(&ls[i]); err == nil && changed && writeLogins(ls) == nil {
+				logged = claudeDirLogged(was, ls[i])
 			}
 			return
 		}
@@ -181,6 +184,8 @@ func readSavedClaudeUsage(ctx context.Context, user string) ([]QuotaWindow, erro
 // is none yet, and what Claude Code has made of it since is read back. An
 // account that can't be used (claudeSignedOut) gets none.
 func claudeSavedDir(user string) (string, error) {
+	var logged func()
+	defer func() { runLogged(logged) }()
 	savedTokenMu.Lock()
 	defer savedTokenMu.Unlock()
 	loginsMu.Lock()
@@ -196,6 +201,7 @@ func claudeSavedDir(user string) (string, error) {
 		return "", fmt.Errorf("no saved claude account %q", user)
 	}
 	dir := claudeAccountDir(user)
+	was := ls[i].Lapsed
 	has, changed, err := syncClaudeDir(&ls[i])
 	if err != nil {
 		return "", err
@@ -204,6 +210,7 @@ func claudeSavedDir(user string) (string, error) {
 		if err := writeLogins(ls); err != nil {
 			return "", err
 		}
+		logged = claudeDirLogged(was, ls[i])
 	}
 	if why := claudeSignedOut(ls[i]); why != "" {
 		return "", errors.New(why)
@@ -249,6 +256,21 @@ func syncClaudeDir(l *savedLogin) (has, changed bool, err error) {
 		return false, refuseClaudeLogin(l, claudeLoginVersion(*l)), nil
 	}
 	return false, false, nil
+}
+
+// claudeDirLogged is the log of what syncClaudeDir did to the mark of the
+// saved Claude account l, written, whose mark was was: run once loginsMu
+// is let go (runLogged), as the log's writer can block. nil for no change.
+func claudeDirLogged(was string, l savedLogin) func() {
+	switch {
+	case l.Lapsed != "" && l.Lapsed != was:
+		return func() {
+			logLapsed("claude", l.User, l.Lapsed, 0, "Claude Code emptied its sign-in in the account's own folder (Anthropic refused it)")
+		}
+	case was != "" && l.Lapsed == "":
+		return func() { logUnlapsed("claude", l.User, "Claude Code holds a new sign-in for it in its own folder") }
+	}
+	return nil
 }
 
 // takeClaudeDir puts the sign-in Claude Code keeps in an account's config

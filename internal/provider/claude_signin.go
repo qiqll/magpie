@@ -306,6 +306,12 @@ func startClaudeSignIn(s *signInFlow) error {
 		case <-grace:
 			if link == "" {
 				cancel()
+				// what it printed and how it ended are kept (s.said) as it
+				// ends, for the failure's line this start's error makes
+				select {
+				case <-exited:
+				case <-time.After(2 * time.Second):
+				}
 				return claudeNoLink(cli, said.get())
 			}
 			s.mu.Lock()

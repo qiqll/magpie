@@ -12,7 +12,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -134,7 +133,6 @@ func NoteExpiredSignIn(ctx context.Context, a *Account, req *http.Request) {
 	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 	defer cancel()
-	if _, _, err := a.renew(rctx, stale); err != nil {
-		log.Printf("codex: %s's token was called expired and couldn't be renewed: %v", a.User, err)
-	}
+	// a renewal that failed is logged by renewSaved (logRefreshFailed)
+	_, _, _ = a.renew(rctx, stale)
 }

@@ -300,6 +300,9 @@ func renewSaved(ctx context.Context, agent, user string, force bool, stale strin
 	}
 	err = writeLogins(ls)
 	loginsMu.Unlock()
+	if err == nil {
+		logRefreshFailed(agent, user, nil)
+	}
 	if err == nil && lapsed {
 		logUnlapsed(agent, user, "its sign-in was refreshed")
 	}

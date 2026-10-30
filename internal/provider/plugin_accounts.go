@@ -426,9 +426,9 @@ func notePluginLapseOf(agent, key string, status int, began uint64, text func(us
 					user := l.User
 					if want != "" {
 						logged = func() { logLapsed(agent, user, want, status, "its vendor refused a request with its sign-in") }
-					} else if status == http.StatusOK && text == nil {
-						logged = func() { logUnlapsed(agent, user, "signed in again through the plugin") }
-					} else {
+					} else if text != nil {
+						// one signed in again (clearPluginLapse, with no
+						// text) has the sign-in's own "done" line
 						logged = func() { logUnlapsed(agent, user, "its vendor served it") }
 					}
 				}

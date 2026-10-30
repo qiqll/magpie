@@ -3,7 +3,9 @@ package provider
 import (
 	"context"
 	"errors"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,15 +51,7 @@ func StartPluginSignInWith(id string, method int, inputs map[string]string, o Si
 	} else if err := s.pluginBegin(id, method, inputs); err != nil {
 		return failed(err)
 	}
-	signIns.Lock()
-	for sid, o := range signIns.m {
-		if o.st.Agent == s.st.Agent {
-			o.finish(SignInState{State: "canceled"})
-			delete(signIns.m, sid)
-		}
-	}
-	signIns.m[s.st.ID] = s
-	signIns.Unlock()
+	replaceSignIns(s)
 	if install {
 		go func() {
 			err := installCLI(installing, cli)
@@ -235,18 +229,30 @@ func PluginAPIKey(ctx context.Context, id string, method int, inputs map[string]
 	// through the proxy the provider's requests go through (#1663)
 	saved, err := plugin.APIKey(Via(ctx, PluginID(id)), id, method, inputs, strings.TrimSpace(key), plugin.NewAccount)
 	if err != nil {
-		why := err.Error()
-		if k := strings.TrimSpace(key); len(k) >= 4 {
-			// a plugin's error may repeat the key it was given
-			why = strings.ReplaceAll(why, k, "…")
-		}
-		logSignIn(at, "failed", httpStatusOf(err), why)
+		logSignIn(at, "failed", httpStatusOf(err), keyFailure(err, key, inputs))
 		return "", err
 	}
 	id = PluginSignedIn(saved)
 	at.User = pluginUser(saved)
 	logSignIn(at, "done", 0, "")
 	return id, nil
+}
+
+// keyFailure is why a sign-in with key and inputs failed, err, as the log
+// has it: a plugin's error may repeat the key or another answer it was
+// given (a secret key, a token in an address), and is left out then.
+func keyFailure(err error, key string, inputs map[string]string) string {
+	why := err.Error()
+	if k := strings.TrimSpace(key); k != "" && strings.Contains(why, k) {
+		return "(left out: it repeats what was entered)"
+	}
+	// an answer of a few letters (a region's "us") is no secret
+	for _, v := range slices.Sorted(maps.Values(inputs)) {
+		if v = strings.TrimSpace(v); len(v) >= 4 && strings.Contains(why, v) {
+			return "(left out: it repeats what was entered)"
+		}
+	}
+	return why
 }
 
 // PluginSignedIn finishes a sign-in to a plugin's provider that magpie

@@ -435,6 +435,7 @@ func (g googleAccount) token(ctx context.Context) (string, error) {
 	googleState.Lock()
 	googleState.tokens[g.auth.RefreshToken] = t
 	googleState.Unlock()
+	logRefreshFailed(g.app.agent, g.user, nil)
 	return t.AccessToken, nil
 }
 

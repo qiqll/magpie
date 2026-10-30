@@ -290,20 +290,30 @@ func StartSignInWith(agent string, o SignInOptions) (SignInState, error) {
 		}
 	}()
 
+	replaceSignIns(s)
+	if install {
+		go s.installThenBegin(installing, cli)
+	}
+	return s.status(), nil
+}
+
+// replaceSignIns lists s, the one sign-in of its agent at a time: a newer
+// one replaces the older, which is canceled once signIns is let go, as
+// finish logs and the log's writer can block.
+func replaceSignIns(s *signInFlow) {
+	var old []*signInFlow
 	signIns.Lock()
-	// only one sign-in per agent at a time: a newer one replaces the older
 	for id, o := range signIns.m {
-		if o.st.Agent == agent {
-			o.finish(SignInState{State: "canceled"})
+		if o.st.Agent == s.st.Agent {
+			old = append(old, o)
 			delete(signIns.m, id)
 		}
 	}
 	signIns.m[s.st.ID] = s
 	signIns.Unlock()
-	if install {
-		go s.installThenBegin(installing, cli)
+	for _, o := range old {
+		o.finish(SignInState{State: "canceled"})
 	}
-	return s.status(), nil
 }
 
 // installThenBegin installs the CLI the sign-in needs, then starts it.
@@ -521,7 +531,7 @@ func logPasteRefused(s *signInFlow, raw string, err error) {
 		if raw = strings.TrimSpace(raw); raw != "" {
 			why = strings.ReplaceAll(why, raw, "…")
 		}
-		log.Printf("sign-in %s (%s): what was pasted wasn't taken: %s", st.Agent, st.ID, logText(why))
+		log.Printf("sign-in %s (%s): what was pasted wasn't taken: %s", st.Agent, st.ID, logReason(why))
 	}
 }
 

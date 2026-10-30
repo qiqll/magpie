@@ -1204,6 +1204,8 @@ func switchLogin(agent, user string) error {
 // the agent's own store, and answers the account it replaced: "" when there
 // was none, or the agent was on that one already.
 func switchSavedLogin(agent, user string) (from string, _ error) {
+	var logged func()
+	defer func() { runLogged(logged) }()
 	if agent == "claude" {
 		// nor while Claude Code runs in the account's own directory for
 		// magpie (inSavedClaudeDir), which may refresh it there
@@ -1237,13 +1239,14 @@ func switchSavedLogin(agent, user string) (from string, _ error) {
 		// as Claude Code keeps it, if it has run on the account beside the
 		// one it is signed in to; never one that can't be used, which
 		// Claude Code would only be refused on
+		was := target.Lapsed
 		_, changed, err := syncClaudeDir(target)
 		if err != nil {
 			return "", err
 		}
 		if why := claudeSignedOut(*target); why != "" {
-			if changed {
-				_ = writeLogins(ls)
+			if changed && writeLogins(ls) == nil {
+				logged = claudeDirLogged(was, *target)
 			}
 			return "", fmt.Errorf("%s: %s", target.User, why)
 		}

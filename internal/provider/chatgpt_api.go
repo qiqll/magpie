@@ -411,7 +411,7 @@ func siwcFresh(ctx context.Context, user string, force bool) (siwcCreds, error) 
 			ls[i].Lapsed = msg
 			return ls, nil
 		}) == nil {
-			logLapsed(ChatGPTAPIID, user, msg, te.Status, "OpenAI refused the refresh of its sign-in ("+te.Code+")")
+			logLapsed(ChatGPTAPIID, user, msg, te.Status, "OpenAI refused the refresh of its sign-in: "+logText(te.Code))
 		}
 		return siwcCreds{}, fmt.Errorf("%s: %w", user, ErrSIWCSignIn)
 	}
@@ -443,6 +443,7 @@ func siwcFresh(ctx context.Context, user string, force bool) (siwcCreds, error) 
 	}); err != nil {
 		return siwcCreds{}, err
 	}
+	logRefreshFailed(ChatGPTAPIID, user, nil)
 	if lapsed {
 		logUnlapsed(ChatGPTAPIID, user, "its sign-in was refreshed")
 	}
