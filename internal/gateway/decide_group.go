@@ -126,89 +126,160 @@ func (s *Server) serveDecisionGroup(w http.ResponseWriter, r *http.Request, body
 		}
 	}
 	// a user's, bound by user: each member's provider on its user's own
-	// alone (usersInGroup), after the key's holds as a turn's, never
-	// another user's
-	cs, pl, us, err := s.usersInGroup(r, ms, cs, pl)
-	if err != nil {
-		s.answerUserRefused(w, provider.Chat, &Call{}, err)
-		return
+	// alone, narrowed as the tries reach it (groupUsers), never another
+	// user's; the first here, after the key's holds as a turn's
+	gu := s.groupUsersOf(r, ms, cs, pl)
+	if gu != nil {
+		if cs, pl = gu.begin(cs, pl); len(cs) == 0 && gu.refused != nil {
+			s.answerUserRefused(w, provider.Chat, &Call{}, gu.refused)
+			return
+		}
+	} else {
+		cs = probeOne(cs) // of those resting, only the one back soonest (#1799)
 	}
-	cs = probeOne(cs) // of those resting, only the one back soonest (#1799)
 	if len(cs) == 0 {
 		writeError(w, provider.Chat, http.StatusServiceUnavailable, fmt.Sprintf("no key or account of the group %s's decision models may serve them now", g.Name))
 		return
 	}
-	s.serveDecideUsers(w, r, body, asked, start, cs, pl, groupRef(g, ms), us)
+	s.serveDecideUsers(w, r, body, asked, start, cs, pl, groupRef(g, ms), gu.tries(), gu)
 }
 
 // userTries are a request's userTry of each provider usersOn bound it on,
 // by the provider's id: a decision group's members may be of several.
 type userTries map[string]*userTry
 
-// usersInGroup narrows cs, a decision group's keys and accounts for r
-// planned as pl index for index, bound by user, to r's user's own of each
-// of its members' providers (usersOn), as a decision provider asked alone
-// is (serveSystemOne, askDecider): never another user's. Each provider's
-// own go where its first was in the group's order, and us holds the
-// userTry of each bound. A provider whose binding refuses the user is
-// left out, the others' own still asked; with none left at any, err is
-// the first refusal (a userRefusedError), and no other user's is asked in
-// their place. A user or tier the request can't name is refused at once.
-func (s *Server) usersInGroup(r *http.Request, ms []provider.Member, cs []candidate, pl planned) ([]candidate, planned, userTries, error) {
+// groupUsers narrows a decision group's keys and accounts for r, bound by
+// user, to r's user's own of each member's provider (usersOn), as a
+// decision provider asked alone is (serveSystemOne, askDecider): never
+// another user's. A provider is narrowed only as the tries reach it (at),
+// so the user is bound on those the request goes to, not on each member's
+// provider a group lists: a fallback's seats aren't taken while the first
+// answers.
+type groupUsers struct {
+	s       *Server
+	r       *http.Request
+	members map[string]provider.Provider
+	pools   map[string]pooled // each provider's keys and accounts, before
+	done    map[string]bool   // providers narrowed
+	us      userTries
+	refused error // the first provider's refusal of the user (a userRefusedError)
+}
+
+// pooled is a provider's candidates of a group's, planned index for index.
+type pooled struct {
+	cs []candidate
+	pl planned
+}
+
+// groupUsersOf is the groupUsers of r's decision group of members ms, its
+// candidates cs planned as pl; nil bound by session.
+func (s *Server) groupUsersOf(r *http.Request, ms []provider.Member, cs []candidate, pl planned) *groupUsers {
 	if !s.bind.byUser() {
-		return cs, pl, nil, nil
+		return nil
 	}
-	members := map[string]provider.Provider{}
+	g := &groupUsers{s: s, r: r, members: map[string]provider.Provider{}, pools: map[string]pooled{}, done: map[string]bool{}, us: userTries{}}
 	for _, m := range ms {
-		members[m.Provider.ID] = m.Provider
+		g.members[m.Provider.ID] = m.Provider
 	}
-	var out []candidate
-	var order, left []Weighed
-	us := userTries{}
-	seen := map[string]bool{}
-	var refused error
 	for _, c := range cs {
-		pid := c.p.ID
-		if seen[pid] {
-			continue
-		}
-		seen[pid] = true
-		p, ok := members[pid]
-		if !ok {
-			p = c.p
-		}
-		of, ofPl := keepIn(cs, pl, func(c candidate) bool { return c.p.ID == pid })
-		own, opl, u, err := s.usersOn(r, p, of, ofPl)
-		if err != nil {
-			if userRefusedStatus(err) == http.StatusBadRequest {
-				return nil, pl, nil, err // the request's user or tier: the same at each
-			}
-			if refused == nil {
-				refused = err
-			}
-			continue
-		}
-		if u != nil {
-			us[pid] = u
-		}
-		out, order = append(out, own...), append(order, opl.order...)
-		for _, w := range opl.left {
-			if w.Provider == pid {
-				left = append(left, w)
-			}
+		if _, ok := g.pools[c.p.ID]; !ok {
+			pid := c.p.ID
+			of, ofPl := keepIn(cs, pl, func(c candidate) bool { return c.p.ID == pid })
+			g.pools[pid] = pooled{of, ofPl}
 		}
 	}
-	if len(out) == 0 && refused != nil {
-		return nil, pl, nil, refused
+	return g
+}
+
+// tries is g's userTries, nil for none.
+func (g *groupUsers) tries() userTries {
+	if g == nil {
+		return nil
 	}
-	// those left out of a provider none of cs is of, as before
-	for _, w := range pl.left {
-		if !seen[w.Provider] {
-			left = append(left, w)
+	return g.us
+}
+
+// bound says pid is a provider whose keys or accounts usersOn narrows.
+func (g *groupUsers) bound(pid string) bool {
+	p, ok := g.members[pid]
+	return !ok || p.Account != nil || p.Key != ""
+}
+
+// begin narrows cs to the user's own of the first provider (at), and pl,
+// what the routing log shows, to the keys and accounts of those with none
+// to narrow and that one's own: no provider's others, which may be other
+// users', until the tries reach it.
+func (g *groupUsers) begin(cs []candidate, pl planned) ([]candidate, planned) {
+	keep := func(w Weighed) bool { return !g.bound(w.Provider) }
+	out := planned{order: slices.Clone(pl.order), left: slices.Clone(pl.left)}
+	out.order = slices.DeleteFunc(out.order, func(w Weighed) bool { return !keep(w) })
+	out.left = slices.DeleteFunc(out.left, func(w Weighed) bool { return !keep(w) })
+	if len(cs) == 0 {
+		return cs, out
+	}
+	cs = g.at(cs, 0, func(order, left []Weighed) {
+		out.order, out.left = append(out.order, order...), append(out.left, left...)
+	})
+	return cs, out
+}
+
+// at narrows cs, from i on, to the user's own of the provider of cs[i]
+// when the tries reach it first, and again for the next while that one
+// has none of the user's: its own take its places in the group's order,
+// its first first (more of them than places after its last), and a
+// provider whose binding refuses the user is left out, the first such
+// refusal kept. seen is told the routing log's plan of each narrowed.
+func (g *groupUsers) at(cs []candidate, i int, seen func(order, left []Weighed)) []candidate {
+	if g == nil {
+		return cs
+	}
+	for i < len(cs) && !g.done[cs[i].p.ID] {
+		pid := cs[i].p.ID
+		g.done[pid] = true
+		p, member := g.members[pid]
+		var own []candidate
+		switch {
+		case !member:
+			// not a member's provider: none of the user's known, never asked
+		case !g.bound(pid):
+			continue // nothing to narrow: its own are cs's
+		default:
+			pool := g.pools[pid]
+			mine, opl, u, err := g.s.usersOn(g.r, p, pool.cs, pool.pl)
+			if err != nil {
+				if g.refused == nil {
+					g.refused = err
+				}
+				break
+			}
+			if u == nil {
+				continue // nothing bound: as planned
+			}
+			own, g.us[pid] = probeOne(mine), u // of those resting, only the one back soonest (#1799)
+			if seen != nil {
+				seen(opl.order, opl.left)
+			}
 		}
+		out := slices.Clone(cs[:i])
+		k, after := 0, -1
+		for _, c := range cs[i:] {
+			if c.p.ID != pid {
+				out = append(out, c)
+				continue
+			}
+			if k < len(own) {
+				out, after, k = append(out, own[k]), len(out), k+1
+			}
+		}
+		if k < len(own) {
+			if after < 0 {
+				after = i - 1
+			}
+			out = slices.Insert(out, after+1, own[k:]...)
+		}
+		cs = out
 	}
-	pl.order, pl.left = order, left
-	return out, pl, us, nil
+	return cs
 }
 
 // decideKeys are a decision provider's keys or accounts that may be asked
@@ -237,18 +308,30 @@ func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body [
 	if u != nil && len(cs) > 0 {
 		us = userTries{cs[0].p.ID: u} // one provider's, each of cs
 	}
-	s.serveDecideUsers(w, r, body, asked, start, cs, pl, group, us)
+	s.serveDecideUsers(w, r, body, asked, start, cs, pl, group, us, nil)
 }
 
 // serveDecideUsers is serveDecideTries with the userTry of each provider
-// of cs bound (us, usersInGroup): a decision group's, of several.
-func (s *Server) serveDecideUsers(w http.ResponseWriter, r *http.Request, body []byte, asked string, start time.Time, cs []candidate, pl planned, group *GroupRef, us userTries) {
+// of cs bound (us): a decision group's, of several, each narrowed to its
+// user's own as a failed try hands the request on to it (gu, nil for
+// none to narrow).
+func (s *Server) serveDecideUsers(w http.ResponseWriter, r *http.Request, body []byte, asked string, start time.Time, cs []candidate, pl planned, group *GroupRef, us userTries, gu *groupUsers) {
 	who := callerOf(r)
 	tr := s.trace.beginFor(r, Route{Time: start, Agent: who.agent, Session: sessionOf(r.Header), Model: asked, Provider: cs[0].p.ID,
 		Group: group, Order: pl.order, Left: pl.left})
+	// the plan of a provider narrowed later, in the routing log too
+	seen := func(order, left []Weighed) {
+		s.trace.update(tr, func(t *Route) { t.Order, t.Left = append(t.Order, order...), append(t.Left, left...) })
+	}
 	var skipped []string
 	for i := 0; i < len(cs); i++ {
 		c, last := cs[i], i == len(cs)-1
+		// failed, the next provider's own are narrowed before it is said
+		// whether this was the last
+		handOn := func() {
+			cs = gu.at(cs, i+1, seen)
+			last = i == len(cs)-1
+		}
 		at := time.Now()
 		s.trace.update(tr, func(t *Route) {
 			t.Provider = c.p.ID
@@ -267,6 +350,9 @@ func (s *Server) serveDecideUsers(w http.ResponseWriter, r *http.Request, body [
 			})
 		}
 		status, b, header, err := s.postDecide(r.Context(), c.p, c.model, withModel(body, c.model))
+		if err != nil || status >= 400 {
+			handOn()
+		}
 		if err != nil {
 			fail, rest := failOther, (*Rest)(nil)
 			var tooMany *errRPM
@@ -304,17 +390,19 @@ func (s *Server) serveDecideUsers(w http.ResponseWriter, r *http.Request, body [
 		}
 		if status >= 400 {
 			fail, rest = s.decideFailed(c, status, header, b)
-			if next, refused, lapsed := us[c.p.ID].lapsed(c, status, b, last); lapsed {
-				if refused == nil {
-					last = false // a spare goes next: the route isn't done
+			// the last of its provider's: a spare of that provider's
+			// goes next to it, before another provider's
+			lastOwn := !slices.ContainsFunc(cs[i+1:], func(n candidate) bool { return n.p.ID == c.p.ID })
+			if next, refused, lapsed := us[c.p.ID].lapsed(c, status, b, lastOwn); lapsed {
+				if len(next) > 0 {
+					cs, last = slices.Insert(cs, i+1, next...), false // a spare goes next: the route isn't done
 				}
 				tried(status, errMsg, failAuth, rest, used)
-				if refused != nil {
+				if refused != nil && last {
 					s.answerUserRefused(w, provider.Chat, &Call{}, refused)
 					return
 				}
-				cs = append(cs, next...)
-				continue
+				continue // the next of its own, its spare, or another provider's
 			}
 			// any other account to be signed in again (lapsedTry), a
 			// request with no user's included: the next, else told only
@@ -382,7 +470,7 @@ func (e decideRefused) Unwrap() error { return e.err }
 // answers, the one that failed resting as it would for a chat. ok is false
 // when model names no decision group. Those a gateway key held to some
 // accounts (ctx, askFor) may not use are left out, and bound by user only
-// the user's own of each member's provider are asked (usersInGroup), as
+// the user's own of each member's provider are asked (groupUsers), as
 // at /v1/systemone (serveDecisionGroup): never another user's.
 func (s *Server) askDecisionGroup(ctx context.Context, model string, intents []string, prev before, effort bool, text string) (v verdict, ok bool, err error) {
 	if !provider.IsGroupRef(model) {
@@ -407,14 +495,18 @@ func (s *Server) askDecisionGroup(ctx context.Context, model string, intents []s
 		return verdict{}, true, err
 	}
 	askAsUser(ctx, r.Header)
-	if cs, _, _, err = s.usersInGroup(r, ms, cs, pl); err != nil {
-		return verdict{}, true, callerRefused{err}
+	gu := s.groupUsersOf(r, ms, cs, pl)
+	if gu != nil {
+		if cs, _ = gu.begin(cs, pl); len(cs) == 0 && gu.refused != nil {
+			return verdict{}, true, callerRefused{gu.refused}
+		}
+	} else {
+		cs = probeOne(cs) // of those resting, only the one back soonest (#1799)
 	}
-	cs = probeOne(cs) // of those resting, only the one back soonest (#1799)
 	if len(cs) == 0 {
 		return verdict{}, true, fmt.Errorf("no decision model of the group %s can be asked now", g.Name)
 	}
-	v, err = s.askDecideTries(cs, intents, prev, effort, text)
+	v, err = s.askDecideTries(cs, intents, prev, effort, text, gu)
 	return v, true, err
 }
 
@@ -449,14 +541,16 @@ func (s *Server) askDecider(ctx context.Context, p provider.Provider, model stri
 	if len(cs) == 0 {
 		return verdict{}, fmt.Errorf("no key or account of %s may be asked %s now", p.Name, model)
 	}
-	return s.askDecideTries(cs, intents, prev, effort, text)
+	return s.askDecideTries(cs, intents, prev, effort, text, nil)
 }
 
 // askDecideTries asks each of cs as Jev is (askJev) until one answers, the
 // one that failed resting as it would for a chat; the last one's error
-// when none does.
-func (s *Server) askDecideTries(cs []candidate, intents []string, prev before, effort bool, text string) (v verdict, err error) {
-	for _, c := range cs {
+// when none does. A decision group's next provider is narrowed to its
+// user's own as a failed ask hands on to it (gu, nil for none).
+func (s *Server) askDecideTries(cs []candidate, intents []string, prev before, effort bool, text string, gu *groupUsers) (v verdict, err error) {
+	for i := 0; i < len(cs); i++ {
+		c := cs[i]
 		if v, err = s.askJev(c.p, c.model, intents, prev, effort, text); err == nil {
 			servedCandidate(c, 0)
 			return v, nil
@@ -471,6 +565,7 @@ func (s *Server) askDecideTries(cs []candidate, intents []string, prev before, e
 		default:
 			s.decideFailed(c, http.StatusBadGateway, nil, []byte(err.Error()))
 		}
+		cs = gu.at(cs, i+1, nil)
 	}
 	return verdict{}, err
 }

@@ -222,6 +222,10 @@ func TestUserDecisionGroupOnTheUsersOwnKeys(t *testing.T) {
 		alice, bob = append(alice, ask("alice")...), append(bob, ask("bob")...)
 	}
 	oneKeyEach(t, "the decision group", alice, bob)
+	// the first member answered: none of the next one's seats is taken
+	if b := boundIn(t, "jd"); len(b) != 0 {
+		t.Fatalf("bound on jd %v before any request went to it", b)
+	}
 	if !strings.HasPrefix(alice[0], "kc") || !strings.HasPrefix(bob[0], "kc") {
 		t.Fatalf("alice asked %q, bob %q: want the group's first member's keys", alice, bob)
 	}
@@ -238,6 +242,39 @@ func TestUserDecisionGroupOnTheUsersOwnKeys(t *testing.T) {
 	}
 	if b := boundIn(t, "jd"); len(b) != 2 {
 		t.Fatalf("bound on jd %v, want alice and bob", b)
+	}
+}
+
+// Bound by user, a decision group whose members' providers interleave
+// keeps the group's order once narrowed to its user's own: jc's first
+// member refused, the next asked is jd's, not jc's second.
+func TestUserDecisionGroupKeepsItsOrder(t *testing.T) {
+	fresh(t)
+	noRests()
+	t.Cleanup(noRests)
+	f := &decideFleet{status: map[string]int{"kc": 503}}
+	a, b := f.serve(), f.serve()
+	defer a.Close()
+	defer b.Close()
+	for _, p := range []provider.Provider{
+		{ID: "jc", Name: "JC", Key: "kc", Decide: a.URL + "/v1", Models: []string{"jev-a", "jev-b"}},
+		{ID: "jd", Name: "JD", Key: "kd", Decide: b.URL + "/v1", Models: []string{"jev-latest"}},
+	} {
+		if err := provider.Save(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := provider.SaveGroup(provider.Group{ID: "judges", Name: "Judges", Routing: provider.Ordered,
+		Members: []string{"jc/jev-a", "jd/jev-latest", "jc/jev-b"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := byUserUpTo(t, New(), 1)
+	body := []byte(`{"model":"group/judges","state":{"message":"hi"},"questions":{"intent":{"type":"choice"}}}`)
+	if rec := userAt(s, "/v1/systemone", "", body, "alice"); rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if got := f.took(); !slices.Equal(got, []string{"kc", "kd"}) {
+		t.Fatalf("asked %q, want kc then kd, the group's order", got)
 	}
 }
 

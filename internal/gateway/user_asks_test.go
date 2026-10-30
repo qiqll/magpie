@@ -667,7 +667,7 @@ func TestDecisionClassifierAskedOfTheUsersKeys(t *testing.T) {
 
 // Bound by user, a routing group's classifier that is a decision group is
 // asked on the keys the turn's user is on of its members' provider, as
-// the user's own /v1/systemone to the group is (usersInGroup), never on
+// the user's own /v1/systemone to the group is (groupUsers), never on
 // the group's first key for every user. Before, askDecisionGroup asked
 // the group's keys in its order whoever the turn was of.
 func TestDecisionGroupClassifierAskedOfTheUsersKeys(t *testing.T) {
