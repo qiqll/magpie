@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"maps"
 	"net"
 	"net/http"
 	"regexp"
@@ -744,19 +743,21 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 		defer cancel()
 		if in.Key != "" {
 			msg, err := plugin.Validate(ctx, in.Provider, in.Method, in.Key, in.Value)
+			given := provider.PluginInputSecrets(in.Provider, in.Method, map[string]string{in.Key: in.Value})
 			if err != nil {
-				failSignIn(rw, err, in.Value)
+				failSignIn(rw, err, given)
 				return
 			}
 			if msg != "" {
-				writeJSON(rw, map[string]any{"error": provider.SignInSaid(msg, 0, in.Value)})
+				said, key, _ := provider.SignInFailSaid(errors.New(msg), given)
+				writeJSON(rw, map[string]any{"error": said, "said": key})
 				return
 			}
 			in.Inputs[in.Key] = in.Value
 		}
 		q, err := plugin.NextPrompt(ctx, in.Provider, in.Method, in.Inputs)
 		if err != nil {
-			failSignIn(rw, err, slices.Collect(maps.Values(in.Inputs))...)
+			failSignIn(rw, err, provider.PluginInputSecrets(in.Provider, in.Method, in.Inputs))
 			return
 		}
 		writeJSON(rw, map[string]any{"prompt": q, "inputs": in.Inputs})
@@ -784,7 +785,7 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 			defer cancel()
 			id, err := provider.PluginAPIKey(ctx, in.Provider, in.Method, in.Inputs, in.Key)
 			if err != nil {
-				failSignIn(rw, err, append(slices.Collect(maps.Values(in.Inputs)), in.Key)...)
+				failSignIn(rw, err, provider.PluginInputSecrets(in.Provider, in.Method, in.Inputs).With(provider.SignInSecrets{Hidden: []string{in.Key}}))
 				return
 			}
 			writeJSON(rw, provider.SignInState{Agent: id, State: "done", User: pp.Name})
@@ -792,7 +793,7 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 		}
 		st, err := provider.StartPluginSignInWith(in.Provider, in.Method, in.Inputs, provider.SignInOptions{Proxy: in.Proxy, User: in.User})
 		if err != nil {
-			failSignIn(rw, err, slices.Collect(maps.Values(in.Inputs))...)
+			failSignIn(rw, err, provider.PluginInputSecrets(in.Provider, in.Method, in.Inputs).With(proxySecret(in.Proxy)))
 			return
 		}
 		var failed string

@@ -1915,7 +1915,16 @@ function methods(auth) {
     label: m.label,
     ...(m.type === "api" && m.keyless === true && typeof m.authorize === "function" ? { keyless: true } : {}),
     ...(m.type === "api" && shown(m.placeholder, 200) ? { placeholder: shown(m.placeholder, 200) } : {}),
+    ...(m.prompts?.length ? { asked: askedHow(m.prompts) } : {}),
   }))
+}
+
+// askedHow are a method's questions by how they are answered: from a list, or
+// typed unseen or marked secret. A sign-in's failure never says back an
+// answer typed (provider.PluginInputSecrets); one from a list is no secret.
+function askedHow(prompts) {
+  const keys = (f) => prompts.filter(f).map((p) => String(p.key))
+  return { selects: keys((p) => p.type === "select"), hidden: keys((p) => p.type === "password" || p.secret === true) }
 }
 
 // iconOf is the picture a plugin gives its provider, magpie's own field

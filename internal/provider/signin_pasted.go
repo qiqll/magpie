@@ -102,7 +102,9 @@ func finishPastedSignIn(state, text string) ImportedAccount {
 		return ImportedAccount{Status: "failed", Error: errSignInAddressOver.Error()}
 	}
 	if err := SubmitSignInCallback(st.ID, text); err != nil {
-		return ImportedAccount{Status: "failed", Error: err.Error()}
+		// as the page may say it: the address holds the sign-in's code
+		said, _, _ := SignInFailSaid(err, PastedSecrets(text))
+		return ImportedAccount{Status: "failed", Error: said}
 	}
 	st = s.status()
 	out := ImportedAccount{User: st.User, Plan: st.Plan, Status: "added"}

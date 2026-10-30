@@ -30,6 +30,7 @@ func StartPluginSignIn(id string, method int, inputs map[string]string) (SignInS
 func StartPluginSignInWith(id string, method int, inputs map[string]string, o SignInOptions) (SignInState, error) {
 	s := &signInFlow{done: make(chan struct{})}
 	s.st = SignInState{ID: randomToken(9), Agent: PluginID(id), State: "waiting"}
+	s.secrets = PluginInputSecrets(id, method, inputs)
 	logSignIn(SignInState{ID: s.st.ID, Agent: s.st.Agent, User: strings.TrimSpace(o.User)}, "started", 0, "")
 	// one that couldn't start ends here, logged as failed by finish
 	failed := func(err error) (SignInState, error) {
@@ -209,6 +210,28 @@ func (s *signInFlow) pluginDone(saved plugin.Saved, err error) {
 		user := pluginUser(saved)
 		s.finish(SignInState{State: "done", User: user, Using: pluginUsing(saved, user)})
 	}
+}
+
+// PluginInputSecrets are the answers to a plugin's sign-in method (id,
+// OpenCode's) that its failure never says back: each typed, at any length
+// one typed unseen or marked secret (plugin.Asked); one picked from a list
+// is no secret. A method that doesn't list its questions has each answer
+// taken as typed.
+func PluginInputSecrets(id string, method int, inputs map[string]string) SignInSecrets {
+	var asked plugin.Asked
+	if pp, ok := PluginOf(PluginID(id)); ok && method >= 0 && method < len(pp.Methods) && pp.Methods[method].Asked != nil {
+		asked = *pp.Methods[method].Asked
+	}
+	var out SignInSecrets
+	for _, k := range slices.Sorted(maps.Keys(inputs)) {
+		switch {
+		case slices.Contains(asked.Hidden, k):
+			out.Hidden = append(out.Hidden, inputs[k])
+		case !slices.Contains(asked.Selects, k):
+			out.Given = append(out.Given, inputs[k])
+		}
+	}
+	return out
 }
 
 // PluginAPIKey signs in to a plugin's provider with a key, as its "api"

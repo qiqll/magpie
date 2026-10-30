@@ -23,7 +23,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,35 +82,130 @@ func logReason(why string) string {
 // path ("paste the address … starting with http://", "proxy must look like
 // http://127.0.0.1:7890") hold nothing of a sign-in's, and are said.
 func SignInSaid(why string, status int, secrets ...string) string {
-	held := logSecret.MatchString(plainAddress.ReplaceAllString(why, " "))
-	for _, s := range secrets {
-		if s = strings.TrimSpace(s); len(s) >= 8 && strings.Contains(why, s) {
-			held = true
+	said, _ := signInHeld(why, status, SignInSecrets{Given: secrets})
+	return said
+}
+
+// signInHeld is why as SignInSaid says it, and key the i18n.js key of the
+// sentence said in its place ({status} filled from status), "" when it is
+// said as it is.
+func signInHeld(why string, status int, secrets SignInSecrets) (said, key string) {
+	if !logSecret.MatchString(plainAddress.ReplaceAllString(why, " ")) && !secrets.heldIn(why) {
+		return why, ""
+	}
+	key = SignInHeld
+	if status != 0 {
+		key = SignInHeldStatus
+	}
+	return strings.ReplaceAll(key, "{status}", strconv.Itoa(status)), key
+}
+
+// SignInHeld and SignInHeldStatus are what the page says in place of a
+// sign-in's failure reason that may hold its code or key: i18n.js keys,
+// the second with the vendor's HTTP status.
+const (
+	SignInHeld       = "The answer is left out here, as it may hold the sign-in's code or key"
+	SignInHeldStatus = "The vendor answered HTTP {status}; its answer is left out here, as it may hold the sign-in's code or key"
+)
+
+// SignInSecrets are what the user gave a sign-in, which its failure reason
+// never says back: Given (a pasted code or address, a key, an answer
+// typed) once it is 8 characters or more, Hidden (an answer typed unseen,
+// or one its plugin marks secret) at any length. Each is looked for as
+// it is, escaped for an address or quoted, and by its first 12 characters
+// (a vendor's echo cut short).
+type SignInSecrets struct {
+	Given, Hidden []string
+}
+
+// With is s and o, both.
+func (s SignInSecrets) With(o SignInSecrets) SignInSecrets {
+	return SignInSecrets{slices.Concat(s.Given, o.Given), slices.Concat(s.Hidden, o.Hidden)}
+}
+
+func (s SignInSecrets) heldIn(why string) bool {
+	for i, vs := range [][]string{s.Given, s.Hidden} {
+		for _, v := range vs {
+			if v = strings.TrimSpace(v); v != "" && (i == 1 || len(v) >= 8) && saysBack(why, v) {
+				return true
+			}
 		}
 	}
-	switch {
-	case !held:
-		return why
-	case status != 0:
-		return fmt.Sprintf("The vendor answered HTTP %d; its answer is left out here, as it may hold the sign-in's code or key", status)
-	}
-	return "The answer is left out here, as it may hold the sign-in's code or key"
+	return false
 }
+
+// saysBack says whether why holds v, as it is or as an address or a JSON
+// or Go string would carry it, or its first 12 characters.
+func saysBack(why, v string) bool {
+	q := strconv.Quote(v)
+	forms := []string{v, url.QueryEscape(v), q[1 : len(q)-1]}
+	if len(v) >= 12 {
+		forms = append(forms, v[:12])
+	}
+	for _, f := range forms {
+		if strings.Contains(why, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// PastedSecrets are what a pasted code or address may hold: the text
+// itself, each part of it between #s (Claude's code#state), and each value
+// of its query and fragment.
+func PastedSecrets(raw string) SignInSecrets {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return SignInSecrets{}
+	}
+	given := append([]string{raw}, strings.Split(raw, "#")...)
+	if u, err := url.Parse(raw); err == nil {
+		for _, part := range []string{u.RawQuery, u.Fragment} {
+			// a value read before a bad pair is kept
+			q, _ := url.ParseQuery(part)
+			for _, vs := range q {
+				given = append(given, vs...)
+			}
+		}
+	}
+	return SignInSecrets{Given: given}
+}
+
+// heldErr is a sign-in's error with what the user gave the sign-in, for
+// SignInFailSaid to leave out.
+type heldErr struct {
+	error
+	secrets SignInSecrets
+}
+
+func (e heldErr) Unwrap() error { return e.error }
 
 // plainAddress is an address that can hold no secret: a scheme alone, or
 // one to this computer by its loopback name and port, nothing after it.
 var plainAddress = regexp.MustCompile(`(?i)\b(?:https?|socks5h?)://(?:(?:127\.0\.0\.1|localhost|\[::1\])(?::[0-9]{1,5})?)?/?(?:[\s,;)]|$)`)
 
-// SignInFailSaid is SignInSaid of err, its HTTP status read from it.
-func SignInFailSaid(err error, secrets ...string) string {
-	return SignInSaid(err.Error(), httpStatusOf(err), secrets...)
+// SignInFailSaid is err as the page may say it (SignInSaid), secrets and
+// what the sign-in it ended was given left out; key and status as
+// signInHeld has them, for the page to say it in the reader's language.
+func SignInFailSaid(err error, secrets SignInSecrets) (said, key string, status int) {
+	var h heldErr
+	if errors.As(err, &h) {
+		secrets = secrets.With(h.secrets)
+	}
+	status = httpStatusOf(err)
+	said, key = signInHeld(err.Error(), status, secrets)
+	return said, key, status
 }
 
 // Said is st as the page is told it: its failure reason as SignInSaid
-// says it.
+// says it, what its sign-in was given left out, and the key of the
+// sentence said in its place.
 func (st SignInState) Said() SignInState {
 	if st.Error != "" {
-		st.Error = SignInSaid(st.Error, st.status)
+		st.Error, st.SaidKey = signInHeld(st.Error, st.status, st.secrets)
+		if st.SaidKey == SignInHeldStatus {
+			st.SaidStatus = st.status
+		}
 	}
 	return st
 }
@@ -116,7 +213,8 @@ func (st SignInState) Said() SignInState {
 // logSecret matches a reason that may hold a secret: what claudeSaidSecret
 // does, and a token by its vendor's shape (a JWT, a bearer, sk-, gho_,
 // Google's AIza and ya29.), a field naming a key, a state or a password,
-// a JSON code, and any run of 40 word characters. A vendor's words that
+// a JSON code, any run of 40 word characters, and a proxy's address with
+// its user and password (socks5://u:p@host). A vendor's words that
 // only name a token ("invalid_grant: Token has been expired or revoked")
 // are kept.
 var logSecret = regexp.MustCompile(claudeSaidSecret.String() +
@@ -126,7 +224,8 @@ var logSecret = regexp.MustCompile(claudeSaidSecret.String() +
 	`|\bAIza[\w-]{20,}|\bya29\.[\w-]{8,}|\bAKIA[0-9A-Z]{16}|\bxox[abprs]-[\w-]{8,}` +
 	`|(?i:\b(state|api_?key|apikey|key|password|passwd|device_code|assertion|verifier|authorization)"?\s*[:=])` +
 	`|"code"\s*:\s*"[^"]{20,}"` +
-	`|[\w-]{40,}`)
+	`|[\w-]{40,}` +
+	`|\b\w+://[^/\s@]+:[^/\s@]+@`)
 
 // logName is an account's name as a log line has it: as it is, for grep,
 // unless it holds a space or a control character, which could start a

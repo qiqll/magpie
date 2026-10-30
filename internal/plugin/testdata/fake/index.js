@@ -156,13 +156,18 @@ export const FakePlugin = async ({ client }) => ({
     provider: ID,
     single: process.env.FAKE_KEYLESS === "1",
     methods: [
-      { type: "api", label: "API key", ...(process.env.FAKE_KEYLESS === "1" ? { keyless: true, authorize: async (inputs) => ({ type: "success", key: inputs.credential || "public-fixture" }) } : {}) },
+      // a credential "echo-…" is refused, said back bare, as a vendor's
+      // refusal can say back the key it was given
+      { type: "api", label: "API key", ...(process.env.FAKE_KEYLESS === "1" ? { keyless: true, authorize: async (inputs) => inputs.credential?.startsWith("echo-") ? { type: "failed", error: `FakeCo refused ${inputs.credential}` } : { type: "success", key: inputs.credential || "public-fixture" } } : {}) },
       {
         type: "oauth",
         label: "Browser",
         prompts: [
           { type: "select", key: "where", message: "Where?", options: [{ label: "Home", value: "home" }, { label: "Work", value: "work" }] },
-          { type: "text", key: "team", message: "Team?", when: { key: "where", op: "eq", value: "work" }, validate: (v) => (v ? undefined : "Required") },
+          // a team "echo-…" is refused, said back bare
+          { type: "text", key: "team", message: "Team?", when: { key: "where", op: "eq", value: "work" }, validate: (v) => (!v ? "Required" : v.startsWith("echo-") ? `No team ${v} at FakeCo` : undefined) },
+          // asked only where "vault": typed unseen
+          { type: "password", key: "pin", message: "PIN?", when: { key: "where", op: "eq", value: "vault" } },
         ],
         // $FAKE_LOOPBACK: the page comes back to a port here, as Devin's
         // and Kiro's plugins sign in
@@ -184,7 +189,13 @@ export const FakePlugin = async ({ client }) => ({
                 // its address, as a token endpoint's error body can
                 : code.startsWith("leak-")
                   ? { type: "failed", error: `FakeCo refused ${code} at https://fake.invalid/token?code=${code}` }
-                  : { type: "failed" },
+                  // "echo-…" or 32 hex: said back bare, no address
+                  : code.startsWith("echo-") || /^[0-9a-f]{32}$/.test(code)
+                    ? { type: "failed", error: `FakeCo refused ${code}` }
+                    // "say-pin": says back the PIN typed before the page
+                    : code === "say-pin"
+                      ? { type: "failed", error: `FakeCo refused PIN ${inputs.pin}` }
+                      : { type: "failed" },
         }),
       },
     ],

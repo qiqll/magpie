@@ -2761,18 +2761,32 @@ func writeJSONRows[T any](rw http.ResponseWriter, r *http.Request, key string, r
 }
 
 // failSignIn is fail for a sign-in: its reason as the page may say it
-// (provider.SignInFailSaid), secrets the key or answers the user gave it.
-func failSignIn(rw http.ResponseWriter, err error, secrets ...string) {
-	if said := provider.SignInFailSaid(err, secrets...); said != err.Error() {
-		err = saidErr{said, err}
+// (provider.SignInFailSaid), secrets what the user gave it; one left out
+// is said by the key of the sentence said in its place, for the page to
+// say it in the reader's language.
+func failSignIn(rw http.ResponseWriter, err error, secrets provider.SignInSecrets) {
+	if said, key, status := provider.SignInFailSaid(err, secrets); key != "" {
+		err = saidErr{said, key, status, err}
 	}
 	fail(rw, err)
 }
 
-// saidErr is an error told in other words, still what it wraps.
+// proxySecret is the proxy picked for a sign-in, as a secret its failure
+// never says back when it holds a user and password; one without names no
+// secret, and magpie's own "proxy must look like …" is said.
+func proxySecret(proxy *string) provider.SignInSecrets {
+	if proxy == nil || !strings.Contains(*proxy, "@") {
+		return provider.SignInSecrets{}
+	}
+	return provider.SignInSecrets{Given: []string{*proxy}}
+}
+
+// saidErr is a sign-in's error said in other words, still what it wraps:
+// key the i18n.js key of those words, status the HTTP status it fills in.
 type saidErr struct {
-	said string
-	err  error
+	said, key string
+	status    int
+	err       error
 }
 
 func (e saidErr) Error() string { return e.said }
@@ -2792,6 +2806,13 @@ func fail(rw http.ResponseWriter, err error) {
 	var noHandler *agent.NoLinkHandlerError
 	if errors.As(err, &noHandler) {
 		out["code"], out["app"], out["exe"], out["said"] = "no_link_handler", noHandler.App, noHandler.Exe, linkSaid[noHandler.Exe != ""]
+	}
+	var held saidErr
+	if errors.As(err, &held) {
+		out["said"] = held.key
+		if held.key == provider.SignInHeldStatus {
+			out["status"] = strconv.Itoa(held.status)
+		}
 	}
 	var noModels *agent.NoModelsError
 	if errors.As(err, &noModels) {

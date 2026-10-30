@@ -6551,28 +6551,34 @@ function unmovedLine(p) {
   return card;
 }
 
-// renderLapsed: over the list, each account in use whose sign-in has to be
-// made again, as its row in the editor says Sign-in required: the gateway
-// leaves it out till then, so it is said where the providers are, with
-// its Sign in again. The editor opens with it, where the sign-in shows how
-// it goes. Never hidden: it goes once the account is signed in again.
+// renderLapsed: over the list, each account in use to sign in again
+// (signInLapsed), which the gateway leaves out till then, with its Sign in
+// again, which opens the editor with the sign-in under way.
 function renderLapsed() {
   const box = $("#lapsedAccounts");
   if (!box) return;
   const lines = [];
   for (const p of providers.providers) {
     if (p.off || !p.account) continue;
-    for (const l of p.account.logins || []) if ((l.on || l.active) && signInLapsed(p.account.agent, l)) lines.push(lapsedLine(p, l));
+    for (const l of p.account.logins || []) if (((l.active && !l.paused) || l.on) && signInLapsed(p.account.agent, l)) lines.push(lapsedLine(p, l));
   }
   box.replaceChildren(...lines);
   box.hidden = !lines.length;
 }
 
-// signInLapsed: account l of agent has to be signed in again, as its row
-// reads its mark (renderAccounts' unusable and signedOut)
+// signInLapsed: account l of agent has to be signed in again, for its row
+// in the editor and the line over the list alike. A plugin's whose vendor
+// refused it (#1363): marked lapsed, or its allowance read saying so; a
+// Claude or Copilot one marked lapsed (echo_ts on Discord); another
+// built-in's whose sign-in its vendor revoked (#1793) or won't refresh.
 function signInLapsed(agent, l) {
-  return !!l.lapsed && (agent === "claude" || agent === "copilot" || !!subOf(agent)?.plugin || SIGN_IN_GONE.test(l.lapsed));
+  const plugin = !!subOf(agent)?.plugin;
+  return !!l.lapsed && (agent === "claude" || agent === "copilot" || plugin || SIGN_IN_GONE.test(l.lapsed)) || plugin && SIGN_IN_GONE.test(loginUsageOf(agent)?.[l.user]?.error || "");
 }
+
+// signInName: agent's name on the status line, its provider's in the list
+// as the line over it says
+const signInName = (agent) => providers.providers.find((p) => p.account?.agent === agent)?.name || subOf(agent)?.name || agent;
 
 // signInAgainSite: where account user of agent signs in again — a Copilot
 // account on an enterprise's GHE.com is named login@host, and signs in
@@ -12184,28 +12190,24 @@ async function followSignIn(id) {
     }
     if (st.state === "done") return signedIn(st);
     // a failed one keeps its site and way, for Try again
-    signing = st.state === "canceled" ? null : { ...st, ...signingKept() };
+    signing = st.state === "canceled" ? null : { ...st, error: signInWhy(st), ...signingKept() };
     renderProviders();
     saySignInFailed();
   }
 }
 
-// signInWhy: a sign-in's failure reason in the reader's language. The
-// server leaves out one that may hold the sign-in's code or key
-// (provider.SignInSaid) and says so in one of two sentences.
-function signInWhy(err) {
-  const held = /^The vendor answered HTTP (\d+); its answer is left out here, as it may hold the sign-in's code or key$/.exec(err || "");
-  if (held) return t("The vendor answered HTTP {status}; its answer is left out here, as it may hold the sign-in's code or key", { status: held[1] });
-  return t(err || "");
-}
+// signInWhy: a sign-in's failure reason, or the sentence the server said
+// in place of one that may hold its code or key (r.said, an i18n.js key)
+// in the reader's language
+const signInWhy = (r) => r.said ? t(r.said, r) : r.error;
 
-// saySignInFailed: a sign-in that failed where its box isn't on the page
+// saySignInFailed: a sign-in that failed where its box isn't in sight
 // (the editor closed, another page open) says so on the status line, as
 // one done says it is.
 function saySignInFailed() {
-  if (signing?.state !== "failed" || document.querySelector(".signing.failed")) return;
-  const name = subOf(signing.agent)?.name || signing.agent;
-  status(signing.error ? t("Sign-in to {name} didn't finish: {error}", { name, error: signInWhy(signing.error) }) : t("Sign-in to {name} didn't finish", { name }), "err");
+  if (signing?.state !== "failed" || $(".signing.failed")?.getClientRects().length) return;
+  const name = signInName(signing.agent);
+  status(signing.error ? t("Sign-in to {name} didn't finish: {error}", { name, error: signing.error }) : t("Sign-in to {name} didn't finish", { name }), "err");
 }
 
 // signingKept: what a sign-in under way keeps across its updates, for Try
@@ -12299,7 +12301,7 @@ async function pluginAnswer(sub, value) {
     const r = await api("plugin-signin/prompt", { provider: sub.pid, method: flow.method, inputs: flow.inputs, key: flow.prompt.key, value });
     if (signing !== flow) return;
     if (r.error) {
-      signing = { ...flow, error: r.error, value };
+      signing = { ...flow, error: signInWhy(r), value };
       return renderProviders();
     }
     startPluginSignIn(sub, flow.method, r.inputs, { user: flow.forUser, proxy: flow.picked });
@@ -12345,7 +12347,7 @@ function renderPluginAsk(sub) {
   }
   const q = signing.prompt;
   const form = el("form", "callback-form");
-  const why = el("span", "s why", flow.error ? signInWhy(flow.error) : "");
+  const why = el("span", "s why", flow.error || "");
   if (flow.state === "prompt" && q.type === "select") {
     tt.append(el("span", "n", q.message), why);
     const ch = el("div", "choices");
@@ -12688,7 +12690,7 @@ function renderSigning(sub) {
   if (signing.state === "method" || signing.state === "prompt" || signing.state === "key") return renderPluginAsk(sub);
   if (signing.state === "failed") {
     box.append(el("span", "mark", "!"));
-    tt.append(el("span", "n", t("Sign-in didn't finish")), el("span", "s", signing.error ? signInWhy(signing.error) : ""));
+    tt.append(el("span", "n", t("Sign-in didn't finish")), el("span", "s", signing.error || ""));
     box.append(tt);
     const again = el("button", "text primary", t("Try again"));
     const o = { user: signing.forUser, proxy: signing.picked };
@@ -13017,16 +13019,9 @@ function renderAccounts(a, p) {
   // can't be used till it is signed in again; another subscription's lapse
   // shows on its quota line only, as before
   const unusable = (l) => a.agent === "claude" && !!l.lapsed;
-  // a plugin's account whose sign-in its vendor refused (#1363: Grok after
-  // a restart): marked lapsed, or its allowance read saying so. Whatever
-  // else it is (in use, the agent's own), it keeps a way to sign in again
-  // and its Remove, and the reason never stands in their place.
-  // A built-in Copilot account whose GitHub token GitHub refused (echo_ts
-  // on Discord: a revoked token) is the same, marked lapsed by magpie, and
-  // signed in again in place. So is any other built-in account whose
-  // sign-in its vendor revoked (#1793: ChatGPT's 401 token_revoked) or
-  // refused to refresh: the gateway passes over it till then.
-  const signedOut = (l) => !unusable(l) && (sub?.plugin ? !!l.lapsed || SIGN_IN_GONE.test(quota?.[l.user]?.error || "") : (a.agent === "copilot" && !!l.lapsed) || SIGN_IN_GONE.test(l.lapsed || ""));
+  // any other to sign in again keeps, in use or not, its Sign in again
+  // and Remove, the reason never in their place
+  const signedOut = (l) => !unusable(l) && signInLapsed(a.agent, l);
   // a Copilot account on an enterprise's GHE.com is named login@host, and
   // signs in again there
   const againSite = (l) => signInAgainSite(a.agent, l.user);

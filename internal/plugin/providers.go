@@ -31,6 +31,16 @@ type Method struct {
 	Placeholder string `json:"placeholder,omitempty"`
 	// Keyless skips personal-key entry; authorize supplies the credential.
 	Keyless bool `json:"keyless,omitempty"`
+	// Asked is how the method's questions are answered, by key; nil for a
+	// method with none listed (one that asks as it goes)
+	Asked *Asked `json:"asked,omitempty"`
+}
+
+// Asked are a method's questions by how they are answered: Selects from a
+// list, Hidden typed unseen or marked secret by the plugin.
+type Asked struct {
+	Selects []string `json:"selects,omitempty"`
+	Hidden  []string `json:"hidden,omitempty"`
 }
 
 // KeyTitle is what an "api" method's key is asked as: its label, as

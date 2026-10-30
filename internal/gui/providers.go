@@ -2260,7 +2260,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		}
 		st, err := provider.StartSignInWith(in.Agent, provider.SignInOptions{Site: in.Site, Proxy: in.Proxy, User: in.User})
 		if err != nil {
-			failSignIn(rw, err)
+			failSignIn(rw, err, proxySecret(in.Proxy))
 			return
 		}
 		// one that installs a CLI first has no URL yet: the window opens it
@@ -2288,7 +2288,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			return
 		}
 		if err := provider.SubmitSignInCallback(r.PathValue("id"), in.URL); err != nil {
-			failSignIn(rw, err, in.URL)
+			failSignIn(rw, err, provider.PastedSecrets(in.URL))
 			return
 		}
 		rw.WriteHeader(http.StatusNoContent)
@@ -2325,12 +2325,15 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		res, rest := provider.PastedSignIns(in.Files)
 		if len(rest) > 0 {
 			more, err := imp(ctx, in.Agent, rest)
+			// a vendor's refusal may say back a token the files hold
+			files := provider.SignInSecrets{Given: rest}
 			if err != nil && len(res) == 0 {
-				fail(rw, err)
+				failSignIn(rw, err, files)
 				return
 			}
 			if err != nil {
-				more = []provider.ImportedAccount{{Status: "failed", Error: err.Error()}}
+				said, _, _ := provider.SignInFailSaid(err, files)
+				more = []provider.ImportedAccount{{Status: "failed", Error: said}}
 			}
 			res = append(res, more...)
 		}

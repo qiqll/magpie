@@ -97,9 +97,16 @@ type SignInState struct {
 	// Proxy is the one the sign-in goes through ("" the global one,
 	// "direct" none): the one the account's requests will (#1663)
 	Proxy string `json:"proxy,omitempty"`
+	// SaidKey is the i18n.js key of the sentence Error says in place of a
+	// reason that may hold the sign-in's code or key (Said), SaidStatus the
+	// vendor's HTTP status it fills in
+	SaidKey    string `json:"said,omitempty"`
+	SaidStatus int    `json:"status,omitempty"`
 	// status is the vendor's HTTP status a sign-in failed on, for the log
 	// (failedWith); 0 for none known
 	status int
+	// secrets are what the user gave the sign-in, never said back (Said)
+	secrets SignInSecrets
 }
 
 type signInFlow struct {
@@ -142,6 +149,9 @@ type signInFlow struct {
 	chosen bool
 	// user is the account signed in to again, "" for a new one
 	user string
+	// secrets are what the user gave the sign-in (a plugin's answers, a
+	// code or address pasted), which its state never says back
+	secrets SignInSecrets
 	// said is what the log has beyond a failure's reason: how Claude
 	// Code's `claude auth login` ended and what it printed, its lines that
 	// may hold a code left out (claudeSaidSafe)
@@ -504,6 +514,7 @@ func SubmitSignInCallback(id, raw string) error {
 	if !ok {
 		return errors.New("no such sign-in")
 	}
+	s.give(PastedSecrets(raw))
 	var err error
 	switch {
 	case s.plugin != "":
@@ -518,6 +529,10 @@ func SubmitSignInCallback(id, raw string) error {
 		err = s.pastedCallback(raw)
 	}
 	logPasteRefused(s, raw, err)
+	if err != nil {
+		// the page says it with all the sign-in was given left out
+		err = heldErr{err, s.status().secrets}
+	}
 	return err
 }
 
@@ -669,7 +684,16 @@ func WaitSignIn(ctx context.Context, id string) (SignInState, error) {
 func (s *signInFlow) status() SignInState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.st
+	st := s.st
+	st.secrets = s.secrets
+	return st
+}
+
+// give records what the user gave the sign-in, never said back.
+func (s *signInFlow) give(x SignInSecrets) {
+	s.mu.Lock()
+	s.secrets = s.secrets.With(x)
+	s.mu.Unlock()
 }
 
 // finish records the outcome once and lets the callback server go. A
