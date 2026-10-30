@@ -827,10 +827,11 @@ func setSeats(keyID, pid, user string, seats []userSeat) {
 	userBinds.m[keyID][pid][user] = userBinds.m[keyID][pid][user].withSeats(seats)
 }
 
-// seatUse is how an account is taken: by n users of every key other
-// than the one asking, as a first or a spare, one name under several
-// keys counted once, the least share of their tiers share (0 for no
-// limit); own says the one asking is on it too, under another key.
+// seatUse is how an account is taken: by n user names other than the
+// one asking, bound under any gateway key (the asking key's included),
+// as a first or a spare, one name under several keys counted once, the
+// least share of their tiers share (0 for no limit); own says the name
+// asking is on it too, under any key.
 type seatUse struct {
 	n, share int
 	own      bool
@@ -855,7 +856,15 @@ func (u seatUse) takes(share int) bool {
 // who → its use, each user's share its tier's in tiers (Tiers.shareOf).
 // user's own seats, under any gateway key, never keep it off an account
 // (the owner's decision, 2026-10-30), and another name bound under
-// several keys is one user. Called with userBinds held.
+// several keys is one user. A name is the caller's to send
+// (UserHeader), never tied to a key: the caller of one key that sends
+// the name another key's user goes by is on that user's seats as itself,
+// a share-1 account that user has alone included, when its key may use
+// the account (TestUserNameOfAnotherKeySharesItsSeats). By design (the
+// owner's option A2, 2026-10-30): names are one namespace across keys,
+// which holds only while every key is the owner's or one team's, one
+// trust domain. Keys handed to separate tenants would need names merged
+// per tenant instead. Called with userBinds held.
 type seatUses map[string]seatUse
 
 func seatUsesOf(pid string, tiers Tiers, user string) seatUses {
@@ -1179,7 +1188,12 @@ func (u *UserBound) atTier(n int) string {
 
 // keyHeld says the account st of provider pid is one the gateway key
 // asking may not use: not among pool, and left out of the plan held
-// (allowedCandidates, left). It stays the user's, bound as it was.
+// (allowedCandidates, left). It stays the user's, bound as it was, and
+// is let go only as any seat is (sweepIdle, its user idle): a sign-in
+// or a key's list changed doesn't touch a binding (the owner's
+// decision). So it still counts toward each account's share for others
+// (seatUsesOf), and a user whose key was narrowed may be given up to its
+// tier's max_accounts among the key's own beside it.
 func keyHeld(st userSeat, pid string, pool []candidate, left []Weighed) bool {
 	if slices.ContainsFunc(pool, func(c candidate) bool { return c.p.ID == pid && strings.EqualFold(c.who(), st.Who) }) {
 		return false
@@ -1290,10 +1304,18 @@ func boundRefusal(user string, b userBinding, pid string, rests []Rest, pl plann
 		return userRefusal{status: http.StatusTooManyRequests, msg: fmt.Sprintf("%s: %q is bound to %s%s%s; no other account is tried in its place", UserHeader, user, names, which, strings.Join(said, "; ")),
 			limit: userLimit(first.Why), until: first.Until, model: first.Model}
 	}
+	// one the gateway key may not use says why only when every one is:
+	// another's reason is the user's then (keyHeld)
+	allHeld := !slices.ContainsFunc(seats, func(st userSeat) bool {
+		return !slices.ContainsFunc(pl.left, func(w Weighed) bool { return w.Held && leftIs(w, pid, st.Who) })
+	})
 	for _, st := range seats {
 		for _, w := range pl.left {
 			if !leftIs(w, pid, st.Who) || w.Lapsed != "" {
 				continue // one to be signed in again serves the model, once it is
+			}
+			if w.Held && !allHeld {
+				continue
 			}
 			switch {
 			case w.Held:
@@ -1445,7 +1467,7 @@ func cappedFor(keyID, user, pid, model string, ws []Weighed, back time.Time) (st
 	userBinds.Unlock()
 	var own []Weighed
 	for _, w := range ws {
-		if ok && (w.Capped > 0 || w.NoCredits) && slices.ContainsFunc(b.seats(), func(s userSeat) bool { return leftIs(w, pid, s.Who) }) {
+		if ok && !w.Held && (w.Capped > 0 || w.NoCredits) && slices.ContainsFunc(b.seats(), func(s userSeat) bool { return leftIs(w, pid, s.Who) }) {
 			own = append(own, w)
 		}
 	}

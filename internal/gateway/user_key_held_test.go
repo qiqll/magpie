@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/access"
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // keyHeldUser stands up the reporter's case (T-014): user "2", of tier
@@ -155,5 +156,165 @@ func TestUserKeyHeldSeatServedWithoutTheHold(t *testing.T) {
 	}
 	if got := asked(true); len(got) != 1 || got[0] != "acct-2" {
 		t.Fatalf("asked %v, want De@post.com's acct-2", got)
+	}
+}
+
+// The account the gateway key may not use held, not free: De@post.com
+// out of its five hours and set not to spend its credits (held at 100%,
+// back in 3 hours), or to be signed in again. Either way it is still one
+// the key may not use: a spare is added among the key's own, and with
+// none to add the user is back when the first of the key's own is (4
+// hours), never at De's 3.
+func TestUserKeyHeldSeatHeldOtherwise(t *testing.T) {
+	t.Run("credits", func(t *testing.T) {
+		noRests()
+		_, ask, keyID := keyHeldUser(t, "free@post.com")
+		_, asked := limitUpstream(t)
+		creditsHeldDe(t)
+		restSeat("codex@kaaaw@post.com", 4*time.Hour)
+		restSeat("codex@so33@post.com", 5*time.Hour)
+		rec := ask("hi")
+		if got := asked(true); rec.Code != 200 || len(got) != 1 || got[0] != "acct-5" {
+			t.Fatalf("no spare among the key's own: %d asked %v %v", rec.Code, got, rec.Header())
+		}
+		if got := keyBound(t, keyID); len(got) != 4 || got[0] != "De@post.com" {
+			t.Fatalf("user 2 bound to %v", got)
+		}
+	})
+	t.Run("credits-no-spare", func(t *testing.T) {
+		noRests()
+		s, ask, _ := keyHeldUser(t)
+		_, asked := limitUpstream(t)
+		creditsHeldDe(t)
+		restSeat("codex@kaaaw@post.com", 4*time.Hour)
+		restSeat("codex@so33@post.com", 5*time.Hour)
+		rec := ask("hi")
+		if got := asked(true); rec.Code != 429 || len(got) != 0 {
+			t.Fatalf("%d asked %v", rec.Code, got)
+		}
+		if limit, until := limitOf(t, rec); limit != "quota" || !near(until, 4*time.Hour) {
+			t.Fatalf("%q until %v, want kaAAw@'s 4 hours: %v %s", limit, until, rec.Header(), refusedWhy(s))
+		}
+	})
+	t.Run("lapsed", func(t *testing.T) {
+		noRests()
+		_, ask, keyID := keyHeldUser(t, "free@post.com")
+		_, asked := limitUpstream(t)
+		lapseSaved(t, "De@post.com")
+		restSeat("codex@kaaaw@post.com", 4*time.Hour)
+		restSeat("codex@so33@post.com", 5*time.Hour)
+		rec := ask("hi")
+		if got := asked(true); rec.Code != 200 || len(got) != 1 || got[0] != "acct-5" {
+			t.Fatalf("no spare among the key's own: %d asked %v %v", rec.Code, got, rec.Header())
+		}
+		if got := keyBound(t, keyID); len(got) != 4 || got[0] != "De@post.com" {
+			t.Fatalf("user 2 bound to %v", got)
+		}
+	})
+}
+
+// creditsHeldDe holds De@post.com at 100% of its five hours, back in 3
+// hours, set not to spend its credits; the others have room.
+func creditsHeldDe(t *testing.T) {
+	t.Helper()
+	capUsage(t, map[string]float64{"De@post.com": 100, "de@post.com": 100, "kaAAw@post.com": 10, "so33@post.com": 10, "free@post.com": 10})
+	if err := provider.SetCodexCredits("De@post.com", false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Every one of the user's accounts is one the gateway key may not use:
+// a spare among the key's own is added and asked, the first kept; with
+// none free, it is refused and De@post.com isn't asked.
+func TestUserOnlyKeyHeldSeats(t *testing.T) {
+	bindDeAlone := func(t *testing.T, keyID string) {
+		now := time.Now().UTC()
+		writeUsers(t, userFile{Keys: map[string]map[string]map[string]userBinding{keyID: {"codex": {
+			"2": {Who: "codex@de@post.com", Account: "De@post.com", At: now, Tier: "max", Used: now},
+		}}}})
+	}
+	t.Run("spare", func(t *testing.T) {
+		noRests()
+		_, ask, keyID := keyHeldUser(t)
+		_, asked := limitUpstream(t)
+		bindDeAlone(t, keyID)
+		rec := ask("hi")
+		if got := asked(true); rec.Code != 200 || len(got) != 1 || got[0] == "acct-2" {
+			t.Fatalf("%d asked %v: %s", rec.Code, got, rec.Body.String())
+		}
+		if got := keyBound(t, keyID); len(got) != 2 || got[0] != "De@post.com" {
+			t.Fatalf("user 2 bound to %v", got)
+		}
+	})
+	t.Run("none-free", func(t *testing.T) {
+		noRests()
+		_, ask, keyID := keyHeldUser(t)
+		_, asked := limitUpstream(t)
+		bindDeAlone(t, keyID)
+		restSeat("codex@kaaaw@post.com", 4*time.Hour)
+		restSeat("codex@so33@post.com", 5*time.Hour)
+		rec := ask("hi")
+		if got := asked(true); rec.Code == 200 || len(got) != 0 {
+			t.Fatalf("%d asked %v: %s", rec.Code, got, rec.Body.String())
+		}
+		if got := keyBound(t, keyID); len(got) != 1 || got[0] != "De@post.com" {
+			t.Fatalf("user 2 bound to %v", got)
+		}
+	})
+}
+
+// The key's own account asked runs out for hours as it is asked, the
+// other resting too: a spare is added among the key's own in the same
+// request, and answers.
+func TestUserKeyHeldSeatSpareAfterTheTry(t *testing.T) {
+	noRests()
+	_, ask, keyID := keyHeldUser(t, "free@post.com")
+	out, asked := limitUpstream(t)
+	out("acct-3", 7200)
+	restSeat("codex@so33@post.com", 3*time.Hour)
+	rec := ask("hi")
+	if got := asked(true); rec.Code != 200 || len(got) != 2 || got[0] != "acct-3" || got[1] != "acct-5" {
+		t.Fatalf("%d asked %v: %s", rec.Code, got, rec.Body.String())
+	}
+	if got := keyBound(t, keyID); len(got) != 4 || got[0] != "De@post.com" || got[3] != "free@post.com" {
+		t.Fatalf("user 2 bound to %v", got)
+	}
+}
+
+// Why a user's accounts can't take a request is said of one the key may
+// use: De@post.com first but held from the key, kaAAw@ not serving the
+// model, is the 400 of the model, not a 403 for the key; bound to only
+// such as De, it is the key's 403.
+func TestUserBoundRefusalPassesOverKeyHeld(t *testing.T) {
+	de := Weighed{Provider: "codex", Kind: "account", Who: "De@post.com", Model: "gpt-5.5", Held: true}
+	ka := Weighed{Provider: "codex", Kind: "account", Who: "kaAAw@post.com", Model: "gpt-5.5", Barred: true}
+	both := userBinding{Who: "codex@de@post.com", Account: "De@post.com", More: []userSeat{{Who: "codex@kaaaw@post.com", Account: "kaAAw@post.com"}}}
+	if r := boundRefusal("2", both, "codex", nil, planned{left: []Weighed{de, ka}}); r.status != 400 || !strings.Contains(r.msg, "doesn't serve gpt-5.5") {
+		t.Fatalf("De held, kaAAw not serving: %d %s", r.status, r.msg)
+	}
+	alone := userBinding{Who: "codex@de@post.com", Account: "De@post.com"}
+	if r := boundRefusal("2", alone, "codex", nil, planned{left: []Weighed{de}}); r.status != 403 {
+		t.Fatalf("De alone, held: %d %s", r.status, r.msg)
+	}
+}
+
+// Every account held at its cap: the user is back when the first of its
+// own the key may use is, never at one held from the key.
+func TestUserCappedForPassesOverKeyHeld(t *testing.T) {
+	fresh(t)
+	userBinds.Lock()
+	userBinds.m, userBinds.stale = nil, false
+	userBinds.Unlock()
+	now := time.Now().UTC()
+	writeUsers(t, userFile{Keys: map[string]map[string]map[string]userBinding{"k1": {"codex": {
+		"2": {Who: "codex@de@post.com", Account: "De@post.com", At: now, Used: now, More: []userSeat{{Who: "codex@kaaaw@post.com", Account: "kaAAw@post.com", At: now}}},
+	}}}})
+	soon, later := now.Add(time.Hour), now.Add(3*time.Hour)
+	ws := []Weighed{
+		{Provider: "codex", Kind: "account", Who: "De@post.com", Model: "gpt-5.5", Capped: 90, Used: 95, CapBack: &soon, Held: true},
+		{Provider: "codex", Kind: "account", Who: "kaAAw@post.com", Model: "gpt-5.5", Capped: 90, Used: 95, CapBack: &later},
+	}
+	if limit, until := cappedFor("k1", "2", "codex", "gpt-5.5", ws, soon); limit != "cap" || !until.Equal(later) {
+		t.Fatalf("%q until %v, want kaAAw@'s %v", limit, until, later)
 	}
 }

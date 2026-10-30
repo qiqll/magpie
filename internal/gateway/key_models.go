@@ -273,15 +273,24 @@ func allowedCandidates(who access.Identity, cs []candidate, pl planned, members 
 	gone := func(c candidate) bool {
 		return !members[c.p.ID+"/"+c.model] && !modelAllowed(who, c.p, c.model) || !accountAllowed(who, c)
 	}
-	// one left out at its cap or to be signed in again that the key may
-	// not use is said held, as one in the order is: a pin to it is told
-	// the key may not use it, not how the account is
-	for _, c := range append(slices.Clone(pl.capped), pl.lapsed...) {
-		if !accountAllowed(who, c) {
-			for i, w := range pl.left {
-				if w.ID == c.rest && w.Model == c.model && (w.Capped > 0 || w.Lapsed != "") {
-					pl.left[i].Held = true
-				}
+	// every one left out that the key may not use is said held, as one
+	// in the order is, whatever left it out (at its cap, to be signed in
+	// again, held for its credits, set not to serve the model, its list
+	// lacking it): a pin to it is told the key may not use it, not how
+	// the account is, and a user bound to it isn't told it serves it nor
+	// when it is back (keyHeld)
+	if len(who.Accounts) > 0 {
+		judged := map[string]bool{} // rest → the key may use it
+		for _, c := range slices.Concat(pl.capped, pl.lapsed, pl.held, pl.unlisted) {
+			judged[c.rest] = accountAllowed(who, c)
+		}
+		for i, w := range pl.left {
+			ok, seen := judged[w.ID]
+			if !seen {
+				ok = leftAllowed(who, w)
+			}
+			if !ok {
+				pl.left[i].Held = true
 			}
 		}
 	}
@@ -303,6 +312,25 @@ func allowedCandidates(who access.Identity, cs []candidate, pl planned, members 
 	}
 	pl.unlisted, pl.unlistedW = unlisted, unlistedW
 	return out, pl, held
+}
+
+// leftAllowed is accountAllowed for w, left out of a plan with no
+// candidate kept beside it (one set not to serve the model, barredOf):
+// an account by its stable id, a key of several by the fingerprint its
+// rest id ends in. A provider's one key isn't told by its row, and
+// counts as allowed, as it did.
+func leftAllowed(who access.Identity, w Weighed) bool {
+	switch {
+	case len(who.Accounts) == 0:
+		return true
+	case w.Kind == "account" && w.Who != "":
+		return who.AllowsAccount(w.Provider, provider.LoginID(w.Agent, w.Who))
+	case w.Kind == "key":
+		if _, ref, ok := strings.Cut(w.ID, "#"); ok {
+			return who.AllowsAccount(w.Provider, ref)
+		}
+	}
+	return true
 }
 
 // accountAllowed says the key may use a candidate's account or key: a
