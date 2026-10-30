@@ -700,10 +700,10 @@ func TestKeyLimitHoldsTheClassifiersAsk(t *testing.T) {
 	s, _, _, c := intented(t, provider.Rule{Use: "b/big", Intent: "writing or fixing tests"})
 	c.set("1", 0)
 	budget.Forget()
-	pinLimitClock(t)
+	at := pinLimitClock(t)
 	keys, secrets := newCaller(t, "Capped", "Free")
 	setLimit(t, keys[0].ID, &access.Limit{Period: "day", Tokens: 1000})
-	budget.Append(usage.Record{Time: time.Now(), Provider: "a", Model: "small", Input: 999, Status: 200, CallerKeyID: keys[0].ID})
+	budget.Append(usage.Record{Time: at.Add(-time.Minute), Provider: "a", Model: "small", Input: 999, Status: 200, CallerKeyID: keys[0].ID})
 	post := func(secret, text string) (int, string, Route) {
 		t.Helper()
 		rec := httptest.NewRecorder()
