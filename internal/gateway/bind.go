@@ -129,6 +129,16 @@ func askAsUser(ctx context.Context, h http.Header) {
 	}
 }
 
+// askedAs is ctx asked for the user as is (forUser): for an ask made
+// later, from a request that carries none of its own (a Claude Code
+// run's web search, asked back through its MCP callback).
+func askedAs(ctx, as context.Context) context.Context {
+	if f, ok := as.Value(askedForKey{}).(askedFor); ok {
+		return context.WithValue(ctx, askedForKey{}, f)
+	}
+	return ctx
+}
+
 // askedUser is the user ctx is asked for (forUser), with its gateway
 // key's id, whose users are its own; "" for none.
 func askedUser(ctx context.Context) string {

@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -56,7 +57,11 @@ func TestServeNeedsTheUserWhoeverCalls(t *testing.T) {
 		{"pinned", provider.Responses, strings.Replace(resp, "%s", "codex/gpt-5.5", 1), map[string]string{AccountHeader: "spare@example.com"}, "--bind=user"},
 		{"magpie's own", provider.Chat, `{"model":"codex/gpt-5.5","messages":[{"role":"user","content":"hi"}]}`, map[string]string{"User-Agent": RouterAgent}, "--bind=user"},
 	} {
+		was := len(s.Recent())
 		rec := serveAs(s, c.from, c.body, c.h)
+		if n := len(s.Recent()); n != was+1 {
+			t.Errorf("%s: %d calls logged, want 1", c.name, n-was)
+		}
 		if rec.Code != 400 || !strings.Contains(rec.Body.String(), c.says) {
 			t.Errorf("%s: %d %s", c.name, rec.Code, rec.Body.String())
 		}
@@ -148,7 +153,7 @@ var serveCallers = map[string]string{
 	"codexShaped":     "Codex's request on CodexPath or handle, as it came",
 	"codexPrediction": "Codex's request on CodexPath or handle, as it came",
 	"askChat":         "a classifier's ask, its turn's user (askFor, askAsUser)",
-	"searchWith":      "a web search, its request's user (forUser, askAsUser)",
+	"searchWith":      "a web search, its request's user (forUser, askAsUser), a Claude run's its turn's (runSearch)",
 	"askVisionWith":   "an image description or question, its request's user (forUser, askAsUser)",
 }
 
@@ -206,5 +211,47 @@ func TestEveryServeCallerIsKnown(t *testing.T) {
 		if !slices.Contains(found, fn) {
 			t.Errorf("%s no longer calls serve: take it out of serveCallers", fn)
 		}
+	}
+}
+
+// Bound by user, a Claude Code run's web search, asked back through its
+// MCP callback with no user of its own, is asked of the user of the turn
+// that started the run, on that user's account, never another's; a run
+// started for no user's turn searches nothing.
+func TestClaudeRunSearchesAsItsTurnsUser(t *testing.T) {
+	keys, users := dsKeyed(t, provider.Responses)
+	s := byUserUpTo(t, New(), 1)
+	turnOf := func(user string) *http.Request {
+		r := httptest.NewRequest("POST", "/v1/messages", nil)
+		if user != "" {
+			r.Header.Set(UserHeader, user)
+		}
+		return r
+	}
+	// the callback's ctx: no user, as mcpCall's request carries none
+	callback := context.Background()
+	if _, _, err := s.runSearch(turnOf(""))(callback, "weather in Hangzhou"); err == nil {
+		t.Fatal("searched for no user's turn")
+	}
+	if got := keys("deepseek-flash"); len(got) != 0 {
+		t.Fatalf("searched without a user: %q", got)
+	}
+	var alice, bob []string
+	for range 2 {
+		for _, u := range []string{"alice", "bob"} {
+			if _, _, err := s.runSearch(turnOf(u))(callback, "weather in Hangzhou"); err != nil {
+				t.Fatalf("%s: %v", u, err)
+			}
+			got := keys("deepseek-flash")
+			if u == "alice" {
+				alice = append(alice, got[len(got)-1])
+			} else {
+				bob = append(bob, got[len(got)-1])
+			}
+		}
+	}
+	oneKeyEach(t, "a Claude run's search", alice, bob)
+	if n := users(); n != 0 {
+		t.Fatalf("%d searches took the user header to the vendor", n)
 	}
 }

@@ -4419,6 +4419,17 @@ var ratelimitWindows = map[string]string{
 	"seven_day_overage_included": "7d_oi",
 }
 
+// runSearch is the web search a Claude Code run started for r's turn
+// asks for, back through its MCP callback, which names no user: bound by
+// user, asked of the turn's user's accounts (forUser), never of every
+// user's.
+func (s *Server) runSearch(r *http.Request) func(ctx context.Context, query string) (string, []Hit, error) {
+	turn := s.forUser(context.Background(), r)
+	return func(ctx context.Context, query string) (string, []Hit, error) {
+		return s.webSearch(askedAs(ctx, turn), query)
+	}
+}
+
 // serveSubscription answers a request through an agent's own binary: a new
 // turn starts it, a request carrying tool results resumes the turn waiting
 // on them.
@@ -4564,7 +4575,7 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 			run.mu.Lock()
 			run.tools = tools
 			if search.Name != "" {
-				run.search, run.searchName = s.webSearch, search.Name
+				run.search, run.searchName = s.runSearch(r), search.Name
 			}
 			run.mu.Unlock()
 		}
