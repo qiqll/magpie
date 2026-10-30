@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -475,9 +476,11 @@ func TestKimiOwnSearchOnTheUsersKey(t *testing.T) {
 			t.Fatalf("no user, on %s: %v", on.Key, err)
 		}
 	}
+	mu.Lock()
 	if len(keys) != 0 {
 		t.Fatalf("searched for no user with %q", keys)
 	}
+	mu.Unlock()
 
 	alice := httptest.NewRequest("POST", "/v1/messages", nil)
 	alice.Header.Set(UserHeader, "alice")
@@ -492,17 +495,103 @@ func TestKimiOwnSearchOnTheUsersKey(t *testing.T) {
 			t.Fatalf("alice, on %s: %v", on.Key, err)
 		}
 	}
+	mu.Lock()
 	if len(keys) != 2 || keys[0] != mine || keys[1] != mine {
 		t.Fatalf("alice searched with %q, want %q each time", keys, mine)
 	}
+	mu.Unlock()
 
-	keys = nil
 	sess := New()
 	for k, on := range accounts {
+		mu.Lock()
 		keys = nil
-		if _, _, err := sess.ownSearch(turn(context.Background()), on, "latest go"); err != nil || len(keys) != 1 || keys[0] != k {
-			t.Fatalf("bound by session, on %s: searched with %q, %v", k, keys, err)
+		mu.Unlock()
+		_, _, err := sess.ownSearch(turn(context.Background()), on, "latest go")
+		mu.Lock()
+		got := slices.Clone(keys)
+		mu.Unlock()
+		if err != nil || len(got) != 1 || got[0] != k {
+			t.Fatalf("bound by session, on %s: searched with %q, %v", k, got, err)
 		}
+	}
+}
+
+// Bound by user, a Kimi Code turn asked for web search has its plan's
+// own search made on the key its user's chat went on, each user on its
+// own: the route a turn takes (translate's searchingOn), not ownSearch
+// alone.
+func TestKimiTurnSearchesOnItsUsersKey(t *testing.T) {
+	searchSandbox(t)
+	var mu sync.Mutex
+	chats, searches := map[string][]string{}, map[string][]string{}
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		switch r.URL.Path {
+		case "/coding/v1/search":
+			var q struct {
+				Text string `json:"text_query"`
+			}
+			json.Unmarshal(b, &q)
+			mu.Lock()
+			searches[q.Text] = append(searches[q.Text], key)
+			mu.Unlock()
+			io.WriteString(w, `{"search_results":[{"site_name":"Go","title":"Go downloads","url":"https://go.dev/dl/","snippet":"go1.27.1 is the latest release.","date":"2026-09-30"}]}`)
+		case "/coding/v1/chat/completions":
+			var q struct {
+				Messages []map[string]any `json:"messages"`
+			}
+			json.Unmarshal(b, &q)
+			w.Header().Set("Content-Type", "text/event-stream")
+			if last := q.Messages[len(q.Messages)-1]; last["role"] == "tool" {
+				io.WriteString(w, sse(`data: {"id":"d","choices":[{"index":0,"delta":{"role":"assistant","content":"Go 1.27.1 is out."}}]}`,
+					`data: {"id":"d","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`,
+					`data: [DONE]`))
+				return
+			}
+			// the user is in the question, and so in the search asked
+			who, _ := q.Messages[len(q.Messages)-1]["content"].(string)
+			mu.Lock()
+			chats[who] = append(chats[who], key)
+			mu.Unlock()
+			args, _ := json.Marshal(map[string]string{"query": who})
+			call, _ := json.Marshal(map[string]any{"id": "c", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": "call_1", "type": "function", "function": map[string]any{"name": "web_search", "arguments": string(args)}}}}}}})
+			io.WriteString(w, sse("data: "+string(call),
+				`data: {"id":"c","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`,
+				`data: [DONE]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(up.Close)
+	if err := provider.Save(provider.Provider{ID: "kimi", Name: "Kimi Code", Preset: "kimi-code-cn", Key: "sk-a", Keys: []provider.KeyAccount{{Key: "sk-b"}},
+		Chat: up.URL + "/coding/v1", Models: []string{"kimi-for-coding"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := lanGuard(byUserUpTo(t, New(), 1).Handler())
+	for i := 0; i < 2; i++ {
+		for _, u := range []string{"alice", "bob"} {
+			body := `{"model":"kimi/kimi-for-coding","max_tokens":1000,"stream":true,"messages":[{"role":"user","content":"` + u + `"}],
+				"tools":[{"name":"Read","description":"read","input_schema":{"type":"object"}},{"type":"web_search_20250305","name":"web_search","max_uses":8}]}`
+			r := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+			r.RemoteAddr = "127.0.0.1:5000"
+			r.Header.Set(UserHeader, u)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, r)
+			if rec.Code != 200 || !strings.Contains(rec.Body.String(), "Go 1.27.1 is out.") {
+				t.Fatalf("%s: %d %s", u, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, u := range []string{"alice", "bob"} {
+		if len(chats[u]) != 2 || len(searches[u]) != 2 || chats[u][0] != chats[u][1] || searches[u][0] != chats[u][0] || searches[u][1] != chats[u][0] {
+			t.Fatalf("%s chatted on %q and searched on %q: want one key for both", u, chats[u], searches[u])
+		}
+	}
+	if chats["alice"][0] == chats["bob"][0] {
+		t.Fatalf("alice and bob both on %q", chats["alice"][0])
 	}
 }
 

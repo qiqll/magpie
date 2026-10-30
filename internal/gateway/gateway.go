@@ -6871,7 +6871,7 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 				ask = zenRound(zen.z, ask)
 			}
 			// a Kimi Code plan's own searches stay on it
-			r = r.WithContext(searchingOn(r.Context(), p))
+			r = r.WithContext(searchingModel(searchingOn(r.Context(), p), model))
 			return s.searchReply(w, r, from, p.Name, request, u, ask)
 		}
 	}

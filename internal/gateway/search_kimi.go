@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
@@ -38,6 +39,10 @@ const kimiSearchAgent = "KimiCLI/1.52.0"
 // made for.
 type searchOnKey struct{}
 
+// searchModelKey holds the model, as its provider has it, of the
+// conversation a search is made for (searchingOn).
+type searchModelKey struct{}
+
 // searchCallKey holds the id of the model's call a search answers, which
 // kimi-cli sends as X-Msh-Tool-Call-Id.
 type searchCallKey struct{}
@@ -65,6 +70,12 @@ func searchingOn(ctx context.Context, p provider.Provider) context.Context {
 	return context.WithValue(ctx, searchOnKey{}, p)
 }
 
+// searchingModel is ctx for the searches made for model, as the provider
+// serving them has it: not a group's or a profile's name the agent sent.
+func searchingModel(ctx context.Context, model string) context.Context {
+	return context.WithValue(ctx, searchModelKey{}, model)
+}
+
 // ownSearcher is the provider serving the conversation when it searches
 // for itself: by a search service of its own plan (Kimi Code), or, a
 // Google sign-in, by its own Gemini's googleSearch — which a request with
@@ -80,8 +91,8 @@ func ownSearcher(ctx context.Context) (provider.Provider, bool) {
 // user, on the account of p the turn's user is on (usersSearchKey), and
 // for a turn that names no user on none.
 func (s *Server) ownSearch(ctx context.Context, p provider.Provider, query string) (string, []Hit, error) {
-	var model string
-	if f := searchFor(ctx); f != nil {
+	model, _ := ctx.Value(searchModelKey{}).(string)
+	if f := searchFor(ctx); model == "" && f != nil {
 		model = f.Model
 	}
 	if provider.KimiCodeSearch(p) != "" {
@@ -123,27 +134,37 @@ func (s *Server) searchBy(ctx context.Context, p provider.Provider, model, query
 
 // usersSearchKey is p, the turn's account of a plan whose search service
 // is sent its key straight, on the account the user ctx is asked for is
-// on (usersOwn): p's own when the user is on it, else the user's first,
-// as searchBy asks a searcher. Bound by
-// session it is p. Bound by user, a search made for no user, or for one
-// on none of p's accounts that can answer, is refused, never sent on p's
-// key or the provider's first.
+// on: p's own when it is one of the user's seats, resting for the model
+// or not (the service isn't the model), else the user's first as
+// usersOwn has them, as searchBy asks a searcher. Bound by session it is
+// p. Bound by user, a search made for no user, or for one on none of p's
+// accounts that can answer, is refused, never sent on p's key or the
+// provider's first.
 func (s *Server) usersSearchKey(ctx context.Context, p provider.Provider, model string, from provider.Protocol) (provider.Provider, error) {
 	if !s.bind.byUser() {
 		return p, nil
 	}
-	// the provider whole: p may be one of its accounts, a turn's
-	all := p
-	if q, err := provider.Find(p.ID); err == nil {
-		all = *q
+	who := candidate{p: p, model: model, rest: p.ID}.who()
+	if f, ok := ctx.Value(askedForKey{}).(askedFor); ok {
+		userBinds.Lock()
+		loadUsers()
+		seats := userBinds.m[f.key][p.ID][f.user].seats()
+		userBinds.Unlock()
+		if seatIn(seats, who) {
+			return p, nil
+		}
 	}
-	own, _, err := s.usersOwn(ctx, all, model, from)
+	// the provider whole: p may be one of its accounts, a turn's
+	all, err := provider.Find(p.ID)
 	if err != nil {
 		return p, fmt.Errorf("%s: %w", p.Name, err)
 	}
-	who := candidate{p: p, model: model, rest: p.ID}.who()
+	own, _, err := s.usersOwn(ctx, *all, model, from)
+	if err != nil {
+		return p, fmt.Errorf("%s: %w", p.Name, err)
+	}
 	for _, c := range own {
-		if c.who() == who {
+		if strings.EqualFold(c.who(), who) {
 			return c.p, nil
 		}
 	}
