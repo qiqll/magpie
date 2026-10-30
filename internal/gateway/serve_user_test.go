@@ -5,12 +5,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/yetone/magpie/internal/access"
@@ -310,5 +312,47 @@ func TestUsersOnAndOwnRefuseNoUser(t *testing.T) {
 	}
 	if _, bound, err := sess.usersOwn(context.Background(), *p, "gpt-5.5", provider.Responses); bound || err != nil {
 		t.Fatalf("bound by session, usersOwn: bound %v err %v", bound, err)
+	}
+}
+
+// Bound by user, a video that names no user, started past its route's
+// userNeeded, is refused by usersOn, never started on the provider's
+// first key, nobody asked (review of T-024: usersOwnRoute let it by
+// usersOn). Another magpie's videos take that branch.
+func TestUserVideoWithoutAUserStartsNowhere(t *testing.T) {
+	fresh(t)
+	var mu sync.Mutex
+	var made []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		made = append(made, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"vid-1"}`)
+	}))
+	t.Cleanup(up.Close)
+	if err := provider.Save(provider.Provider{ID: "office", Name: "Office", Preset: provider.RemoteMagpiePreset,
+		Chat: up.URL + "/v1", Key: "kA", Keys: []provider.KeyAccount{{Key: "kB"}}, Models: []string{"grok-imagine-video"}}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := provider.Find("office")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := byUser(New())
+	f := filming{Model: "office/grok-imagine-video", Prompt: "a magpie"}
+	r := httptest.NewRequest("POST", "/v1/videos", nil)
+	_, code, err := s.startVideo(context.Background(), r, *p, "grok-imagine-video", f, true)
+	if err == nil || code != http.StatusBadRequest || !strings.Contains(err.Error(), "--bind=user") {
+		t.Fatalf("no user: %d %v", code, err)
+	}
+	mu.Lock()
+	if len(made) != 0 {
+		t.Errorf("started for no user on %v", made)
+	}
+	mu.Unlock()
+	r.Header.Set(UserHeader, "alice")
+	if _, code, err := s.startVideo(context.Background(), r, *p, "grok-imagine-video", f, true); err != nil {
+		t.Fatalf("alice: %d %v", code, err)
 	}
 }

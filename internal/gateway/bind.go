@@ -155,7 +155,7 @@ func askedUser(ctx context.Context) string {
 // would have them (ownOf: a spare added too when each of its accounts is
 // out a while, as for a turn); for an ask that goes to the vendor without
 // a request through serve (Codex's web.run on the ChatGPT backend, a Kimi
-// Code plan's search service). bound is false bound by session: nothing
+// Code plan's search service). Bound by session, bound is false: nothing
 // to narrow. Bound by user, an ask made for no user is refused as noUser
 // refuses its request, never asked of every account of p. With none of
 // the user's to ask, err says why, and none of p's other accounts is
@@ -378,15 +378,10 @@ func (s *Server) usersSeated(r *http.Request, p provider.Provider, cs []candidat
 	}), true
 }
 
-// usersOwnRoute says r is a request of a user's, bound by user: one whose
-// accounts usersOn narrows.
-func (s *Server) usersOwnRoute(r *http.Request) bool {
-	if !s.bind.byUser() {
-		return false
-	}
-	user, bad := userOf(r.Header)
-	return user != "" || bad != ""
-}
+// usersOwnRoute says r goes through usersOn, bound by user: every
+// request, one that names no user too, which usersOn refuses rather than
+// it going out on the provider's first account.
+func (s *Server) usersOwnRoute(r *http.Request) bool { return s.bind.byUser() }
 
 // keepIn is cs with those keep leaves, pl's order index for index with
 // them.
