@@ -17,7 +17,9 @@ import (
 )
 
 // socksTo is a SOCKS5 proxy that carries every connection to addr,
-// whatever host it is asked for, counting them.
+// whatever host it is asked for, counting them; with no addr it answers
+// every CONNECT with "connection refused", so a proxy that won't carry the
+// request fails at once.
 func socksTo(t *testing.T, addr string) (string, *atomic.Int32) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -48,6 +50,10 @@ func socksTo(t *testing.T, addr string) (string, *atomic.Int32) {
 					io.ReadFull(c, l[:])
 					io.CopyN(io.Discard, c, int64(l[0])+2)
 				}
+				if addr == "" {
+					c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+					return
+				}
 				up, err := net.Dial("tcp", addr)
 				if err != nil {
 					c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
@@ -75,9 +81,10 @@ func closedPort(t *testing.T) string {
 }
 
 // A plugin's request goes through a SOCKS5 proxy, as a built-in's does,
-// though Bun can't use one itself; and a proxy that is down, SOCKS or
-// HTTP, is said as Go's transport says it ("proxyconnect …"), so the
-// gateway asks the next account and rests none, as for a built-in's.
+// though Bun can't use one itself; and a proxy that won't carry the
+// request, SOCKS or HTTP, is said as Go's transport says it ("proxyconnect
+// …"), so the gateway asks the next account and rests none, as for a
+// built-in's.
 func TestPluginSOCKSProxy(t *testing.T) {
 	sandbox(t)
 	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +118,16 @@ func TestPluginSOCKSProxy(t *testing.T) {
 	if _, b, err := fetch(socks, "http://vendor.invalid/v1/chat/completions"); err != nil || b != "vendor vendor.invalid" || carried.Load() != 1 {
 		t.Fatalf("through the SOCKS proxy: %q, %v; it carried %d", b, err, carried.Load())
 	}
-	deadHTTP, deadSOCKS := "http://"+closedPort(t), "socks5://"+closedPort(t)
+	// A SOCKS proxy that answers CONNECT with "connection refused", rather
+	// than a just-freed port whose answer races the fetch. Its refusal is
+	// there when it is asked.
+	deadSOCKS, _ := socksTo(t, "")
+	// Bound before deadHTTP frees a port: a listener started later can be
+	// handed that port and answer the dead HTTP proxy's requests.
+	if netproxy.ForBun(deadSOCKS) == deadSOCKS {
+		t.Fatal("the SOCKS proxy has no bridge")
+	}
+	deadHTTP := "http://" + closedPort(t)
 	for _, x := range []struct{ proxy, url, says string }{
 		{deadHTTP, "http://vendor.invalid/v1/chat/completions", "proxyconnect tcp: dial tcp 127.0.0.1:"},
 		{deadHTTP, "https://vendor.invalid/v1/chat/completions", "proxyconnect tcp: dial tcp 127.0.0.1:"},
@@ -120,12 +136,20 @@ func TestPluginSOCKSProxy(t *testing.T) {
 			t.Fatalf("%s through %s, which is down: %q, %v; want it to say %q", x.url, x.proxy, b, err, x.says)
 		}
 	}
-	// through a SOCKS proxy that is down, the bridge answers as Go's
-	// transport fails: a 502 saying "socks connect", which the gateway
-	// takes for the proxy's failure
+	// The bridge's 502 is a response for HTTP, while Bun 1.4.3 and later
+	// report a failed HTTPS CONNECT as a transport error. Either form is
+	// the proxy's failure the gateway takes, so it asks the next account
+	// and rests none.
 	for _, url := range []string{"http://vendor.invalid/v1/chat/completions", "https://vendor.invalid/v1/chat/completions"} {
-		if code, b, err := fetch(deadSOCKS, url); err != nil || code != 502 || !strings.HasPrefix(b, "socks connect tcp 127.0.0.1:") {
-			t.Fatalf("%s through a SOCKS proxy that is down: %d %q, %v", url, code, b, err)
+		code, b, err := fetch(deadSOCKS, url)
+		if err != nil {
+			if !strings.HasPrefix(err.Error(), "proxyconnect tcp: 502 Bad Gateway") {
+				t.Fatalf("%s through a SOCKS proxy that refuses: %d %q, %v", url, code, b, err)
+			}
+			continue
+		}
+		if code != 502 || !strings.HasPrefix(b, "socks connect tcp 127.0.0.1:") {
+			t.Fatalf("%s through a SOCKS proxy that refuses: %d %q, %v", url, code, b, err)
 		}
 	}
 }
