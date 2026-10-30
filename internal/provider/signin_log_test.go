@@ -114,7 +114,7 @@ func TestClaudeSignInFailureIsLogged(t *testing.T) {
 	if err := SubmitSignInCallback(st.ID, "http://localhost:1/callback?code=secret-pasted&state=st"); err == nil {
 		t.Fatal("an address from another sign-in was taken")
 	}
-	logSays(t, buf, "sign-in claude ("+st.ID+"): what was pasted wasn't taken")
+	logSays(t, buf, "sign-in claude ("+st.ID+") paste refused: what was pasted wasn't taken")
 	if err := SubmitSignInCallback(st.ID, "http://localhost:"+port+"/callback?code=secret-own&state=st"); err == nil {
 		t.Fatal("an address nothing answered was taken")
 	}

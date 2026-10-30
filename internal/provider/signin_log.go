@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -115,9 +116,28 @@ func httpStatusOf(err error) int {
 	return 0
 }
 
-// failedWith is a sign-in's end on err, its status kept for the log.
+// failedWith is a sign-in's end on err, its status and errReason kept for
+// the log.
 func failedWith(err error) SignInState {
-	return SignInState{State: "failed", Error: err.Error(), status: httpStatusOf(err)}
+	return SignInState{State: "failed", Error: err.Error(), status: httpStatusOf(err), logWhy: errReason(err)}
+}
+
+// errReason is err's text for the log with the request it names, when an
+// address's request failed (a *url.Error), said by what was done and the
+// host alone: the address, its path and query (a code, a state) in it,
+// would have logReason leave the whole reason out, the network's own
+// error with it ("dial tcp: i/o timeout").
+func errReason(err error) string {
+	why := err.Error()
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return why
+	}
+	host := "an address"
+	if u, perr := url.Parse(ue.URL); perr == nil && u.Host != "" {
+		host = u.Host
+	}
+	return strings.Replace(why, ue.Error(), fmt.Sprintf("%s %s: %v", ue.Op, host, ue.Err), 1)
 }
 
 // logLapsed logs that the account of agent and user has to be signed in
@@ -155,6 +175,20 @@ type refreshFailure struct {
 // isn't logged again.
 const refreshFailedQuiet = 5 * time.Minute
 
+// digits are the numbers in a failure's words.
+var digits = regexp.MustCompile(`[0-9]+`)
+
+// rootErr is the error err wraps at its end.
+func rootErr(err error) error {
+	for {
+		next := errors.Unwrap(err)
+		if next == nil {
+			return err
+		}
+		err = next
+	}
+}
+
 // refreshKey is an account's key in refreshFailedSaid.
 func refreshKey(agent, user string) string { return strings.ToLower(agent + "\x00" + user) }
 
@@ -169,13 +203,16 @@ func logRefreshFailed(agent, user string, err error) {
 	if errors.Is(err, context.Canceled) {
 		return // the request that asked went away: nothing said of the sign-in
 	}
-	why, status, now := err.Error(), httpStatusOf(err), time.Now()
+	why, status, now := errReason(err), httpStatusOf(err), time.Now()
+	// the same failure is the same status, error and words but for its
+	// numbers: a dial's port, a count, a time change from one try to the next
+	same := fmt.Sprintf("%d %T %s", status, rootErr(err), digits.ReplaceAllString(why, "#"))
 	if was, ok := refreshFailedSaid.Load(k); ok {
-		if f := was.(refreshFailure); f.why == why && now.Sub(f.at) < refreshFailedQuiet {
+		if f := was.(refreshFailure); f.why == same && now.Sub(f.at) < refreshFailedQuiet {
 			return
 		}
 	}
-	refreshFailedSaid.Store(k, refreshFailure{why, now})
+	refreshFailedSaid.Store(k, refreshFailure{same, now})
 	line := fmt.Sprintf("sign-in: %s account %s refresh failed", agent, logName(user))
 	if status != 0 {
 		line += fmt.Sprintf(" HTTP %d", status)

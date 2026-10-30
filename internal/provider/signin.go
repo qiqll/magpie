@@ -100,6 +100,9 @@ type SignInState struct {
 	// status is the vendor's HTTP status a sign-in failed on, for the log
 	// (failedWith); 0 for none known
 	status int
+	// logWhy is the failure as the log has it, when it isn't Error: an
+	// address's request failed, said by its host (errReason)
+	logWhy string
 }
 
 type signInFlow struct {
@@ -531,7 +534,7 @@ func logPasteRefused(s *signInFlow, raw string, err error) {
 		if raw = strings.TrimSpace(raw); raw != "" {
 			why = strings.ReplaceAll(why, raw, "…")
 		}
-		log.Printf("sign-in %s (%s): what was pasted wasn't taken: %s", st.Agent, st.ID, logReason(why))
+		log.Print(signInLine(SignInState{ID: st.ID, Agent: st.Agent}, "paste refused", 0) + ": what was pasted wasn't taken: " + logReason(why))
 	}
 }
 
@@ -703,12 +706,15 @@ func (s *signInFlow) finish(out SignInState) bool {
 	// after the lock, as its writer can block
 	switch out.State {
 	case "failed":
-		at := SignInState{ID: out.ID, Agent: out.Agent, User: user}
+		at, why := SignInState{ID: out.ID, Agent: out.Agent, User: user}, out.Error
+		if out.logWhy != "" {
+			why = out.logWhy
+		}
 		if said != "" {
-			log.Print(signInLine(at, "failed", out.status) + ": " + logReason(out.Error) + " (" + said + ")")
+			log.Print(signInLine(at, "failed", out.status) + ": " + logReason(why) + " (" + said + ")")
 			break
 		}
-		logSignIn(at, "failed", out.status, out.Error)
+		logSignIn(at, "failed", out.status, why)
 	case "done":
 		logSignIn(SignInState{ID: out.ID, Agent: out.Agent, User: out.User}, "done", 0, out.Error)
 	case "canceled":
