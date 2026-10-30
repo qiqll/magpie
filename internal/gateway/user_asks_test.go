@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -431,6 +432,78 @@ func TestKimiSearchOnTheUsersKey(t *testing.T) {
 		}
 	}
 	oneKeyEach(t, "Kimi Code's search", alice, bob)
+}
+
+// Bound by user, a Kimi Code turn's own search (ownSearch) goes on the
+// key its user is on, never on the turn's account when it is another's,
+// and a search made for no user is sent on no key at all (T-025: it went
+// on whichever account the turn had).
+func TestKimiOwnSearchOnTheUsersKey(t *testing.T) {
+	searchSandbox(t)
+	var mu sync.Mutex
+	var keys []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.ReadAll(r.Body)
+		mu.Lock()
+		keys = append(keys, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		mu.Unlock()
+		io.WriteString(w, `{"search_results":[{"site_name":"Go","title":"Go downloads","url":"https://go.dev/dl/","snippet":"go1.27.1 is the latest release.","date":"2026-09-30"}]}`)
+	}))
+	t.Cleanup(up.Close)
+	if err := provider.Save(provider.Provider{ID: "kimi", Name: "Kimi Code", Preset: "kimi-code-cn", Key: "sk-a", Keys: []provider.KeyAccount{{Key: "sk-b"}},
+		Chat: up.URL + "/coding/v1", Models: []string{"kimi-for-coding"}}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := provider.Find("kimi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts := map[string]provider.Provider{}
+	for _, c := range perKey(*p, "kimi-for-coding", provider.Anthropic) {
+		accounts[c.p.Key] = c.p
+	}
+	if len(accounts) != 2 {
+		t.Fatalf("%d keys, want two to tell the user's from another's", len(accounts))
+	}
+	s := byUserUpTo(t, New(), 1)
+	turn := func(ctx context.Context) context.Context {
+		return context.WithValue(ctx, searchForKey{}, &CallFor{Model: "kimi-for-coding"})
+	}
+
+	for _, on := range accounts {
+		if _, _, err := s.ownSearch(turn(context.Background()), on, "latest go"); err == nil || !strings.Contains(err.Error(), "--bind=user") {
+			t.Fatalf("no user, on %s: %v", on.Key, err)
+		}
+	}
+	if len(keys) != 0 {
+		t.Fatalf("searched for no user with %q", keys)
+	}
+
+	alice := httptest.NewRequest("POST", "/v1/messages", nil)
+	alice.Header.Set(UserHeader, "alice")
+	ctx := turn(s.forUser(context.Background(), alice))
+	own, _, err := s.usersOwn(ctx, *p, "kimi-for-coding", provider.Anthropic)
+	if err != nil || len(own) != 1 {
+		t.Fatalf("alice's: %d, %v", len(own), err)
+	}
+	mine := own[0].p.Key
+	for _, on := range accounts {
+		if _, _, err := s.ownSearch(ctx, on, "latest go"); err != nil {
+			t.Fatalf("alice, on %s: %v", on.Key, err)
+		}
+	}
+	if len(keys) != 2 || keys[0] != mine || keys[1] != mine {
+		t.Fatalf("alice searched with %q, want %q each time", keys, mine)
+	}
+
+	keys = nil
+	sess := New()
+	for k, on := range accounts {
+		keys = nil
+		if _, _, err := sess.ownSearch(turn(context.Background()), on, "latest go"); err != nil || len(keys) != 1 || keys[0] != k {
+			t.Fatalf("bound by session, on %s: searched with %q, %v", k, keys, err)
+		}
+	}
 }
 
 // A user is its gateway key's own: the same id sent with two keys is two

@@ -76,11 +76,26 @@ func ownSearcher(ctx context.Context) (provider.Provider, bool) {
 }
 
 // ownSearch searches with the conversation's own provider (ownSearcher).
+// A plan's search service is sent the key straight, past serve: bound by
+// user, on the account of p the turn's user is on (usersSearchKey), and
+// for a turn that names no user on none.
 func (s *Server) ownSearch(ctx context.Context, p provider.Provider, query string) (string, []Hit, error) {
+	var model string
+	if f := searchFor(ctx); f != nil {
+		model = f.Model
+	}
 	if provider.KimiCodeSearch(p) != "" {
+		p, err := s.usersSearchKey(ctx, p, model, provider.Anthropic)
+		if err != nil {
+			return "", nil, err
+		}
 		return s.kimiSearch(ctx, p, query)
 	}
 	if wbSearches(p) {
+		p, err := s.usersSearchKey(ctx, p, model, provider.Chat)
+		if err != nil {
+			return "", nil, err
+		}
 		return s.wbSearch(ctx, p, query)
 	}
 	ctx, cancel := context.WithTimeout(context.WithValue(ctx, searchingKey{}, true), searchTimeout)
@@ -104,6 +119,35 @@ func (s *Server) searchBy(ctx context.Context, p provider.Provider, model, query
 		return s.kimiSearch(ctx, p, query)
 	}
 	return s.searchWith(ctx, p, model, query, effort)
+}
+
+// usersSearchKey is p, the turn's account of a plan whose search service
+// is sent its key straight, on the account the user ctx is asked for is
+// on (usersOwn): p's own when the user is on it, else the user's first,
+// as searchBy asks a searcher. Bound by
+// session it is p. Bound by user, a search made for no user, or for one
+// on none of p's accounts that can answer, is refused, never sent on p's
+// key or the provider's first.
+func (s *Server) usersSearchKey(ctx context.Context, p provider.Provider, model string, from provider.Protocol) (provider.Provider, error) {
+	if !s.bind.byUser() {
+		return p, nil
+	}
+	// the provider whole: p may be one of its accounts, a turn's
+	all := p
+	if q, err := provider.Find(p.ID); err == nil {
+		all = *q
+	}
+	own, _, err := s.usersOwn(ctx, all, model, from)
+	if err != nil {
+		return p, fmt.Errorf("%s: %w", p.Name, err)
+	}
+	who := candidate{p: p, model: model, rest: p.ID}.who()
+	for _, c := range own {
+		if c.who() == who {
+			return c.p, nil
+		}
+	}
+	return own[0].p, nil
 }
 
 // kimiSearch asks a Kimi Code plan's search service.
