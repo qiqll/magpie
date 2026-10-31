@@ -119,13 +119,10 @@ func (s *Server) ownSearch(ctx context.Context, p provider.Provider, query strin
 func (s *Server) searchBy(ctx context.Context, p provider.Provider, model, query, effort string) (string, []Hit, error) {
 	if provider.KimiCodeSearch(p) != "" {
 		// the plan's service is asked with a key straight: bound by user,
-		// the user's own (usersOwn), never the provider's first for all
-		own, bound, err := s.usersOwn(ctx, p, model, provider.Anthropic)
+		// the user's own (usersSearchKey), never the provider's first for all
+		p, err := s.usersSearchKey(ctx, p, model, provider.Anthropic)
 		if err != nil {
-			return "", nil, fmt.Errorf("%s: %w", p.Name, err)
-		}
-		if bound {
-			p = own[0].p
+			return "", nil, err
 		}
 		return s.kimiSearch(ctx, p, query)
 	}
@@ -133,22 +130,27 @@ func (s *Server) searchBy(ctx context.Context, p provider.Provider, model, query
 }
 
 // usersSearchKey is p, the turn's account of a plan whose search service
-// is sent its key straight, on the account the user ctx is asked for is
-// on: p's own when it is one of the user's seats, resting for the model
-// or not (the service isn't the model), else the user's first as
-// usersOwn has them, as searchBy asks a searcher. Bound by session it is
-// p. Bound by user, a search made for no user, or for one on none of p's
-// accounts that can answer, is refused, never sent on p's key or the
-// provider's first.
+// is sent its key straight, or the provider a searcher is (searchBy), on
+// the account the user ctx is asked for is on: p's own when it is one of
+// the user's seats, resting for the model or not (the service isn't the
+// model), else the first of the user's seats p has, read only, else the
+// user's first as usersOwn has them, bound now when it is on none. A
+// seat out a while isn't traded for a spare bound for one search. Bound
+// by session it is p. Bound by user, a search made for no user, or for
+// one on none of p's accounts that can answer, is refused, never sent on
+// p's key or the provider's first.
 func (s *Server) usersSearchKey(ctx context.Context, p provider.Provider, model string, from provider.Protocol) (provider.Provider, error) {
 	if !s.bind.byUser() {
 		return p, nil
 	}
 	who := candidate{p: p, model: model, rest: p.ID}.who()
+	var seats []userSeat
 	if f, ok := ctx.Value(askedForKey{}).(askedFor); ok {
 		userBinds.Lock()
-		loadUsers()
-		seats := userBinds.m[f.key][p.ID][f.user].seats()
+		// unreadable, the seats are unknown: usersOwn refuses
+		if loadUsers() == nil {
+			seats = userBinds.m[f.key][p.ID][f.user].seats()
+		}
 		userBinds.Unlock()
 		if seatIn(seats, who) {
 			return p, nil
@@ -158,6 +160,16 @@ func (s *Server) usersSearchKey(ctx context.Context, p provider.Provider, model 
 	all, err := provider.Find(p.ID)
 	if err != nil {
 		return p, fmt.Errorf("%s: %w", p.Name, err)
+	}
+	if len(seats) > 0 {
+		pool, _ := s.plan(*all, model, from)
+		for _, st := range seats {
+			for _, c := range pool {
+				if c.p.ID == p.ID && strings.EqualFold(c.who(), st.Who) {
+					return c.p, nil
+				}
+			}
+		}
 	}
 	own, _, err := s.usersOwn(ctx, *all, model, from)
 	if err != nil {
