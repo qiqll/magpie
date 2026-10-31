@@ -319,11 +319,14 @@ func TestUserKeptBoundWhenItsAccountIsRevoked(t *testing.T) {
 	}
 }
 
-// An account found revoked by any request, a bound user's or not (a
-// group's), keeps the users bound to it (the owner's decision,
-// 2026-10-29; it used to let them go).
+// An account found revoked by any request, another user's (a group's,
+// bound on the member's provider as it goes: groupTurn), keeps the users
+// bound to it (the owner's decision, 2026-10-29; it used to let them go).
+// Accounts are shared with any number of users, for ops's spare not to
+// fill the one alice is given next.
 func TestUsersKeptBoundToAnAccountRevokedForAnother(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
+	writeTiers(t, `{"default":"free","tiers":{"free":{"credits":1000,"max_accounts":2}}}`)
 	tried := revokedUpstream(t, codexAccessToken(t))
 	if err := provider.SaveGroup(provider.Group{Name: "Solo", Members: []string{"codex/gpt-5.5"}}); err != nil {
 		t.Fatal(err)
@@ -379,12 +382,19 @@ func TestUnreadableUserBindingsRefuse(t *testing.T) {
 	if b, _ := os.ReadFile(usersPath()); string(b) != `{"users": {"codex": {"alice": ` {
 		t.Fatalf("written over: %s", b)
 	}
-	// a group's request isn't bound: it reads no file, and goes on
+	// a group's request is bound too (groupTurn): refused the same, nothing
+	// sent, the file left as it was
 	if err := provider.SaveGroup(provider.Group{Name: "Solo", Members: []string{"codex/gpt-5.5"}}); err != nil {
 		t.Fatal(err)
 	}
-	if rec := userPost(s, "group/solo", "alice", "hi"); rec.Code != 200 {
+	if rec := userPost(s, "group/solo", "alice", "hi"); rec.Code != 503 || !strings.Contains(rec.Body.String(), "user-accounts.json") {
 		t.Fatalf("a group's: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := asked(true); len(got) != 0 {
+		t.Fatalf("a group's asked: %v", got)
+	}
+	if b, _ := os.ReadFile(usersPath()); string(b) != `{"users": {"codex": {"alice": ` {
+		t.Fatalf("written over by a group's: %s", b)
 	}
 }
 

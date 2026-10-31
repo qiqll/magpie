@@ -2508,6 +2508,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 		}
 	}
+	// a routing group's turn, bound by user: each member's provider on its
+	// user's own alone, narrowed as the tries reach it (groupTurn), never
+	// another user's; after the key's holds and the sealed narrowing, as a
+	// provider's turn is. A Codex reset spent before any try would be
+	// another's (bindsUser)
+	var gt *groupTurn
+	if isGroup && pin == "" {
+		if gt = s.groupTurnOf(r, ms, cands, pl); gt != nil {
+			bindsUser = true
+		}
+	}
 	// a pin to a lapsed account with no user bound: of those left, only
 	// one that can answer now takes it (a user's own are judged once
 	// growUser has had its say, below)
@@ -2780,7 +2791,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		capture.tools = tools
 	}
 	tierAsked := bodyTier(from, body) // the service tier the client asked for (#1784)
-	tr := s.trace.beginFor(r, Route{turn: turn, dirOf: dirOf(from, plain), tools: tools, imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, call.Agent), TitleLink: link, Pinned: pin, User: userBound, Time: start, Agent: call.Agent, Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, call.Kind), Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Tier: tierAsked, Provider: p.ID, Group: group, Rule: hit, Nested: nested, SealedTask: sealedTask, LeadAccount: leadAccount, Compaction: compactionWho(checkpoint), Subagent: subagent, SubagentEffort: subagentEffort, Sub: subOf(r.Header), SubagentID: subagentID, Affinity: shown, Order: pl.order, Left: append(slices.Clip(pl.left), smallW...)})
+	tr := s.trace.beginFor(r, Route{turn: turn, dirOf: dirOf(from, plain), tools: tools, imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, call.Agent), TitleLink: link, Pinned: pin, User: userBound, Time: start, Agent: call.Agent, Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, call.Kind), Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Tier: tierAsked, Provider: p.ID, Group: group, Rule: hit, Nested: nested, SealedTask: sealedTask, LeadAccount: leadAccount, Compaction: compactionWho(checkpoint), Subagent: subagent, SubagentEffort: subagentEffort, Sub: subOf(r.Header), SubagentID: subagentID, Affinity: shown, Order: gt.plan(pl.order), Left: gt.plan(append(slices.Clip(pl.left), smallW...))})
+	// the plan of a group's provider narrowed as the tries reach it, in
+	// the routing log too (groupTurn)
+	seen := func(order, left []Weighed) {
+		s.trace.update(tr, func(t *Route) { t.Order, t.Left = append(t.Order, order...), append(t.Left, left...) })
+	}
 	if watched != nil {
 		watched.routeID = tr.ID
 	}
@@ -2888,7 +2904,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 		}()
 	}
+	ranOut := false // a group's tries left none of its user's own to ask (groupTurn)
 	for i := 0; i < len(cands); i++ {
+		// a group's member is narrowed to its user's own as the tries
+		// reach its provider, another user's left out (groupTurn)
+		if cands = gt.reach(cands, i, seen); i >= len(cands) {
+			ranOut = true
+			break
+		}
 		c := cands[i]
 		if j := s.laneMate(cands, i, isGroup, gaveWay); j > i {
 			// its key or account is full, and another of its provider's,
@@ -3693,6 +3716,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			skipped = append(skipped, c.label()+": "+call.Error)
 			continue
 		}
+		if gt != nil && hw.failed() && failureOf(c, hw.code(), hw.errBody()) == failAuth {
+			// one of a group's user's accounts has to be signed in again,
+			// the last of its own of its provider: a spare of that
+			// provider's goes next to it, before another member's
+			if next := gt.spare(c, hw.code(), hw.errBody(), cands[i+1:]); len(next) > 0 {
+				cands, last = slices.Concat(cands[:i+1], next, cands[i+1:]), false
+			}
+		}
 		if !last && hw.failed() && failureOf(c, hw.code(), hw.errBody()) == failAuth {
 			// the account's sign-in is gone, refused by Anthropic: no rest
 			// brings it back, so none is told; it is passed over until it
@@ -3937,6 +3968,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			var next []candidate
 			var nextW []Weighed
 			next, nextW, unlisted, unlistedW = unlistedNext(unlisted, unlistedW, key)
+			next, nextW = gt.keep(next, nextW) // a group's user's own alone
 			if len(next) > 0 && last {
 				// a lapse is never the error told (lapsedTry), as no
 				// caller is told a sign-in lapsed
@@ -4052,7 +4084,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// the user lets spend its resets by itself, its week used up,
 			// spends one and is asked again
 			autoReset = true
-			if pick, out, ok := s.autoReset(r.Context(), all, c, pl.held); ok {
+			if pick, out, ok := s.autoReset(r.Context(), gt.only(all), c, gt.only(pl.held)); ok {
 				try.Fail = failQuota
 				try.Reset = &AutoReset{Who: pick.p.Account.User, Text: out.Text(), Agent: pick.p.Account.Agent}
 				s.trace.update(tr, func(t *Route) {
@@ -4078,7 +4110,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			var next []candidate
 			var nextW []Weighed
 			for k, x := range small {
-				if _, resting := restingOf(x); resting {
+				if _, resting := restingOf(x); resting || !gt.askable(x) {
 					continue
 				}
 				next = append(next, x)
@@ -4264,6 +4296,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 		break
+	}
+	if ranOut {
+		// none of a group's user's own was left to ask: told as its binding
+		// refused it, never another user's asked in its place
+		s.groupTurnRefused(w, from, kept, &call, gt)
 	}
 	if len(skipped) > 0 {
 		call.Fallback = strings.Join(skipped, "; ")

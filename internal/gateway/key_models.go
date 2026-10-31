@@ -372,15 +372,14 @@ func allowedKey(who access.Identity, p provider.Provider, model string) (provide
 // them (#1657): in its routing's order, a key or account whose own list
 // of models (#474) leaves the model out never, one the vendor lists the
 // model to another only after those that list it, and those the calling
-// key may not use (#905) left out. Asked on its own (alone), not as a
-// group's member, they are its user's alone, bound by user (usersOn), as
-// a turn's are, with the userTry their tries go with (nil when nothing is
-// bound). p's fallback models are not among them. With none left it
+// key may not use (#905) left out. Bound by user, they are its user's
+// alone (usersOn), asked on its own or as a group's member, as a turn's
+// are, with the userTry their tries go with (nil when nothing is bound). p's fallback models are not among them. With none left it
 // gives the status and the error the caller is told: 403 when every one
 // is set not to serve the model, or is one the calling key may not use;
 // a userRefusedError (answerUserRefused) when its user's binding refuses
 // it. A provider with no key and no account (a local ollama) is itself.
-func (s *Server) onKeys(r *http.Request, p provider.Provider, model, asked string, alone bool) ([]candidate, *userTry, int, error) {
+func (s *Server) onKeys(r *http.Request, p provider.Provider, model, asked string) ([]candidate, *userTry, int, error) {
 	if p.Account == nil && p.Key == "" {
 		return []candidate{{p: p, model: model, rest: p.ID}}, nil, 0, nil
 	}
@@ -396,15 +395,13 @@ func (s *Server) onKeys(r *http.Request, p provider.Provider, model, asked strin
 			return nil, nil, http.StatusForbidden, errors.New(keyAccountsError(keyWho, asked))
 		}
 	}
-	if alone {
-		// after the key's holds, as a turn's: bound to none it may not use
-		own, _, u, err := s.usersOn(r, q, cs, pl)
-		if err != nil {
-			return nil, nil, userRefusedStatus(err), err
-		}
-		if u != nil {
-			return own, u, 0, nil
-		}
+	// after the key's holds, as a turn's: bound to none it may not use
+	own, _, u, err := s.usersOn(r, q, cs, pl)
+	if err != nil {
+		return nil, nil, userRefusedStatus(err), err
+	}
+	if u != nil {
+		return own, u, 0, nil
 	}
 	if len(cs) == 0 {
 		cs = []candidate{{p: p, model: model, rest: p.ID}}

@@ -342,7 +342,7 @@ func TestUserVideoWithoutAUserStartsNowhere(t *testing.T) {
 	s := byUser(New())
 	f := filming{Model: "office/grok-imagine-video", Prompt: "a magpie"}
 	r := httptest.NewRequest("POST", "/v1/videos", nil)
-	_, code, err := s.startVideo(context.Background(), r, *p, "grok-imagine-video", f, true)
+	_, code, err := s.startVideo(context.Background(), r, *p, "grok-imagine-video", f)
 	if err == nil || code != http.StatusBadRequest || !strings.Contains(err.Error(), "--bind=user") {
 		t.Fatalf("no user: %d %v", code, err)
 	}
@@ -352,7 +352,7 @@ func TestUserVideoWithoutAUserStartsNowhere(t *testing.T) {
 	}
 	mu.Unlock()
 	r.Header.Set(UserHeader, "alice")
-	if _, code, err := s.startVideo(context.Background(), r, *p, "grok-imagine-video", f, true); err != nil {
+	if _, code, err := s.startVideo(context.Background(), r, *p, "grok-imagine-video", f); err != nil {
 		t.Fatalf("alice: %d %v", code, err)
 	}
 }

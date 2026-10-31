@@ -163,8 +163,9 @@ func postAt(s *Server, path, body string, h map[string]string) *httptest.Respons
 
 // Bound by user, every request that asks a model names its user: one
 // without, or with one the header can't take, is a 400 that says so and
-// asks nobody — a group's and one pinned to an account too, though
-// neither is bound. Listing models picks no account, and needs none; a
+// asks nobody — a group's and one pinned to an account too. A pinned
+// one isn't bound; a group's is, on its user's own of each member's
+// provider (groupTurn). Listing models picks no account, and needs none; a
 // count without a user is estimated, asking none
 // (TestUserBindingCountsWithoutTheUserLocally).
 func TestUserBindingNeedsTheUser(t *testing.T) {
@@ -201,23 +202,23 @@ func TestUserBindingNeedsTheUser(t *testing.T) {
 	if got := asked(true); len(got) != 0 {
 		t.Fatalf("asked without a user: %v", got)
 	}
-	// a group's and a pinned request with a user: answered, nobody bound
-	for _, c := range []struct {
-		model string
-		h     map[string]string
-	}{
-		{"group/pair", map[string]string{UserHeader: "alice"}},
-		{"codex/gpt-5.5", map[string]string{UserHeader: "alice", AccountHeader: "spare@example.com"}},
-	} {
-		if rec := postAt(s, "/v1/responses", strings.Replace(resp, "%s", c.model, 1), c.h); rec.Code != 200 {
-			t.Fatalf("%s: %d %s", c.model, rec.Code, rec.Body.String())
-		}
-		if r := lastRoute(s); r.User != nil {
-			t.Fatalf("%s: bound %+v", c.model, r.User)
-		}
+	// a pinned request with a user: answered, nobody bound
+	if rec := postAt(s, "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), map[string]string{UserHeader: "alice", AccountHeader: "spare@example.com"}); rec.Code != 200 {
+		t.Fatalf("pinned: %d %s", rec.Code, rec.Body.String())
+	}
+	if r := lastRoute(s); r.User != nil {
+		t.Fatalf("pinned: bound %+v", r.User)
 	}
 	if _, err := os.Stat(usersPath()); err == nil {
-		t.Fatal("a group's or a pinned request bound its user")
+		t.Fatal("a pinned request bound its user")
+	}
+	// a group's with a user: answered, its user bound on the member's
+	// provider it went to (groupTurn)
+	if rec := postAt(s, "/v1/responses", strings.Replace(resp, "%s", "group/pair", 1), map[string]string{UserHeader: "alice"}); rec.Code != 200 {
+		t.Fatalf("group/pair: %d %s", rec.Code, rec.Body.String())
+	}
+	if b := boundIn(t, "codex"); b["alice"] == "" {
+		t.Fatalf("a group's request didn't bind its user: %v", b)
 	}
 	// no model asked, no user needed
 	rec := httptest.NewRecorder()

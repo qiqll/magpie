@@ -504,7 +504,7 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 		var told []string // of skipped, those the caller is told of: no lapse
 		for i, m := range tries {
 			call.Provider, model = m.Provider.ID, m.Model
-			drew, out, code, capBack, err = s.drawOnAccounts(ctx, r, m.Provider, m.Model, d, !isGroup)
+			drew, out, code, capBack, err = s.drawOnAccounts(ctx, r, m.Provider, m.Model, d)
 			// a group's next member is asked as a chat's would be: while
 			// this one's vendor fails, is out of quota or doesn't serve the
 			// model; a refusal of the request itself is the request's
@@ -858,10 +858,11 @@ func viaFor(p provider.Provider, model string) drawVia {
 // are gone over the same way (#1657): a key whose own list of models
 // leaves the image model out never draws, nor is the first key used for
 // one only another lists; with every key or account set not to serve the
-// model, it is refused with why, as a chat is. Asked on its own (alone),
-// not as a group's member, it goes over its user's accounts alone, bound
-// by user (usersOn), its refusal a userRefusedError.
-func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider.Provider, model string, d drawing, alone bool) (provider.Provider, drawn, int, time.Time, error) {
+// model, it is refused with why, as a chat is. Bound by user, it goes over
+// its user's accounts alone (usersOn), asked on its own or as a group's
+// member, its refusal a userRefusedError: a group's next member is asked
+// on its user's own of that one's provider as the drawing reaches it.
+func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider.Provider, model string, d drawing) (provider.Provider, drawn, int, time.Time, error) {
 	if p.Account == nil && p.Key == "" {
 		// no key and no account (a local ollama): nothing to go over
 		out, code, err := s.draw(ctx, p, model, d)
@@ -919,18 +920,14 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 		// every key or account is set not to serve the model (#474)
 		return p, drawn{}, http.StatusForbidden, time.Time{}, errors.New(barredError(d.Model, barredOf(barred, q, false, provider.Chat, nil)))
 	}
-	var u *userTry
-	if alone {
-		// a user's, bound by user: its own accounts alone, after the
-		// key's holds as a turn's, never the provider's first for all
-		var err error
-		var own []candidate
-		if own, _, u, err = s.usersOn(r, q, cs, pl); err != nil {
-			return p, drawn{}, userRefusedStatus(err), time.Time{}, err
-		}
-		if u != nil {
-			cs = own
-		}
+	// a user's, bound by user: its own accounts alone, after the key's
+	// holds as a turn's, never the provider's first for all
+	own, _, u, err := s.usersOn(r, q, cs, pl)
+	if err != nil {
+		return p, drawn{}, userRefusedStatus(err), time.Time{}, err
+	}
+	if u != nil {
+		cs = own
 	}
 	if len(cs) == 0 {
 		cs = []candidate{{p: p, model: model, rest: p.ID}}
@@ -938,7 +935,6 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 	cs = probeOne(cs) // of those resting, only the one back soonest (#1799)
 	var out drawn
 	var code int
-	var err error
 	for i := 0; i < len(cs); i++ {
 		c := cs[i]
 		p = c.p
