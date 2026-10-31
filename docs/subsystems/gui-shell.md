@@ -404,14 +404,18 @@ covers it in both engines, every language and a narrow window.
 ### /api writes from another port over plain http on the network
 
 This is an open gap, not a design choice. Over plain http at an address
-that isn't loopback, a page on another port of magpie web's host can write
-through `/api`.
+that isn't loopback, a page on another port of magpie web's host (and any
+other same-site page) can write through `/api`.
 
 Why: `magpie web`, and the app's page in a browser (Settings › Network
 and sharing › Browser access), signs a browser in with a `SameSite=Lax`
 cookie (`webGuard`, [`web.go`](../../internal/gui/web.go)). A browser keeps
-a cookie per host, not per port. A page on another port of the same host is
-same-site, so the browser sends that cookie with the page's requests. The
+a cookie per host, not per port, and SameSite judges the site (the scheme
+and the registrable domain), not the host. A page on another port of the
+same host is same-site, and so, when the page is opened by a name rather
+than an IP address, is a plain http page at another name under the same
+registrable domain. The browser sends that cookie with such a page's
+requests. The
 `/api` handlers decode a body as JSON whatever its `Content-Type`, so a
 "simple" request (`text/plain`, a form), which needs no CORS preflight, is
 enough to write. The page can't read the answer, and doesn't need to.
@@ -422,15 +426,18 @@ before every `/api` route by `noFramedAPI`) refuses `Sec-Fetch-Site`
 potentially trustworthy origin: https, localhost and loopback. Served over
 plain http at a LAN address (no `--tls-cert`), the page's requests carry no
 `Sec-Fetch-Site`, so `apiFramed` can't tell magpie web's own page from a
-page on another port. It lets the request through, as it does a CLI's.
+same-site page. It lets the request through, as it does a CLI's.
 
 What it reaches: every write under `/api`, which includes settings,
 providers and accounts, keys, backup import and plugin install
 (`POST /api/plugins/{op}`, which runs code). Only magpie web or the app's
 page over plain http at an address that isn't loopback is open. Loopback
-and https get Fetch Metadata and are covered. The page that writes has to
-be served from the same host on another port: another service on that
-machine, or anything that can get a page served there. A page on another
+and https get Fetch Metadata and are covered, in a browser that sends it
+(Safari before 16.4 sends none, so there the gap is open on every
+address). The page that writes has to be same-site: on another port of the
+same host (another service on that machine, or anything that can get a
+page served there), or, when magpie web is opened by a name, at another
+name under the same registrable domain over plain http. A page on another
 site is cross-site, and is refused already (`SameSite=Lax` also keeps the
 cookie off its POST).
 
@@ -444,8 +451,9 @@ Two ways to fix it, neither chosen yet. Either one needs a test with a
 - **A: with no `Sec-Fetch-Site`, compare `Origin` with the page's own
   origin.** A browser sends `Origin` on every POST, same-origin included.
   When `Sec-Fetch-Site` is missing and `Origin` is there, refuse a
-  non-GET `/api` request whose `Origin` isn't the page's: `Host`, or
-  `X-Forwarded-Host` or `MAGPIE_PUBLIC_URL` behind a proxy. A request
+  non-GET `/api` request whose `Origin`, scheme and host both, isn't the
+  page's: the request's own scheme and `Host`, or `X-Forwarded-Proto` and
+  `X-Forwarded-Host`, or `MAGPIE_PUBLIC_URL`, behind a proxy. A request
   with no `Origin` (a CLI, a script) goes through as now. The cost: behind
   a reverse proxy that rewrites `Host`, sends no `X-Forwarded-Host` and has
   no `MAGPIE_PUBLIC_URL` set, magpie web's own page is refused. A
@@ -461,8 +469,10 @@ Two ways to fix it, neither chosen yet. Either one needs a test with a
   `/api` today. A route that takes another body (`POST /api/icons` takes
   raw bytes as well as JSON) needs the header, not the type. A caller
   missed is a broken button, so B needs a guard test over every `/api`
-  call site. In return it depends on neither Fetch Metadata nor the proxy,
-  so it covers older browsers too.
+  call site. In return it depends on neither `Origin` nor the proxy's
+  headers, so it keeps working behind any proxy and needs no list of the
+  names a page may be at. Both cover a browser that sends no Fetch
+  Metadata: A because it acts only then, B because it never reads it.
 
 ### Shared UI rules
 
