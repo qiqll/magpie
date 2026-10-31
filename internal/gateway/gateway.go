@@ -2465,12 +2465,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// holds and the sealed narrowing, which bind it to none it may not
 	// reach, and before the conversation's own account is kept (strictKeep,
 	// affine), which keeps it among them. Bound by session, no user is
-	// bound, and user-accounts.json is neither read nor written
+	// bound, and user-accounts.json is neither read nor written. A pin is
+	// bound too (the owner's decision of 2026-10-30, T-009): it holds only
+	// to one of the user's own accounts, and one to another's is served as
+	// if unpinned, never on that account
 	bindsUser := false
 	var limitedUser string // the user a limit is said to, as UserLimitHeader
 	var userBound *UserBound
 	pool, poolPl := cands, pl // before the user's narrowing, for a spare
-	if s.bind.byUser() && pin == "" && !isGroup && (pinLapsed == "" || pinProvider == p.ID) {
+	if s.bind.byUser() && !isGroup && (pinLapsed == "" || pinProvider == p.ID) {
 		user, bad := userOf(r.Header)
 		bindsUser, limitedUser = user != "" || bad != "", user
 		if bad != "" {
@@ -2506,6 +2509,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				s.record(call)
 				return
 			}
+			// pinned to an account that isn't one of the user's: served as
+			// if unpinned, on its own (bindUser, growUser). Pinned to one of
+			// its own, that one alone is tried (pinTo, below, told why it
+			// can't take it as before), no spare added in its place
+			if pin != "" {
+				if userBound.owns(pin) {
+					cands, pl = pool, poolPl
+				} else {
+					pin = ""
+				}
+			}
 		}
 	}
 	// a routing group's turn, bound by user: each member's provider on its
@@ -2537,7 +2551,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// (#1797)
 	cands, pl, strictHeld := strictKeep(scope, mode, r.Header, body, cands, pl)
 	grew := false // a spare was added to the user's accounts, once a request
-	if userBound != nil && strictHeld == nil {
+	if userBound != nil && strictHeld == nil && pin == "" {
 		// none of the user's accounts has room: a spare, when each is out
 		// a while, or why none is asked
 		var refused userRefusal
@@ -3765,7 +3779,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			noteTryLapsed(c)
 			authFailed = append(authFailed, c.who())
 			var refused userRefusal
-			if !grew {
+			if !grew && pin == "" { // a pin to one of its own is that one alone
 				var next []candidate
 				var nextPl planned
 				// this account counts as lapsed for the spare though its
@@ -4154,7 +4168,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				continue
 			}
 		}
-		if last && userBound != nil && !grew && hw.failed() && !hw.passing && !hw.turnedAway && !hw.refused &&
+		if last && userBound != nil && !grew && pin == "" && hw.failed() && !hw.passing && !hw.turnedAway && !hw.refused &&
 			slices.Contains([]string{failQuota, failCredit}, failureOf(c, hw.code(), hw.errBody())) {
 			// the last of the user's accounts is out of its allowance or
 			// credit before any of its reply went: it rests, and, each of

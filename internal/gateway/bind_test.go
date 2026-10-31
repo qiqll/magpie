@@ -164,8 +164,8 @@ func postAt(s *Server, path, body string, h map[string]string) *httptest.Respons
 // Bound by user, every request that asks a model names its user: one
 // without, or with one the header can't take, is a 400 that says so and
 // asks nobody — a group's and one pinned to an account too. A pinned
-// one isn't bound; a group's is, on its user's own of each member's
-// provider (groupTurn). Listing models picks no account, and needs none; a
+// one is bound, its pin holding only to its user's own (T-009); a
+// group's is, on its user's own of each member's provider (groupTurn). Listing models picks no account, and needs none; a
 // count without a user is estimated, asking none
 // (TestUserBindingCountsWithoutTheUserLocally).
 func TestUserBindingNeedsTheUser(t *testing.T) {
@@ -202,15 +202,18 @@ func TestUserBindingNeedsTheUser(t *testing.T) {
 	if got := asked(true); len(got) != 0 {
 		t.Fatalf("asked without a user: %v", got)
 	}
-	// a pinned request with a user: answered, nobody bound
+	// a pinned request with a user: answered, its user bound as an
+	// unpinned one is, the pin holding only to its own (the owner's
+	// decision of 2026-10-30, T-009; before, a pinned request bound
+	// nobody and went to whichever account it named)
 	if rec := postAt(s, "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), map[string]string{UserHeader: "alice", AccountHeader: "spare@example.com"}); rec.Code != 200 {
 		t.Fatalf("pinned: %d %s", rec.Code, rec.Body.String())
 	}
-	if r := lastRoute(s); r.User != nil {
-		t.Fatalf("pinned: bound %+v", r.User)
+	if r := lastRoute(s); r.User == nil || r.User.User != "alice" {
+		t.Fatalf("pinned: not bound %+v", r.User)
 	}
-	if _, err := os.Stat(usersPath()); err == nil {
-		t.Fatal("a pinned request bound its user")
+	if b := boundIn(t, "codex"); b["alice"] == "" {
+		t.Fatalf("a pinned request didn't bind its user: %v", b)
 	}
 	// a group's with a user: answered, its user bound on the member's
 	// provider it went to (groupTurn)

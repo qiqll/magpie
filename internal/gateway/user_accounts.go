@@ -441,6 +441,15 @@ func (u *UserBound) shown(seats []userSeat) {
 	}
 }
 
+// owns says pin, an account AccountHeader names (its user, or its id in
+// the routing trace), is one u is bound to, one to be signed in again
+// among them.
+func (u *UserBound) owns(pin string) bool {
+	return slices.ContainsFunc(u.seats, func(s userSeat) bool {
+		return strings.EqualFold(pin, s.Account) || strings.EqualFold(pin, s.Who)
+	})
+}
+
 // userOf is the user a request names in the first of userHeaders it
 // sends, "" for none; bad is why a value can't be taken.
 func userOf(h http.Header) (user, bad string) {
