@@ -120,6 +120,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     const typed = await name.inputValue();
     assert.equal(typed, "Opus anywhere and more");
     await page.waitForTimeout(300);
+    // a group opening into its editor moves its height and parts for ~700ms
+    // (91b0be836): where things are is read once that has stopped
+    await page.waitForFunction(() => !document.getAnimations().some((a) => a.playState === "running" && Number.isFinite(a.effect?.getComputedTiming().endTime)));
 
     // where things are: on the screen, and the groups' place in the page
     // (which moves as what's above them grows or shrinks)
