@@ -52,21 +52,26 @@ async function rested(p, view, ms = 3000) {
   return last;
 }
 
-// the browser's coast after the lift: a scroll each frame, 6px slowing to 1px,
-// for `ms` after the last wheel, with no wheel of its own. It counts what it
-// asked for, and stops at the page's foot or when told to.
+// the browser's coast after the lift: a scroll each frame, 6px slowing to 1px
+// for each 60th of a second, for `ms` after the last wheel, with no wheel of
+// its own. By the time gone, not the frames: headless WebKit draws ~30 a
+// second, and a coast by frames asked for half as far there. It counts what
+// it asked for, and stops at the page's foot or when told to.
 const coast = (v, ms) => new Promise((done) => {
   const end = performance.now() + ms;
-  let d = 6, asked = 0;
+  let d = 6, asked = 0, last = performance.now();
   window.__coastStop = false;
-  const step = () => {
+  const step = (now) => {
     if (window.__coastStop || performance.now() > end || v.scrollTop + v.clientHeight >= v.scrollHeight - 1) return done(asked);
-    v.scrollTop += Math.max(1, Math.round(d));
-    asked += Math.max(1, Math.round(d));
-    d *= 0.97;
+    const f = Math.max(1, (now - last) / (1000 / 60));
+    last = now;
+    const by = Math.max(1, Math.round(d * f));
+    v.scrollTop += by;
+    asked += by;
+    d *= 0.97 ** f;
     requestAnimationFrame(step);
   };
-  requestAnimationFrame(step);
+  requestAnimationFrame((now) => { last = now; requestAnimationFrame(step); });
 });
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
