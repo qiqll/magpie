@@ -67,7 +67,7 @@ func TestUserGroupPinnedToItsOwnKeyAsksThatOneAlone(t *testing.T) {
 	f := &chatFleet{status: map[string]int{}}
 	chatGroup(t, f)
 	writeUsers(t, userFile{Users: map[string]map[string]userBinding{
-		"ca": {"alice": {Who: keyWho("ca", "kc1"), Account: "kc1", At: time.Now().UTC(),
+		"ca": {"alice": {Who: keyWho("ca", "kc1"), Account: "kc1", At: time.Now().UTC(), Used: time.Now().UTC().Add(-48 * time.Hour),
 			More: []userSeat{{Who: keyWho("ca", "kc2"), Account: "kc2", At: time.Now().UTC()}}}},
 	}})
 	s := byUserUpTo(t, New(), 3)
@@ -80,6 +80,10 @@ func TestUserGroupPinnedToItsOwnKeyAsksThatOneAlone(t *testing.T) {
 	}
 	if r := lastRoute(s); r.Pinned != pin || r.User == nil || r.User.User != "alice" || len(r.Order) == 0 {
 		t.Fatalf("route pinned %q user %+v order %+v", r.Pinned, r.User, r.Order)
+	}
+	// its use is kept, as an unpinned turn's is, so it isn't let go as idle
+	if used := boundOf(t, "", "ca", "alice").Used; time.Since(used) > time.Minute {
+		t.Fatalf("used %v, not stamped by a pinned turn", used)
 	}
 	// out of capacity: told so, never sent on to kc1 or the next member
 	f.set("kc2", 503)
@@ -114,5 +118,43 @@ func TestUserGroupPinnedWithUnreadableBindingsRefused(t *testing.T) {
 	}
 	if got := f.took(); len(got) != 0 {
 		t.Fatalf("asked %v", got)
+	}
+}
+
+// A group's turn pinned to another user's account whose sign-in has to be
+// made again goes as an unpinned one too: not cut down to that account's
+// provider, nor refused for its lapse. Before, the lapse was judged first,
+// on the whole group, and alice's turn went to bob's provider alone.
+func TestUserGroupPinnedToAnotherUsersLapsedAccountServedOnItsOwn(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	codex, _ := usersUpstream(t, nil)
+	noRests()
+	t.Cleanup(noRests)
+	f := &chatFleet{status: map[string]int{}}
+	srv := f.serve(t)
+	if err := provider.Save(provider.Provider{ID: "ca", Name: "CA", Chat: srv.URL + "/v1", Key: "kc1", Models: []string{"m"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SaveGroup(provider.Group{ID: "pair", Name: "Pair", Members: []string{"ca/m", "codex/gpt-5.5"}, Routing: "order"}); err != nil {
+		t.Fatal(err)
+	}
+	lapseSaved(t, "spare@example.com")
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{
+		"ca":    {"alice": {Who: keyWho("ca", "kc1"), Account: "kc1", At: time.Now().UTC()}},
+		"codex": {"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: time.Now().UTC()}},
+	}})
+	s := byUserUpTo(t, New(), 1)
+	rec := pinnedGroupChat(s, "alice", "spare@example.com")
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if got := f.took(); !slices.Equal(got, []string{"kc1"}) {
+		t.Fatalf("asked %v, want alice's kc1, the group's first", got)
+	}
+	if got := codex(true); len(got) != 0 {
+		t.Fatalf("codex asked %v", got)
+	}
+	if r := lastRoute(s); r.Pinned != "" {
+		t.Fatalf("route pinned %q", r.Pinned)
 	}
 }

@@ -2427,12 +2427,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// may not use is told so by pinTo first, as before
 	pin := strings.TrimSpace(r.Header.Get(AccountHeader))
 	pinLapsed, pinProvider, pinWho := pinnedLapsed(pin, cands, pl)
-	if pinLapsed != "" && pinProvider != p.ID && s.bind.byUser() && !isGroup {
+	if pinLapsed != "" && s.bind.byUser() && (isGroup || pinProvider != p.ID) {
 		// pinned to a lapsed account of a fallback's provider, with a
 		// user (or one the header can't take, a 400 below): served as if
-		// unpinned, bound to its accounts of the provider asked for
+		// unpinned, bound to its accounts of the provider asked for. A
+		// group's: whose it is is groupTurn.pinned's to say, below, so a
+		// pin to another user's lapsed account goes as if it named none
+		// (T-036)
 		if user, bad := userOf(r.Header); user != "" || bad != "" {
-			pin, pinLapsed, pinProvider = "", "", ""
+			if pinLapsed, pinProvider = "", ""; !isGroup {
+				pin = ""
+			}
 		}
 	}
 	if pinLapsed != "" {
@@ -2541,10 +2546,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// tried; one to another's is served as if unpinned, never on
 			// that account (T-009's decision, T-036)
 			if pin != "" {
-				var own bool
-				if cands, pl, own = gt.pinned(pin, cands, pl); !own {
-					pin = ""
-				}
+				cands, pl, pin = gt.pinned(pin, cands, pl)
 			}
 		}
 	}

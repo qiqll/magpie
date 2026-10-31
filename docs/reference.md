@@ -2095,9 +2095,9 @@ as any other: pinned to one of the user's own accounts, only that one is
 tried, and no other is added in its place; pinned to another's, it is
 served as if it named none, on the user's own (a new one when its tier
 has room, else a 429 that names no account). A routing group's request
-with it is held the same way: pinned to accounts the user is on already
-of its members, only those are tried; pinned to another's, it goes as
-an unpinned group's request. Listing models and counting tokens don't.
+with it is held the same way: pinned to an account the user is on
+already of its members, only that one is tried; pinned to another's,
+it goes as an unpinned group's request. Listing models and counting tokens don't.
 magpie's own MCP tools that draw, search or look at an image need it as
 well, and refuse a call without it. The web searches and image
 descriptions magpie makes for a request go to the accounts that

@@ -119,73 +119,71 @@ func (g *groupTurn) narrow(pid string) (order, left []Weighed) {
 }
 
 // pinned is cs, the group's candidates for a turn pinned (AccountHeader)
-// to pin, planned as pl index for index, narrowed to the accounts of
-// that name the user is on already, as a provider's turn's pin is
-// (pinnedOwn, the owner's decision of 2026-10-30, T-009, T-036): those
-// left out of pl too, for pinTo to say why it can't take one. The
-// user's seats are read from its binding alone, so no seat is taken and
-// no spare added for a pin. ok is false when pin names none of the
-// user's own, another user's or an account it isn't on: the turn goes
-// as an unpinned one, and the account named is never asked for it.
-// user-accounts.json unread is none of its own, the turn's narrowing
-// then saying why.
-func (g *groupTurn) pinned(pin string, cs []candidate, pl planned) (_ []candidate, _ planned, ok bool) {
+// to pin, planned as pl index for index, narrowed to the one seat of the
+// user's own pin names (its account or its id in the routing trace), of
+// the first member's provider in the group's order it is on, as a
+// provider's turn's pin is (pinnedOwn, the owner's decision of
+// 2026-10-30, T-009, T-036); own is pin as pinTo knows it. The user's
+// seats are read from its binding, its use stamped as bindUser stamps it,
+// so no seat is taken and no spare added for a pin. own is "" when pin
+// names none of the user's own, another user's or an account it isn't
+// on: the turn goes as an unpinned one, and the account named is never
+// asked for it. user-accounts.json unread is none of its own, the turn's
+// narrowing then saying why.
+func (g *groupTurn) pinned(pin string, cs []candidate, pl planned) (_ []candidate, _ planned, own string) {
 	user, _ := userOf(g.r.Header)
-	seats := map[string][]userSeat{}
+	key := userKey(g.r)
 	userBinds.Lock()
-	if loadUsers() == nil {
-		for pid := range g.members {
-			seats[pid] = userBinds.m[userKey(g.r)][pid][user].seats()
-		}
+	defer userBinds.Unlock()
+	if user == "" || loadUsers() != nil {
+		return cs, pl, ""
 	}
-	userBinds.Unlock()
-	match := func(w Weighed) bool { return strings.EqualFold(pin, w.Who) || pin == w.ID }
-	own := func(pid string) bool { _, member := g.members[pid]; return member && g.bound(pid) }
-	var out []candidate
-	var order, left []Weighed
+	// the seat pin names on pid, if the user is on one there
+	named := func(pid string) (userSeat, bool) {
+		if _, member := g.members[pid]; !member || !g.bound(pid) {
+			return userSeat{}, false
+		}
+		for _, s := range userBinds.m[key][pid][user].seats() {
+			if strings.EqualFold(pin, s.Account) || strings.EqualFold(pin, s.Who) {
+				return s, true
+			}
+		}
+		return userSeat{}, false
+	}
+	var pid, id string // its provider, and its row's ID, as pinTo knows it
+	var seat userSeat
 	for i, c := range cs {
-		if i < len(pl.order) && match(pl.order[i]) && own(c.p.ID) && seatIn(seats[c.p.ID], c.who()) {
-			out, order = append(out, c), append(order, pl.order[i])
+		if s, ok := named(c.p.ID); ok && i < len(pl.order) && seatIn([]userSeat{s}, c.who()) {
+			pid, id, seat = c.p.ID, pl.order[i].ID, s
+			break
 		}
 	}
 	for _, w := range pl.left {
-		if match(w) && own(w.Provider) && slices.ContainsFunc(seats[w.Provider], func(s userSeat) bool { return leftIs(w, w.Provider, s.Who) }) {
-			left = append(left, w)
+		if pid != "" {
+			break
+		}
+		if s, ok := named(w.Provider); ok && leftIs(w, w.Provider, s.Who) {
+			pid, id, seat = w.Provider, w.ID, s
 		}
 	}
-	if len(out)+len(left) == 0 {
-		return cs, pl, false
+	if pid == "" {
+		return cs, pl, ""
 	}
-	// those providers are narrowed now, to the accounts pinned alone
-	for _, pid := range slices.Concat(provIDs(out), weighedProvs(left)) {
-		if !g.done[pid] {
-			g.done[pid], g.own[pid] = true, map[string]bool{}
-			if g.ub == nil {
-				g.ub = &UserBound{User: user, Why: "kept"}
-				g.ub.shown(seats[pid])
-			}
-		}
+	// its use kept as any bound user's, so it isn't let go as idle
+	now := time.Now().UTC()
+	noteSeen(key, pid, user, now)
+	if !userBinds.stale && touchUsed(key, pid, user, now) {
+		saveUsersLogged()
 	}
-	for _, c := range out {
-		g.own[c.p.ID][strings.ToLower(c.who())] = true
+	b := userBinds.m[key][pid][user]
+	g.done[pid], g.own[pid] = true, map[string]bool{strings.ToLower(seat.Who): true}
+	g.ub = &UserBound{User: user, Tier: b.Tier, Why: "kept"}
+	if tier, _, err := tierOf(g.r.Header); err == nil && tierNamed(g.r.Header) {
+		g.ub.Tier = tier.Name
 	}
-	return out, planned{order: order, left: left}, true
-}
-
-func provIDs(cs []candidate) []string {
-	var out []string
-	for _, c := range cs {
-		out = append(out, c.p.ID)
-	}
-	return out
-}
-
-func weighedProvs(ws []Weighed) []string {
-	var out []string
-	for _, w := range ws {
-		out = append(out, w.Provider)
-	}
-	return out
+	g.ub.shown(b.seats())
+	out, opl := pinnedOwn(seat, pid, cs, pl)
+	return out, opl, id
 }
 
 // reach is cs with its provider narrowed when the tries reach cs[i]
