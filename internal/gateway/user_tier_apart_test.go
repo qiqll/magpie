@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"context"
-	"net/http/httptest"
+	"encoding/json"
+	"log"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -20,16 +22,22 @@ func lapsedAt(tier string) userBinding {
 		More: []userSeat{{Who: "codex@third@example.com", Account: "third@example.com", At: now}}}
 }
 
-// keyPost asks for codex/gpt-5.5 for user with the gateway key secret,
-// naming no tier.
-func keyPost(s *Server, secret, user, input string) *httptest.ResponseRecorder {
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"codex/gpt-5.5","stream":true,"input":"`+input+`"}`))
-	req.RemoteAddr = "127.0.0.1:50000"
-	req.Header.Set("Authorization", "Bearer "+secret)
-	req.Header.Set(UserHeader, user)
-	lanGuard(s.Handler()).ServeHTTP(rec, req)
-	return rec
+// boundOf is user's binding to pid under the gateway key keyID ("" for
+// none) as user-accounts.json has it.
+func boundOf(t *testing.T, keyID, pid, user string) userBinding {
+	t.Helper()
+	b, err := os.ReadFile(usersPath())
+	if err != nil {
+		t.Fatalf("user-accounts.json: %v", err)
+	}
+	var f userFile
+	if err := json.Unmarshal(b, &f); err != nil {
+		t.Fatalf("user-accounts.json: %v: %s", err, b)
+	}
+	if keyID == "" {
+		return f.Users[pid][user]
+	}
+	return f.Keys[keyID][pid][user]
 }
 
 // A request that names no tier is of the tier its user's binding keeps
@@ -56,13 +64,13 @@ func TestUserTierKeptOfItsKeyAndProvider(t *testing.T) {
 	s := byUser(New())
 
 	for i, name := range []string{"another key's pro", "another provider's pro"} {
-		rec := keyPost(s, secrets[i+1], "bob", name)
+		rec := userPostWith(s, secrets[i+1], "bob", name)
 		if got := asked(true); rec.Code != 429 || len(got) != 0 || !strings.Contains(refusedWhy(s), "tier free's 2 accounts") {
 			t.Fatalf("%s: %d asked %v: %s (%s)", name, rec.Code, got, rec.Body.String(), refusedWhy(s))
 		}
 	}
 
-	rec := keyPost(s, secrets[0], "bob", "its own key's pro")
+	rec := userPostWith(s, secrets[0], "bob", "its own key's pro")
 	if got := asked(true); rec.Code != 200 || len(got) != 1 || got[0] != "acct-1" {
 		t.Fatalf("its own key: %d asked %v: %s (%s)", rec.Code, got, rec.Body.String(), refusedWhy(s))
 	}
@@ -70,15 +78,9 @@ func TestUserTierKeptOfItsKeyAndProvider(t *testing.T) {
 		t.Fatalf("its own key: route %+v", r.User)
 	}
 
-	userBinds.Lock()
-	err := loadUsers()
 	var kept []string
 	for _, k := range keys {
-		kept = append(kept, userBinds.m[k.ID]["codex"]["bob"].Tier)
-	}
-	userBinds.Unlock()
-	if err != nil {
-		t.Fatal(err)
+		kept = append(kept, boundOf(t, k.ID, "codex", "bob").Tier)
 	}
 	if !slices.Equal(kept, []string{"pro", "", ""}) {
 		t.Fatalf("tiers kept by key: %q", kept)
@@ -91,7 +93,7 @@ func TestUserTierKeptOfItsKeyAndProvider(t *testing.T) {
 // is: bob, bound at pro to two accounts to be signed in again, is given
 // a spare beside them, keeping pro. alice, bound so with none, is of the
 // default and refused at free's 2; bob under another gateway key, where
-// his binding keeps none, is too.
+// its binding keeps none, is too.
 func TestUsersOwnKeepsItsTierWithoutTheHeader(t *testing.T) {
 	codexSignedIn(t, "spare@example.com", "third@example.com")
 	usersUpstream(t, nil)
@@ -106,21 +108,24 @@ func TestUsersOwnKeepsItsTierWithoutTheHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	ask := func(key, user string) ([]candidate, bool, error) {
 		return s.usersOwn(context.WithValue(context.Background(), askedForKey{}, askedFor{key, user, ""}), *p, "gpt-5.5", provider.Responses)
 	}
 
 	for _, c := range []struct{ key, user string }{{"", "alice"}, {"other-key", "bob"}} {
-		// told as a limit (a 429), its tier not named: no spare added
-		if own, bound, err := ask(c.key, c.user); err == nil || !bound || len(own) != 0 {
+		// told as a limit, its tier in the log: no spare added
+		logged.Reset()
+		if own, bound, err := ask(c.key, c.user); err == nil || err.Error() != userLimitSaid || !bound || len(own) != 0 {
 			t.Fatalf("%q of key %q: %d accounts, bound %v, err %v", c.user, c.key, len(own), bound, err)
 		}
-		userBinds.Lock()
-		err := loadUsers()
-		seats := userBinds.m[c.key]["codex"][c.user].seats()
-		userBinds.Unlock()
-		if err != nil || len(seats) != 2 {
-			t.Fatalf("%q of key %q given a spare: %v %v", c.user, c.key, seats, err)
+		if !strings.Contains(logged.String(), "at its tier free's 2 accounts") {
+			t.Fatalf("%q of key %q: logged %q", c.user, c.key, logged.String())
+		}
+		if seats := boundOf(t, c.key, "codex", c.user).seats(); len(seats) != 2 {
+			t.Fatalf("%q of key %q given a spare: %v", c.user, c.key, seats)
 		}
 	}
 
