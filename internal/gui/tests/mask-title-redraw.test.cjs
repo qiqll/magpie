@@ -60,8 +60,18 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     // a pick with no address in it is left as it is, and isn't swapped
     // for an earlier address when the accounts show again
     await page.evaluate(() => { document.querySelector("#sample").title = "All computers"; });
-    await page.evaluate(() => new Promise((r) => setTimeout(r, 0)));
+    await page.waitForFunction(() => !document.querySelector("#sample[data-pii-title]"));
     assert.equal(await page.locator("#sample").getAttribute("title"), "All computers");
+    // a title taken away keeps no address behind it in the page
+    await page.evaluate(() => { document.querySelector("#sample").title = "two@example.org"; });
+    await page.waitForFunction(() => document.querySelector("#sample[data-pii-title]"));
+    await page.evaluate(() => {
+      const b = document.querySelector("#sample");
+      b.removeAttribute("title");
+      b.parentElement.append(document.createElement("i")); // the batch's root is its parent
+    });
+    await page.waitForFunction(() => !document.querySelector("#sample[data-pii-title]"));
+    assert.equal(await page.locator("#sample").getAttribute("title"), null);
     await page.evaluate(() => { document.querySelector("#sample").title = "two@example.org"; });
     await page.waitForFunction(() => document.querySelector("#sample").title === "•••@•••••••.•••");
 

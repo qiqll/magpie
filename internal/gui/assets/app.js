@@ -24516,7 +24516,8 @@ window.noteAccounts = noteAccounts;
         if (bits.length > 1) { const run = el("span", "pii-run"); run.append(...bits); n.replaceWith(run); }
         else n.replaceWith(...bits);
       }
-      for (const e of [root, ...root.querySelectorAll("[title]")]) {
+      // a title taken away since keeps no address behind it either
+      for (const e of [root, ...root.querySelectorAll("[title], [data-pii-title]")]) {
         if (!e.dataset || e.closest(KEEP)) continue;
         // one masked already reads as an account too, its stars and all;
         // one written again since is new text, its own to hide and to put
