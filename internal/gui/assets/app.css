@@ -1180,7 +1180,9 @@ body.masked :hover > .acct-eye, body.masked .pq-card:hover .acct-eye, body.maske
 .chart .labels span { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: visible; }
 /* the last label can be wider than its bar's column: let it spill left, not off the card */
 .chart .labels span:last-child { display: flex; justify-content: flex-end; }
-.row.stat .who { flex: 0 0 180px; }
+/* the room an action or a narrow window needs comes out of the name's,
+   which ends in "…" (an account's, a key's and a user's rows too) */
+.row.stat .who { flex: 0 1 180px; }
 .row.stat .who .name.faint { color: var(--faint); font-weight: 400; }
 .row.stat .share { flex: 1 1 auto; height: 4px; border-radius: 2px; background: var(--pill); overflow: hidden; margin: 0 6px; }
 .row.stat .share i { display: block; height: 100%; border-radius: 2px; background: var(--accent); opacity: .7; }
@@ -1203,8 +1205,6 @@ body.masked :hover > .acct-eye, body.masked .pq-card:hover .acct-eye, body.maske
 .row.stat .us-more.open { opacity: 1; background: var(--pill); color: var(--fg); }
 @media (hover: none) { .row.stat .us-more { opacity: 1; margin: 0 -4px 0 -2px; } }
 .row.stat .us-unhide { flex: none; margin-right: -4px; }
-/* the action's room comes out of the name's, which ends in "…" */
-.row.stat.acts .who { flex-shrink: 1; }
 /* the hidden ones: a quiet line under the list, opening them dimmed */
 .us-hid { display: flex; flex-direction: column; flex: none; }
 .us-hid[hidden] { display: none; }

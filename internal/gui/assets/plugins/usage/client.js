@@ -49,6 +49,8 @@ magpie.plugin("usage", (ctx) => {
     <div class="list" id="usageAccounts" hidden></div>
     <div class="row-head" id="usageKeysHead" hidden><button class="fold" type="button" data-fold="keys" aria-expanded="true" aria-controls="usageKeys"><span class="label" data-t>Gateway keys</span></button></div>
     <div class="list" id="usageKeys" hidden></div>
+    <div class="row-head" id="usageUsersHead" hidden><button class="fold" type="button" data-fold="users" aria-expanded="true" aria-controls="usageUsers"><span class="label" data-t>Users</span></button></div>
+    <div class="list" id="usageUsers" hidden></div>
     <p class="usage-note" id="usageNote"></p>
     <p class="usage-clear"><button class="text" id="usageClear" type="button" hidden><span data-t>Clear all usage…</span></button></p>
     <div class="plugin-slot" data-slot="usage" hidden></div>

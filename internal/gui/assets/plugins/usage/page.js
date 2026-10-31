@@ -319,7 +319,7 @@ function renderUsageLoading() {
     stats.append(tile);
   }
   $("#chart").hidden = true;
-  for (const id of ["usageAgents", "usageAgentsHid", "usageModels", "usageKeys"]) $("#" + id).hidden = true;
+  for (const id of ["usageAgents", "usageAgentsHid", "usageModels", "usageKeys", "usageUsers"]) $("#" + id).hidden = true;
   // the allowances' head is renderQuotas' alone: the quotas it heads are
   // still there while the period loads (#809, Hu9956: 用量界面红框这行会延迟几秒才会出现)
   for (const h of $$("#view-usage .row-head:not(#quotaHead, .plugin-panel > .row-head)")) h.hidden = true;
@@ -445,17 +445,18 @@ function fitChartLabels() {
 }
 new ResizeObserver(fitChartLabels).observe($("#view-usage"));
 
-// The Overview's lists — Agents, Models, Accounts, Gateway keys — each fold
+// The Overview's lists — Agents, Models, Accounts, Gateway keys, Users — each fold
 // away under their heading (#2378: 日常看账号维度较多，都要拉到最底下), and
 // stay folded across a reload (magpie.usageFolded, the folded ones' names).
 let usageFolded = new Set();
 try { usageFolded = new Set(JSON.parse(localStorage.getItem("magpie.usageFolded") || "[]")); } catch {}
-const USAGE_FOLDS = { agents: ["usageAgents", "usageAgentsHid"], models: ["usageModels"], accounts: ["usageAccounts"], keys: ["usageKeys"] };
+const USAGE_FOLDS = { agents: ["usageAgents", "usageAgentsHid"], models: ["usageModels"], accounts: ["usageAccounts"], keys: ["usageKeys"], users: ["usageUsers"] };
 const USAGE_FOLD_TITLES = {
   agents: ["Show the agents", "Fold the agents away"],
   models: ["Show the models", "Fold the models away"],
   accounts: ["Show the accounts", "Fold the accounts away"],
   keys: ["Show the gateway keys", "Fold the gateway keys away"],
+  users: ["Show the users", "Fold the users away"],
 };
 function mountUsageFolds() {
   for (const b of $$("#usagePane .row-head .fold[data-fold]")) {
@@ -538,6 +539,9 @@ function renderUsage() {
   $("#usageKeysHead").hidden = $("#usageKeys").hidden = empty || !u.callerKeys?.length;
   // each subscription account's share, by the account that answered (#557)
   $("#usageAccountsHead").hidden = $("#usageAccounts").hidden = empty || !u.accounts?.length;
+  // the calls by the caller's user (X-Magpie-User, T-020), once a call
+  // named one: the calls that named none are a "No user" row of their own
+  $("#usageUsersHead").hidden = $("#usageUsers").hidden = empty || !u.users?.some((g) => g.name);
   if (empty) {
     stats.classList.add("empty");
     const none = noCallsIn(period);
@@ -601,7 +605,8 @@ function renderUsage() {
   fitChartLabels();
 
   const total = Math.max(1, usageTokens(u));
-  const list = (id, groups, act) => {
+  // none: what a group without a name is called (an account not recorded)
+  const list = (id, groups, act, none = "account not recorded") => {
     const box = typeof id === "string" ? $("#" + id) : id;
     box.replaceChildren();
     for (const g of groups) {
@@ -609,7 +614,7 @@ function renderUsage() {
       r.dataset.id = g.id || "";
       r.append(icon(g.icon || "generic"));
       const who = el("div", "who");
-      who.append(el("div", "name" + (g.name ? "" : " faint"), g.name || t("account not recorded")));
+      who.append(el("div", "name" + (g.name ? "" : " faint"), g.name || t(none)));
       const sub = [];
       if (g.sub) sub.push(g.sub);
       sub.push(t(g.calls === 1 ? "{n} call" : "{n} calls", { n: g.calls }));
@@ -724,6 +729,7 @@ function renderUsage() {
   });
   list("usageAccounts", u.accounts || []);
   list("usageKeys", u.callerKeys || []);
+  list("usageUsers", u.users || [], null, "No user");
   $("#usageNote").textContent = t("Counted from the providers' own usage reports on every call through the gateway · {path}", { path: u.path });
   const clear = $("#usageClear");
   clear.hidden = false;
