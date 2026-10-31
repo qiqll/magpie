@@ -84,14 +84,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.deepEqual(await ed.locator(".rt-rule .rt-rhandle").allTextContents(), ["1", "2", "3"]);
       assert.equal(await handle("three").getAttribute("aria-label"), w.move);
       if (w.tip) assert.equal(await handle("three").getAttribute("title"), w.tip);
-      // the grip shows on the rule under the pointer only
-      await page.mouse.move(1, 1);
-      await page.waitForFunction(() => [...document.querySelectorAll(".rt-rhandle")].map((h) => getComputedStyle(h, "::before").opacity).join() === "0,0,0");
-      await rule("two").locator(".rt-then").hover();
-      await page.waitForFunction(() => [...document.querySelectorAll(".rt-rhandle")].map((h) => getComputedStyle(h, "::before").opacity).join() === "0,1,0");
 
       // wheeled to the rules, as the reader would (a scroll no reader asked
-      // for is put back)
+      // for is put back: a hover's own scroll to a rule below the window
+      // was, and the pointer was left on the hint above the rules)
       const v = await page.locator("#view-routing").boundingBox();
       await page.mouse.move(v.x + 10, 300);
       for (let n = 0; n < 40; n++) {
@@ -102,6 +98,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.waitForTimeout(60);
       }
       await page.waitForTimeout(200);
+      // the grip shows on the rule under the pointer only
+      await page.mouse.move(1, 1);
+      await page.waitForFunction(() => [...document.querySelectorAll(".rt-rhandle")].map((h) => getComputedStyle(h, "::before").opacity).join() === "0,0,0");
+      await rule("two").locator(".rt-then").hover();
+      await page.waitForFunction(() => [...document.querySelectorAll(".rt-rhandle")].map((h) => getComputedStyle(h, "::before").opacity).join() === "0,1,0");
       const at = () => page.evaluate(() => [...document.querySelectorAll("*")].filter((e) => e.scrollTop).map((e) => [e.id || e.className, e.scrollTop]).join(";") + "|" + Math.round(document.querySelector(".rt-gedit").getBoundingClientRect().top));
       const before = await at();
       // drag "three" above "one"
