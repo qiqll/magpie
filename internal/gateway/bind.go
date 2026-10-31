@@ -416,7 +416,7 @@ func keepIn(cs []candidate, pl planned, keep func(candidate) bool) ([]candidate,
 // isn't one of user-tiers.json's: each request goes to its user's
 // accounts, so one without can't be placed. A group's request, bound
 // on each member's provider it reaches (groupTurn), and one with
-// AccountHeader, which isn't bound, need it too. Tiers that
+// AccountHeader, held to the user's own (T-009), need it too. Tiers that
 // can't be read are left to the binding to refuse.
 func (s *Server) noUser(w http.ResponseWriter, r *http.Request, from provider.Protocol) bool {
 	if bad := s.userMissing(r); bad != "" {

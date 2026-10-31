@@ -2069,7 +2069,9 @@ An optional `X-Magpie-Account: <account>` header (the account's email
 or login, or its id on the Routing page) pins a request to one account of a
 subscription with several: only it is tried, and an unknown account, one
 whose plan lacks the model, or one resting is an error rather than another
-account's reply. The header is not sent on to the vendor.
+account's reply. Under `--bind=user` (below) it holds only to one of the
+request's user's own accounts; one bound to another user, or to nobody, is
+taken as no pin at all. The header is not sent on to the vendor.
 
 How the gateway keeps requests on accounts is set when it starts, with
 `--bind` on `magpie serve`, `magpie web` and `magpie daemon install`
@@ -2088,8 +2090,12 @@ sent. A routing group's request and one with `X-Magpie-Account` need it
 too. A routing group's request, a drawing, video, embedding, rerank or
 audio request on one too, goes on
 its user's own accounts of each member's provider, bound only on those it
-reaches, as the one before fails; one with `X-Magpie-Account` isn't
-bound. Listing models and counting tokens don't.
+reaches, as the one before fails. One with `X-Magpie-Account` is bound
+as any other: pinned to one of the user's own accounts, only that one is
+tried, and no other is added in its place; pinned to another's, it is
+served as if it named none, on the user's own (a new one when its tier
+has room, else a 429 that names no account). A routing group's request
+with it isn't bound. Listing models and counting tokens don't.
 magpie's own MCP tools that draw, search or look at an image need it as
 well, and refuse a call without it. The web searches and image
 descriptions magpie makes for a request go to the accounts that
@@ -2098,8 +2104,9 @@ tool, a model's web_search, Codex's web.run (on a ChatGPT account too),
 a Kimi Code plan's search service, its image recognition MCP tool, the
 image a model that can't see is sent, and the question a routing group's
 classifier is asked as each turn begins (its model's accounts, or a
-decision model's keys). One with `X-Magpie-Account` is bound for these
-too, though the request itself isn't.
+decision model's keys). A routing group's request with
+`X-Magpie-Account` is bound for these too, though the request itself
+isn't.
 A value either can't take refuses to start, saying why, and so does
 `--bind=user` with a `user-tiers.json` that doesn't read or holds a value
 it can't (below). `--bind-max` and `MAGPIE_BIND_MAX` are gone: the user's
