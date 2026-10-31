@@ -93,9 +93,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         let on = "";
         // going from page to page cancels the reads still on their way, and
         // WebKit reports each one as a page error, "Fetch API cannot load …
-        // due to access control checks" (#1350, #1307): not this test's
+        // due to access control checks" (#1350, #1307): not this test's.
+        // Playwright 1.62 splits that text at its first colon, into a name
+        // "Fetch API cannot load http" and a message "//magpie.test/…", so
+        // it is read whole
         page.on("pageerror", (e) => {
-          if (engine === "webkit" && /^Fetch API cannot load .* due to access control checks/.test(e.message)) return;
+          if (engine === "webkit" && /Fetch API cannot load .* due to access control checks/.test(`${e.name}:${e.message}`)) return;
           errors.push(`${width}px ${on}: ${e.stack}`);
         });
         await page.route("**/*", serve(lang));
