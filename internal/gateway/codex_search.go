@@ -143,10 +143,15 @@ func chatGPTSearchers(r *http.Request, model string) ([]provider.Provider, strin
 
 // usersSearchers is ons, the ChatGPT accounts a search for id (bare as
 // model) may go to, bound by user less those r's user isn't on
-// (usersOwn), and why, when none is left.
+// (usersOwn), and why, when none is left. Bound by user, an id that no
+// longer resolves (its provider turned off since chatGPTSearchers looked)
+// leaves none: ons aren't narrowed to the user, so some may be another's.
 func (s *Server) usersSearchers(r *http.Request, id string, ons []provider.Provider, model string) ([]provider.Provider, string) {
 	p, _, ok := provider.Resolve(id)
 	if !ok {
+		if s.bind.byUser() {
+			return nil, "magpie no longer finds " + id + "'s provider, so it can't tell the user's accounts"
+		}
 		return ons, ""
 	}
 	own, bound, err := s.usersOwn(s.forUser(r.Context(), r), p, model, provider.Responses)

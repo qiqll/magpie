@@ -315,6 +315,37 @@ func TestUsersOnAndOwnRefuseNoUser(t *testing.T) {
 	}
 }
 
+// Bound by user, a ChatGPT web search whose model no longer resolves
+// when usersSearchers looks again (the provider turned off between it and
+// chatGPTSearchers, a Changed dropping the held catalog) goes to none of
+// the accounts chatGPTSearchers found, never all of them unnarrowed
+// (T-028): one is another user's. Bound by session, ons are kept.
+func TestUsersSearchersRefuseAModelGone(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	alice := httptest.NewRequest("POST", "/v1/alpha/search", nil)
+	alice.Header.Set(UserHeader, "alice")
+	ons, model := chatGPTSearchers(alice, "codex/gpt-5.5")
+	if len(ons) < 2 {
+		t.Fatalf("%d searchers, want two to tell a pool from a user's", len(ons))
+	}
+	s := byUser(New())
+	if got, why := s.usersSearchers(alice, "codex/gpt-5.5", ons, model); why != "" || len(got) != 1 {
+		t.Fatalf("alice's searchers: %d of %d, why %q", len(got), len(ons), why)
+	}
+	if err := provider.SetOff("codex", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := provider.Resolve("codex/gpt-5.5"); ok {
+		t.Fatal("codex/gpt-5.5 still resolves with codex off")
+	}
+	if got, why := s.usersSearchers(alice, "codex/gpt-5.5", ons, model); len(got) != 0 || why == "" {
+		t.Fatalf("model gone, bound by user: %d of %d searchers, why %q", len(got), len(ons), why)
+	}
+	if got, why := New().usersSearchers(alice, "codex/gpt-5.5", ons, model); len(got) != len(ons) || why != "" {
+		t.Fatalf("model gone, bound by session: %d of %d searchers, why %q", len(got), len(ons), why)
+	}
+}
+
 // Bound by user, a video that names no user, started past its route's
 // userNeeded, is refused by usersOn, never started on the provider's
 // first key, nobody asked (review of T-024: usersOwnRoute let it by
