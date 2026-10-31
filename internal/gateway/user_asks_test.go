@@ -655,10 +655,10 @@ func imagePosted(t *testing.T, s *Server, model, user string, hdr ...string) {
 	}
 }
 
-// A routing group's request isn't bound to its user's accounts, nor one
-// pinned to an account (X-Magpie-Account), but each needs its user, and
-// the image magpie describes for it is: asked on the describer's account
-// the user is on, bound there when on none.
+// A routing group's request (groupTurn) and one pinned to an account
+// (X-Magpie-Account, held to its user's own since T-009) each need its
+// user, and the image magpie describes for it is asked on the
+// describer's account the user is on, bound there when on none.
 func TestUnboundRequestsDescribeOnTheUsersAccount(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -681,10 +681,12 @@ func TestUnboundRequestsDescribeOnTheUsersAccount(t *testing.T) {
 				t.Fatalf("alice's and bob's images were described with %q: want once each, on two accounts", eye)
 			}
 			if tc.name == "pinned" {
-				for _, k := range keys("text") {
-					if k != "ka" {
-						t.Fatalf("pinned to ka, the model was asked with %q", keys("text"))
-					}
+				// each on its own key, the one its image was described
+				// on: a pin to ka holds only for the user bound to it (the
+				// owner's decision of 2026-10-30, T-009; before, both
+				// were sent to ka)
+				if got := keys("text"); !slices.Equal(got, []string{eye[0], eye[1], eye[0], eye[1]}) {
+					t.Fatalf("pinned to ka, the model was asked with %q, the images described with %q", got, eye)
 				}
 			}
 			if b := boundIn(t, "probe"); len(b) != 2 {
