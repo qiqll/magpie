@@ -44,6 +44,12 @@ type Record struct {
 	ProviderAccount string `json:"providerAccount,omitempty"`
 	CallerKeyID     string `json:"callerKeyId,omitempty"`
 	CallerKeyName   string `json:"callerKeyName,omitempty"`
+	// User is the caller's own user the request named (X-Magpie-User, or
+	// the header MAGPIE_USER_HEADER names), as --bind=user keeps a user on
+	// accounts of its own. "" for a request that named none, and in a
+	// record written before it was kept: the Usage page counts those as
+	// one group, "No user" (T-020).
+	User string `json:"user,omitempty"`
 	// SessionProvider is the provider ID recorded by the agent. SessionAccount
 	// identifies the session's creator, not the account used for an API request.
 	// Neither field establishes an upstream route from today's configuration.
@@ -815,6 +821,9 @@ type Group struct {
 	Account       string `json:"account,omitempty"`
 	CallerKeyID   string `json:"callerKeyId,omitempty"`
 	CallerKeyName string `json:"callerKeyName,omitempty"`
+	// User is the caller's user of a Users group: "" for the calls that
+	// named none (Record.User)
+	User string `json:"user,omitempty"`
 	// Host is where the calls went, when the provider's id has gone to
 	// more than one place, or elsewhere than the provider goes now: its
 	// calls are then told apart by it, not summed under the id.
@@ -909,6 +918,9 @@ type Summary struct {
 	// account that answered (#557)
 	Accounts   []Group `json:"accounts"`
 	CallerKeys []Group `json:"callerKeys"`
+	// Users are the calls by the caller's user they named (Record.User),
+	// those that named none one group of User "" (T-020)
+	Users []Group `json:"users"`
 	// Sessions are the calls that named their session, by session, the
 	// most tokens first: all of them, or the top few of SessionCount where
 	// it was asked for that way (SummarizeTop).

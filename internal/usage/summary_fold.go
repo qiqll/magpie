@@ -195,9 +195,9 @@ func (g *groupSet) freeze() {
 
 // summaryCounts is the second pass's sums.
 type summaryCounts struct {
-	totals                                               Totals
-	series                                               []Point
-	agents, models, keys, accounts, callerKeys, sessions groupSet
+	totals                                                      Totals
+	series                                                      []Point
+	agents, models, keys, accounts, callerKeys, users, sessions groupSet
 }
 
 func (u *summaryRun) newCounts() summaryCounts {
@@ -205,7 +205,7 @@ func (u *summaryRun) newCounts() summaryCounts {
 }
 
 func (c *summaryCounts) sets() []*groupSet {
-	return []*groupSet{&c.agents, &c.models, &c.keys, &c.accounts, &c.callerKeys, &c.sessions}
+	return []*groupSet{&c.agents, &c.models, &c.keys, &c.accounts, &c.callerKeys, &c.users, &c.sessions}
 }
 
 // carried is a copy of c to count on in, which leaves c as it is: c's
@@ -255,6 +255,11 @@ func (c *summaryCounts) add(u *summaryRun, k *summaryKeying, r Record) {
 		g.CallerKeyName = r.CallerKeyName
 		g.add(r, pr)
 	}
+	// every call by the user it named, those that named none together, so
+	// the users' shares add up to the totals (T-020)
+	ug := c.users.at(r.User, func() Group { return Group{ID: r.User, User: r.User} })
+	ug.add(r, pr)
+	ug.addOwn(r, pr)
 	if k.keyProviders[r.Provider] {
 		g := c.keys.at(r.Provider+"#"+r.ProviderKeyID, func() Group {
 			return Group{ID: r.Provider + "#" + r.ProviderKeyID, Provider: r.Provider, ProviderKeyID: r.ProviderKeyID}
@@ -293,6 +298,7 @@ func (c *summaryCounts) summary(u *summaryRun) Summary {
 	s.ProviderKeys = byTokens(c.keys.list())
 	s.Accounts = byTokens(c.accounts.list())
 	s.CallerKeys = byTokens(c.callerKeys.list())
+	s.Users = byTokens(c.users.list())
 	s.Sessions = byTokens(c.sessions.list())
 	s.SessionCount = len(s.Sessions)
 	return s

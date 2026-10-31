@@ -83,7 +83,7 @@ func directRows(p Period, now time.Time) []Row {
 }
 
 func direct(p Period, now time.Time, rows []Row) Summary {
-	s := Summary{Period: p, Since: p.Since(now), Bucket: "day", Agents: []Group{}, Models: []Group{}, ProviderKeys: []Group{}, Accounts: []Group{}, CallerKeys: []Group{}, Sessions: []Group{}, Series: []Point{}}
+	s := Summary{Period: p, Since: p.Since(now), Bucket: "day", Agents: []Group{}, Models: []Group{}, ProviderKeys: []Group{}, Accounts: []Group{}, CallerKeys: []Group{}, Users: []Group{}, Sessions: []Group{}, Series: []Point{}}
 	s.Period = p.shown()
 	until := p.Until(now)
 	agents, models, accounts, sessions := map[string]*Group{}, map[string]*Group{}, map[string]*Group{}, map[string]*Group{}

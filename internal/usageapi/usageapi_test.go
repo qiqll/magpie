@@ -221,3 +221,20 @@ func TestRowsNameTheirAccountAtTheirProvider(t *testing.T) {
 		}
 	}
 }
+
+// /api/usage's Users name each caller's user by itself (T-020), the calls
+// that named none a group of Name "" the page says "No user" for, and a
+// summary with no calls an empty list, never null.
+func TestUsersNamedByTheirUser(t *testing.T) {
+	s := usage.Summary{Users: []usage.Group{
+		{ID: "alice", User: "alice", Totals: usage.Totals{Calls: 2}},
+		{ID: "", Totals: usage.Totals{Calls: 1}},
+	}}
+	got := stateOf(s).Users
+	if len(got) != 2 || got[0].Name != "alice" || got[0].User != "alice" || got[0].Calls != 2 || got[1].Name != "" || got[1].Calls != 1 || got[0].Icon != "generic" {
+		t.Fatalf("users: %+v", got)
+	}
+	if got := stateOf(usage.Summary{}).Users; got == nil || len(got) != 0 {
+		t.Fatalf("no calls: %#v", got)
+	}
+}

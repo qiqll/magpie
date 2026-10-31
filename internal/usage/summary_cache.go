@@ -124,6 +124,7 @@ func cloneSummary(s Summary) Summary {
 	s.ProviderKeys = slices.Clone(s.ProviderKeys)
 	s.Accounts = slices.Clone(s.Accounts)
 	s.CallerKeys = slices.Clone(s.CallerKeys)
+	s.Users = slices.Clone(s.Users)
 	s.Sessions = slices.Clone(s.Sessions)
 	return s
 }

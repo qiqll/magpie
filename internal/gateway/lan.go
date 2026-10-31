@@ -550,6 +550,11 @@ func appendUsage(r *http.Request, rec usage.Record) {
 	}
 	who := access.Caller(r.Context())
 	rec.CallerKeyID, rec.CallerKeyName = who.KeyID, who.KeyName
+	// the caller's user, for the Usage page's Users (T-020); a value
+	// UserHeader can't take is no user
+	if rec.User == "" {
+		rec.User, _ = userOf(r.Header)
+	}
 	rec.Local = local(r)
 	if r.Context().Value(observedKey{}) != nil {
 		rec.Watched = true

@@ -60,7 +60,10 @@ type Usage struct {
 	Models     []Group `json:"models"`
 	Accounts   []Group `json:"accounts"`
 	CallerKeys []Group `json:"callerKeys"`
-	Path       string  `json:"path"`
+	// Users are the calls by the caller's user they named (--bind=user's
+	// X-Magpie-User), Name "" the calls that named none (T-020)
+	Users []Group `json:"users"`
+	Path  string  `json:"path"`
 }
 
 // State is the Usage page's summary of a period: what /api/usage and the
@@ -128,6 +131,10 @@ func stateOf(s usage.Summary) Usage {
 		out.Accounts = append(out.Accounts, ug)
 	}
 	out.CallerKeys = callerGroups(s)
+	out.Users = []Group{}
+	for _, g := range s.Users {
+		out.Users = append(out.Users, Group{Group: g, Name: g.User, Icon: "generic"})
+	}
 	return out
 }
 
