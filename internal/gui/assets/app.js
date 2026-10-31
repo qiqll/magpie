@@ -24408,19 +24408,19 @@ window.noteAccounts = noteAccounts;
   // card's own (WorkBuddy's account with no nickname is "WorkBuddy") is not
   // one to hide
   function names() {
-    const all = new Set(accountNames), not = new Set(NOT_ACCOUNTS);
+    const all = new Set(accountNames), not = new Set(NOT_ACCOUNTS), yes = (n) => all.add(String(n || "").trim()), no = (...ns) => { for (const n of ns) if (n) not.add(String(n).toLowerCase()); };
     for (const p of providers?.providers || []) {
-      for (const n of [p.id, p.name, p.account?.agentName, p.account?.agent]) if (n) not.add(String(n).toLowerCase());
-      if (p.account) { all.add((p.account.user || "").trim()); for (const l of p.account.logins || []) all.add((l.user || "").trim()); }
+      no(p.id, p.name, p.account?.agentName, p.account?.agent);
+      if (p.account) { yes(p.account.user); for (const l of p.account.logins || []) yes(l.user); }
       // the names the user gave accounts (#1515), as the accounts are
-      for (const n of Object.values(p.accountNames || {})) all.add(String(n).trim());
+      for (const n of Object.values(p.accountNames || {})) yes(n);
     }
     for (const q of quotas || []) {
-      for (const n of [q.provider, q.name, q.plan]) if (n) not.add(String(n).toLowerCase());
-      all.add((q.user || "").trim());
-      if (q.alias && q.alias !== q.seat) all.add(q.alias.trim());
+      no(q.provider, q.name, q.plan);
+      yes(q.user);
+      if (q.alias !== q.seat) yes(q.alias);
     }
-    for (const a of state?.agents || []) for (const n of [a.id, a.name]) if (n) not.add(String(n).toLowerCase());
+    for (const a of state?.agents || []) no(a.id, a.name);
     return [...all].filter((n) => n.length >= 2 && !IS_EMAIL.test(n) && !not.has(n.toLowerCase().replace(/ \(\d+\)$/, ""))).sort((a, b) => b.length - a.length);
   }
   let findKey = null, find = EMAIL;
@@ -24489,12 +24489,14 @@ window.noteAccounts = noteAccounts;
   const pages = targets.map(([v, bs]) => {
     const view = $(v);
     if (!view) return () => {};
+    const unpii = (e) => { delete e.dataset.piiTitle; delete e.dataset.piiOut; };
     function mask(root = view) {
       const all = finder(), reOf = (e) => e?.closest(NAMELESS) ? EMAIL : all;
       const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), found = [];
-      for (let n; (n = walk.nextNode());) {
-        if (n.data.length < 2 || SKIP.has(n.parentElement?.tagName) || n.parentElement?.closest(".pii, " + KEEP)) continue;
-        const re = reOf(n.parentElement);
+      for (let n, p; (n = walk.nextNode());) {
+        p = n.parentElement;
+        if (n.data.length < 2 || SKIP.has(p?.tagName) || p?.closest(".pii, " + KEEP)) continue;
+        const re = reOf(p);
         re.lastIndex = 0;
         if (re.test(n.data)) found.push(n);
       }
@@ -24512,20 +24514,15 @@ window.noteAccounts = noteAccounts;
         if (last < n.data.length) bits.push(n.data.slice(last));
         // one piece still, where the text was: in a flex row each would
         // otherwise stand as an item of its own
-        if (bits.length > 1) { const run = el("span", "pii-run"); run.append(...bits); n.replaceWith(run); }
-        else n.replaceWith(...bits);
+        const run = bits[1] ? el("span", "pii-run") : new DocumentFragment();
+        run.append(...bits);
+        n.replaceWith(run);
       }
-      // a title taken away since keeps no address behind it either
       for (const e of [root, ...root.querySelectorAll("[title], [data-pii-title]")]) {
         if (!e.dataset || e.closest(KEEP)) continue;
-        // one masked already reads as an account too, its stars and all;
-        // one written again since is new text, its own to hide and to put
-        // back (sessPick sets its button's title on each draw)
-        if ("piiTitle" in e.dataset) {
-          if (e.title === e.dataset.piiOut) continue;
-          delete e.dataset.piiTitle;
-          delete e.dataset.piiOut;
-        }
+        // masked already, unless written again (sessPick) or taken away since
+        if (e.title === e.dataset.piiOut) continue;
+        unpii(e);
         if (!e.title) continue;
         let out = "", last = 0;
         for (const m of hits(e.title, reOf(e), e)) {
@@ -24541,12 +24538,7 @@ window.noteAccounts = noteAccounts;
       for (const s of view.querySelectorAll(".pii")) s.replaceWith(s.dataset.raw);
       for (const r of view.querySelectorAll(".pii-run")) r.replaceWith(r.textContent);
       view.normalize();
-      for (const e of view.querySelectorAll("[data-pii-title]")) {
-        // written again since it was hidden: what it says now stays
-        if (e.title === e.dataset.piiOut) e.title = e.dataset.piiTitle;
-        delete e.dataset.piiTitle;
-        delete e.dataset.piiOut;
-      }
+      for (const e of view.querySelectorAll("[data-pii-title]")) { if (e.title === e.dataset.piiOut) e.title = e.dataset.piiTitle; unpii(e); }
     }
     // only what changed is looked through again, not the whole window on
     // each tick of Routing's live view
@@ -24585,8 +24577,9 @@ window.noteAccounts = noteAccounts;
       }
       view.classList.toggle("masked", on);
       // a name learnt since it was masked: hidden afresh
-      if (on) { watch.disconnect(); unmask(); mask(); watch.observe(view, OBS); }
-      else { watch.disconnect(); unmask(); }
+      watch.disconnect();
+      unmask();
+      if (on) { mask(); watch.observe(view, OBS); }
     };
   });
   function setMasked(on, keep) {
@@ -24639,7 +24632,7 @@ window.noteAccounts = noteAccounts;
   window.addEventListener("storage", (e) => {
     if (e.key !== "magpie.maskEmails") return;
     chosen = e.newValue;
-    if ((e.newValue === "1") !== masked) setMasked(e.newValue === "1", true);
+    if ((chosen === "1") !== masked) setMasked(chosen === "1", true);
   });
   setMasked(masked, true);
 })();
