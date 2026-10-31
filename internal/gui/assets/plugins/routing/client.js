@@ -2919,8 +2919,10 @@ function routingPage(part) {
     // out of sight the trace isn't read (df6bd3ef), so a request come since
     // (the newest on the Usage page's Requests) isn't known yet: the page
     // in sight reads what came meanwhile first, else a live request opened
-    // as a past day's, with Back to live (usage-ledger)
-    if (!r && sightWait) {
+    // as a past day's, with Back to live (usage-ledger). Only one come
+    // since, an id past every one kept: an older one is the trace's no
+    // longer, and the read waits for something new (wait=1)
+    if (!r && sightWait && id > Math.max(0, ...routes.keys())) {
       const read = new Promise((ok) => traceRead.push(ok));
       window.show("routing");
       await Promise.race([read, new Promise((ok) => setTimeout(ok, 2000))]);

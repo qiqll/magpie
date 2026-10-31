@@ -54,7 +54,7 @@ function serve(feed) {
 }
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
-  test(`${engine}: a request done in the middle of the list swaps its own row only`, async (t) => {
+  test(`${engine}: a request done in the middle of the list is told in its own row`, async (t) => {
     const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
     t.after(() => browser.close());
     const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
