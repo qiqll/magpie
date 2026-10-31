@@ -118,6 +118,76 @@ func (g *groupTurn) narrow(pid string) (order, left []Weighed) {
 	return opl.order, opl.left
 }
 
+// pinned is cs, the group's candidates for a turn pinned (AccountHeader)
+// to pin, planned as pl index for index, narrowed to the accounts of
+// that name the user is on already, as a provider's turn's pin is
+// (pinnedOwn, the owner's decision of 2026-10-30, T-009, T-036): those
+// left out of pl too, for pinTo to say why it can't take one. The
+// user's seats are read from its binding alone, so no seat is taken and
+// no spare added for a pin. ok is false when pin names none of the
+// user's own, another user's or an account it isn't on: the turn goes
+// as an unpinned one, and the account named is never asked for it.
+// user-accounts.json unread is none of its own, the turn's narrowing
+// then saying why.
+func (g *groupTurn) pinned(pin string, cs []candidate, pl planned) (_ []candidate, _ planned, ok bool) {
+	user, _ := userOf(g.r.Header)
+	seats := map[string][]userSeat{}
+	userBinds.Lock()
+	if loadUsers() == nil {
+		for pid := range g.members {
+			seats[pid] = userBinds.m[userKey(g.r)][pid][user].seats()
+		}
+	}
+	userBinds.Unlock()
+	match := func(w Weighed) bool { return strings.EqualFold(pin, w.Who) || pin == w.ID }
+	own := func(pid string) bool { _, member := g.members[pid]; return member && g.bound(pid) }
+	var out []candidate
+	var order, left []Weighed
+	for i, c := range cs {
+		if i < len(pl.order) && match(pl.order[i]) && own(c.p.ID) && seatIn(seats[c.p.ID], c.who()) {
+			out, order = append(out, c), append(order, pl.order[i])
+		}
+	}
+	for _, w := range pl.left {
+		if match(w) && own(w.Provider) && slices.ContainsFunc(seats[w.Provider], func(s userSeat) bool { return leftIs(w, w.Provider, s.Who) }) {
+			left = append(left, w)
+		}
+	}
+	if len(out)+len(left) == 0 {
+		return cs, pl, false
+	}
+	// those providers are narrowed now, to the accounts pinned alone
+	for _, pid := range slices.Concat(provIDs(out), weighedProvs(left)) {
+		if !g.done[pid] {
+			g.done[pid], g.own[pid] = true, map[string]bool{}
+			if g.ub == nil {
+				g.ub = &UserBound{User: user, Why: "kept"}
+				g.ub.shown(seats[pid])
+			}
+		}
+	}
+	for _, c := range out {
+		g.own[c.p.ID][strings.ToLower(c.who())] = true
+	}
+	return out, planned{order: order, left: left}, true
+}
+
+func provIDs(cs []candidate) []string {
+	var out []string
+	for _, c := range cs {
+		out = append(out, c.p.ID)
+	}
+	return out
+}
+
+func weighedProvs(ws []Weighed) []string {
+	var out []string
+	for _, w := range ws {
+		out = append(out, w.Provider)
+	}
+	return out
+}
+
 // reach is cs with its provider narrowed when the tries reach cs[i]
 // first, every one of that provider's from i on that isn't the user's
 // left out, until cs[i] is one of the user's own to ask, or none is left
@@ -198,12 +268,13 @@ func (g *groupTurn) user() *UserBound {
 
 // plan is ws, the routing log's rows, before any provider is narrowed:
 // those of providers with nothing to narrow alone, as a decision group's
-// (groupUsers.begin); the rest are told as each is narrowed (reach).
+// (groupUsers.begin), and of those narrowed already (pinned); the rest
+// are told as each is narrowed (reach).
 func (g *groupTurn) plan(ws []Weighed) []Weighed {
 	if g == nil {
 		return ws
 	}
-	return slices.DeleteFunc(slices.Clone(ws), func(w Weighed) bool { return g.bound(w.Provider) })
+	return slices.DeleteFunc(slices.Clone(ws), func(w Weighed) bool { return g.bound(w.Provider) && !g.done[w.Provider] })
 }
 
 // spare is, for c, one of the user's accounts that failed with status and

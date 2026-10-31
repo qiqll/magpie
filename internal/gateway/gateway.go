@@ -2531,12 +2531,21 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// provider's turn is. A Codex reset spent before any try would be
 	// another's (bindsUser)
 	var gt *groupTurn
-	if isGroup && pin == "" {
+	if isGroup {
 		if gt = s.groupTurnOf(r, ms, cands, pl); gt != nil {
 			// a limit is said to its user, never naming the group's
 			// accounts, another user's among them (saidToUser)
 			bindsUser = true
 			limitedUser, _ = userOf(r.Header)
+			// a pin holds only to one of the user's own, that one alone
+			// tried; one to another's is served as if unpinned, never on
+			// that account (T-009's decision, T-036)
+			if pin != "" {
+				var own bool
+				if cands, pl, own = gt.pinned(pin, cands, pl); !own {
+					pin = ""
+				}
+			}
 		}
 	}
 	// a pin to a lapsed account with no user bound: of those left, only
@@ -2812,7 +2821,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		capture.tools = tools
 	}
 	tierAsked := bodyTier(from, body) // the service tier the client asked for (#1784)
-	tr := s.trace.beginFor(r, Route{turn: turn, dirOf: dirOf(from, plain), tools: tools, imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, call.Agent), TitleLink: link, Pinned: pin, User: userBound, Time: start, Agent: call.Agent, Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, call.Kind), Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Tier: tierAsked, Provider: p.ID, Group: group, Rule: hit, Nested: nested, SealedTask: sealedTask, LeadAccount: leadAccount, Compaction: compactionWho(checkpoint), Subagent: subagent, SubagentEffort: subagentEffort, Sub: subOf(r.Header), SubagentID: subagentID, Affinity: shown, Order: gt.plan(pl.order), Left: gt.plan(append(slices.Clip(pl.left), smallW...))})
+	tr := s.trace.beginFor(r, Route{turn: turn, dirOf: dirOf(from, plain), tools: tools, imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, call.Agent), TitleLink: link, Pinned: pin, User: cmp.Or(userBound, gt.user()), Time: start, Agent: call.Agent, Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, call.Kind), Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Tier: tierAsked, Provider: p.ID, Group: group, Rule: hit, Nested: nested, SealedTask: sealedTask, LeadAccount: leadAccount, Compaction: compactionWho(checkpoint), Subagent: subagent, SubagentEffort: subagentEffort, Sub: subOf(r.Header), SubagentID: subagentID, Affinity: shown, Order: gt.plan(pl.order), Left: gt.plan(append(slices.Clip(pl.left), smallW...))})
 	// the plan of a group's provider narrowed as the tries reach it, in
 	// the routing log too (groupTurn)
 	seen := func(order, left []Weighed) {
@@ -3743,7 +3752,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			skipped = append(skipped, c.label()+": "+call.Error)
 			continue
 		}
-		if gt != nil && hw.failed() && failureOf(c, hw.code(), hw.errBody()) == failAuth {
+		if gt != nil && pin == "" && hw.failed() && failureOf(c, hw.code(), hw.errBody()) == failAuth {
 			// one of a group's user's accounts has to be signed in again,
 			// the last of its own of its provider: a spare of that
 			// provider's goes next to it, before another member's
