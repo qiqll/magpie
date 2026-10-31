@@ -28,6 +28,8 @@ const ROWS = [
 const ACCOUNTS = [
   { id: "dan@example.com", providers: ["Codex", "Claude", "Relay"], names: ["工作号", "私人号", ""] },
   { id: "eve@example.com", name: "同名", providers: ["Codex", "Claude"] },
+  // named alike where named, not at Relay: the one name, and which gave none
+  { id: "fay@example.com", name: "同名", providers: ["Codex", "Relay"], names: ["同名", ""] },
 ];
 
 function serve(lang) {
@@ -97,6 +99,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(await choices(), [
           { v: "dan@example.com", name: "工作号 / 私人号", note: "dan@example.com · Codex: 工作号 · Claude: 私人号 · Relay" },
           { v: "eve@example.com", name: "同名", note: "eve@example.com · Codex · Claude" },
+          { v: "fay@example.com", name: "同名", note: "fay@example.com · Codex: 同名 · Relay" },
         ]);
 
         // a few letters of either name find it
@@ -115,6 +118,21 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.keyboard.press("Escape");
         await page.evaluate(() => window.hideAccounts.set(false));
         for (const s of ["工作号", "私人号", "同名", "dan@example.com"]) assert(!shown.includes(s), `${s} shows with the accounts hidden: ${shown}`);
+
+        // picked, the button says both names, hidden with the accounts too
+        await page.locator("#ledAccount").click();
+        const reloaded = page.waitForResponse((r) => r.url().includes("/api/usage/requests") && r.url().includes("dan%40example.com"));
+        await page.locator(".sess-menu .pm-item", { hasText: "dan@example.com" }).click();
+        await page.locator(".sess-menu").waitFor({ state: "detached" });
+        await reloaded;
+        await page.waitForTimeout(0);
+        await page.locator(".led tbody tr.led-row").nth(2).waitFor();
+        assert.equal((await page.locator("#ledAccount").textContent()).trim(), "工作号 / 私人号");
+        await page.evaluate(() => window.hideAccounts.set(true));
+        await page.waitForFunction(() => { const b = document.querySelector("#ledAccount"); return !(b.textContent + b.title).match(/私人号|dan@example/); }).catch(() => {}); // what's left shows in the assert below
+        const btn = await page.locator("#ledAccount").evaluate((b) => b.textContent + " " + b.title);
+        await page.evaluate(() => window.hideAccounts.set(false));
+        for (const s of ["工作号", "私人号", "dan@example.com"]) assert(!btn.includes(s), `${s} shows on the button with the accounts hidden: ${btn}`);
 
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "the page runs past the window");
         assert.deepEqual(errors, []);

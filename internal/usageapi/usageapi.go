@@ -393,21 +393,25 @@ func LedgerPage(p usage.Period, f usage.Filter, offset, limit int) Ledger {
 	}
 	// one choice per account, most used first, with the providers it
 	// answered for: the same email may be a Codex and a Claude account
+	// by provider id, not name: two providers may share a name and each
+	// name the address its own way
 	at := map[string]int{}
+	ids := [][]string{}
 	for _, g := range l.Accounts {
-		name := which(g.Provider).Name
 		own := provider.AccountNameOf(g.Provider, g.Account)
 		i, ok := at[g.Account]
 		if !ok {
 			i = len(out.Accounts)
 			at[g.Account] = i
 			out.Accounts = append(out.Accounts, Account{ID: g.Account})
+			ids = append(ids, nil)
 		}
 		a := &out.Accounts[i]
-		if j := slices.Index(a.Providers, name); j >= 0 {
+		if j := slices.Index(ids[i], g.Provider); j >= 0 {
 			a.Names[j] = cmp.Or(a.Names[j], own)
 		} else {
-			a.Providers = append(a.Providers, name)
+			ids[i] = append(ids[i], g.Provider)
+			a.Providers = append(a.Providers, which(g.Provider).Name)
 			a.Names = append(a.Names, own)
 		}
 	}

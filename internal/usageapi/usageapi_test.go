@@ -2,6 +2,7 @@ package usageapi
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -229,19 +230,28 @@ func TestRowsNameTheirAccountAtTheirProvider(t *testing.T) {
 // name every naming provider agrees on.
 func TestAccountFilterNamesEachProviderApart(t *testing.T) {
 	names := map[string]map[string]string{
-		"work-relay":  {"dan@example.com": "工作号", "eve@example.com": "同名"},
-		"home-relay":  {"dan@example.com": "私人号", "eve@example.com": "同名"},
-		"blank-relay": nil,
+		"work-hop":  {"dan@example.com": "工作号", "eve@example.com": "同名"},
+		"home-hop":  {"dan@example.com": "私人号", "eve@example.com": "同名"},
+		"blank-hop": nil,
+		// two providers of one name, each naming the address its own way
+		"twin-a": {"dan@example.com": "甲号", "fay@example.com": "同名"},
+		"twin-b": {"dan@example.com": "乙号"},
 	}
 	for id, an := range names {
-		if err := provider.Save(provider.Provider{ID: id, Name: id, Chat: "http://127.0.0.1:1/v1", Key: "sk-test", AccountNames: an}); err != nil {
+		shown := id
+		if strings.HasPrefix(id, "twin-") {
+			shown = "Twin"
+		}
+		if err := provider.Save(provider.Provider{ID: id, Name: shown, Chat: "http://127.0.0.1:1/v1", Key: "sk-test", AccountNames: an}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	now := time.Now()
 	for i, c := range []struct{ prov, acct string }{
-		{"work-relay", "dan@example.com"}, {"home-relay", "dan@example.com"}, {"blank-relay", "dan@example.com"},
-		{"work-relay", "eve@example.com"}, {"home-relay", "eve@example.com"},
+		{"work-hop", "dan@example.com"}, {"home-hop", "dan@example.com"}, {"blank-hop", "dan@example.com"},
+		{"work-hop", "eve@example.com"}, {"home-hop", "eve@example.com"},
+		{"twin-a", "dan@example.com"}, {"twin-b", "dan@example.com"},
+		{"work-hop", "fay@example.com"}, {"twin-a", "fay@example.com"}, {"blank-hop", "fay@example.com"},
 	} {
 		usage.Append(usage.Record{Time: now.Add(-time.Duration(i+1) * time.Minute), Agent: "codex", Provider: c.prov, Model: "m", Input: 1, ProviderAccount: c.acct})
 	}
@@ -258,18 +268,23 @@ func TestAccountFilterNamesEachProviderApart(t *testing.T) {
 	if len(dan.Names) != len(dan.Providers) {
 		t.Fatalf("dan's names %q don't go with its providers %q", dan.Names, dan.Providers)
 	}
-	own := map[string]string{}
+	own := map[string][]string{}
 	for i, p := range dan.Providers {
-		own[p] = dan.Names[i]
+		own[p] = append(own[p], dan.Names[i])
 	}
-	for p, want := range map[string]string{"work-relay": "工作号", "home-relay": "私人号", "blank-relay": ""} {
-		if n, ok := own[p]; !ok || n != want {
+	for p, want := range map[string][]string{"work-hop": {"工作号"}, "home-hop": {"私人号"}, "blank-hop": {""}, "Twin": {"甲号", "乙号"}} {
+		if n := slices.Sorted(slices.Values(own[p])); !slices.Equal(n, slices.Sorted(slices.Values(want))) { // the twins tie on calls
 			t.Errorf("dan at %s is named %q, want %q (all: %v)", p, n, want, own)
 		}
 	}
 	eve := got["eve@example.com"]
 	if eve.Name != "同名" || eve.Names != nil {
 		t.Errorf("eve, named alike at both, is %q with names %q, want 同名 and none apart", eve.Name, eve.Names)
+	}
+	// named alike where named, and not at one: the one name, and which gave none
+	fay := got["fay@example.com"]
+	if fay.Name != "同名" || len(fay.Names) != 3 || !slices.Contains(fay.Names, "") {
+		t.Errorf("fay is %q with names %q at %q, want 同名 and each provider's, one blank", fay.Name, fay.Names, fay.Providers)
 	}
 }
 
