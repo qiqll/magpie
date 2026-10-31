@@ -134,6 +134,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await confirmKeyAction(page, tablet, w.remove);
       await page.waitForFunction(() => document.querySelectorAll("#gatewayKeys .acc[data-key]").length === 4);
       await page.setViewportSize({ width: 560, height: 740 });
+      // the header's tabs are fitted by a ResizeObserver a moment after the
+      // resize (as gateway-key-limit waits): the state, not the first read
+      await page.waitForFunction(() => document.documentElement.scrollWidth <= window.innerWidth).catch(() => {});
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
       assert.deepEqual(errors, []);
       if (process.env.ARTIFACT_DIR) {

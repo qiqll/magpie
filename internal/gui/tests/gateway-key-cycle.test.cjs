@@ -126,7 +126,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert(box && box.width > 100 && box.x + box.width <= 500, "the days field is squeezed");
       // the app's own narrow width (the nav's labels need more below it)
       await page.setViewportSize({ width: 560, height: 740 });
-      await page.waitForTimeout(100);
+      // the header's tabs are fitted by a ResizeObserver a moment after the
+      // resize (as gateway-key-limit waits): the state, not a fixed 100ms
+      await page.waitForFunction(() => document.documentElement.scrollWidth <= window.innerWidth).catch(() => {});
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "the page overflows at 560px");
       await page.setViewportSize({ width: 1000, height: 700 });
       assert.equal(sent("limit-key").length, 0, "sent before Save");
