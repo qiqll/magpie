@@ -326,6 +326,80 @@ func TestPluginPageNoAPI(t *testing.T) {
 	}
 }
 
+// A page on another port of magpie web's host is same-site: the browser
+// sends it the page's cookie, kept per host, with a "simple" POST (text/plain,
+// a form) that needs no preflight. It is turned away as another site's page
+// is (T-031), a link opened from it still reads, and the window's own
+// requests, a CLI's and an older webview's without Fetch Metadata go on.
+func TestAPISameHostOtherPortRefused(t *testing.T) {
+	pagePlugins(t)
+	wrote := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/settings", func(rw http.ResponseWriter, r *http.Request) {
+		wrote++
+		rw.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/state", func(rw http.ResponseWriter, r *http.Request) {
+		writeJSON(rw, map[string]string{"secret": "the window's"})
+	})
+	g := webGuard("magpie_web_8080", "key", 0, noFramedAPI(mux))
+	ask := func(method, ct string, set map[string]string) int {
+		r := httptest.NewRequest(method, "http://127.0.0.1:8080/api/settings", strings.NewReader(`{"theme":"dark"}`))
+		if method == "GET" || method == "HEAD" {
+			r = httptest.NewRequest(method, "http://127.0.0.1:8080/api/state", nil)
+		}
+		if ct != "" {
+			r.Header.Set("Content-Type", ct)
+		}
+		r.AddCookie(&http.Cookie{Name: "magpie_web_8080", Value: "key"})
+		for k, v := range set {
+			r.Header.Set(k, v)
+		}
+		return do(g, r).Code
+	}
+	other := "http://127.0.0.1:3000"
+	for _, c := range []struct {
+		method, ct string
+		set        map[string]string
+	}{
+		{"POST", "text/plain;charset=UTF-8", map[string]string{"Origin": other, "Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "empty"}},
+		{"POST", "application/x-www-form-urlencoded", map[string]string{"Origin": other, "Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}},
+		{"POST", "application/json", map[string]string{"Origin": other, "Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}},
+		{"GET", "", map[string]string{"Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image"}},
+		{"GET", "", map[string]string{"Origin": other, "Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}},
+		// another site's form, a navigation too, writes nothing either
+		{"POST", "application/x-www-form-urlencoded", map[string]string{"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}},
+	} {
+		if code := ask(c.method, c.ct, c.set); code != http.StatusForbidden {
+			t.Errorf("%s %s %v: %d, want 403", c.method, c.ct, c.set, code)
+		}
+	}
+	if wrote != 0 {
+		t.Fatalf("a page on another port wrote settings %d times", wrote)
+	}
+	if code := ask("POST", "application/json", map[string]string{"Origin": "http://127.0.0.1:8080", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}); code != http.StatusNoContent {
+		t.Errorf("the page's own POST: %d", code)
+	}
+	if code := ask("POST", "application/json", nil); code != http.StatusNoContent {
+		t.Errorf("a POST without Fetch Metadata: %d", code)
+	}
+	for _, m := range []string{"GET", "HEAD"} {
+		if code := ask(m, "", map[string]string{"Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}); code != 200 {
+			t.Errorf("a link opened from another port, %s: %d", m, code)
+		}
+	}
+	if wrote != 2 {
+		t.Errorf("the page's own writes: %d, want 2", wrote)
+	}
+	// the window's own handler, not only this test's
+	r := httptest.NewRequest("POST", "/api/plugin-pages/read", strings.NewReader(`{}`))
+	r.Header.Set("Content-Type", "text/plain;charset=UTF-8")
+	r.Header.Set("Sec-Fetch-Site", "same-site")
+	if w := do(Handler(nil, nil), r); w.Code != http.StatusForbidden {
+		t.Errorf("the window's /api to a page on another port: %d", w.Code)
+	}
+}
+
 // magpie web's guard lets a page's files through without the cookie a
 // sandboxed frame never sends, and only those: a made-up token is served
 // nothing, and the rest of the page still wants the key.

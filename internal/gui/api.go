@@ -2432,7 +2432,8 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 }
 
 // noFramedAPI turns away a request for /api that no page of the window's
-// own makes (apiFramed): a plugin's page in its frame among them.
+// own makes (apiFramed): a plugin's page in its frame among them, and a page
+// on another port of the same host.
 func noFramedAPI(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if apiFramed(r) {

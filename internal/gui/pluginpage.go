@@ -351,8 +351,17 @@ func servePluginPage(rw http.ResponseWriter, r *http.Request) {
 // apiFramed is whether r is a request for /api that no page of the window's
 // own makes: one from a sandboxed frame (Origin: null, which a plugin's
 // page's fetch would send were its policy not to stop it), one that loads
-// /api into a frame, or one another site's page sends. The desktop
+// /api into a frame, or one a page of another origin sends. The desktop
 // window's /api has no key, so this is what keeps a plugin's page out.
+//
+// Another origin is another site's page, and a page on another port of the
+// same host too (Sec-Fetch-Site: same-site; T-031): a browser keeps
+// magpie web's SameSite=Lax cookie per host, not per port, and sends it
+// with that page's "simple" POST (text/plain, a form), which the handlers
+// decode as JSON all the same. Only a link opened to read (GET or HEAD of
+// a document) goes on, which no page can read the answer of. A request
+// without Sec-Fetch-Site (a CLI, a webview before Fetch Metadata) is judged
+// as before.
 func apiFramed(r *http.Request) bool {
 	if !strings.HasPrefix(r.URL.Path, "/api/") {
 		return false
@@ -364,7 +373,12 @@ func apiFramed(r *http.Request) bool {
 	case "iframe", "frame", "embed", "object":
 		return true
 	}
-	return r.Header.Get("Sec-Fetch-Site") == "cross-site" && r.Header.Get("Sec-Fetch-Dest") != "document"
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "cross-site", "same-site":
+		read := r.Method == http.MethodGet || r.Method == http.MethodHead
+		return !read || r.Header.Get("Sec-Fetch-Dest") != "document"
+	}
+	return false
 }
 
 func pluginPageRoutes(mux *http.ServeMux) {
