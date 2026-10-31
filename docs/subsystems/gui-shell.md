@@ -401,6 +401,69 @@ security model, the bridge and the reads are in
 [`plugin-page.test.cjs`](../../internal/gui/tests/plugin-page.test.cjs)
 covers it in both engines, every language and a narrow window.
 
+### /api writes from another port over plain http on the network
+
+This is an open gap, not a design choice. Over plain http at an address
+that isn't loopback, a page on another port of magpie web's host can write
+through `/api`.
+
+Why: `magpie web`, and the app's page in a browser (Settings › Network
+and sharing › Browser access), signs a browser in with a `SameSite=Lax`
+cookie (`webGuard`, [`web.go`](../../internal/gui/web.go)). A browser keeps
+a cookie per host, not per port. A page on another port of the same host is
+same-site, so the browser sends that cookie with the page's requests. The
+`/api` handlers decode a body as JSON whatever its `Content-Type`, so a
+"simple" request (`text/plain`, a form), which needs no CORS preflight, is
+enough to write. The page can't read the answer, and doesn't need to.
+`apiFramed` ([`pluginpage.go`](../../internal/gui/pluginpage.go), put
+before every `/api` route by `noFramedAPI`) refuses `Sec-Fetch-Site`
+`cross-site` and `same-site` except a GET or HEAD of a document
+(`TestAPISameHostOtherPortRefused`). Browsers send Fetch Metadata only to a
+potentially trustworthy origin: https, localhost and loopback. Served over
+plain http at a LAN address (no `--tls-cert`), the page's requests carry no
+`Sec-Fetch-Site`, so `apiFramed` can't tell magpie web's own page from a
+page on another port. It lets the request through, as it does a CLI's.
+
+What it reaches: every write under `/api`, which includes settings,
+providers and accounts, keys, backup import and plugin install
+(`POST /api/plugins/{op}`, which runs code). Only magpie web or the app's
+page over plain http at an address that isn't loopback is open. Loopback
+and https get Fetch Metadata and are covered. The page that writes has to
+be served from the same host on another port: another service on that
+machine, or anything that can get a page served there. A page on another
+site is cross-site, and is refused already (`SameSite=Lax` also keeps the
+cookie off its POST).
+
+Until it is fixed: serve magpie web to the network with `--tls-cert`, or
+through an https tunnel or proxy. The browser then sends Fetch Metadata and
+the same-site refusal covers it.
+
+Two ways to fix it, neither chosen yet. Either one needs a test with a
+`192.168.x` Host and no `Sec-*` headers that is red on the current code.
+
+- **A: with no `Sec-Fetch-Site`, compare `Origin` with the page's own
+  origin.** A browser sends `Origin` on every POST, same-origin included.
+  When `Sec-Fetch-Site` is missing and `Origin` is there, refuse a
+  non-GET `/api` request whose `Origin` isn't the page's: `Host`, or
+  `X-Forwarded-Host` or `MAGPIE_PUBLIC_URL` behind a proxy. A request
+  with no `Origin` (a CLI, a script) goes through as now. The cost: behind
+  a reverse proxy that rewrites `Host`, sends no `X-Forwarded-Host` and has
+  no `MAGPIE_PUBLIC_URL` set, magpie web's own page is refused. A
+  forwarding header can be trusted only as far as the proxy sets it, and
+  the names a page may be at have to be kept right as the deployment
+  changes.
+- **B: a non-GET `/api` request needs `Content-Type: application/json`,
+  or a header of magpie's own (such as `X-Magpie: 1`).** Either makes the
+  request non-simple, so a page of another origin needs a CORS preflight,
+  which `/api` never allows, and the browser never sends the write. The
+  cost: every caller of `/api` has to send it. That is every `fetch` in the
+  GUI's scripts, the plugin page bridge, and any script or tool that calls
+  `/api` today. A route that takes another body (`POST /api/icons` takes
+  raw bytes as well as JSON) needs the header, not the type. A caller
+  missed is a broken button, so B needs a guard test over every `/api`
+  call site. In return it depends on neither Fetch Metadata nor the proxy,
+  so it covers older browsers too.
+
 ### Shared UI rules
 
 - Windows desktop windows and tray panels keep the modal's dimming veil without backdrop blur or saturation: full-window filtering can stall WebView2 while a provider test or sign-in dialog is open. The existing `win` marker from [`layout.js`](../../internal/gui/assets/layout.js) scopes the rule in [`app.css`](../../internal/gui/assets/app.css) to the desktop app; browser pages and other platforms keep their existing effect. `modal-backdrop.test.cjs` checks the computed filter and veil in both engines and modes.
