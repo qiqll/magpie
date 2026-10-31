@@ -715,8 +715,10 @@ the key's limit holds the ask as it holds the turn: once the key, its
 turn counted, has nothing left, the classifier isn't asked and the turn
 goes where a classifier that couldn't say sends it. A web search or a
 picture described for the key's turn is held the same way: with nothing
-left, it isn't made and the turn goes on without it, the model told the
-search failed or the image couldn't be described. When every
+left, it isn't made and the turn goes on without it, the model told
+only that web search is unavailable or the image couldn't be described.
+A turn's large image isn't dropped for its own size: it is counted at an
+image's cost, and described while the key's use leaves it room. When every
 account or key behind a model is one the key may not use, the request is
 refused with a 403 in the API's own error shape naming the model and the
 accounts it may use, before a provider is asked — after a usage cap's 429

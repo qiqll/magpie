@@ -325,11 +325,11 @@ func (s *Server) describe(ctx context.Context, model, src string) (string, error
 		s.sightMu.Unlock()
 		select {
 		case <-e.done:
-			// another key's limit is that key's own: asked again, as this
-			// request's (the refused look isn't kept)
+			// another key's limit is that key's own: asked once more, as
+			// this request's, past the shared look so it can't wait again
 			var held sideHeld
 			if errors.As(e.err, &held) && held.key != access.Caller(ctx).KeyID {
-				return s.describe(ctx, model, src)
+				return s.askVision(ctx, model, src)
 			}
 			return e.text, e.err
 		case <-ctx.Done():
@@ -365,6 +365,11 @@ func (s *Server) describe(ctx context.Context, model, src string) (string, error
 func (s *Server) askVision(ctx context.Context, model, src string) (string, error) {
 	return s.askVisionWith(ctx, model, src, visionSystem, "Describe this image.")
 }
+
+// visionImageBytes is what an image is reserved at against a key's limit
+// (reserveSide), as bytes a quarter of a token each: about what a
+// describer counts an image as, whatever its base64 runs to.
+const visionImageBytes = 4 * 1600
 
 // askVisionWith asks model about the image at src: system, and the user's
 // text beside the image.
@@ -410,7 +415,7 @@ func (s *Server) askVisionWith(ctx context.Context, model, src, system, text str
 	// the look here (sideHeld); an MCP call's is held where it came in
 	// (visionMCPRun)
 	if f.call == nil || !f.call.MCP {
-		release, err := reserveSide(ctx, int64(len(body)), model)
+		release, err := reserveSide(ctx, int64(len(body)-len(src))+visionImageBytes, model)
 		if err != nil {
 			return "", err
 		}

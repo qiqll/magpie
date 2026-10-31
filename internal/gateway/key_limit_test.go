@@ -779,8 +779,10 @@ func TestKeyLimitHoldsTheTurnsImageDescription(t *testing.T) {
 
 // A web search made for a key's turn, through serve past keyLimited, is
 // held to the key's limit too: with nothing left, no searcher is asked
-// and the turn goes on, the model told the search failed. Another key's
-// turn searches. Before, the key's limit only counted the search's spend.
+// and the turn goes on, the model told the search can't be made in words
+// that name neither the key nor magpie, as they go on to its vendor.
+// Another key's turn searches. Before, the key's limit only counted the
+// search's spend.
 func TestKeyLimitHoldsTheTurnsWebSearch(t *testing.T) {
 	searched, _ := dsKeyed(t, provider.Responses)
 	glm, result := newBlindModel(t)
@@ -795,7 +797,7 @@ func TestKeyLimitHoldsTheTurnsWebSearch(t *testing.T) {
 	if n := len(searched("deepseek-flash")); n != 0 {
 		t.Fatalf("the searcher was asked %d times for a key with nothing left", n)
 	}
-	if got := result(); !strings.Contains(got, "search failed") || !strings.Contains(got, `"Capped"`) {
+	if got := result(); !strings.Contains(got, "search failed: web search is unavailable") || strings.Contains(got, "Capped") || strings.Contains(strings.ToLower(got), "magpie") {
 		t.Fatalf("the model was told %q", got)
 	}
 	if code, out := keyedPost(s, secrets[1], "/v1/messages", body); code != 200 {
@@ -803,5 +805,26 @@ func TestKeyLimitHoldsTheTurnsWebSearch(t *testing.T) {
 	}
 	if got := result(); len(searched("deepseek-flash")) == 0 || !strings.Contains(got, "22/17℃") {
 		t.Fatalf("another key's turn: searched %d times, the model told %q", len(searched("deepseek-flash")), got)
+	}
+}
+
+// A turn's own reservation is its body's bytes a quarter token each, its
+// image's base64 too, so it can hold more of a key's limit than is left
+// beside it. Its image is described all the same while what the key has
+// used leaves the look room, and is reserved at an image's cost, not at
+// its base64's.
+func TestKeyLimitDescribesALargeImageWithRoomLeft(t *testing.T) {
+	s, u := eyed(t)
+	keys, secrets := newCaller(t, "Roomy")
+	budget.Forget()
+	pinLimitClock(t)
+	setLimit(t, keys[0].ID, &access.Limit{Period: "day", Tokens: 20000})
+	big := strings.Repeat("aGVsbG8g", 12000) // 96KB of base64: the turn holds ~24k tokens
+	body := `{"model":"probe/text","messages":[{"role":"user","content":[{"type":"text","text":"read"},{"type":"image_url","image_url":{"url":"data:image/png;base64,` + big + `"}}]}]}`
+	if code, out := keyedPost(s, secrets[0], "/v1/chat/completions", body); code != 200 {
+		t.Fatalf("%d %s", code, out)
+	}
+	if got := u.sent("text"); len(u.sent("eye")) != 1 || len(got) != 1 || !strings.Contains(got[0], "HELLO") {
+		t.Fatalf("eye asked %d times, the text model sent %d requests", len(u.sent("eye")), len(got))
 	}
 }

@@ -106,17 +106,48 @@ type sideHeld struct {
 
 func (k sideHeld) Unwrap() error { return k.error }
 
+// sideSaid is err as a model is told it in a tool's result, which goes on
+// to its vendor: a key's refusal (sideHeld) names the key, what it used
+// and magpie, so the model is told only that the search can't be made.
+func sideSaid(err error) string {
+	if errors.As(err, new(sideHeld)) {
+		return "web search is unavailable for this request"
+	}
+	return err.Error()
+}
+
 // reserveSide holds a side ask's request, sent through serve past
 // keyLimited, to the limit of the key its turn came with, as keyLimited
-// holds the turn: the turn's own reservation counted, a key with nothing
-// left is refused with sideHeld.
+// holds the turn: a key with nothing left for it is refused with
+// sideHeld. size is the ask's bytes as it costs, not as it is sent (an
+// image's base64 isn't its tokens). Refused only for what is in flight,
+// the turn's own reservation among it (its body's base64 counted a
+// quarter of a token a byte), it is let in while what the key has
+// used leaves the ask room, holding nothing: a turn's large image isn't
+// dropped on a key with most of its limit left.
 func reserveSide(ctx context.Context, size int64, model string) (func(), error) {
 	who := access.Caller(ctx)
-	release, err := reserveFor(who, size, model, limitClock())
-	if err != nil {
-		return nil, sideHeld{err, who.KeyID}
+	now := limitClock()
+	release, err := reserveFor(who, size, model, now)
+	if err == nil {
+		return release, nil
 	}
-	return release, nil
+	var refused *budget.Refusal
+	if errors.As(err, &refused) && !refused.Spent && roomFor(who, size/4, now) {
+		return func() {}, nil
+	}
+	return nil, sideHeld{err, who.KeyID}
+}
+
+// roomFor is whether every limit of who's key, by what it has used alone,
+// has more than est tokens left and cost under its cap.
+func roomFor(who access.Identity, est int64, now time.Time) bool {
+	for _, st := range budget.All(access.Key{ID: who.KeyID, Name: who.KeyName, Limit: who.Limit, More: who.More}, now) {
+		if st.Spent || st.TokenLimit > 0 && st.Tokens+est >= st.TokenLimit {
+			return false
+		}
+	}
+	return true
 }
 
 // protoOfPath is the API a path is of, for an error said its way.

@@ -291,7 +291,7 @@ func (s *Server) alphaSearchHere(w http.ResponseWriter, r *http.Request, q alpha
 				return
 			}
 			log.Printf("web search for %s: %v", q.Model, err)
-			msg := "magpie couldn't search the web for " + query + ": " + err.Error()
+			msg := "magpie couldn't search the web for " + query + ": " + sideSaid(err)
 			if errors.Is(err, errNoSearcher) {
 				msg += ": add a search API in magpie's Settings → Models → Web search (or magpie search add <api> <key>), or a provider that can search"
 			}

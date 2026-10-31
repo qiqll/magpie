@@ -800,6 +800,10 @@ func (s *Server) modelSearch(ctx context.Context, query string) (string, []Hit, 
 		if next == nil {
 			said, hits, next = s.searchWith(ctx, c.Provider, c.Small, query, searchEffort(c.Provider, c.Small))
 		}
+		// the turn's key refused it: the next would be refused too
+		if errors.As(next, new(sideHeld)) {
+			return "", nil, next
+		}
 		if next != nil {
 			err = errors.Join(err, next)
 		} else {
@@ -1197,7 +1201,7 @@ func (s *Server) searchRounds(ctx context.Context, q *Request, tool string, in <
 				}
 				found, hits, err := s.webSearch(context.WithValue(ctx, searchCallKey{}, c.ID), a.Query)
 				if err != nil {
-					results[i].Text, results[i].IsError = "search failed: "+err.Error(), true
+					results[i].Text, results[i].IsError = "search failed: "+sideSaid(err), true
 					return
 				}
 				results[i].Text = found
