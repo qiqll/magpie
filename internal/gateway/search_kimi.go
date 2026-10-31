@@ -146,8 +146,14 @@ func (s *Server) usersSearchKey(ctx context.Context, p provider.Provider, model 
 	who := candidate{p: p, model: model, rest: p.ID}.who()
 	var seats []userSeat
 	if f, ok := ctx.Value(askedForKey{}).(askedFor); ok {
+		// a tier usersOwn would refuse is refused on a seat too
+		if _, _, err := askedUserTier(ctx, f); err != nil {
+			return p, fmt.Errorf("%s: %w", p.Name, err)
+		}
 		userBinds.Lock()
-		// unreadable, the seats are unknown: usersOwn refuses
+		// never read, the seats are unknown: usersOwn refuses. Read once
+		// and changed since into what can't be read (stale), they are the
+		// last read, as bindUser keeps them
 		if loadUsers() == nil {
 			seats = userBinds.m[f.key][p.ID][f.user].seats()
 		}

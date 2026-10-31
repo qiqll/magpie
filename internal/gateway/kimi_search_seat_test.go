@@ -102,4 +102,25 @@ func TestKimiSearchKeepsTheUsersSeat(t *testing.T) {
 			}
 		})
 	}
+
+	// a tier that is none is refused on a seat as usersOwn refuses it:
+	// nothing is searched
+	r.Header.Set(UserTierHeader, "no-such-tier")
+	bad := context.WithValue(s.forUser(context.Background(), r), searchForKey{}, &CallFor{Model: "kimi-for-coding"})
+	mu.Lock()
+	before := len(keys)
+	mu.Unlock()
+	for _, on := range []provider.Provider{*p, accounts[0].p, accounts[1].p} {
+		if _, _, err := s.searchBy(bad, on, "kimi-for-coding", "latest go", ""); err == nil {
+			t.Fatalf("searchBy on %s with a tier that is none: searched", on.Key)
+		}
+		if _, _, err := s.ownSearch(bad, on, "latest go"); err == nil {
+			t.Fatalf("ownSearch on %s with a tier that is none: searched", on.Key)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(keys) != before {
+		t.Fatalf("searched with %q for a tier that is none", keys[before:])
+	}
 }

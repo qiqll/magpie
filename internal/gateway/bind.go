@@ -168,14 +168,9 @@ func (s *Server) usersOwn(ctx context.Context, p provider.Provider, model string
 	if !ok {
 		return nil, true, errors.New(noUserSaid())
 	}
-	h := http.Header{}
-	askAsUser(ctx, h)
-	tier, bad, err := tierOf(h)
-	if bad != "" {
-		return nil, true, errors.New(bad)
-	}
+	h, tier, err := askedUserTier(ctx, f)
 	if err != nil {
-		return nil, true, fmt.Errorf("%s: magpie can't read user-tiers.json, so it doesn't know how many accounts %q may have; nothing was sent", UserTierHeader, f.user)
+		return nil, true, err
 	}
 	pool, poolPl := s.plan(p, model, from)
 	cands, _, ub, refused := ownOf(f.key, f.user, tier, tierNamed(h), p, pool, poolPl)
@@ -195,6 +190,23 @@ func (s *Server) usersOwn(ctx context.Context, p provider.Provider, model string
 		return nil, true, fmt.Errorf("%s: none of %s's accounts %q is on can answer now; no other is asked in its place", UserHeader, p.Name, f.user)
 	}
 	return cands, true, nil
+}
+
+// askedUserTier is the headers of magpie's own ask made for the user f of
+// ctx (askAsUser) and the tier they name; err refuses the ask, a tier
+// that isn't one or a user-tiers.json magpie can't read, before anything
+// is sent.
+func askedUserTier(ctx context.Context, f askedFor) (http.Header, Tier, error) {
+	h := http.Header{}
+	askAsUser(ctx, h)
+	tier, bad, err := tierOf(h)
+	if bad != "" {
+		return h, tier, errors.New(bad)
+	}
+	if err != nil {
+		return h, tier, fmt.Errorf("%s: magpie can't read user-tiers.json, so it doesn't know how many accounts %q may have; nothing was sent", UserTierHeader, f.user)
+	}
+	return h, tier, nil
 }
 
 // ownOf narrows pool, p's candidates for a request of user (of the
