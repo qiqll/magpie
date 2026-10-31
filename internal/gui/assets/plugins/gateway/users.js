@@ -93,22 +93,28 @@ function userSeatChip(u, account, seat, first) {
   return held;
 }
 
+// what letting go of one of u's accounts leaves it: a spare, its first
+// as it is; its first, the next its first; its only one, bound afresh
+function unbindSays(u, seat) {
+  if (seat !== u.seat) return t("Its first account stays its first, and its other spares stay.");
+  if (u.spares?.length) return t("Its other accounts stay, the next one its first, and take its requests.");
+  return t("It is the user's only account of {provider}: its next request binds it afresh.", { provider: u.providerName });
+}
+
 // one of u's accounts let go of, once confirmed; the list read again after
 async function unbindUserSeat(u, account, seat, go) {
-  const others = (u.spares?.length || 0) > 0;
-  const ok = await confirmAction(t("Unbind {account} from {user}?", { account, user: u.user }),
-    others ? t("Its other accounts stay, the next one its first, and take its requests.")
-      : t("It is the user's only account of {provider}: its next request binds it afresh.", { provider: u.providerName }), t("Unbind"));
-  if (!ok) return;
+  if (!await confirmAction(t("Unbind {account} from {user}?", { account, user: u.user }), unbindSays(u, seat), t("Unbind"))) return;
   go.classList.add("busy");
+  let out;
   try {
-    const out = await api("gateway/users/unbind", { key: u.key || "", provider: u.provider, user: u.user, seat });
-    status(t(out?.unbound ? "{user} let go of {account}" : "{user} was let go of {account} already", { user: u.user, account }), "ok");
+    out = await api("gateway/users/unbind", { key: u.key || "", provider: u.provider, user: u.user, seat });
   } catch (e) {
-    go.classList.remove("busy");
     status(e.why ? t("user-accounts.json can't be changed: {why}", { why: e.why }) : e.message, "err");
     return;
+  } finally {
+    go.classList.remove("busy");
   }
+  status(t(out?.unbound ? "{user} let go of {account}" : "{user} was let go of {account} already", { user: u.user, account }), "ok");
   loadUserBinds();
 }
 

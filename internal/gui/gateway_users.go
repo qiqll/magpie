@@ -175,9 +175,11 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 		writeJSON(w, out)
 	})
 	// one of a user's accounts let go of, as the page names it: its
-	// gateway key, provider, user and seat. unbound is false when the user
-	// was let go of it meanwhile; a file that doesn't read, or can't be
-	// written, is said why, for the page to say it in the reader's language
+	// gateway key, provider, user and seat; only while the gateway binds
+	// by user, as the page offers it: bound by session the bindings are
+	// kept as they are. unbound is false when the user was let go of it
+	// meanwhile; a file that doesn't read, or can't be written, is said
+	// why, for the page to say it in the reader's language
 	mux.HandleFunc("POST /api/gateway/users/unbind", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Key      string `json:"key"`
@@ -189,10 +191,14 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			http.Error(w, "nothing to unbind", http.StatusBadRequest)
 			return
 		}
+		if servingBinding().mode != gateway.BindUser {
+			http.Error(w, "the gateway doesn't bind by user now (start option --bind=user), so nothing is unbound", http.StatusConflict)
+			return
+		}
 		found, err := gateway.Unbind(in.Key, in.Provider, in.User, in.Seat)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
+			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("user-accounts.json can't be changed: %v", err), "why": err.Error()})
 			return
 		}

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -29,10 +30,12 @@ func unbindUser(t *testing.T, body string) (int, map[string]any) {
 // gateway key and provider, the seat as the page names it; the user's
 // spare is its first then, and a user left with none is gone from the
 // list; one let go of meanwhile is said so; a request that names nobody
-// changes nothing; a file that doesn't read is said why, and left as it is.
+// changes nothing, nor one while the gateway binds by session; a file
+// that doesn't read is said why, and left as it is.
 func TestGatewayUsersUnbind(t *testing.T) {
 	sandboxHome(t)
 	noGateway(t)
+	t.Setenv(gateway.BindEnv, "user")
 	at := time.Now().UTC().Format(time.RFC3339)
 	writeUsers(t, fmt.Sprintf(`{
   "users": {"antigravity": {"1": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q, "more": [{"who": "antigravity@b@x.com", "account": "b@x.com", "at": %q}]}}},
@@ -78,12 +81,22 @@ func TestGatewayUsersUnbind(t *testing.T) {
 			t.Fatalf("%q: %d", body, code)
 		}
 	}
-	// a file that doesn't read
 	path := filepath.Join(filepath.Dir(provider.Path()), "user-accounts.json")
+	// bound by session: kept as they are
+	t.Setenv(gateway.BindEnv, "session")
+	before, _ := os.ReadFile(path)
+	if code, _ := unbindUser(t, `{"provider":"antigravity","user":"1","seat":"antigravity@b@x.com"}`); code != http.StatusConflict {
+		t.Fatalf("by session: %d", code)
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Fatalf("changed by session: %s", after)
+	}
+	t.Setenv(gateway.BindEnv, "user")
+	// a file that doesn't read
 	bad := `{"users": `
 	writeUsers(t, bad)
 	code, out2 := unbindUser(t, `{"provider":"antigravity","user":"1","seat":"antigravity@b@x.com"}`)
-	if code != 400 || !strings.Contains(fmt.Sprint(out2["error"]), "user-accounts.json") || out2["why"] == "" {
+	if code != http.StatusInternalServerError || !strings.Contains(fmt.Sprint(out2["error"]), "user-accounts.json") || out2["why"] == "" {
 		t.Fatalf("unreadable: %d %v", code, out2)
 	}
 	if b, _ := os.ReadFile(path); string(b) != bad {

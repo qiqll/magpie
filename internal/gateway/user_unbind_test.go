@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -124,5 +125,93 @@ func TestUserUnbindsWhileUsersAreBound(t *testing.T) {
 		if got := seats[fmt.Sprint("new-", i)]; len(got) != 1 {
 			t.Errorf("new-%d on %v", i, got)
 		}
+	}
+}
+
+// Another magpie writing the file between this one's read and its write
+// (the window's Unbind while the gateway binds, in another process, whose
+// userBinds isn't this one's): this one's write is refused, the other's
+// change kept, and the next read takes it.
+func TestUserFileNotWrittenOverAnotherMagpiesChange(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	asked, _ := usersUpstream(t, nil)
+	two := userBinding{Who: "codex@me@example.com", Account: "me@example.com", More: []userSeat{{Who: "codex@spare@example.com", Account: "spare@example.com"}}}
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {"alice": two}}})
+	s := byUserUpTo(t, New(), 2)
+
+	userBinds.Lock()
+	if err := loadUsers(); err != nil {
+		userBinds.Unlock()
+		t.Fatal(err)
+	}
+	// the other magpie lets go of alice's first meanwhile
+	theirs := mustJSON(userFile{Users: map[string]map[string]userBinding{"codex": {"alice": bindingOf(two.seats()[1:])}}})
+	if err := os.WriteFile(usersPath(), theirs, 0o600); err != nil {
+		userBinds.Unlock()
+		t.Fatal(err)
+	}
+	// this one keeps her tier, on what it read before
+	b := userBinds.m[""]["codex"]["alice"]
+	b.Tier = "free"
+	userBinds.m[""]["codex"]["alice"] = b
+	err := saveUsers()
+	userBinds.Unlock()
+	if !errors.Is(err, errUsersChanged) {
+		t.Fatalf("written over another magpie's change: %v", err)
+	}
+	if got, _ := os.ReadFile(usersPath()); !bytes.Equal(got, theirs) {
+		t.Fatalf("the file: %s", got)
+	}
+	// read again: alice is on her spare alone
+	rec := userPost(s, "codex/gpt-5.5", "alice", "hi")
+	if r := lastRoute(s); rec.Code != 200 || r.User == nil || r.User.Account != "spare@example.com" || len(r.User.Spares) != 0 {
+		t.Fatalf("alice: %d %+v asked %v", rec.Code, r.User, asked(false))
+	}
+	if got := seatsIn(t, "codex")["alice"]; len(got) != 1 || got[0] != "spare@example.com" {
+		t.Fatalf("alice on %v", got)
+	}
+}
+
+// A file that can't be written: Unbind says why, and the binding stays
+// as the file has it, in memory too, so it can be let go of once it can.
+// Another magpie's write between its read and its write is read again
+// and the change made on it.
+func TestUserUnbindWriteFails(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	usersUpstream(t, nil)
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"alice": {Who: "codex@me@example.com", Account: "me@example.com"},
+		"bob":   {Who: "codex@me@example.com", Account: "me@example.com"},
+	}}})
+	was := writeUsersFile
+	t.Cleanup(func() { writeUsersFile = was })
+	writeUsersFile = func(string, []byte, os.FileMode) error { return errors.New("disk full") }
+	if found, err := Unbind("", "codex", "alice", "codex@me@example.com"); found || err == nil || err.Error() != "disk full" {
+		t.Fatalf("unwritable: %v %v", found, err)
+	}
+	writeUsersFile = was
+	if found, err := Unbind("", "codex", "alice", "codex@me@example.com"); !found || err != nil {
+		t.Fatalf("written once it can: %v %v", found, err)
+	}
+	// bob's written by another magpie as Unbind writes: read again
+	writes := 0
+	writeUsersFile = func(path string, b []byte, mode os.FileMode) error {
+		if writes++; writes == 1 {
+			other := mustJSON(userFile{Users: map[string]map[string]userBinding{"codex": {
+				"bob":   {Who: "codex@me@example.com", Account: "me@example.com"},
+				"carol": {Who: "codex@spare@example.com", Account: "spare@example.com"},
+			}}})
+			if err := os.WriteFile(usersPath(), other, 0o600); err != nil {
+				return err
+			}
+			return errUsersChanged
+		}
+		return was(path, b, mode)
+	}
+	if found, err := Unbind("", "codex", "bob", "codex@me@example.com"); !found || err != nil || writes != 2 {
+		t.Fatalf("bob: %v %v after %d writes", found, err, writes)
+	}
+	if got := seatsIn(t, "codex"); len(got) != 1 || len(got["carol"]) != 1 {
+		t.Fatalf("the other magpie's carol lost, or bob kept: %v", got)
 	}
 }

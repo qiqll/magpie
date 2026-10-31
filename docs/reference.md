@@ -2243,10 +2243,15 @@ narrowed by a search, which matches a spare's account too. Bound by user,
 each of a user's accounts has an Unbind, confirmed first, that lets go of
 it (`POST /api/gateway/users/unbind`, behind the window's API guard): the
 user's next account is its first then, and a user left with none is bound
-afresh on its next request. The file is read again and written under the
-same lock as the gateway's own changes, through a temporary file renamed
-over it; one that doesn't read is left as it is and the page says why.
-Bound by session the list only reads the file. A file that
+afresh on its next request (possibly on the same account again, and with
+the default tier for a request that names none). The file is read again
+and written under the same lock as the gateway's own changes, through a
+temporary file renamed over it. Neither the window nor a gateway writes
+over a change another magpie made after its read: the gateway's own
+change is dropped and read again, and Unbind is made again on what it
+reads. One that doesn't read is left as it is and the page says why.
+Bound by session the list only reads the file, and the route refuses
+(409). A file that
 doesn't read keeps the users read before bound and binds nobody new. A
 request for a routing group is bound on each member's provider it
 reaches, never on another user's account, and `X-Magpie-Account` wins

@@ -511,12 +511,34 @@ func loadUsers() error {
 	return nil
 }
 
+// errUsersChanged is a write refused because the file changed since it
+// was read: another magpie wrote it (the window's Unbind, or a gateway's
+// binding while the window serves none), or it was edited by hand.
+var errUsersChanged = errors.New("it changed since it was read, and is left as that change has it")
+
+// usersChanged says the file isn't as it was last read or written: there,
+// gone, or of another time or size. One that can't be looked at is
+// unknown, and counts as changed. Called with userBinds held.
+func usersChanged() bool {
+	fi, err := os.Stat(usersPath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return !userBinds.mod.IsZero()
+	}
+	return err != nil || !fi.ModTime().Equal(userBinds.mod) || fi.Size() != userBinds.size
+}
+
 // saveUsers writes the bindings, only for this user to read: to a file
 // beside it first, flushed, renamed over it. Called with userBinds held,
-// never while the file doesn't read (stale).
+// never while the file doesn't read (stale), and never over one that
+// changed since it was read (errUsersChanged): userBinds is held in this
+// process only, and the other change wins over this one, which the next
+// read drops from memory too.
 func saveUsers() error {
 	if userBinds.stale {
 		return errors.New("it doesn't read, and is left as it is")
+	}
+	if usersChanged() {
+		return errUsersChanged
 	}
 	f := userFile{Users: userBinds.m[""]}
 	for k, ps := range userBinds.m {
@@ -539,7 +561,7 @@ func saveUsers() error {
 	if err != nil {
 		return err
 	}
-	if err := steady.WriteFile(target, b, 0o600); err != nil {
+	if err := writeUsersFile(target, b, 0o600); err != nil {
 		return err
 	}
 	if fi, err := os.Stat(path); err == nil {
@@ -547,6 +569,9 @@ func saveUsers() error {
 	}
 	return nil
 }
+
+// writeUsersFile writes the file for saveUsers; a test's to fail.
+var writeUsersFile = steady.WriteFile
 
 // saveUsersLogged is saveUsers, its failure logged: what is bound is in
 // memory still, and the next change writes it.
