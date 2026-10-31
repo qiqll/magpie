@@ -2516,7 +2516,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	var gt *groupTurn
 	if isGroup && pin == "" {
 		if gt = s.groupTurnOf(r, ms, cands, pl); gt != nil {
+			// a limit is said to its user, never naming the group's
+			// accounts, another user's among them (saidToUser)
 			bindsUser = true
+			limitedUser, _ = userOf(r.Header)
 		}
 	}
 	// a pin to a lapsed account with no user bound: of those left, only
@@ -2795,7 +2798,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// the plan of a group's provider narrowed as the tries reach it, in
 	// the routing log too (groupTurn)
 	seen := func(order, left []Weighed) {
-		s.trace.update(tr, func(t *Route) { t.Order, t.Left = append(t.Order, order...), append(t.Left, left...) })
+		bound := gt.user()
+		s.trace.update(tr, func(t *Route) {
+			t.Order, t.Left = append(t.Order, order...), append(t.Left, left...)
+			if t.User == nil {
+				t.User = bound
+			}
+		})
 	}
 	if watched != nil {
 		watched.routeID = tr.ID
@@ -3800,6 +3809,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				try.Fail = failAuth
 			}
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+			if gt != nil && gt.lapsed != nil {
+				// a group's user's last own of its provider, with no spare
+				// left: told as a turn to that provider would be
+				noteLapseRefused(c.who(), provider.SignInLapsed(c.p.Account))
+				call.Error = "sign-in lapsed: " + c.who() + ": " + call.Error
+				s.groupTurnRefused(w, from, kept, &call, gt)
+				break
+			}
 			noteLapseRefused(c.who(), provider.SignInLapsed(c.p.Account))
 			call.Status, call.Error = http.StatusTooManyRequests, "sign-in lapsed: "+c.who()+": "+call.Error
 			lapsedRetryAfter(w.Header())
@@ -3968,7 +3985,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			var next []candidate
 			var nextW []Weighed
 			next, nextW, unlisted, unlistedW = unlistedNext(unlisted, unlistedW, key)
-			next, nextW = gt.keep(next, nextW) // a group's user's own alone
+			next, nextW = gt.keep(next, nextW, seen) // a group's user's own alone
 			if len(next) > 0 && last {
 				// a lapse is never the error told (lapsedTry), as no
 				// caller is told a sign-in lapsed
@@ -4110,7 +4127,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			var next []candidate
 			var nextW []Weighed
 			for k, x := range small {
-				if _, resting := restingOf(x); resting || !gt.askable(x) {
+				if _, resting := restingOf(x); resting {
 					continue
 				}
 				next = append(next, x)
@@ -4121,6 +4138,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				}
 			}
 			small = nil
+			next, nextW = gt.keep(next, nextW, seen) // a group's user's own alone
 			if len(next) > 0 {
 				rest := s.restAfterMarked(c, hw.code(), hw.header, hw.errBody(), hw.sharedPool)
 				try.Fail, try.Rest = rest.Why, &rest

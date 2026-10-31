@@ -142,10 +142,19 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 	// fails: a member that serves no such API (404), one out of quota
 	// (429) or one whose vendor fails; a model is asked on its own
 	tries := []candidate{{p: p, model: model}}
-	var u *userTry // a user's own, bound by user: its tries' spare (onKeys)
+	var u *userTry    // a user's own, bound by user: its tries' spare (onKeys)
+	var gt *groupTurn // a group's, bound by user: each member's provider on its user's own
 	if isGroup {
-		if cs, _ := s.planGroup(g.Live(), ms, provider.Chat); len(cs) > 0 {
-			tries = cs
+		if cs, pl := s.planGroup(g.Live(), ms, provider.Chat); len(cs) > 0 {
+			// the calling key's holds first, as a turn's: its user bound
+			// to none it may not use
+			if keyWho, held := accountHolds(r); held {
+				cs, pl = keepIn(cs, pl, func(c candidate) bool { return accountAllowed(keyWho, c) })
+			}
+			// bound by user, each member's provider narrowed to its
+			// user's own as the tries reach it, as a turn to the group
+			// is (groupTurn), never another user's
+			tries, gt = cs, s.groupTurnOf(r, ms, cs, pl)
 		}
 	} else {
 		// a model of one provider goes over its keys or accounts as a
@@ -204,6 +213,14 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 		defer func() { noted(call.Provider, went) }()
 	}
 	for i := 0; i < len(tries); i++ {
+		if tries = gt.reach(tries, i, nil); i >= len(tries) {
+			// none of a group's user's own left to ask: told as its
+			// binding refused it, the tries before it the call's
+			call.Fallback, call.Millis = strings.Join(skipped, "; "), time.Since(start).Milliseconds()
+			s.groupTurnRefused(w, provider.Chat, nil, &call, gt)
+			s.record(call)
+			return
+		}
 		c, last := tries[i], i == len(tries)-1
 		call.Provider, went = c.p.ID, c.model
 		base := strings.TrimRight(c.p.Base(provider.Chat), "/")
@@ -230,6 +247,21 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 		b, got, code, err := s.retrieveAs(ctx, c.p, base+path, ctype, out)
 		cancel()
 		call.Millis = time.Since(start).Milliseconds()
+		if err != nil && r.Context().Err() == nil && gt != nil {
+			// a group's user's own to be signed in again, the last of its
+			// provider's: a spare of that provider's next, else the next
+			// member's own, else its refusal (groupTurnRefused)
+			if next := gt.spare(c, code, []byte(err.Error()), tries[i+1:]); len(next) > 0 {
+				tries, last = slices.Concat(tries[:i+1], next, tries[i+1:]), false
+			}
+			if last && gt.lapsed != nil {
+				call.Fallback = strings.Join(skipped, "; ")
+				call.Error = "sign-in lapsed: " + c.label() + ": " + err.Error()
+				s.groupTurnRefused(w, provider.Chat, nil, &call, gt)
+				s.record(call)
+				return
+			}
+		}
 		if err != nil && r.Context().Err() == nil {
 			// one of a user's accounts whose sign-in has to be made again:
 			// the next of its own, else a spare, as a turn's; the caller

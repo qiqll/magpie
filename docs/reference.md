@@ -2071,7 +2071,8 @@ responses, messages, Gemini's generateContent, images, embeddings,
 audio, videos, Codex's backend) must name its user: one without, or
 with one the header can't take, is a 400 that says why, and nothing is
 sent. A routing group's request and one with `X-Magpie-Account` need it
-too. A routing group's request, a drawing or a video on one too, goes on
+too. A routing group's request, a drawing, video, embedding, rerank or
+audio request on one too, goes on
 its user's own accounts of each member's provider, bound only on those it
 reaches, as the one before fails; one with `X-Magpie-Account` isn't
 bound. Listing models and counting tokens don't.

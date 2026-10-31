@@ -280,3 +280,44 @@ func TestUserVideoGroupOnTheUsersOwnKeys(t *testing.T) {
 		t.Fatalf("bob asked after alice's video: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// Bound by user, an embedding or a rerank on a routing group (audio goes
+// the same way, serveRetrieval) goes on its user's own keys of the
+// member's provider it reaches, as one on that provider does (onKeys):
+// alice and bob each on a key of their own, the next member's seats
+// untaken while the first answers. Before, a group's went over every
+// member's keys in order: both on kA.
+func TestUserRetrievalGroupOnTheUsersOwnKeys(t *testing.T) {
+	for _, c := range []struct{ path, body string }{
+		{"/v1/embeddings", `{"model":"group/near","input":"a magpie"}`},
+		{"/v1/rerank", `{"model":"group/near","query":"birds","documents":["a magpie"]}`},
+	} {
+		t.Run(c.path, func(t *testing.T) {
+			fresh(t)
+			noRests()
+			t.Cleanup(noRests)
+			u := newRoutesUp(t)
+			for _, p := range []provider.Provider{
+				{ID: "ea", Name: "EA", Chat: u.URL + "/v1", Key: "kA", Keys: []provider.KeyAccount{{Key: "kB"}}, Models: []string{"embed-1"}},
+				{ID: "eb", Name: "EB", Chat: u.URL + "/v1", Key: "kC", Keys: []provider.KeyAccount{{Key: "kD"}}, Models: []string{"embed-1"}},
+			} {
+				if err := provider.Save(p); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := provider.SaveGroup(provider.Group{ID: "near", Name: "near", Members: []string{"ea/embed-1", "eb/embed-1"}, Routing: "order"}); err != nil {
+				t.Fatal(err)
+			}
+			s := byUserUpTo(t, New(), 1)
+			eachOnItsOwn(t, u, c.path, func(user string) *httptest.ResponseRecorder {
+				return userAt(s, c.path, "", []byte(c.body), user)
+			})
+			if b := boundIn(t, "ea"); len(b) != 2 {
+				t.Fatalf("bound on ea %v, want alice and bob", b)
+			}
+			if b := boundIn(t, "eb"); len(b) != 0 {
+				t.Fatalf("bound on eb %v before any request went to it", b)
+			}
+		})
+	}
+}

@@ -29,7 +29,9 @@ type groupTurn struct {
 	free    map[string]bool   // narrowed with nothing bound: its own are all of them
 	own     map[string]map[string]bool
 	us      userTries
-	refused error // the first provider's refusal of the user (a userRefusedError)
+	refused error      // the first provider's refusal of the user (a userRefusedError)
+	lapsed  error      // the refusal of the user's last own of a provider to be signed in again, no spare left
+	ub      *UserBound // the first binding narrowed, for the routing log
 }
 
 // groupTurnOf is the groupTurn of r, a turn to the group of members ms,
@@ -74,17 +76,6 @@ func (g *groupTurn) mine(c candidate) bool {
 	return g.done[pid] && g.own[pid][strings.ToLower(c.who())]
 }
 
-// askable says c may still be asked: one of the user's own (mine), or of
-// a member's provider not narrowed yet, which reach narrows. nil, every
-// one is.
-func (g *groupTurn) askable(c candidate) bool {
-	if g == nil {
-		return true
-	}
-	_, member := g.members[c.p.ID]
-	return g.mine(c) || member && !g.done[c.p.ID]
-}
-
 // narrow binds the user on pid's keys and accounts now (usersOn), once,
 // and says the routing log's plan of those it is on. A provider whose
 // binding refuses the user is left with none of its own, the first such
@@ -115,14 +106,24 @@ func (g *groupTurn) narrow(pid string) (order, left []Weighed) {
 	for _, c := range own {
 		set[strings.ToLower(c.who())] = true
 	}
+	// its own whose list lacks the model, asked once one refused it
+	// (unlistedNext), as a provider's turn has them (ownedBy)
+	for _, c := range opl.unlisted {
+		set[strings.ToLower(c.who())] = true
+	}
 	g.own[pid], g.us[pid] = set, u
+	if g.ub == nil {
+		g.ub = u.ub
+	}
 	return opl.order, opl.left
 }
 
 // reach is cs with its provider narrowed when the tries reach cs[i]
 // first, every one of that provider's from i on that isn't the user's
 // left out, until cs[i] is one of the user's own to ask, or none is left
-// (i past the end). seen is told the routing log's plan of each narrowed.
+// (i past the end). Those after it of a provider narrowed already that
+// aren't the user's go too, so that cs[i] is the last when nothing after
+// it may be asked. seen is told the routing log's plan of each narrowed.
 func (g *groupTurn) reach(cs []candidate, i int, seen func(order, left []Weighed)) []candidate {
 	if g == nil {
 		return cs
@@ -130,30 +131,41 @@ func (g *groupTurn) reach(cs []candidate, i int, seen func(order, left []Weighed
 	for i < len(cs) {
 		pid := cs[i].p.ID
 		if !g.done[pid] {
-			if order, left := g.narrow(pid); seen != nil && len(order)+len(left) > 0 {
-				seen(order, left)
-			}
+			g.narrowSeen(pid, seen)
 			cs = append(slices.Clone(cs[:i]), slices.DeleteFunc(slices.Clone(cs[i:]), func(c candidate) bool { return c.p.ID == pid && !g.mine(c) })...)
 			continue
 		}
 		if g.mine(cs[i]) {
-			return cs
+			return append(cs[:i+1:i+1], slices.DeleteFunc(slices.Clone(cs[i+1:]), func(c candidate) bool { return g.done[c.p.ID] && !g.mine(c) })...)
 		}
 		cs = slices.Delete(slices.Clone(cs), i, i+1)
 	}
 	return cs
 }
 
-// keep is cs, candidates to be asked next, without those that may not be
-// (askable), and ws, their rows index for index, with them.
-func (g *groupTurn) keep(cs []candidate, ws []Weighed) ([]candidate, []Weighed) {
+// narrowSeen narrows pid (narrow), seen told its plan.
+func (g *groupTurn) narrowSeen(pid string, seen func(order, left []Weighed)) {
+	if order, left := g.narrow(pid); seen != nil && len(order)+len(left) > 0 {
+		seen(order, left)
+	}
+}
+
+// keep is cs, candidates added to be asked next (the unlisted, the roomy
+// left out), of the user's own alone, their providers narrowed now, and
+// ws, their rows index for index, with them: another user's is never
+// asked, nor shown in the routing log. seen is told the plan of each
+// provider narrowed.
+func (g *groupTurn) keep(cs []candidate, ws []Weighed, seen func(order, left []Weighed)) ([]candidate, []Weighed) {
 	if g == nil {
 		return cs, ws
 	}
 	var out []candidate
 	var outW []Weighed
 	for k, c := range cs {
-		if !g.askable(c) {
+		if _, member := g.members[c.p.ID]; member && !g.done[c.p.ID] {
+			g.narrowSeen(c.p.ID, seen)
+		}
+		if !g.mine(c) {
 			continue
 		}
 		out = append(out, c)
@@ -162,7 +174,7 @@ func (g *groupTurn) keep(cs []candidate, ws []Weighed) ([]candidate, []Weighed) 
 		}
 	}
 	if len(ws) != len(cs) {
-		outW = ws
+		outW = nil // rows not index for index: none shown
 	}
 	return out, outW
 }
@@ -174,6 +186,14 @@ func (g *groupTurn) only(cs []candidate) []candidate {
 		return cs
 	}
 	return slices.DeleteFunc(slices.Clone(cs), func(c candidate) bool { return !g.mine(c) })
+}
+
+// user is the first binding narrowed, for the routing log; nil for none.
+func (g *groupTurn) user() *UserBound {
+	if g == nil {
+		return nil
+	}
+	return g.ub
 }
 
 // plan is ws, the routing log's rows, before any provider is narrowed:
@@ -196,23 +216,30 @@ func (g *groupTurn) spare(c candidate, status int, body []byte, rest []candidate
 	if g == nil || c.p.Account == nil {
 		return nil
 	}
-	lastOwn := !slices.ContainsFunc(rest, func(n candidate) bool { return n.p.ID == c.p.ID })
-	next, _, lapsed := g.us[c.p.ID].lapsed(c, status, body, lastOwn)
+	lastOwn := !slices.ContainsFunc(rest, func(n candidate) bool { return n.p.ID == c.p.ID && g.mine(n) })
+	next, refused, lapsed := g.us[c.p.ID].lapsed(c, status, body, lastOwn)
 	if !lapsed {
 		return nil
 	}
+	if refused != nil && g.lapsed == nil {
+		g.lapsed = refused // told as a provider's turn's would be (userTryRefusal)
+	}
+	// a spare for this member's model: a member of another model of the
+	// provider keeps its own place in the group's order
+	next = slices.DeleteFunc(next, func(n candidate) bool { return n.model != c.model })
 	for _, n := range next {
 		g.own[c.p.ID][strings.ToLower(n.who())] = true
 	}
 	return next
 }
 
-// refusal is why none of the user's own was left to ask: the first
+// refusal is why none of the user's own was left to ask: its last own of
+// a provider to be signed in again with no spare left, else the first
 // provider's refusal, else that none of the accounts it is on of the
 // group's members can take the request now.
 func (g *groupTurn) refusal() (*UserBound, userRefusal) {
 	var ur *userRefusedError
-	if errors.As(g.refused, &ur) {
+	if errors.As(g.lapsed, &ur) || errors.As(g.refused, &ur) {
 		return ur.u, ur.refused
 	}
 	user, _ := userOf(g.r.Header)
@@ -232,6 +259,9 @@ func (s *Server) groupTurnRefused(w http.ResponseWriter, from provider.Protocol,
 		s.userRefused(w, from, call, u, refused)
 	} else {
 		call.Status, call.Error = refused.status, "user bound: "+u.accountOr()+": "+refused.msg
+		if refused.limit != "" {
+			userLimited(w.Header(), refused.limit, refused.until, refused.model)
+		}
 		failTo(w, kept, from, refused.status, refused.told())
 	}
 	if before != "" {
