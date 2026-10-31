@@ -113,9 +113,12 @@ func userLimited(h http.Header, limit string, until time.Time, model string) {
 type userRefusal struct {
 	status int
 	msg    string
-	limit  string
-	until  time.Time
-	model  string
+	// said: what the caller is told when msg names the user's accounts,
+	// which are the operator's (told)
+	said  string
+	limit string
+	until time.Time
+	model string
 	// unknown: what the user is bound to can't be told (the file doesn't
 	// read), a 503 that goes as it is
 	unknown bool
@@ -1339,11 +1342,14 @@ func boundRefusal(user string, b userBinding, pid string, rests []Rest, pl plann
 				return userRefusal{status: http.StatusTooManyRequests, msg: fmt.Sprintf("%s: %q is bound to %s: %s; no other account is tried in its place", UserHeader, user, names, msg),
 					limit: cappedLimit([]Weighed{w}), until: back}
 			default:
-				return userRefusal{status: http.StatusBadRequest, msg: fmt.Sprintf("%s: %q is bound to %s, which doesn't serve %s", UserHeader, user, names, w.Model)}
+				return userRefusal{status: http.StatusBadRequest, msg: fmt.Sprintf("%s: %q is bound to %s, which doesn't serve %s", UserHeader, user, names, w.Model),
+					said: fmt.Sprintf("%s: %q is bound to no account that serves %s", UserHeader, user, w.Model)}
 			}
 		}
 	}
-	return userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: %q is bound to %s, which can't take this request (paused, or the conversation was sealed by another account); no other account is tried in its place", UserHeader, user, names)}
+	why := "take this request (paused, or the conversation was sealed by another account); no other account is tried in its place"
+	return userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: %q is bound to %s, which can't %s", UserHeader, user, names, why),
+		said: fmt.Sprintf("%s: %q is bound to no account that can %s", UserHeader, user, why)}
 }
 
 // restWho is which of seats r is the rest of, "" when it can't be told.
@@ -1373,9 +1379,19 @@ func saidToUser(user string, status int, msg string) string {
 	return msg
 }
 
+// told is what the caller is told of r: a 429 only userLimitSaid, else r
+// without the accounts the user is bound to (said), which are the
+// operator's, as a 429's are.
+func (r userRefusal) told() string {
+	if r.status == http.StatusTooManyRequests {
+		return userLimitSaid
+	}
+	return cmp.Or(r.said, r.msg)
+}
+
 // userRefused writes refused, why a request of the user u goes to none
-// of its accounts, with its limit when it is one. A 429 says only
-// userLimitSaid; why is in the call's error.
+// of its accounts, with its limit when it is one. The caller is told it
+// without the user's accounts (told); they are in the call's error.
 func (s *Server) userRefused(w http.ResponseWriter, from provider.Protocol, call *Call, u *UserBound, refused userRefusal) {
 	call.Status, call.Error = refused.status, "user bound: "+u.accountOr()
 	if refused.limit != "" {
@@ -1385,10 +1401,9 @@ func (s *Server) userRefused(w http.ResponseWriter, from provider.Protocol, call
 		// when to try again all the same
 		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(d.Seconds()))))
 	}
-	msg := refused.msg
-	if refused.status == http.StatusTooManyRequests {
-		call.Error += ": " + msg
-		msg = userLimitSaid
+	msg := refused.told()
+	if msg != refused.msg {
+		call.Error += ": " + refused.msg
 	}
 	writeError(w, from, refused.status, msg)
 }

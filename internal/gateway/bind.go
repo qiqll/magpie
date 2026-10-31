@@ -179,13 +179,10 @@ func (s *Server) usersOwn(ctx context.Context, p provider.Provider, model string
 	}
 	pool, poolPl := s.plan(p, model, from)
 	cands, _, ub, refused := ownOf(f.key, f.user, tier, tierNamed(h), p, pool, poolPl)
-	if refused.status == http.StatusTooManyRequests {
-		// told as a limit, never the sign-in (lapsedRefusal) nor the
-		// user's accounts and their rests (setRefusal, boundRefusal)
-		return nil, true, errors.New(userLimitSaid)
-	}
 	if refused.status != 0 {
-		return nil, true, errors.New(refused.msg)
+		// a 429 told as a limit alone, never the sign-in (lapsedRefusal);
+		// none names the user's accounts and their rests (told)
+		return nil, true, errors.New(refused.told())
 	}
 	// "none": no account of p can answer now, and the user is bound to
 	// none of them yet; those cands are p's, not the user's
@@ -221,10 +218,7 @@ type userRefusedError struct {
 }
 
 func (e *userRefusedError) Error() string {
-	if e.refused.status == http.StatusTooManyRequests {
-		return userLimitSaid
-	}
-	return e.refused.msg
+	return e.refused.told()
 }
 
 // userRefusedStatus is the status a userRefusedError is answered with, 0

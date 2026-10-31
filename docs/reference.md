@@ -2128,7 +2128,10 @@ place. A 429 magpie gives says only Anthropic's own words, "This request
 would exceed your account's rate limit. Please try again later.", as
 `rate_limit_error` in your protocol's shape; which accounts the user is on,
 their caps and rests, and why no spare was added are in the request's
-error in the usage log (`userRefused`), not the reply. When that error is a
+error in the usage log (`userRefused`), not the reply. Another refusal (a
+400 when none of the user's accounts serves the model, a 503 when they are
+paused or the conversation was sealed by another account) says why
+without naming them. When that error is a
 limit, it says so and until when the first of the user's accounts is back,
 for you to stop sending the user's requests until then:
 `X-Magpie-User-Limit` is `quota` (the account's allowance is used up),

@@ -3745,12 +3745,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// (503); else the lapse's 429, never a refusal naming the
 			// user's accounts
 			refused = userTryRefusal(userBound, refused)
-			said := refused.msg
+			said := refused.told()
 			if refused.limit != "" {
 				userLimited(w.Header(), refused.limit, refused.until, refused.model)
-			}
-			if refused.status == http.StatusTooManyRequests {
-				said = userLimitSaid
 			}
 			call.Status, call.Error = refused.status, "user bound: "+userBound.accountOr()+": "+refused.msg+": "+call.Error
 			failTo(w, kept, from, refused.status, said)
