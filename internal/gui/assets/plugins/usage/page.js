@@ -1034,6 +1034,15 @@ function ledProtoBadge(r) {
 // a request that failed: told by its status, or, for one read from a
 // session file, which records none, by the error that ended it
 const ledFailed_ = (r) => r.status >= 400 || !!r.err;
+// the subscription account a row went out as, as usage.Record.Account
+// tells it: the one the record names, or the one its host was reached as
+const ledAccountOf = (r) => {
+  if (r.providerAccount) return r.providerAccount;
+  const i = (r.host || "").lastIndexOf(" as ");
+  return i >= 0 ? r.host.slice(i + 4) : "";
+};
+// the names the user gave the period's accounts (the Account filter's)
+let ledAccountNames = new Map();
 const ledKey = (r) => [r.t, r.agent, r.model, r.rid, r.session, r.computer || ""].join("|");
 const ledOpen = new Set(); // the rows opened, kept across a refresh
 
@@ -1927,6 +1936,7 @@ function renderLedger() {
   const missingAgent = ledAgent && !l.agents.some((a) => a.id === ledAgent);
   const missingProvider = ledProvider && !providers.some((p) => p.id === ledProvider);
   const accounts = l.accounts || [];
+  ledAccountNames = new Map(accounts.filter((a) => a.name).map((a) => [a.id, a.name]));
   const missingAccount = ledAccount && !accounts.some((a) => a.id === ledAccount);
   // "none": the calls no gateway key made, a choice beside the keys when
   // there are such calls, so one key's are told from the rest (#2521)
@@ -2132,6 +2142,19 @@ function renderLedger() {
     // session. A row whose file names none says only that.
     const where = local ? (r.session_account || r.session_provider || t("Local session")) : t(r.providerName) + (r.host ? " · " + r.host : "");
     const wc = td(el("div", "where-name", where), "where", where);
+    // the account that answered, by its first two letters, so one account's
+    // requests are told from another's down the list; its whole name, the
+    // one the user gave it first, in the tooltip. A session file's account
+    // made the session, not the call, and has none
+    const acct = local ? "" : ledAccountOf(r);
+    if (acct) {
+      const named = ledAccountNames.get(acct) || "";
+      const ab = el("span", "acct-ab", [...(named || acct).trim()].slice(0, 2).join(""));
+      ab.title = named && named !== acct ? named + " · " + acct : acct;
+      const line = el("div", "where-line");
+      line.append(ab, wc.firstChild);
+      wc.prepend(line);
+    }
     const badges = el("div", "source-badges");
     if (local && r.session_account && r.session_official_login) {
       const badge = el("span", "src official", t("OFFICIAL"));
