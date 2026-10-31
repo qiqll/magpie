@@ -24517,8 +24517,16 @@ window.noteAccounts = noteAccounts;
         else n.replaceWith(...bits);
       }
       for (const e of [root, ...root.querySelectorAll("[title]")]) {
-        // one masked already reads as an account too, its stars and all
-        if (!e.dataset || "piiTitle" in e.dataset || !e.title || e.closest(KEEP)) continue;
+        if (!e.dataset || e.closest(KEEP)) continue;
+        // one masked already reads as an account too, its stars and all;
+        // one written again since is new text, its own to hide and to put
+        // back (sessPick sets its button's title on each draw)
+        if ("piiTitle" in e.dataset) {
+          if (e.title === e.dataset.piiOut) continue;
+          delete e.dataset.piiTitle;
+          delete e.dataset.piiOut;
+        }
+        if (!e.title) continue;
         let out = "", last = 0;
         for (const m of hits(e.title, reOf(e), e)) {
           out += e.title.slice(last, m.index) + m[0].replace(m[0].includes("@") ? /[^@.]/g : /./gu, "•"); // a tooltip can't blur
@@ -24526,14 +24534,19 @@ window.noteAccounts = noteAccounts;
         }
         if (!last) continue;
         e.dataset.piiTitle = e.title;
-        e.title = out + e.title.slice(last);
+        e.title = e.dataset.piiOut = out + e.title.slice(last);
       }
     }
     function unmask() {
       for (const s of view.querySelectorAll(".pii")) s.replaceWith(s.dataset.raw);
       for (const r of view.querySelectorAll(".pii-run")) r.replaceWith(r.textContent);
       view.normalize();
-      for (const e of view.querySelectorAll("[data-pii-title]")) { e.title = e.dataset.piiTitle; delete e.dataset.piiTitle; }
+      for (const e of view.querySelectorAll("[data-pii-title]")) {
+        // written again since it was hidden: what it says now stays
+        if (e.title === e.dataset.piiOut) e.title = e.dataset.piiTitle;
+        delete e.dataset.piiTitle;
+        delete e.dataset.piiOut;
+      }
     }
     // only what changed is looked through again, not the whole window on
     // each tick of Routing's live view
