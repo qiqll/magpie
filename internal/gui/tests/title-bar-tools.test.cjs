@@ -98,7 +98,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // "Fetch API cannot load http" and a message "//magpie.test/…", so
         // it is read whole
         page.on("pageerror", (e) => {
-          if (engine === "webkit" && /Fetch API cannot load .* due to access control checks/.test(`${e.name}:${e.message}`)) return;
+          if (engine === "webkit" && /^(?:\w*Error:)?Fetch API cannot load .* due to access control checks/.test(`${e.name}:${e.message}`)) return;
           errors.push(`${width}px ${on}: ${e.stack}`);
         });
         await page.route("**/*", serve(lang));

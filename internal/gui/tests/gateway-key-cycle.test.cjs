@@ -128,7 +128,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.setViewportSize({ width: 560, height: 740 });
       // the header's tabs are fitted by a ResizeObserver a moment after the
       // resize (as gateway-key-limit waits): the state, not a fixed 100ms
-      await page.waitForFunction(() => document.documentElement.scrollWidth <= window.innerWidth).catch(() => {});
+      await page.waitForFunction(() => document.documentElement.scrollWidth <= window.innerWidth, null, { timeout: 3000 }).catch(() => {});
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, "the page overflows at 560px");
       await page.setViewportSize({ width: 1000, height: 700 });
       assert.equal(sent("limit-key").length, 0, "sent before Save");

@@ -132,8 +132,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const p = await open("http://magpie.test/?view=usage", { width: 1180, height: 760 }, calls, cur);
       // read in one step: the tabs can be drawn again between finding the
       // picked one and asking about it, which leaves it out of the page
-      await p.locator("#usageTab .opt.on").waitFor({ state: "attached" });
-      if (await p.evaluate(() => { const b = document.querySelector("#usageTab .opt.on"); return b !== b.parentElement.firstElementChild; })) await p.locator(":is(#usageTab .opt, .nav-s):visible").first().click();
+      const later = await (await p.waitForFunction(() => { const b = document.querySelector("#usageTab .opt.on"); return b && { later: b !== b.parentElement.firstElementChild }; })).jsonValue();
+      if (later.later) await p.locator(":is(#usageTab .opt, .nav-s):visible").first().click();
       const BAR = "#chart .bars .bar";
       await p.locator(BAR).first().waitFor();
       assert.equal(await p.locator(BAR).count(), DAYS);
