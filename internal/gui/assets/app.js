@@ -23224,8 +23224,11 @@ function hold(h) {
     // in above it: a day picked on Routing brings its stage in above the bar
     // (~138px), and the bar is held where it was clicked (#961). Half its
     // height was too little once a settings row kept 12px above and below its
-    // words: the Version row's line grew it 12px past a 22px switch (10-22)
-    if (h.top && want > 0 && Math.abs(d) < a[0].getBoundingClientRect().height) want = 0;
+    // words: the Version row's line grew it 12px past a 22px switch (10-22).
+    // The height is what was clicked, as it was: a stand-in for it drawn
+    // away is taller (Unhide on Usage held by the hidden list, ~100px), and
+    // a whole row come in above passed for a line (usage-agents-hide)
+    if (h.top && want > 0 && Math.abs(d) < Math.min(a[0].getBoundingClientRect().height, h.size)) want = 0;
     // a view at its top when clicked stays there rather than be given room
     // to scroll down: a chip saved in the panel's Profiles came in above the
     // button held, and room made for the button slid the chip up under the
@@ -23312,7 +23315,8 @@ addEventListener("click", (e) => {
   for (let n = from; n && n !== v; n = n.parentElement) {
     for (const m of [n, n.previousElementSibling, n.nextElementSibling]) if (m instanceof HTMLElement && m.offsetParent) chain.push([m, onScreen(m, v), pathIn(v, m)]);
   }
-  held = chain.length ? { v, chain, until: performance.now() + 4000, top: v.scrollTop < 1 } : null;
+  const size = chain.find(([m]) => m.offsetHeight)?.[0].getBoundingClientRect().height ?? Infinity;
+  held = chain.length ? { v, chain, until: performance.now() + 4000, top: v.scrollTop < 1, size } : null;
   heldSizes.disconnect();
   if (held) for (const c of v.children) if (!c.classList.contains("view-room")) heldSizes.observe(c);
   if (held && !holding) { holding = true; requestAnimationFrame(keepHeld); }
