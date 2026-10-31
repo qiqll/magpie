@@ -123,3 +123,32 @@ func TestReportedCallKeepsNoUser(t *testing.T) {
 		t.Fatalf("the reported call's line: %s", s)
 	}
 }
+
+// The days this computer shares with the others it syncs with (OwnDays)
+// carry no caller's user: it stays here, out of the sync server.
+func TestSharedDaysCarryNoUser(t *testing.T) {
+	pageHome(t)
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local)
+	holdClock(t, now)
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if heldLog.f != nil {
+			heldLog.f.Close()
+			heldLog.f = nil
+		}
+	})
+	Append(Record{Time: now, Agent: "codex", Provider: "relay", Model: "m", User: "alice@example.com", Input: 2, Status: 200})
+	n := 0
+	for _, calls := range OwnDays(now.Add(-time.Hour)) {
+		for _, c := range calls {
+			n++
+			if c.User != "" {
+				t.Fatalf("a shared call carries its user: %+v", c.Record)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d shared calls, want 1", n)
+	}
+}

@@ -118,7 +118,9 @@ func OwnDays(since time.Time) map[string][]SharedCall {
 		if r.Via != "" {
 			continue
 		}
-		r.Archive, r.Computer = "", ""
+		// nor the caller's user (T-020): it stays on this computer, out
+		// of the sync server and the others' copies
+		r.Archive, r.Computer, r.User = "", "", ""
 		if len(r.Error) > 300 {
 			r.Error = r.Error[:300]
 		}

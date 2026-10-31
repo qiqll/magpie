@@ -838,6 +838,14 @@ history. The usual local `magpie` token and older records stay unattributed.
 Caller attribution includes chat, images, video creation and System One.
 Provider attribution stays independent; CSV puts `provider_key_*` before
 `caller_key_*`.
+
+**Usage → Overview → Users** groups the gateway's calls by the user each
+named in `X-Magpie-User` (or the header `MAGPIE_USER_HEADER` names),
+under either `--bind`, with the calls that named none as one *No user*
+row; the list shows once a call in the period named a user. Records
+written before magpie kept the user are in *No user*: nothing is
+rewritten. A call a client reported, and the days shared with the
+computers this one syncs with, carry no user.
 An existing LAN key becomes **Magpie** without changing the credential.
 `lanKey` remains in settings for older Magpie versions. Disabling or removing
 the default key replaces that mirror with a random non-empty revoked value;
@@ -2063,7 +2071,8 @@ How the gateway keeps requests on accounts is set when it starts, with
 (`MAGPIE_BIND`, which the service is given and keeps when installed
 again without it). `--bind=session`, the default, keeps each
 conversation where its affinity says, as magpie always has: an
-`X-Magpie-User` header changes nothing, and `user-accounts.json` is
+`X-Magpie-User` header changes no routing (Usage still counts the
+calls by it, below), and `user-accounts.json` is
 neither read nor written, nor are `X-Magpie-User-Tier` and
 `user-tiers.json`. `--bind=user` keeps each of your users on accounts of
 its own, below. Then every request that asks a model (chat,
