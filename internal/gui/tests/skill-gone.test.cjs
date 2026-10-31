@@ -14,6 +14,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
+const { settled } = require("./reader.cjs");
 
 const assets = path.resolve(__dirname, "../assets");
 const HOME = "/Users/lionel";
@@ -142,6 +143,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await press(page, clean);
         const modal = page.locator(".lib-remove-gone");
         await modal.waitFor();
+        await settled(page); // the dialog grows out of Clean up: its buttons are measured once it has
         assert.equal((await modal.locator(".ehead b").textContent()).trim(), w.head);
         const items = modal.locator("ul.lib-gonelist li");
         assert.equal(await items.count(), 2);
