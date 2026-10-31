@@ -1480,6 +1480,10 @@ body.masked :hover > .acct-eye, body.masked .pq-card:hover .acct-eye, body.maske
    the name beside it is */
 .led .where-line { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .led .where-line .where-name { min-width: 0; }
+/* narrowed, the line is cut where the name alone was, the chip within it */
+.led.tight .where-line { max-width: 160px; }
+.led.tighter .where-line { max-width: 110px; }
+.led.tighter .where-line .where-name { max-width: none; }
 .led .acct-ab { flex: none; min-width: 18px; padding: 0 4px; box-sizing: border-box; font-size: 9.5px; font-weight: 650; line-height: 16px; text-align: center; border-radius: 5px; color: var(--fg-2); background: color-mix(in srgb, var(--fg-2) 10%, var(--card)); }
 /* hidden with the accounts, for a screenshot: two letters of an address
    are no pattern the masking finds */

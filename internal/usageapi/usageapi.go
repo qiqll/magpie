@@ -226,6 +226,10 @@ type Row struct {
 	PricingModel   string `json:"pricing_model,omitempty"`
 	// ComputerName is the other computer a call was made on, shared through sync (#542)
 	ComputerName string `json:"computerName,omitempty"`
+	// AccountName is the name the user gave the row's account at its own
+	// provider (provider.AccountNameOf): the same address may be named at
+	// one provider and not at another
+	AccountName string `json:"accountName,omitempty"`
 }
 
 type Ledger struct {
@@ -336,6 +340,7 @@ func LedgerPage(p usage.Period, f usage.Filter, offset, limit int) Ledger {
 	// a group magpie found is named as agents pick it, auto/<model>; the
 	// ledger keeps group/auto-<slug> (provider.CanonicalRef)
 	pub := map[string]string{}
+	named := map[string]string{} // provider and account: the name the user gave it
 	for _, r := range page {
 		a := who(r.Agent)
 		lr := Row{Row: r, AgentName: a.Name, Icon: a.Icon, ProviderName: which(r.Provider).Name}
@@ -354,6 +359,13 @@ func LedgerPage(p usage.Period, f usage.Filter, offset, limit int) Ledger {
 			}
 		}
 		lr.CallerKeyLabel = callerLabels[r.CallerKeyID]
+		if acct := r.Account(); acct != "" && r.Source != "log" {
+			k := r.Provider + "\n" + acct
+			if _, ok := named[k]; !ok {
+				named[k] = provider.AccountNameOf(r.Provider, acct)
+			}
+			lr.AccountName = named[k]
+		}
 		if r.Computer != "" {
 			lr.ComputerName = l.Names[r.Computer]
 			if lr.ComputerName == "" {

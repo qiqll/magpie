@@ -2,12 +2,14 @@
 // The Usage page's Requests tell each request's account by its first two
 // letters, before its provider's name (需求方: 「每个详细请求展示带上账号的名称
 // 的前两个字母，好区分每个请求归属于哪个账号」): the account the record names,
-// or the one its host was reached as, by the name the user gave it when
-// there is one, a Chinese name by its first two characters. Its whole name is
+// or the one its host was reached as, by the name the user gave it at that
+// provider when there is one (one address may be named at one provider and
+// not another), a Chinese name by its first two characters. Its whole name is
 // in the tooltip. A key's request, and one read from a session file (whose
 // account made the session, not the call), have none. Hidden with the
-// accounts; the provider's name beside it is what is cut, and nothing runs
-// past the window at 420 or 1100 wide, in both engines and every language.
+// accounts, the name the user gave too; the provider's name beside it is
+// what is cut, the table runs no wider for it at 700 or 1100 wide and nothing runs
+// past the window at 420, in both engines and every language.
 // The API is faked.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
@@ -24,13 +26,15 @@ const row = (i, extra) => ({
 });
 const ROWS = [
   // a named account: its name's first two, a Chinese one's characters
-  row(0, { provider: "codex", providerName: "Codex", host: "chatgpt.com as ann@example.com", providerAccount: "ann@example.com" }),
+  row(0, { provider: "codex", providerName: "Codex", host: "chatgpt.com as ann@example.com", providerAccount: "ann@example.com", accountName: "工作号" }),
   // an account the record knows only by the host it went to
   row(1, { provider: "claude", providerName: "Claude", host: "api.anthropic.com as bob@example.org" }),
   // a key's: no account
   row(2, { host: "relay.dev" }),
   // read from a session file: its account made the session
   row(3, { source: "log", session_account: "carol@example.net", session_provider: "openai" }),
+  // the same address at another provider, where it has no name
+  row(4, { provider: "claude", providerName: "Claude", host: "api.anthropic.com as ann@example.com" }),
 ];
 const ACCOUNTS = [
   { id: "ann@example.com", name: "工作号", providers: ["Codex"] },
@@ -71,7 +75,7 @@ function serve(lang) {
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   for (const lang of ["en", "zh", "zh-TW", "ja", "de"]) {
-    for (const width of [420, 1100]) {
+    for (const width of [420, 700, 1100]) {
       test(`${engine} ${lang} ${width}: each request names its account by two letters`, async (t) => {
         const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
         const context = await browser.newContext({ viewport: { width, height: 760 }, reducedMotion: "reduce" });
@@ -91,7 +95,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.goto("http://magpie.test/?view=usage");
         await page.locator(":is(#usageTab .opt, .nav-s):visible").nth(1).click();
         const rows = page.locator(".led tbody tr.led-row");
-        await rows.nth(3).waitFor({ timeout: 15000 });
+        await rows.nth(4).waitFor({ timeout: 15000 });
 
         const cells = await rows.evaluateAll((trs) => trs.map((tr) => {
           const w = tr.querySelector("td.where"), ab = w.querySelector(".acct-ab");
@@ -103,6 +107,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(cells[2].name, "Relay · relay.dev");
         assert.equal(cells[3].ab, null, "a session file's account made the session, not the call");
         assert.equal(cells[3].name, "carol@example.net");
+        assert.deepEqual(cells[4], { ab: "an", title: "ann@example.com", name: "Claude · api.anthropic.com as ann@example.com" }, "named at Codex only");
 
         // whole, on the provider's line, and the page never runs sideways
         const fit = await rows.first().locator("td.where").evaluate((td) => {
@@ -111,13 +116,26 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         });
         assert.deepEqual(fit, { line: true, inside: true, whole: true });
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "the page runs past the window");
+        // narrowed, the chip takes its room from the name, not the table's:
+        // the table runs no further past its box than it does without it
+        // (German's headers do at 700 already)
+        const over = () => page.locator("#ledWrap").evaluate((w) => w.scrollWidth - w.clientWidth);
+        if (width >= 700) {
+          const withChip = await over();
+          const off = await page.addStyleTag({ content: ".led .acct-ab { display: none; }" });
+          const without = await over();
+          await off.evaluate((s) => s.remove());
+          assert(withChip <= without + 1, `the chip widens the table: ${withChip}px past its box, ${without}px without it`);
+        }
 
         // hidden with the accounts, for a screenshot, and back after
         const blurred = () => rows.first().locator(".acct-ab").evaluate((e) => getComputedStyle(e).filter);
         assert.equal(await blurred(), "none");
         await page.evaluate(() => window.hideAccounts.set(true));
         assert.match(await blurred(), /blur/);
-        assert.doesNotMatch(await rows.first().locator(".acct-ab").getAttribute("title"), /ann@example\.com/, "the tooltip's address is masked too");
+        const tip = await rows.first().locator(".acct-ab").getAttribute("title");
+        assert.doesNotMatch(tip, /ann@example\.com/, "the tooltip's address is masked too");
+        assert.doesNotMatch(tip, /工作号/, "and the name the user gave it");
         await page.evaluate(() => window.hideAccounts.set(false));
         assert.equal(await blurred(), "none");
         assert.deepEqual(errors, []);

@@ -1041,8 +1041,6 @@ const ledAccountOf = (r) => {
   const i = (r.host || "").lastIndexOf(" as ");
   return i >= 0 ? r.host.slice(i + 4) : "";
 };
-// the names the user gave the period's accounts (the Account filter's)
-let ledAccountNames = new Map();
 const ledKey = (r) => [r.t, r.agent, r.model, r.rid, r.session, r.computer || ""].join("|");
 const ledOpen = new Set(); // the rows opened, kept across a refresh
 
@@ -1936,7 +1934,9 @@ function renderLedger() {
   const missingAgent = ledAgent && !l.agents.some((a) => a.id === ledAgent);
   const missingProvider = ledProvider && !providers.some((p) => p.id === ledProvider);
   const accounts = l.accounts || [];
-  ledAccountNames = new Map(accounts.filter((a) => a.name).map((a) => [a.id, a.name]));
+  // the names the user gave accounts, hidden with the accounts as they are:
+  // the filter's menu and the rows' tooltips show them (#568's kind)
+  window.noteAccounts?.([...accounts.map((a) => a.name), ...l.rows.map((r) => r.accountName)].filter(Boolean).map((alias) => ({ alias })));
   const missingAccount = ledAccount && !accounts.some((a) => a.id === ledAccount);
   // "none": the calls no gateway key made, a choice beside the keys when
   // there are such calls, so one key's are told from the rest (#2521)
@@ -2144,11 +2144,11 @@ function renderLedger() {
     const wc = td(el("div", "where-name", where), "where", where);
     // the account that answered, by its first two letters, so one account's
     // requests are told from another's down the list; its whole name, the
-    // one the user gave it first, in the tooltip. A session file's account
+    // one the user gave it at that provider first, in the tooltip. A session file's account
     // made the session, not the call, and has none
     const acct = local ? "" : ledAccountOf(r);
     if (acct) {
-      const named = ledAccountNames.get(acct) || "";
+      const named = r.accountName || "";
       const ab = el("span", "acct-ab", [...(named || acct).trim()].slice(0, 2).join(""));
       ab.title = named && named !== acct ? named + " · " + acct : acct;
       const line = el("div", "where-line");

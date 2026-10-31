@@ -178,3 +178,46 @@ func TestDeletedProviderNamedAndMerged(t *testing.T) {
 		t.Fatal("named a provider that is not deleted")
 	}
 }
+
+// T-019: each row carries the name the user gave its account at its own
+// provider, so one address named at one provider and not at another is
+// shown by that name only in the first's rows; a key's row and a session
+// file's (whose account made the session, not the call) carry none.
+func TestRowsNameTheirAccountAtTheirProvider(t *testing.T) {
+	for _, id := range []string{"named-relay", "plain-relay"} {
+		p := provider.Provider{ID: id, Name: id, Chat: "http://127.0.0.1:1/v1", Key: "sk-test"}
+		if id == "named-relay" {
+			p.AccountNames = map[string]string{"ann@example.com": "工作号"}
+		}
+		if err := provider.Save(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now()
+	usage.Append(usage.Record{Time: now.Add(-1 * time.Minute), Agent: "codex", Provider: "named-relay", Model: "m", Input: 1, ProviderAccount: "Ann@example.com"})
+	usage.Append(usage.Record{Time: now.Add(-2 * time.Minute), Agent: "codex", Provider: "plain-relay", Model: "m", Input: 1, Host: "plain-relay.example as ann@example.com"})
+	usage.Append(usage.Record{Time: now.Add(-3 * time.Minute), Agent: "codex", Provider: "named-relay", Model: "m", Input: 1})
+	usage.Append(usage.Record{Time: now.Add(-4 * time.Minute), Agent: "codex", Provider: "named-relay", Model: "m", Input: 1, Source: "log", SessionAccount: "ann@example.com"})
+
+	l := LedgerPage(usage.All, usage.Filter{}, 0, 100)
+	got := map[string]string{}
+	for _, r := range l.Rows {
+		if strings.HasSuffix(r.Provider, "-relay") { // the package's other tests write the log too
+			got[r.Provider+" "+r.Account()+" "+r.Source] = r.AccountName
+		}
+	}
+	want := map[string]string{
+		"named-relay Ann@example.com ": "工作号",
+		"plain-relay ann@example.com ": "",
+		"named-relay  ":                "",
+		"named-relay  log":             "",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("rows: %v", got)
+	}
+	for k, v := range want {
+		if n, ok := got[k]; !ok || n != v {
+			t.Errorf("row %q names its account %q, want %q (all: %v)", k, n, v, got)
+		}
+	}
+}
