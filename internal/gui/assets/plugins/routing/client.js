@@ -2912,6 +2912,16 @@ function routingPage(part) {
   // Context tab), which shows unfolded for it
   window.openRoute = async (id, time, o = {}) => {
     let r = routes.get(id);
+    // out of sight the trace isn't read (df6bd3ef), so a request come since
+    // (the newest on the Usage page's Requests) isn't known yet: the page
+    // in sight reads what came meanwhile first, else a live request opened
+    // as a past day's, with Back to live (usage-ledger)
+    if (!r && sightWait) {
+      const read = new Promise((ok) => traceRead.push(ok));
+      window.show("routing");
+      await Promise.race([read, new Promise((ok) => setTimeout(ok, 2000))]);
+      r = routes.get(id);
+    }
     if (!r) {
       const res = await fetch("/api/gateway/route?id=" + encodeURIComponent(id) + "&day=" + encodeURIComponent(time.slice(0, 10)));
       if (res.status === 404) throw new Error(t("Routing history for this request is no longer available."));
@@ -4525,6 +4535,8 @@ function routingPage(part) {
   // that changed meanwhile, and plays only the requests still under way
   const inSight = () => !document.hidden && (shown() || !!(pBox && pShown()));
   let heard = false, sightWait = null, caught = false;
+  let traceRead = []; // who waits for the trace's next answer (openRoute)
+  const readOnce = () => { for (const ok of traceRead.splice(0)) ok(); };
   function inSightAgain() {
     if (sightWait && inSight()) { const go = sightWait; sightWait = null; go(); }
   }
@@ -4559,6 +4571,7 @@ function routingPage(part) {
           loaded = false;
           renderPanel();
           liveDots();
+          readOnce();
           await new Promise((r) => setTimeout(r, 5000));
           continue;
         }
@@ -4631,7 +4644,9 @@ function routingPage(part) {
           wake();
           renderAll();
         }
+        readOnce();
       } catch {
+        readOnce();
         await new Promise((r) => setTimeout(r, 3000));
       }
     }
