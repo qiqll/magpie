@@ -22994,8 +22994,11 @@ function givesBack(e, dir) {
   putBack = putBack.filter((p) => !mine(p));
   for (const p of back) p.v.scrollTop += p.by;
 }
-// marks a box that scrolls in a page while it overflows (.holds, app.css)
-const holds = (e) => { for (let b = e.target; b instanceof Element && !b.matches(".view,body"); b = b.parentNode) b.classList.toggle("holds", b.scrollHeight > b.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(b).overflowY)); };
+// marks a box that scrolls in a page while it overflows ([data-holds],
+// app.css). An attribute, not a class: a class come and gone with the
+// pointer changed the box's className, which the click's hold matches a
+// part drawn again by (classList[0]) and the tests name boxes by
+const holds = (e) => { for (let b = e.target; b instanceof Element && !b.matches(".view,body"); b = b.parentNode) b.toggleAttribute("data-holds", b.scrollHeight > b.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(b).overflowY)); };
 addEventListener("pointerover", holds, { capture: true, passive: true });
 let touchY = null;
 addEventListener("wheel", (e) => { holds(e); flings(); givesBack(e, Math.sign(e.deltaY)); }, { capture: true, passive: true });

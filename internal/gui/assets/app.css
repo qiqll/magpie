@@ -547,7 +547,7 @@ body:not(.side-nav) .side-toggle .st-pane { opacity: 0; }
    wheel at its ends stays with it (contain keeps the Mac's bounce on it).
    Only then: Chromium holds the wheel even in a box that doesn't overflow.
    :where() weighs nothing, so .mchips in a short window still passes it on */
-:where(.holds) { overscroll-behavior-y: contain; }
+:where([data-holds]) { overscroll-behavior-y: contain; }
 @keyframes view-in { from { opacity: 0; transform: translateY(5px); } }
 @media (prefers-reduced-motion: reduce) { .view { animation-name: fade-in; } }
 body.window .view { padding: 2px max(0px, calc(16px - var(--bar, 0px))) 8px 16px; }
