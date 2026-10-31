@@ -181,8 +181,13 @@ func (s *Server) usersOwn(ctx context.Context, p provider.Provider, model string
 	cands, _, ub, refused := ownOf(f.key, f.user, tier, tierNamed(h), p, pool, poolPl)
 	if refused.status != 0 {
 		// a 429 told as a limit alone, never the sign-in (lapsedRefusal);
-		// none names the user's accounts and their rests (told)
-		return nil, true, errors.New(refused.told())
+		// none names the user's accounts and their rests (told). Those
+		// are the operator's, in the log, as a turn's are in its call
+		said := refused.told()
+		if said != refused.msg {
+			log.Printf("bound by user, %s's ask of %s refused: %s", p.Name, model, refused.msg)
+		}
+		return nil, true, errors.New(said)
 	}
 	// "none": no account of p can answer now, and the user is bound to
 	// none of them yet; those cands are p's, not the user's

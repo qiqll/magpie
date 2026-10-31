@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,18 +65,52 @@ func TestUserPausedAccountUnnamed(t *testing.T) {
 	usersUpstream(t, nil)
 	s := byUser(New())
 	userPost(s, "codex/gpt-5.5", "alice", "hi")
-	logins := filepath.Join(filepath.Dir(provider.Path()), "logins.json")
-	var saved []map[string]any
-	raw, _ := os.ReadFile(logins)
-	json.Unmarshal(raw, &saved)
-	saved = append(saved, map[string]any{"agent": "codex", "user": "me@example.com", "paused": true, "seen": time.Now()})
-	os.WriteFile(logins, mustJSON(saved), 0o600)
-	provider.ForgetAccounts()
+	pauseCodex(t, "me@example.com")
 	rec := userPost(s, "codex/gpt-5.5", "alice", "paused")
-	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `\"alice\" is bound to no account that can take this request`) {
-		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	body := rec.Body.String()
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(body, `\"alice\" is bound to no account that can take this request`) || strings.Contains(body, "me@example.com") {
+		t.Fatalf("%d %s", rec.Code, body)
 	}
 	if why := refusedWhy(s); !strings.Contains(why, "me@example.com") {
 		t.Fatalf("the call's error: %q", why)
 	}
+}
+
+// magpie's own ask for a user (usersOwn: Codex's web.run, a Kimi Code
+// plan's search) refused as its paused account can't take it says so
+// without the account, which goes in the log.
+func TestUsersOwnRefusalNamesNoAccount(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	usersUpstream(t, nil)
+	s := byUser(New())
+	userPost(s, "codex/gpt-5.5", "alice", "hi")
+	pauseCodex(t, "me@example.com")
+	var logs strings.Builder
+	was := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(was) })
+	p, err := provider.Find("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), askedForKey{}, askedFor{"", "alice", ""})
+	_, bound, err := s.usersOwn(ctx, *p, "gpt-5.5", provider.Responses)
+	if !bound || err == nil || strings.Contains(err.Error(), "me@example.com") || !strings.Contains(err.Error(), "no account that can take") {
+		t.Fatalf("bound %v err %v", bound, err)
+	}
+	if !strings.Contains(logs.String(), "me@example.com") {
+		t.Fatalf("not logged: %q", logs.String())
+	}
+}
+
+// pauseCodex pauses the Codex account user, as the Providers page does.
+func pauseCodex(t *testing.T, user string) {
+	t.Helper()
+	logins := filepath.Join(filepath.Dir(provider.Path()), "logins.json")
+	var saved []map[string]any
+	raw, _ := os.ReadFile(logins)
+	json.Unmarshal(raw, &saved)
+	saved = append(saved, map[string]any{"agent": "codex", "user": user, "paused": true, "seen": time.Now()})
+	os.WriteFile(logins, mustJSON(saved), 0o600)
+	provider.ForgetAccounts()
 }
