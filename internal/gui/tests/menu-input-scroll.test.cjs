@@ -48,6 +48,9 @@ function serve(lang) {
 // wheeled to the control as the reader would (the page keeps still for any
 // other scroll), then clicked with the mouse
 async function press(page, loc) {
+  // a group opening into its editor moves its height and parts for ~700ms
+  // (91b0be836): where loc will be is read once that has stopped
+  await page.waitForFunction(() => !document.getAnimations().some((a) => a.playState === "running" && Number.isFinite(a.effect?.getComputedTiming().endTime)));
   await page.mouse.move(Math.min(550, (page.viewportSize().width / 2) | 0), 300);
   for (let i = 0; i < 20; i++) {
     const y = (await loc.boundingBox()).y;
