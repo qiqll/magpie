@@ -82,8 +82,8 @@ type userJSON struct {
 // gatewayUserRoutes serves the Gateway page's User bindings: each
 // provider's accounts with how many of the caller's users are bound to
 // them and whether each is out, and the users with their first and spare
-// accounts, narrowed by q's words. Read-only: a binding is moved or
-// forgotten in user-accounts.json. A search (q) leaves the accounts, and
+// accounts, narrowed by q's words; and a user's account let go of by hand
+// (unbind). A search (q) leaves the accounts, and
 // how the gateway binds, out, which don't depend on it: the page keeps
 // the ones it has, and nobody's sign-ins or rests are read again for each
 // word typed.
@@ -173,6 +173,30 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 		}
 		out["matched"], out["users"] = matched, users
 		writeJSON(w, out)
+	})
+	// one of a user's accounts let go of, as the page names it: its
+	// gateway key, provider, user and seat. unbound is false when the user
+	// was let go of it meanwhile; a file that doesn't read, or can't be
+	// written, is said why, for the page to say it in the reader's language
+	mux.HandleFunc("POST /api/gateway/users/unbind", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Key      string `json:"key"`
+			Provider string `json:"provider"`
+			User     string `json:"user"`
+			Seat     string `json:"seat"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in) != nil || in.Provider == "" || in.User == "" || in.Seat == "" {
+			http.Error(w, "nothing to unbind", http.StatusBadRequest)
+			return
+		}
+		found, err := gateway.Unbind(in.Key, in.Provider, in.User, in.Seat)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("user-accounts.json can't be changed: %v", err), "why": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]bool{"unbound": found})
 	})
 }
 
