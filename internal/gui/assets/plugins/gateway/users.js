@@ -5,8 +5,12 @@
 // names in X-Magpie-User (or the header MAGPIE_USER_HEADER names) are
 // bound only while the gateway binds by user (--bind=user); bound by
 // session, the bindings are shown as they are and nothing is bound by
-// them. Read-only: a user is moved or forgotten in the file, which the
-// gateway reads again when it changes. Bound by user the section shows
+// them. Bound by user, each of a user's accounts has an Unbind, confirmed
+// first, that lets go of it (/api/gateway/users/unbind): its spare is its
+// first then, and a user left with none is bound afresh on its next
+// request; bound by session nothing is changed here. A user is moved in
+// the file, which the gateway reads again when it changes. Bound by user
+// the section shows
 // even with nobody bound yet, saying so; bound by session it stays hidden
 // while nobody is.
 //
@@ -73,12 +77,39 @@ function userSeatState(a) {
 // the account of a provider a user's seat names, as the accounts list has it
 const userAccountOf = (p, seat) => userAccounts.find((a) => a.provider === p && a.seat === seat);
 
-// one of a user's accounts: its name, first or spare, and its state
+// one of a user's accounts: its name, first or spare, and its state;
+// bound by user, with an Unbind beside it
 function userSeatChip(u, account, seat, first) {
   const a = userAccountOf(u.provider, seat);
   const chip = el("span", "user-seat " + (first ? "first" : "spare") + (!a?.outKnown || a.out || a.gone ? " out" : ""));
   chip.append(el("span", "name", account), el("span", "", ` (${t(first ? "first" : "spare")} · ${userSeatState(a)})`));
-  return chip;
+  if (userBindMode?.mode !== "user") return chip;
+  const go = el("button", "text user-unbind", t("Unbind"));
+  go.type = "button";
+  go.title = t("Lets go of this account for this user");
+  go.onclick = () => unbindUserSeat(u, account, seat, go);
+  const held = el("span", "user-seat-held");
+  held.append(chip, go);
+  return held;
+}
+
+// one of u's accounts let go of, once confirmed; the list read again after
+async function unbindUserSeat(u, account, seat, go) {
+  const others = (u.spares?.length || 0) > 0;
+  const ok = await confirmAction(t("Unbind {account} from {user}?", { account, user: u.user }),
+    others ? t("Its other accounts stay, the next one its first, and take its requests.")
+      : t("It is the user's only account of {provider}: its next request binds it afresh.", { provider: u.providerName }), t("Unbind"));
+  if (!ok) return;
+  go.classList.add("busy");
+  try {
+    const out = await api("gateway/users/unbind", { key: u.key || "", provider: u.provider, user: u.user, seat });
+    status(t(out?.unbound ? "{user} let go of {account}" : "{user} was let go of {account} already", { user: u.user, account }), "ok");
+  } catch (e) {
+    go.classList.remove("busy");
+    status(e.why ? t("user-accounts.json can't be changed: {why}", { why: e.why }) : e.message, "err");
+    return;
+  }
+  loadUserBinds();
 }
 
 // how many users an account a user of tier x is on may be bound to; a

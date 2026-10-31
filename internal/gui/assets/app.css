@@ -2965,6 +2965,8 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .user-seats { display: flex; flex-wrap: wrap; gap: 2px 12px; }
 .user-seat { min-width: 0; overflow-wrap: anywhere; }
 .user-seat .name { color: var(--fg); }
+.user-seat-held { display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: 0 6px; min-width: 0; }
+.user-seat-held .user-unbind { padding: 0 4px; min-height: 0; font-size: inherit; white-space: nowrap; }
 .user-seat.out::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--amber); vertical-align: 1px; }
 /* no gateway key yet: said in its card as Recent calls says it has none */
 #gatewayKeys .none { padding: 13px 14px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }

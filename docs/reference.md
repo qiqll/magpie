@@ -2239,8 +2239,14 @@ their first account and spares in order, each marked first or spare with
 its state, provider, gateway key, tier (the default's for one bound before
 tiers), when they were bound and when they last sent the provider a
 request ("last used", none for a binding from before it was kept), 200 at a time,
-narrowed by a search, which matches a spare's account too. It only reads
-the file. A file that
+narrowed by a search, which matches a spare's account too. Bound by user,
+each of a user's accounts has an Unbind, confirmed first, that lets go of
+it (`POST /api/gateway/users/unbind`, behind the window's API guard): the
+user's next account is its first then, and a user left with none is bound
+afresh on its next request. The file is read again and written under the
+same lock as the gateway's own changes, through a temporary file renamed
+over it; one that doesn't read is left as it is and the page says why.
+Bound by session the list only reads the file. A file that
 doesn't read keeps the users read before bound and binds nobody new. A
 request for a routing group is bound on each member's provider it
 reaches, never on another user's account, and `X-Magpie-Account` wins
