@@ -680,16 +680,24 @@ func (s *Server) webSearch(ctx context.Context, query string) (string, []Hit, er
 		}
 		errs = append(errs, err)
 	}
+	// a search the turn's key's limit refused (sideHeld) is skipped: the
+	// turn goes on without what it would have found
 	if p, ok := ownSearcher(ctx); ok {
 		said, hits, err := s.ownSearch(ctx, p, query)
 		if err == nil {
 			return said, hits, nil
+		}
+		if errors.As(err, new(sideHeld)) {
+			return "", nil, err
 		}
 		errs = append(errs, err)
 	}
 	said, hits, err := s.modelSearch(ctx, query)
 	if err == nil {
 		return said, hits, nil
+	}
+	if errors.As(err, new(sideHeld)) {
+		return "", nil, err
 	}
 	apis := len(provider.SearchAPIs()) > 0
 	// that no provider searches is news only when nothing else was tried
@@ -749,6 +757,11 @@ func (s *Server) modelSearch(ctx context.Context, query string) (string, []Hit, 
 	}
 	if err == nil {
 		said, hits, err = s.searchBy(ctx, p, model, query, searchEffort(p, model))
+	}
+	// the turn's key with nothing left is no searcher's failure, and every
+	// other searcher would be refused it too
+	if errors.As(err, new(sideHeld)) {
+		return "", nil, err
 	}
 	if named {
 		// a search the agent stopped waiting for is no failure of its
@@ -923,6 +936,16 @@ func (s *Server) searchWith(ctx context.Context, p provider.Provider, model, que
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("User-Agent", SearchAgent)
 	askAsUser(ctx, r.Header)
+	// serve is called past keyLimited, so the turn's key's limit holds
+	// the search here (sideHeld); an MCP call's is held where it came in
+	// (searchMCPRun)
+	if f := searchFor(ctx); f == nil || !f.MCP {
+		release, err := reserveSide(ctx, int64(len(body)), model)
+		if err != nil {
+			return "", nil, err
+		}
+		defer release()
+	}
 	w := httptest.NewRecorder()
 	s.serve(w, r, provider.Anthropic, body)
 	var out struct {

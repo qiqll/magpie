@@ -713,7 +713,10 @@ accounts hold them too. A classifier asked for the key's turn is
 recorded as the key's call, so its tokens count in the key's usage, and
 the key's limit holds the ask as it holds the turn: once the key, its
 turn counted, has nothing left, the classifier isn't asked and the turn
-goes where a classifier that couldn't say sends it. When every
+goes where a classifier that couldn't say sends it. A web search or a
+picture described for the key's turn is held the same way: with nothing
+left, it isn't made and the turn goes on without it, the model told the
+search failed or the image couldn't be described. When every
 account or key behind a model is one the key may not use, the request is
 refused with a 403 in the API's own error shape naming the model and the
 accounts it may use, before a provider is asked — after a usage cap's 429

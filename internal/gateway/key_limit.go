@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -91,6 +92,29 @@ func reserveFor(who access.Identity, size int64, model string, now time.Time) (r
 	release, refused := l.Reserve(who, size, model, now)
 	if refused != nil {
 		return nil, refused
+	}
+	return release, nil
+}
+
+// sideHeld is a side ask of a turn's (a picture described, a web search)
+// its key's limit refused (reserveSide): the ask is skipped and the turn
+// goes on without what it would have said. key is the refused key's id.
+type sideHeld struct {
+	error
+	key string
+}
+
+func (k sideHeld) Unwrap() error { return k.error }
+
+// reserveSide holds a side ask's request, sent through serve past
+// keyLimited, to the limit of the key its turn came with, as keyLimited
+// holds the turn: the turn's own reservation counted, a key with nothing
+// left is refused with sideHeld.
+func reserveSide(ctx context.Context, size int64, model string) (func(), error) {
+	who := access.Caller(ctx)
+	release, err := reserveFor(who, size, model, limitClock())
+	if err != nil {
+		return nil, sideHeld{err, who.KeyID}
 	}
 	return release, nil
 }
