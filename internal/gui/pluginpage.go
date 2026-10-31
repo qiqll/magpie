@@ -359,9 +359,12 @@ func servePluginPage(rw http.ResponseWriter, r *http.Request) {
 // magpie web's SameSite=Lax cookie per host, not per port, and sends it
 // with that page's "simple" POST (text/plain, a form), which the handlers
 // decode as JSON all the same. Only a link opened to read (GET or HEAD of
-// a document) goes on, which no page can read the answer of. A request
-// without Sec-Fetch-Site (a CLI, a webview before Fetch Metadata) is judged
-// as before.
+// a document) goes on, which no page can read the answer of, so a GET
+// handler under /api must write nothing. A request without Sec-Fetch-Site
+// is judged as before: a CLI's, a webview's before Fetch Metadata, and
+// every browser's to plain http at an address that isn't loopback (magpie
+// web on the local network without --tls-cert), which browsers send no
+// Fetch Metadata; there a page on another port still gets through.
 func apiFramed(r *http.Request) bool {
 	if !strings.HasPrefix(r.URL.Path, "/api/") {
 		return false
