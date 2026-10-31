@@ -33,7 +33,7 @@ if (!Object.hasOwn) {
 if (!window.structuredClone) {
   window.structuredClone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
 }
-// Safari 16: overscroll-behavior. A box app.js marks [data-holds], wheeled past
+// Safari 16: overscroll-behavior. A [data-holds] box, wheeled past
 // an end, would scroll the page; it keeps the wheel here instead
 if (!CSS.supports("overscroll-behavior-y", "contain")) addEventListener("wheel", (e) => {
   const b = e.target.closest?.("[data-holds]");

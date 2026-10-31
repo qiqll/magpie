@@ -22994,10 +22994,7 @@ function givesBack(e, dir) {
   putBack = putBack.filter((p) => !mine(p));
   for (const p of back) p.v.scrollTop += p.by;
 }
-// marks a box that scrolls in a page while it overflows ([data-holds],
-// app.css). An attribute, not a class: a class come and gone with the
-// pointer changed the box's className, which the click's hold matches a
-// part drawn again by (classList[0]) and the tests name boxes by
+// marks a box that scrolls in a page while it overflows ([data-holds], app.css)
 const holds = (e) => { for (let b = e.target; b instanceof Element && !b.matches(".view,body"); b = b.parentNode) b.toggleAttribute("data-holds", b.scrollHeight > b.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(b).overflowY)); };
 addEventListener("pointerover", holds, { capture: true, passive: true });
 let touchY = null;
@@ -23225,13 +23222,9 @@ function hold(h) {
     // switch once the save answered, and the view slid 2px off its top (#2134).
     // Only while what was clicked moved by less than its height, a line come
     // in above it: a day picked on Routing brings its stage in above the bar
-    // (~138px), and the bar is held where it was clicked (#961). Half its
-    // height was too little once a settings row kept 12px above and below its
-    // words: the Version row's line grew it 12px past a 22px switch (10-22).
-    // The height is what was clicked, as it was: a stand-in for it drawn
-    // away is taller (Unhide on Usage held by the hidden list, ~100px), and
-    // a whole row come in above passed for a line (usage-agents-hide)
-    if (h.top && want > 0 && Math.abs(d) < Math.min(a[0].getBoundingClientRect().height, h.size)) want = 0;
+    // (~138px), and the bar is held where it was clicked (#961). Its height
+    // as clicked: a taller stand-in let a row pass for a line (Unhide, Usage)
+    if (h.top && want > 0 && Math.abs(d) < Math.min(a[0].getBoundingClientRect().height, h.size || 1e9)) want = 0;
     // a view at its top when clicked stays there rather than be given room
     // to scroll down: a chip saved in the panel's Profiles came in above the
     // button held, and room made for the button slid the chip up under the
@@ -23318,8 +23311,7 @@ addEventListener("click", (e) => {
   for (let n = from; n && n !== v; n = n.parentElement) {
     for (const m of [n, n.previousElementSibling, n.nextElementSibling]) if (m instanceof HTMLElement && m.offsetParent) chain.push([m, onScreen(m, v), pathIn(v, m)]);
   }
-  const size = chain.find(([m]) => m.offsetHeight)?.[0].getBoundingClientRect().height ?? Infinity;
-  held = chain.length ? { v, chain, until: performance.now() + 4000, top: v.scrollTop < 1, size } : null;
+  held = chain.length ? { v, chain, until: performance.now() + 4000, top: v.scrollTop < 1, size: chain[0][0].offsetHeight } : null;
   heldSizes.disconnect();
   if (held) for (const c of v.children) if (!c.classList.contains("view-room")) heldSizes.observe(c);
   if (held && !holding) { holding = true; requestAnimationFrame(keepHeld); }
