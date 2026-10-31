@@ -286,11 +286,15 @@ type Share struct {
 // Account is a subscription account the Account filter offers: its
 // name, as the record keeps it and the filter asks by, the name the user
 // gave it in magpie when there is one (plugins#310), and the providers it
-// answered for, by name.
+// answered for, by name. A name is given at a provider, so the same
+// address may be named apart at two: Names holds each of Providers' own,
+// in their order ("" where none), and Name is the one name only while
+// every provider that named it gave that one.
 type Account struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name,omitempty"`
 	Providers []string `json:"providers"`
+	Names     []string `json:"names,omitempty"`
 }
 
 type Named struct {
@@ -393,16 +397,33 @@ func LedgerPage(p usage.Period, f usage.Filter, offset, limit int) Ledger {
 	for _, g := range l.Accounts {
 		name := which(g.Provider).Name
 		own := provider.AccountNameOf(g.Provider, g.Account)
-		if i, ok := at[g.Account]; ok {
-			a := &out.Accounts[i]
-			if !slices.Contains(a.Providers, name) {
-				a.Providers = append(a.Providers, name)
-			}
-			a.Name = cmp.Or(a.Name, own)
-			continue
+		i, ok := at[g.Account]
+		if !ok {
+			i = len(out.Accounts)
+			at[g.Account] = i
+			out.Accounts = append(out.Accounts, Account{ID: g.Account})
 		}
-		at[g.Account] = len(out.Accounts)
-		out.Accounts = append(out.Accounts, Account{ID: g.Account, Name: own, Providers: []string{name}})
+		a := &out.Accounts[i]
+		if j := slices.Index(a.Providers, name); j >= 0 {
+			a.Names[j] = cmp.Or(a.Names[j], own)
+		} else {
+			a.Providers = append(a.Providers, name)
+			a.Names = append(a.Names, own)
+		}
+	}
+	for i := range out.Accounts {
+		a := &out.Accounts[i]
+		for _, n := range a.Names {
+			if n != "" && a.Name == "" {
+				a.Name = n
+			} else if n != "" && n != a.Name {
+				a.Name = ""
+				break
+			}
+		}
+		if !slices.ContainsFunc(a.Names, func(n string) bool { return n != a.Name }) {
+			a.Names = nil // no provider names it apart
+		}
 	}
 	// what each is of: the rows of the filter, or, for the dimension the
 	// filter has picked, of the rows without that pick

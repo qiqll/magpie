@@ -222,6 +222,57 @@ func TestRowsNameTheirAccountAtTheirProvider(t *testing.T) {
 	}
 }
 
+// The Account filter offers one choice per address, and a name is given at
+// a provider: an address named 工作号 at one relay and 私人号 at another was
+// offered as the first name found at both (T-033). Each provider's name now
+// comes with it, in Providers' order, and the choice is named only by a
+// name every naming provider agrees on.
+func TestAccountFilterNamesEachProviderApart(t *testing.T) {
+	names := map[string]map[string]string{
+		"work-relay":  {"dan@example.com": "工作号", "eve@example.com": "同名"},
+		"home-relay":  {"dan@example.com": "私人号", "eve@example.com": "同名"},
+		"blank-relay": nil,
+	}
+	for id, an := range names {
+		if err := provider.Save(provider.Provider{ID: id, Name: id, Chat: "http://127.0.0.1:1/v1", Key: "sk-test", AccountNames: an}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now()
+	for i, c := range []struct{ prov, acct string }{
+		{"work-relay", "dan@example.com"}, {"home-relay", "dan@example.com"}, {"blank-relay", "dan@example.com"},
+		{"work-relay", "eve@example.com"}, {"home-relay", "eve@example.com"},
+	} {
+		usage.Append(usage.Record{Time: now.Add(-time.Duration(i+1) * time.Minute), Agent: "codex", Provider: c.prov, Model: "m", Input: 1, ProviderAccount: c.acct})
+	}
+
+	l := LedgerPage(usage.All, usage.Filter{}, 0, 100)
+	got := map[string]Account{}
+	for _, a := range l.Accounts {
+		got[a.ID] = a
+	}
+	dan := got["dan@example.com"]
+	if dan.Name != "" {
+		t.Errorf("dan is named %q by one provider's name, at three that name it apart", dan.Name)
+	}
+	if len(dan.Names) != len(dan.Providers) {
+		t.Fatalf("dan's names %q don't go with its providers %q", dan.Names, dan.Providers)
+	}
+	own := map[string]string{}
+	for i, p := range dan.Providers {
+		own[p] = dan.Names[i]
+	}
+	for p, want := range map[string]string{"work-relay": "工作号", "home-relay": "私人号", "blank-relay": ""} {
+		if n, ok := own[p]; !ok || n != want {
+			t.Errorf("dan at %s is named %q, want %q (all: %v)", p, n, want, own)
+		}
+	}
+	eve := got["eve@example.com"]
+	if eve.Name != "同名" || eve.Names != nil {
+		t.Errorf("eve, named alike at both, is %q with names %q, want 同名 and none apart", eve.Name, eve.Names)
+	}
+}
+
 // /api/usage's Users name each caller's user by itself (T-020), the calls
 // that named none a group of Name "" the page says "No user" for, and a
 // summary with no calls an empty list, never null.

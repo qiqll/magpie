@@ -1933,6 +1933,16 @@ function ledProviderMore(p) {
   };
 }
 
+// an Account filter choice: one per address, named by the name the user gave
+// it, or each provider's own where they named it apart (T-033), with the
+// providers it answered for, each by its own name then
+function ledAccountPick(a) {
+  const names = a.names || [];
+  const shown = a.name || [...new Set(names.filter(Boolean))].join(" / ");
+  const providers = (a.providers || []).map((p, i) => (names[i] ? `${t(p)}: ${names[i]}` : t(p)));
+  return { v: a.id, name: shown || a.id, note: [shown && a.id, ...providers].filter(Boolean).join(" · ") };
+}
+
 function renderLedger() {
   const l = ledger;
   const callers = l.callerKeys || [];
@@ -1942,7 +1952,7 @@ function renderLedger() {
   const accounts = l.accounts || [];
   // the names the user gave accounts, hidden with the accounts as they are:
   // the filter's menu and the rows' tooltips show them (#568's kind)
-  window.noteAccounts?.([...accounts.map((a) => a.name), ...l.rows.map((r) => r.accountName)].filter(Boolean).map((alias) => ({ alias })));
+  window.noteAccounts?.([...accounts.flatMap((a) => [a.name, ...(a.names || [])]), ...l.rows.map((r) => r.accountName)].filter(Boolean).map((alias) => ({ alias })));
   const missingAccount = ledAccount && !accounts.some((a) => a.id === ledAccount);
   // "none": the calls no gateway key made, a choice beside the keys when
   // there are such calls, so one key's are told from the rest (#2521)
@@ -1976,7 +1986,7 @@ function renderLedger() {
   sessPick($("#ledAgent"), "All agents", ledAgent, l.agents.map((a) => ({ v: a.id, name: a.name, note: "" })), "Agent", (v) => { ledAgent = v; ledOwn("agent"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
   sessPick($("#ledProvider"), "All providers", ledProvider, providers.map((p) => ({ v: p.id, name: t(p.name), note: p.deleted ? t("Deleted {date}", { date: new Date(p.deleted).toLocaleDateString(intlLang(), { year: "numeric", month: "short", day: "numeric" }) }) : "" })), "Provider", (v) => { ledProvider = v; ledOwn("provider"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
   ledProviderMore(providers.find((p) => p.id === ledProvider));
-  sessPick($("#ledAccount"), "All accounts", ledAccount, accounts.map((a) => ({ v: a.id, name: a.name || a.id, note: [a.name && a.id, ...(a.providers || []).map((p) => t(p))].filter(Boolean).join(" · ") })), "Account", (v) => { ledAccount = v; ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
+  sessPick($("#ledAccount"), "All accounts", ledAccount, accounts.map(ledAccountPick), "Account", (v) => { ledAccount = v; ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
   sessPick($("#ledKey"), "All gateway keys", ledCallerKey, callers.map((k) => ({
     v: k.id, name: k.name, note: "",
   })).concat(noKey ? [{ v: "none", name: t("No gateway key"), note: "" }] : []), "Gateway keys", (v) => { ledCallerKey = v; ledOwn("callerKey"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
