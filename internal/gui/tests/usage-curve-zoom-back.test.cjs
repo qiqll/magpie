@@ -59,13 +59,16 @@ function serve(lang, data) {
   };
 }
 
-// the cards' heights and the list's, once the page has settled: two frames
-// with nothing moving
+// the cards' heights, their curves' and the list's, once the page has
+// settled: four frames with nothing moving. The curves are read too: the
+// last card in a column is held down to the tallest, so a curve's first
+// frames of growing fill that slack and move no card.
 async function settled(page) {
   return page.evaluate(() => new Promise((done) => {
     const read = () => JSON.stringify({
       list: Math.round(document.querySelector("#subscriptionUsage").getBoundingClientRect().height),
       cards: [...document.querySelectorAll("#subscriptionUsage > .subscription-card")].map((c) => [c.dataset.key, Math.round(c.getBoundingClientRect().height)]),
+      curves: [...document.querySelectorAll("#subscriptionUsage .quota-curve")].map((c) => Math.round(c.getBoundingClientRect().height)),
     });
     let last = read(), still = 0;
     const tick = () => {
