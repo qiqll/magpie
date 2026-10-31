@@ -2734,7 +2734,11 @@ function routingPage(part) {
   // grown since it was measured (a font come in): measured again as it is
   // and the head's line told again, so it is held from the first width
   // on, not from the second's next telling (a pick before it isn't held)
-  new ResizeObserver(() => { storyW = steps.clientWidth; storyDrawn = ""; holdStory(); if (headOf) header(...headOf); }).observe(steps);
+  // The width with its scroll bar: the steps scroll in their own box (#3764),
+  // and a bar that takes room (WebKit, Windows, a Mac with a mouse) came with
+  // a long story, so clientWidth changed and the holds were let go as at a
+  // new width (routing-story-shrinks)
+  new ResizeObserver(() => { storyW = steps.offsetWidth; storyDrawn = ""; holdStory(); if (headOf) header(...headOf); }).observe(steps);
   // renderCtx draws the request's context window under its story, with
   // its session's prompts request by request; drawn again only when what
   // it shows changes. Live, the next request is patched into the card
