@@ -441,13 +441,30 @@ func (u *UserBound) shown(seats []userSeat) {
 	}
 }
 
-// owns says pin, an account AccountHeader names (its user, or its id in
-// the routing trace), is one u is bound to, one to be signed in again
-// among them.
-func (u *UserBound) owns(pin string) bool {
-	return slices.ContainsFunc(u.seats, func(s userSeat) bool {
+// owns is the seat of u that pin, an account AccountHeader names (its
+// user, or its id in the routing trace), is, one to be signed in again
+// among them; ok is false when it is none of u's.
+func (u *UserBound) owns(pin string) (_ userSeat, ok bool) {
+	i := slices.IndexFunc(u.seats, func(s userSeat) bool {
 		return strings.EqualFold(pin, s.Account) || strings.EqualFold(pin, s.Who)
 	})
+	if i < 0 {
+		return userSeat{}, false
+	}
+	return u.seats[i], true
+}
+
+// pinnedOwn is pool narrowed to seat, of provider pid alone, resting or
+// not, for pinTo to say why it can't take a request pinned to it; pl's
+// left, held, capped, lapsed and unlisted are narrowed to it too. An
+// account of the same name at another provider (a fallback's) may be
+// another user's, and is never kept.
+func pinnedOwn(seat userSeat, pid string, pool []candidate, pl planned) ([]candidate, planned) {
+	seats := []userSeat{seat}
+	out, opl := keepAligned(pool, pl, func(c candidate) bool { return c.p.ID == pid && seatIn(seats, c.who()) })
+	n := ownedOf(seats, pid, pl)
+	n.order = opl.order
+	return out, n
 }
 
 // userOf is the user a request names in the first of userHeaders it
@@ -1560,8 +1577,16 @@ func ownedBy(seats []userSeat, pid string, cands []candidate, pl planned) ([]can
 			out, order = append(out, c), append(order, pl.order[i])
 		}
 	}
+	n := ownedOf(seats, pid, pl)
+	n.order = append(order, spentAt...)
+	return append(out, spent...), n
+}
+
+// ownedOf is pl's left, held, capped, lapsed and unlisted narrowed to
+// seats of provider pid, with no order.
+func ownedOf(seats []userSeat, pid string, pl planned) planned {
 	mine := func(c candidate) bool { return c.p.ID == pid && seatIn(seats, c.who()) }
-	n := planned{order: append(order, spentAt...)}
+	var n planned
 	for _, w := range pl.left {
 		if slices.ContainsFunc(seats, func(s userSeat) bool { return leftIs(w, pid, s.Who) }) {
 			n.left = append(n.left, w)
@@ -1587,7 +1612,7 @@ func ownedBy(seats []userSeat, pid string, cands []candidate, pl planned) ([]can
 			n.unlisted, n.unlistedW = append(n.unlisted, c), append(n.unlistedW, pl.unlistedW[i])
 		}
 	}
-	return append(out, spent...), n
+	return n
 }
 
 // unbindTurnedAway lets go of c's account, for every user bound to it,

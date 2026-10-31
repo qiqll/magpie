@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/yetone/magpie/internal/provider"
 	"time"
 )
 
@@ -132,4 +134,37 @@ func mustRead(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// Pinned to its own key, a user's request is never sent on to a
+// fallback's key of the same name: that one may be another user's, and
+// a fallback's accounts aren't counted in the user's binding.
+func TestUserPinnedToItsOwnKeyNotOnToAFallbacksOfTheSameName(t *testing.T) {
+	codexSignedIn(t)
+	busy := &scripted{replies: []reply{{503, "", `{"error":{"message":"busy","type":"server_error"}}`}}}
+	first := httptest.NewServer(busy)
+	t.Cleanup(first.Close)
+	other := &scripted{replies: []reply{{200, "", `{"id":"c1","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"from fb2"},"finish_reason":"stop"}]}`}}}
+	second := httptest.NewServer(other)
+	t.Cleanup(second.Close)
+	if err := provider.Save(provider.Provider{ID: "fb2", Name: "FB2", Chat: second.URL + "/v1", Models: []string{"m"},
+		KeyName: "main", Key: "k2", Keys: []provider.KeyAccount{{Name: "other2", Key: "k2b"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Save(provider.Provider{ID: "fb", Name: "FB", Chat: first.URL + "/v1", Models: []string{"m"}, Fallback: []string{"fb2/m"},
+		KeyName: "main", Key: "k1", Keys: []provider.KeyAccount{{Name: "other1", Key: "k1b"}}}); err != nil {
+		t.Fatal(err)
+	}
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{
+		"fb":  {"alice": {Who: "fb#" + provider.KeyID("k1"), Account: "main", At: time.Now().UTC()}},
+		"fb2": {"bob": {Who: "fb2#" + provider.KeyID("k2"), Account: "main", At: time.Now().UTC()}},
+	}})
+	s := byUser(New())
+	rec := postAt(s, "/v1/chat/completions", `{"model":"fb/m","messages":[{"role":"user","content":"hi"}]}`, map[string]string{UserHeader: "alice", AccountHeader: "main"})
+	if other.n != 0 || busy.n == 0 || strings.Contains(rec.Body.String(), "from fb2") {
+		t.Fatalf("%d %s: fb asked %d times, fb2 %d", rec.Code, rec.Body.String(), busy.n, other.n)
+	}
+	if r := lastRoute(s); r.Pinned != "main" || r.User == nil || r.User.User != "alice" {
+		t.Fatalf("route pinned %q user %+v", r.Pinned, r.User)
+	}
 }

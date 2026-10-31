@@ -187,10 +187,16 @@ func TestUserLimitSaysTheCap(t *testing.T) {
 	if limit, until := limitOf(t, rec); rec.Code != 429 || limit != "cap" || !near(until, 3*time.Hour) {
 		t.Fatalf("every account capped: %d %q until %v: %s", rec.Code, limit, until, rec.Body.String())
 	}
-	// pinned to an account, a user isn't bound: no limit of its own
+	// pinned to its own account, a user is bound all the same (the
+	// owner's decision of 2026-10-30, T-009; before, a pinned request
+	// wasn't bound and had no limit of its own): told when its own is back
+	asked(true) // bob's, above
 	rec = postAt(s, "/v1/responses", `{"model":"codex/gpt-5.5","stream":true,"input":"pinned"}`, map[string]string{UserHeader: "alice", AccountHeader: bound})
-	if rec.Code < 400 || rec.Header().Get(UserLimitHeader) != "" {
-		t.Fatalf("pinned, every account capped: %d %v", rec.Code, rec.Header())
+	if limit, until := limitOf(t, rec); rec.Code != 429 || limit != "cap" || !near(until, 3*time.Hour) {
+		t.Fatalf("pinned, every account capped: %d %q until %v: %s", rec.Code, limit, until, rec.Body.String())
+	}
+	if got := asked(true); len(got) != 0 {
+		t.Fatalf("pinned: asked past the cap: %v", got)
 	}
 }
 

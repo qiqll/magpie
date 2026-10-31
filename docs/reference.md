@@ -2070,8 +2070,8 @@ or login, or its id on the Routing page) pins a request to one account of a
 subscription with several: only it is tried, and an unknown account, one
 whose plan lacks the model, or one resting is an error rather than another
 account's reply. Under `--bind=user` (below) it holds only to one of the
-request's user's own accounts; one bound to another user, or to nobody, is
-taken as no pin at all. The header is not sent on to the vendor.
+request's user's own accounts; any other, another user's or one the
+user isn't bound to, is taken as no pin at all. The header is not sent on to the vendor.
 
 How the gateway keeps requests on accounts is set when it starts, with
 `--bind` on `magpie serve`, `magpie web` and `magpie daemon install`

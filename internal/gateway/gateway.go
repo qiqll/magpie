@@ -2511,11 +2511,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 			// pinned to an account that isn't one of the user's: served as
 			// if unpinned, on its own (bindUser, growUser). Pinned to one of
-			// its own, that one alone is tried (pinTo, below, told why it
-			// can't take it as before), no spare added in its place
+			// its own, that one alone is tried, of this provider's alone
+			// (pinnedOwn: a fallback's of the same name may be another
+			// user's), pinTo below saying why it can't take it; no spare
+			// is added in its place
 			if pin != "" {
-				if userBound.owns(pin) {
-					cands, pl = pool, poolPl
+				if seat, ok := userBound.owns(pin); ok {
+					pin = seat.Account // as pinTo knows it
+					cands, pl = pinnedOwn(seat, p.ID, pool, poolPl)
 				} else {
 					pin = ""
 				}
@@ -2770,7 +2773,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				lapsedRetryAfter(w.Header())
 				msg = userLimitSaid
 			}
-			writeError(w, from, status, msg)
+			// a user's limit is said only as one (saidToUser)
+			writeError(w, from, status, saidToUser(limitedUser, status, msg))
 			finishCapture()
 			s.record(call)
 			return
