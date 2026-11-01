@@ -59,7 +59,8 @@ func sessionsAsked(t *testing.T, s *Server, asked func(bool) []string, sessions 
 }
 
 // A user bound to two accounts (T-013): each new session goes to the one
-// of them the fewest of its sessions are held on, the first on a tie, and
+// of them the fewest conversations of the provider's model are held on
+// (any user's, on an account shared), the first on a tie, and
 // each session's later turns stay where it went, its cache read there.
 // Another user's account, holding none, is never asked, and the user is
 // bound to nothing more.
@@ -102,6 +103,24 @@ func TestUserOneAccountKeepsEverySession(t *testing.T) {
 	}
 	if got := seatsIn(t, "codex")["alice"]; len(got) != 1 {
 		t.Fatalf("a spare added: %v", got)
+	}
+}
+
+// Kept within a turn only, a user's sessions aren't spread: each next
+// turn routes afresh, to the first, and a first turn spread to the spare
+// would only be moved off it, its cache written twice.
+func TestUserSessionsWithinATurnStayOnTheFirst(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	if err := provider.SetAffinity("codex", provider.AffinityTurn); err != nil {
+		t.Fatal(err)
+	}
+	asked := cachedUpstream(t)
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"alice": {Who: "codex@me@example.com", Account: "me@example.com", More: []userSeat{{Who: "codex@spare@example.com", Account: "spare@example.com"}}},
+	}}})
+	s := byUser(New())
+	if got := sessionsAsked(t, s, asked, "s1", "s2", "s1", "s2"); got != "acct-1,acct-1,acct-1,acct-1" {
+		t.Fatalf("sessions within a turn asked %s", got)
 	}
 }
 
