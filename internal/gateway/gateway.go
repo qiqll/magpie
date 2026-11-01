@@ -2675,11 +2675,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// by another.
 	before := len(cands)
 	if userBound != nil {
-		// a user's accounts go in their order, its first first: a new
-		// conversation isn't sent round them
+		// a user's accounts aren't gone round by requests: a new
+		// conversation goes to the one of them the fewest are held on, below
 		rotate = false
 	}
 	cands, pl, aff, stuck := affine(scope, mode, rotate, r.Header, from, body, plain, cands, pl)
+	if userBound != nil && aff.Why == "first" {
+		// the user's sessions spread over its own accounts, never another's,
+		// none bound for it (T-013, the owner's choice A); one already
+		// answered stays as affine keeps it, and a pin is to its one alone
+		cands, pl = ownLeastHeld(scope, stuck, cands, pl)
+	}
 	// a strict conversation left with its own account of several: its
 	// failure rests the account as it would with the others still there,
 	// for new conversations to go elsewhere meanwhile (#1797)

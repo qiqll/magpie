@@ -588,10 +588,22 @@ func affine(scope, mode string, rotate bool, in http.Header, from provider.Proto
 		}
 	case "first":
 		if rotate {
-			cs, pl = leastHeld(scope, key, cs, pl)
+			cs, pl = leastHeld(scope, key, cs, pl, false)
 		}
 	}
 	return cs, pl, a, key
+}
+
+// ownLeastHeld puts first, for a user's conversation nobody has answered
+// yet under --bind=user, the one of the user's own accounts (cs, bindUser's
+// and growUser's) the fewest conversations are held on, as leastHeld does
+// in turn: sessions of one user all sent to its first account wrote each
+// one's prompt to that account's cache beside the others' (T-013). One all
+// but used up is passed over while another has room, as ownedBy puts it
+// last; on a tie the first stays first. A conversation answered stays
+// where affine keeps it, and a user with one account goes there.
+func ownLeastHeld(scope, key string, cs []candidate, pl planned) ([]candidate, planned) {
+	return leastHeld(scope, key, cs, pl, true)
 }
 
 // heldFor is how long after its last answer a conversation still counts as
@@ -607,8 +619,9 @@ const heldFor = 30 * time.Minute
 // stands. A conversation whose first request is still out counts where it
 // was sent (sticks.opening, under key until opened ends it): many started
 // at once all went to the one holding the fewest before any of them was
-// answered (#1342: 24 requests at once over 5 accounts).
-func leastHeld(scope, key string, cs []candidate, pl planned) ([]candidate, planned) {
+// answered (#1342: 24 requests at once over 5 accounts). With spentLast,
+// one all but used up isn't picked over one with room (ownLeastHeld).
+func leastHeld(scope, key string, cs []candidate, pl planned, spentLast bool) ([]candidate, planned) {
 	if len(cs) < 2 || len(pl.order) < len(cs) {
 		return cs, pl
 	}
@@ -645,6 +658,9 @@ func leastHeld(scope, key string, cs []candidate, pl planned) ([]candidate, plan
 	best := -1
 	for i, c := range cs {
 		if pl.order[i].Rest != nil || pl.order[i].Aside {
+			continue
+		}
+		if w := pl.order[i]; spentLast && w.Known && w.Used >= provider.SpentShareOf(c.p.Routing) {
 			continue
 		}
 		if best < 0 || held[seat(c)] < held[seat(cs[best])] {

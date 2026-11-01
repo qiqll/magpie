@@ -265,8 +265,11 @@ func TestUserNotGivenAnAlmostSpentSpare(t *testing.T) {
 	}
 }
 
-// Its first back, a user's new conversation goes to it again, while one
-// already on its spare stays there.
+// Its first back, a user's new conversation goes to it, while one already
+// on its spare stays there: the first holds none of the user's sessions,
+// the spare one. It isn't back on its first for being first (T-013, the
+// owner's choice A, 2026-11-01): once the first holds more, the next new
+// one goes to the spare.
 func TestUserBackOnItsFirst(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	if err := provider.SetAffinity("codex", provider.AffinitySession); err != nil {
@@ -298,6 +301,15 @@ func TestUserBackOnItsFirst(t *testing.T) {
 	}
 	if got := asked(true); len(got) != 1 || got[0] != "acct-1" {
 		t.Fatalf("a new conversation not on the first: %v", got)
+	}
+	// one each: the first, as it is first; then two on it to one
+	for _, c := range []struct{ session, want string }{{"s3", "acct-1"}, {"s4", "acct-2"}} {
+		if rec := sessionPost(s, "alice", c.session, "new"); rec.Code != 200 {
+			t.Fatalf("%s: %d %s", c.session, rec.Code, rec.Body.String())
+		}
+		if got := asked(true); len(got) != 1 || got[0] != c.want {
+			t.Fatalf("%s asked %v, not %s", c.session, got, c.want)
+		}
 	}
 }
 
@@ -409,8 +421,10 @@ func TestUserSpareTakesTheFirstsPlace(t *testing.T) {
 	}
 }
 
-// A provider routed in turn sends a user's new conversations to its first
-// all the same: its accounts go in their order, not round them.
+// A provider routed in turn spreads a user's new conversations over its
+// own accounts as any other routing does: each to the one the fewest are
+// held on, the first on a tie, not one a request in turn (T-013, the
+// owner's choice A, 2026-11-01; it sent every one to the first before).
 func TestUserFirstThoughRoutedInTurn(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	if err := provider.SetRouting("codex", provider.Rotate); err != nil {
@@ -429,7 +443,16 @@ func TestUserFirstThoughRoutedInTurn(t *testing.T) {
 			t.Fatalf("%s: %d %s", session, rec.Code, rec.Body.String())
 		}
 	}
-	if got := strings.Join(asked(true), ","); got != "acct-2,acct-2,acct-2" {
-		t.Fatalf("sent round alice's accounts: %s", got)
+	if got := strings.Join(asked(true), ","); got != "acct-2,acct-1,acct-2" {
+		t.Fatalf("not spread over alice's accounts: %s", got)
+	}
+	// each stays where it went, not sent round in turn
+	for _, session := range []string{"r1", "r2", "r3", "r2"} {
+		if rec := sessionPost(s, "alice", session, "hi "+session+" again"); rec.Code != 200 {
+			t.Fatalf("%s again: %d %s", session, rec.Code, rec.Body.String())
+		}
+	}
+	if got := strings.Join(asked(true), ","); got != "acct-2,acct-1,acct-2,acct-1" {
+		t.Fatalf("moved: %s", got)
 	}
 }
