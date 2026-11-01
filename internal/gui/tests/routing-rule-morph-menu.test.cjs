@@ -129,6 +129,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         });
         await page.locator(".rt-gedit .rt-rule .rt-model").first().focus({ preventScroll: true });
         for (let i = 0; i < 6 && !(await page.evaluate(() => "t047" in window)); i++) await page.keyboard.press(TAB);
+        assert(await page.evaluate(() => "t047" in window), "Tab reaches the rule's ⋯");
         const after = await page.evaluate(() => new Promise((done) => {
           const e = document.querySelector(".rt-gedit");
           let n = 0;
@@ -150,9 +151,15 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.waitForFunction(() => document.querySelector(".rt-gedit").style.overflow === "");
         assert(await page.locator(".row-menu").isVisible(), "the menu stays as the editor ends its morph");
 
-        // a reader's own wheel still closes it
+        // a reader's own wheel still closes it, toward whichever end the
+        // page has room to go
+        const room = await page.evaluate(() => {
+          const v = document.getElementById("view-routing");
+          return { down: v.scrollHeight - v.clientHeight - v.scrollTop, up: v.scrollTop };
+        });
+        assert(room.down > 50 || room.up > 50, `the page has room to wheel (${JSON.stringify(room)})`);
         await page.mouse.move(Math.min(550, (width / 2) | 0), 300);
-        await page.mouse.wheel(0, 200);
+        await page.mouse.wheel(0, room.down > 50 ? 200 : -200);
         await page.waitForFunction(() => !document.querySelector(".row-menu"));
         assert.deepEqual(errors, []);
       });
