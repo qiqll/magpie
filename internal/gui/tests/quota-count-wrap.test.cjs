@@ -74,20 +74,22 @@ for (const [name, engine] of [["webkit", webkit], ["chromium", chromium]]) {
           page.setDefaultTimeout(5000);
           await page.route("**/*", serve(lang, [...wb, trae.after]));
           await page.goto("http://magpie.test/?view=usage");
-          await page.locator(".subscription-card .quota-n").nth(2).waitFor();
-          await page.waitForTimeout(300);
+          await page.locator(".subscription-card .quota-windows.stacked .quota-n").nth(2).waitFor();
+          await page.evaluate(() => document.fonts.ready.then(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok)))));
           const counts = await page.evaluate(() => [...document.querySelectorAll(".quota-n")].map((n) => {
             const part = n.children[0], text = part.firstChild, dot = text.data.lastIndexOf("·");
             const at = (i) => { const r = document.createRange(); r.setStart(text, i); r.setEnd(text, i + 1); return r.getBoundingClientRect(); };
             const over = (el) => { const r = document.createRange(); r.selectNodeContents(el); return r.getBoundingClientRect().width - el.getBoundingClientRect().width; };
             return {
               text: n.textContent,
-              over: Math.max(...[...n.children].map(over)),
+              stacked: !!n.closest(".quota-windows.stacked"),
+              over: Math.max(over(n), ...[...n.children].map(over)),
               alone: dot > 1 && at(dot).top - at(dot - 2).top > 2,
             };
           }));
           assert.equal(counts.length, 3);
           for (const c of counts) {
+            assert.ok(c.stacked, `${lang} ${width}px: "${c.text}" isn't stacked`);
             assert.ok(c.over < 0.01, `${lang} ${width}px: "${c.text}" runs ${c.over}px past its window`);
             assert.equal(c.alone, false, `${lang} ${width}px: "${c.text}" leaves its · on a line alone`);
           }
