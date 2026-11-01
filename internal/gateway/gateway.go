@@ -3915,7 +3915,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				continue
 			}
 			if see, ok := seeing(); ok && !isGroup {
-				if seen, err := s.seenBody(withDescribeFor(r.Context(), call.Agent, call.Model, sessionOf(r.Header), false), from, body, see); err == nil {
+				if seen, err := s.seenBody(withDescribeFor(s.forUser(r.Context(), r), call.Agent, call.Model, sessionOf(r.Header), false), from, body, see); err == nil {
 					body = seen
 					try.Fail = failSight
 					s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })

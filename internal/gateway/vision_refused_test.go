@@ -195,3 +195,30 @@ func TestImageRefused(t *testing.T) {
 		t.Error("a 429 or 500 read as an image refused")
 	}
 }
+
+// Bound by user, the picked model's refusal of an image is mended as
+// unbound: the image described on the user's own account of the Image
+// recognition model and the model asked again. The retry's describe went
+// out with no user (no forUser), so usersOwn refused it and the turn
+// failed (T-050, after the merge with --bind=user).
+func TestPickedModelThatRefusesAnImageIsGivenItDescribedBoundByUser(t *testing.T) {
+	s, pa, pb, eye := sameModelTwice(t, "v/eye")
+	s = byUserUpTo(t, s, 1)
+	tc := imageTurns("pa/DeepSeek-V4.1-Flash")[0]
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body))
+	req.Header.Set(UserHeader, "alice")
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if got := pb.sent(); len(got) != 0 {
+		t.Fatalf("the same model at the other provider was asked %d times", len(got))
+	}
+	if got := pa.sent(); len(got) != 2 || !strings.Contains(got[1], "HELLO") {
+		t.Fatalf("the picked provider was sent %q, want the image then its description", got)
+	}
+	if n := len(eye.sent("eye")); n != 1 {
+		t.Fatalf("the image was described %d times, want 1", n)
+	}
+}
