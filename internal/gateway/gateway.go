@@ -2699,15 +2699,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		rotate = false
 	}
 	cands, pl, aff, stuck := affine(scope, owner, mode, rotate, r.Header, from, body, plain, cands, pl)
-	if userBound != nil && aff.Why == "first" && mode != provider.AffinityTurn {
+	if userBound != nil && aff.afresh() && mode != provider.AffinityTurn {
 		// the user's sessions spread over its own accounts, never another's,
 		// none bound for it (T-013, the owner's choice A); one already
-		// answered stays as affine keeps it, and a pin is to its one alone.
+		// answered stays as affine keeps it, one it doesn't keep (cold,
+		// no-cache, gone, resting) is spread as a new one (T-042, the
+		// owner's choice A of 2026-11-02), and a pin is to its one alone.
 		// Within a turn only, its next turn goes to the first as a new one
 		// does, so its first turn spread there would only move it
 		cands, pl = ownLeastHeld(scope, stuck, cands, pl)
 	}
-	if gt != nil && aff.Why == "first" && mode != provider.AffinityTurn && pin == "" {
+	if gt != nil && aff.afresh() && mode != provider.AffinityTurn && pin == "" {
 		// a group's the same, on each member's provider as the tries
 		// reach it, among the user's own there (groupTurn.spreadOwn,
 		// T-041); a pin is to its one alone, as above

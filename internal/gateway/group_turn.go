@@ -36,9 +36,10 @@ type groupTurn struct {
 	// again, the turn gone as an unpinned one (pinned): told as a limit
 	// when none of its own takes it in its place
 	pinLapsed string
-	// scope and key are a conversation's nobody has answered yet, spread
-	// over its user's own as each provider is reached (spreadOwn); key ""
-	// for one that isn't
+	// scope and key are a conversation's routed afresh (nobody has answered
+	// it yet, or who did isn't kept: Affinity.afresh), spread over its
+	// user's own as each provider is reached (spreadOwn); key "" for one
+	// that isn't
 	scope, key string
 	rows       map[string]map[string]int // each narrowed provider's own, their place in its plan by ownRow
 	plans      map[string][]Weighed      // each narrowed provider's plan of its own
@@ -265,6 +266,8 @@ func (g *groupTurn) reach(cs []candidate, i int, seen func(order, left []Weighed
 // are held on (spreadOwn), as a provider's turn's does (ownLeastHeld,
 // T-013): a group's sessions of one user all sent to its first account
 // there wrote each one's prompt to its cache beside the others' (T-041).
+// One answered that isn't kept (cold, no-cache, gone, resting) is spread
+// the same (T-042).
 func (g *groupTurn) spread(scope, key string) {
 	if g != nil {
 		g.scope, g.key = scope, key

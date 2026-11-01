@@ -103,6 +103,18 @@ type Affinity struct {
 	Why string `json:"why"`
 }
 
+// afresh is whether a's conversation is routed as one nobody has answered:
+// it is ("first"), or who answered it isn't kept ("gone", "resting",
+// "spent", "no-cache", "cold"). Never kept ("off"), a new turn gone round
+// and one kept are not.
+func (a *Affinity) afresh() bool {
+	switch a.Why {
+	case "first", "gone", "resting", "spent", "no-cache", "cold":
+		return true
+	}
+	return false
+}
+
 type stick struct {
 	rest       string
 	who        string // the key or account, however many were on
@@ -623,7 +635,9 @@ func affine(scope, owner, mode string, rotate bool, in http.Header, from provide
 // one's prompt to that account's cache beside the others' (T-013). One all
 // but used up is passed over while another has room, as ownedBy puts it
 // last; on a tie the first stays first. A conversation answered stays
-// where affine keeps it, and a user with one account goes there.
+// where affine keeps it, and a user with one account goes there. One
+// affine doesn't keep (cold, no-cache, gone, resting, spent: afresh) is
+// put the same way, not back on the user's first (T-042).
 func ownLeastHeld(scope, key string, cs []candidate, pl planned) ([]candidate, planned) {
 	return leastHeld(scope, key, cs, pl, true)
 }
@@ -641,7 +655,10 @@ const heldFor = 30 * time.Minute
 // stands. A conversation whose first request is still out counts where it
 // was sent (sticks.opening, under key until opened ends it): many started
 // at once all went to the one holding the fewest before any of them was
-// answered (#1342: 24 requests at once over 5 accounts). With spentLast,
+// answered (#1342: 24 requests at once over 5 accounts). The conversation's
+// own stick, under key, isn't counted: one answered before and routed
+// afresh (afresh) would count against where it was, moved off it on a tie
+// with the cache there written again elsewhere (T-042). With spentLast,
 // one all but used up isn't picked over one with room (ownLeastHeld,
 // groupTurn.spreadOwn).
 func leastHeld(scope, key string, cs []candidate, pl planned, spentLast bool) ([]candidate, planned) {
@@ -668,7 +685,7 @@ func leastHeld(scope, key string, cs []candidate, pl planned, spentLast bool) ([
 	defer sticks.Unlock()
 	for _, m := range []map[string]stick{sticks.m, sticks.opening} {
 		for k, st := range m {
-			if strings.HasPrefix(k, scope+"|") && now.Sub(st.at) <= heldFor {
+			if k != key && strings.HasPrefix(k, scope+"|") && now.Sub(st.at) <= heldFor {
 				held[st.who+"/"+provider.WithMemberEffort(st.model, st.effort)]++
 			}
 		}
