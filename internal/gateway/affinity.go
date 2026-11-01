@@ -649,8 +649,9 @@ func leastHeld(scope, key string, cs []candidate, pl planned, spentLast bool) ([
 		return cs, pl
 	}
 	if strings.HasPrefix(scope, provider.GroupPrefix) && !spentLast {
-		// a user's own (spentLast) are spread whatever the routing, a
-		// group's member's (groupTurn.spreadOwn) as a provider's
+		// not for a user's own (spentLast): those are one member's
+		// accounts alone (groupTurn.spreadOwn), so the group's order of
+		// its members, which a member's own routing keeps, isn't touched
 		if g, ms, ok := provider.FindGroup(scope); ok {
 			for _, m := range ms {
 				// a group in the group, or a provider routed its own way:

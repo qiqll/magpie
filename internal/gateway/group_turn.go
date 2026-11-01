@@ -40,7 +40,9 @@ type groupTurn struct {
 	// over its user's own as each provider is reached (spreadOwn); key ""
 	// for one that isn't
 	scope, key string
-	rows       map[string]map[string]Weighed // each narrowed provider's own, their plan's rows by ownRow
+	rows       map[string]map[string]int // each narrowed provider's own, their place in its plan by ownRow
+	plans      map[string][]Weighed      // each narrowed provider's plan of its own
+	spreadDone map[string]bool           // members spread already, by memberOf
 }
 
 // groupTurnOf is the groupTurn of r, a turn to the group of members ms,
@@ -50,7 +52,7 @@ func (s *Server) groupTurnOf(r *http.Request, ms []provider.Member, cs []candida
 		return nil
 	}
 	g := &groupTurn{s: s, r: r, members: map[string]provider.Provider{}, pools: map[string]pooled{}, done: map[string]bool{},
-		free: map[string]bool{}, own: map[string]map[string]bool{}, us: userTries{}, rows: map[string]map[string]Weighed{}}
+		free: map[string]bool{}, own: map[string]map[string]bool{}, us: userTries{}, rows: map[string]map[string]int{}, plans: map[string][]Weighed{}, spreadDone: map[string]bool{}}
 	for _, m := range ms {
 		g.members[m.Provider.ID] = m.Provider
 	}
@@ -121,10 +123,10 @@ func (g *groupTurn) narrow(pid string) (order, left []Weighed) {
 		set[strings.ToLower(c.who())] = true
 	}
 	g.own[pid], g.us[pid] = set, u
-	g.rows[pid] = map[string]Weighed{}
+	g.rows[pid], g.plans[pid] = map[string]int{}, opl.order
 	for k, c := range own {
 		if k < len(opl.order) {
-			g.rows[pid][ownRow(c)] = opl.order[k]
+			g.rows[pid][ownRow(c)] = k
 		}
 	}
 	if g.ub == nil {
@@ -231,12 +233,25 @@ func (g *groupTurn) reach(cs []candidate, i int, seen func(order, left []Weighed
 	for i < len(cs) {
 		pid := cs[i].p.ID
 		if !g.done[pid] {
-			g.narrowSeen(pid, seen)
+			order, left := g.narrow(pid)
 			cs = append(slices.Clone(cs[:i]), slices.DeleteFunc(slices.Clone(cs[i:]), func(c candidate) bool { return c.p.ID == pid && !g.mine(c) })...)
-			cs = g.spreadOwn(cs, i)
+			var picked int
+			if cs, picked = g.spreadOwn(cs, i); picked > 0 && picked < len(order) {
+				// the routing log's plan as it is asked, the one picked first
+				order = append(append([]Weighed{order[picked]}, order[:picked]...), order[picked+1:]...)
+				for j := range order {
+					order[j].Turn = j == 0
+				}
+			}
+			if seen != nil && len(order)+len(left) > 0 {
+				seen(order, left)
+			}
 			continue
 		}
 		if g.mine(cs[i]) {
+			// a member of a provider narrowed already, reached first now
+			// (a group of two of one provider's models): spread too
+			cs, _ = g.spreadOwn(cs, i)
 			return append(cs[:i+1:i+1], slices.DeleteFunc(slices.Clone(cs[i+1:]), func(c candidate) bool { return g.done[c.p.ID] && !g.mine(c) })...)
 		}
 		cs = slices.Delete(slices.Clone(cs), i, i+1)
@@ -261,17 +276,25 @@ func ownRow(c candidate) string {
 	return c.who() + "|" + c.model + "|" + c.effort
 }
 
+// spreadMember is the member c is of: its provider, model and effort.
+func spreadMember(c candidate) string {
+	return c.p.ID + "|" + c.model + "|" + c.effort
+}
+
 // spreadOwn is cs with cs[i], a member's provider just narrowed, swapped
 // for the one of the user's own of that member (its provider, model and
 // effort) the fewest conversations of the group are held on (leastHeld
 // with spentLast: one all but used up passed over while another has room,
 // resting ones left out, a tie keeping the group's order). The others keep
-// their places after it. Nothing moves for a conversation not spread, a
-// member the user has one of, or one whose rows aren't all known.
-func (g *groupTurn) spreadOwn(cs []candidate, i int) []candidate {
-	if g.key == "" || i >= len(cs) || !g.mine(cs[i]) || g.rows[cs[i].p.ID] == nil {
-		return cs
+// their places after it. A member is spread once, the first time the
+// tries reach it. Nothing moves for a conversation not spread, a member
+// the user has one of, or one whose rows aren't all known. picked is the
+// place in its provider's plan of the one put first, 0 for none moved.
+func (g *groupTurn) spreadOwn(cs []candidate, i int) (_ []candidate, picked int) {
+	if g.key == "" || i >= len(cs) || !g.mine(cs[i]) || g.rows[cs[i].p.ID] == nil || g.spreadDone[spreadMember(cs[i])] {
+		return cs, 0
 	}
+	g.spreadDone[spreadMember(cs[i])] = true
 	first := cs[i]
 	var at []int
 	var sub []candidate
@@ -281,23 +304,23 @@ func (g *groupTurn) spreadOwn(cs []candidate, i int) []candidate {
 		if c.p.ID != first.p.ID || c.model != first.model || c.effort != first.effort || !g.mine(c) {
 			continue
 		}
-		w, ok := g.rows[c.p.ID][ownRow(c)]
-		if !ok {
-			return cs
+		k, ok := g.rows[c.p.ID][ownRow(c)]
+		if !ok || k >= len(g.plans[c.p.ID]) {
+			return cs, 0
 		}
-		at, sub, pl.order = append(at, j), append(sub, c), append(pl.order, w)
+		at, sub, pl.order = append(at, j), append(sub, c), append(pl.order, g.plans[c.p.ID][k])
 	}
 	got, _ := leastHeld(g.scope, g.key, sub, pl, true)
 	if len(got) == 0 || ownRow(got[0]) == ownRow(first) {
-		return cs
+		return cs, 0
 	}
 	for k, c := range sub {
 		if ownRow(c) == ownRow(got[0]) {
 			out := slices.Clone(cs)
-			return slices.Insert(slices.Delete(out, at[k], at[k]+1), i, c)
+			return slices.Insert(slices.Delete(out, at[k], at[k]+1), i, c), g.rows[c.p.ID][ownRow(c)]
 		}
 	}
-	return cs
+	return cs, 0
 }
 
 // narrowSeen narrows pid (narrow), seen told its plan.

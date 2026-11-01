@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -98,11 +99,19 @@ func TestUserGroupSessionsSpreadOverItsAccounts(t *testing.T) {
 			}
 			aliceOnTwo(t)
 			s := byUserUpTo(t, New(), 3)
-			if got := groupSessionsAsked(t, s, asked, "alice", "s1", "s2", "s3"); got != "kc1,kc2,kc1" {
+			if got := groupSessionsAsked(t, s, asked, "alice", "s1", "s2"); got != "kc1,kc2" {
 				t.Fatalf("new sessions asked %s", got)
 			}
-			if r := lastRoute(s); r.Affinity == nil || r.Affinity.Why != "first" {
+			// the routing log's plan has the one picked first, its turn
+			r := lastRoute(s)
+			if r.Affinity == nil || r.Affinity.Why != "first" {
 				t.Fatalf("route %+v", r.Affinity)
+			}
+			if i := slices.IndexFunc(r.Order, func(w Weighed) bool { return w.Provider == "ca" }); i < 0 || r.Order[i].ID != keyWho("ca", "kc2") || !r.Order[i].Turn {
+				t.Fatalf("route's plan %+v, want kc2 first of ca's", r.Order)
+			}
+			if got := groupSessionsAsked(t, s, asked, "alice", "s3"); got != "kc1" {
+				t.Fatalf("a third session asked %s", got)
 			}
 			if got := groupSessionsAsked(t, s, asked, "alice", "s2", "s1", "s2", "s3"); got != "kc2,kc1,kc2,kc1" {
 				t.Fatalf("later turns asked %s", got)
@@ -121,8 +130,7 @@ func TestUserGroupSessionsSpreadOverItsAccounts(t *testing.T) {
 }
 
 // A group's sessions of a user with one account of the member's provider
-// all go there, as before; a spread session's turn whose own fails goes on
-// to its other own and the next member as before.
+// all go there, as before.
 func TestUserGroupOneAccountKeepsEverySession(t *testing.T) {
 	fresh(t)
 	noRests()
@@ -174,5 +182,54 @@ func TestUserGroupPinnedSessionNotSpread(t *testing.T) {
 	}
 	if got := asked(); got != "kc1" {
 		t.Fatalf("pinned session asked %s, want kc1", got)
+	}
+}
+
+// A group of two of one provider's models: once the first member fails
+// on every one of the user's own, the second, reached first now, is
+// spread too, not sent to the user's first account for each new session.
+// The first member fails with a 503, its rests forgotten.
+func TestUserGroupSecondMemberOfAProviderSpread(t *testing.T) {
+	fresh(t)
+	noRests()
+	t.Cleanup(noRests)
+	var mu sync.Mutex
+	var got []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(string(b), `"model":"m"`) {
+			w.WriteHeader(503)
+			io.WriteString(w, `{"error":{"message":"no capacity for m","type":"server_error"}}`)
+			return
+		}
+		mu.Lock()
+		got = append(got, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		mu.Unlock()
+		io.WriteString(w, `{"id":"c1","object":"chat.completion","model":"m2","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5000,"completion_tokens":1}}`)
+	}))
+	t.Cleanup(up.Close)
+	if err := provider.Save(provider.Provider{ID: "ca", Name: "CA", Chat: up.URL + "/v1", Key: "kc1", Keys: []provider.KeyAccount{{Key: "kc2"}, {Key: "kc3"}}, Models: []string{"m", "m2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SaveGroup(provider.Group{ID: "pair", Name: "Pair", Members: []string{"ca/m", "ca/m2"}, Routing: "order"}); err != nil {
+		t.Fatal(err)
+	}
+	aliceOnTwo(t)
+	s := byUserUpTo(t, New(), 3)
+	asked := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := strings.Join(got, ",")
+		got = nil
+		return out
+	}
+	var answered []string
+	for _, session := range []string{"s1", "s2", "s3"} {
+		noRests() // the first member's 503s rest no key the second is asked on
+		answered = append(answered, groupSessionsAsked(t, s, asked, "alice", session))
+	}
+	if got := strings.Join(answered, ","); got != "kc1,kc2,kc1" {
+		t.Fatalf("the second member's new sessions answered on %s", got)
 	}
 }
