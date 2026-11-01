@@ -700,8 +700,11 @@ func TestCallKind(t *testing.T) {
 // model Codex CLI reaches on its own isn't refused through magpie
 // (Discord: "The 'gpt-6.1-sol' model is not supported when using Codex
 // with a ChatGPT account"). 0.161.0 is newer than any installed here or
-// magpie's own fallback, so only the client's own version can pass.
+// magpie's own fallback, so only the client's own version can pass. The
+// newer Codex an earlier test sent (0.162.1, 0.165.0) is forgotten first:
+// the pool would rightly say it is that one.
 func TestCodexPoolSaysTheClientsVersion(t *testing.T) {
+	t.Cleanup(provider.CodexSeenForTests())
 	codexSignedIn(t, "spare@example.com")
 	var uas, vers []string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
