@@ -2574,7 +2574,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// (#1797)
 	// a bound user's conversations are kept apart from another's, the
 	// same first words or not (T-043); unbound, as they were
-	owner := stickOwner(userKey(r), limitedUser)
+	owner := stickOwner(limitedUser)
 	cands, pl, strictHeld := strictKeep(scope, owner, mode, r.Header, body, cands, pl)
 	grew := false // a spare was added to the user's accounts, once a request
 	if userBound != nil && strictHeld == nil && pin == "" {

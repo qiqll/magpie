@@ -102,20 +102,56 @@ func TestUnboundStickKeyAsBefore(t *testing.T) {
 
 // stickKey with no owner is the key as it was; an owner's goes between
 // scope and the conversation, so a count by scope's prefix and a lead
-// found by its id's suffix still find it, and owners whose ids would
-// spell the separator stay apart.
+// found by its id's suffix still find it, and a name that would spell the
+// separator can't pass for another user's key.
 func TestStickKeyOwner(t *testing.T) {
 	h := http.Header{}
 	h.Set("session_id", "thread-1")
 	if got := stickKey("p/m", "", h, nil); got != "p/m|thread-1" {
 		t.Fatalf("unbound %q", got)
 	}
-	a := stickKey("p/m", stickOwner("k", "a|b"), h, nil)
-	b := stickKey("p/m", stickOwner("k|a", "b"), h, nil)
-	if a == b || !strings.HasPrefix(a, "p/m|") || !strings.HasSuffix(a, "|thread-1") {
-		t.Fatalf("owned %q %q", a, b)
+	a := stickKey("p/m", stickOwner("a|b"), h, nil)
+	if strings.Count(a, "|") != 2 || !strings.HasPrefix(a, "p/m|") || !strings.HasSuffix(a, "|thread-1") {
+		t.Fatalf("owned %q", a)
 	}
-	if stickOwner("k", "") != "" {
+	if stickOwner("") != "" {
 		t.Fatal("no user, an owner")
+	}
+}
+
+// A name is one user under every gateway key (the owner's option A2,
+// 2026-10-30): its conversation is kept under one key whichever key it
+// comes by, so it isn't taken for a new one there, nor counted twice.
+func TestUserStickSameUnderEveryKey(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	asked := cachedUpstream(t)
+	keys, secrets := newCaller(t, "k1", "k2")
+	both := userBinding{Who: "codex@me@example.com", Account: "me@example.com", More: []userSeat{{Who: "codex@spare@example.com", Account: "spare@example.com"}}}
+	writeUsers(t, userFile{Keys: map[string]map[string]map[string]userBinding{
+		keys[0].ID: {"codex": {"alice": both}},
+		keys[1].ID: {"codex": {"alice": both}},
+	}})
+	s := byUser(New())
+	post := func(secret string) Route {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"codex/gpt-5.5","stream":true,"input":"hi"}`))
+		req.RemoteAddr = "127.0.0.1:50000"
+		req.Header.Set("Authorization", "Bearer "+secret)
+		req.Header.Set(UserHeader, "alice")
+		lanGuard(s.Handler()).ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		}
+		return lastRoute(s)
+	}
+	if r := post(secrets[0]); r.Affinity == nil || r.Affinity.Why != "first" {
+		t.Fatalf("first turn: %+v", r.Affinity)
+	}
+	if r := post(secrets[1]); r.Affinity == nil || r.Affinity.Why != "cache" || !r.Affinity.Kept {
+		t.Fatalf("its next turn by the other key: %+v", r.Affinity)
+	}
+	if got := strings.Join(asked(true), ","); got != "acct-1,acct-1" {
+		t.Fatalf("asked %s", got)
 	}
 }
