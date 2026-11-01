@@ -144,11 +144,11 @@ func renewLogins(ctx context.Context, every time.Duration, atOnce int) []Renewal
 			continue
 		}
 		r := Renewal{Agent: l.Agent, User: l.User}
-		// one whose refresh was refused is due at once: routing leaves it
-		// out (SignInLapsed), so this is its only way back short of a
-		// sign-in anew; a failed renewal still waits keepAliveRetry, and
-		// a run renews at most atOnce
-		if every > 0 && (l.Lapsed == "" && !renewalDue(l, every, time.Now()) || renewWaiting(l.Agent, l.User, time.Now())) || atOnce > 0 && tried >= atOnce {
+		// one whose refresh was refused is due at each run, its last
+		// failure no wait: routing leaves it out (SignInLapsed), so this
+		// is its only way back short of a sign-in anew; a run still
+		// renews at most atOnce
+		if every > 0 && l.Lapsed == "" && (!renewalDue(l, every, time.Now()) || renewWaiting(l.Agent, l.User, time.Now())) || atOnce > 0 && tried >= atOnce {
 			out = append(out, r)
 			continue
 		}
