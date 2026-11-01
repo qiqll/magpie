@@ -266,8 +266,8 @@ func (g *groupTurn) reach(cs []candidate, i int, seen func(order, left []Weighed
 // are held on (spreadOwn), as a provider's turn's does (ownLeastHeld,
 // T-013): a group's sessions of one user all sent to its first account
 // there wrote each one's prompt to its cache beside the others' (T-041).
-// One answered that isn't kept (cold, no-cache, gone, resting) is spread
-// the same (T-042).
+// One answered that isn't kept (cold, no-cache, gone, resting, spent) is
+// spread the same (T-042).
 func (g *groupTurn) spread(scope, key string) {
 	if g != nil {
 		g.scope, g.key = scope, key

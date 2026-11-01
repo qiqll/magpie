@@ -2703,7 +2703,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// the user's sessions spread over its own accounts, never another's,
 		// none bound for it (T-013, the owner's choice A); one already
 		// answered stays as affine keeps it, one it doesn't keep (cold,
-		// no-cache, gone, resting) is spread as a new one (T-042, the
+		// no-cache, gone, resting, spent) is spread as a new one (T-042, the
 		// owner's choice A of 2026-11-02), and a pin is to its one alone.
 		// Within a turn only, its next turn goes to the first as a new one
 		// does, so its first turn spread there would only move it

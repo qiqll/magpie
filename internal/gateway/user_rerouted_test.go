@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // ageStick has the conversation session's stick, the one of the test,
@@ -210,5 +212,66 @@ func TestUserOneAccountColdSessionStays(t *testing.T) {
 	}
 	if got := seatsIn(t, "codex")["alice"]; len(got) != 1 {
 		t.Fatalf("a spare added: %v", got)
+	}
+}
+
+// A provider's conversation gone cold isn't counted where it was: with one
+// other on each of kc1 and kc2, s2 goes back to kc2, not to kc1 on a tie
+// with itself (T-042). The provider's keys go cold in five minutes, well
+// within heldFor, so its own stick would count.
+func TestUserColdSessionNotCountedWhereItWas(t *testing.T) {
+	fresh(t)
+	noRests()
+	t.Cleanup(noRests)
+	asked := cachedGroup(t, "order", "")
+	aliceOnTwo(t)
+	s := byUserUpTo(t, New(), 3)
+	send := func(session string) string {
+		t.Helper()
+		rec := postAt(s, "/v1/chat/completions", `{"model":"ca/m","messages":[{"role":"user","content":"hi `+session+`"}]}`,
+			map[string]string{UserHeader: "alice", "session_id": session})
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", session, rec.Code, rec.Body.String())
+		}
+		return asked()
+	}
+	if got := send("s1") + "," + send("s2"); got != "kc1,kc2" {
+		t.Fatalf("new sessions asked %s", got)
+	}
+	ageStick(t, "s2", cacheCold+time.Minute)
+	if got := send("s2"); got != "kc2" {
+		t.Fatalf("cold session asked %s, want kc2", got)
+	}
+	if r := lastRoute(s); r.Affinity == nil || r.Affinity.Why != "cold" {
+		t.Fatalf("route %+v", r.Affinity)
+	}
+}
+
+// A conversation routed afresh whose request is out counts where it was
+// sent alone, not where it was answered too: x, answered on a and sent
+// to b, with z on a, leaves a and b one each, and a new one goes to a,
+// first on the tie. Counted twice, a held two and it went to b.
+func TestLeastHeldCountsARoutedAfreshOnce(t *testing.T) {
+	c := func(key string) candidate {
+		return candidate{p: provider.Provider{ID: "t042", Key: key}, model: "m", rest: "t042"}
+	}
+	a, b := c("ka"), c("kb")
+	now := time.Now()
+	sticks.Lock()
+	sticks.m["t042|x"] = stick{rest: a.rest, who: a.who(), model: "m", at: now}
+	sticks.opening["t042|x"] = stick{rest: b.rest, who: b.who(), model: "m", at: now}
+	sticks.m["t042|z"] = stick{rest: a.rest, who: a.who(), model: "m", at: now}
+	sticks.Unlock()
+	t.Cleanup(func() {
+		sticks.Lock()
+		for _, k := range []string{"t042|x", "t042|z", "t042|n"} {
+			delete(sticks.m, k)
+			delete(sticks.opening, k)
+		}
+		sticks.Unlock()
+	})
+	got, _ := leastHeld("t042", "t042|n", []candidate{a, b}, planned{order: []Weighed{{}, {}}}, true)
+	if got[0].who() != a.who() {
+		t.Fatalf("went to %s, want %s", got[0].who(), a.who())
 	}
 }

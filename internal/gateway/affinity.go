@@ -658,7 +658,9 @@ const heldFor = 30 * time.Minute
 // answered (#1342: 24 requests at once over 5 accounts). The conversation's
 // own stick, under key, isn't counted: one answered before and routed
 // afresh (afresh) would count against where it was, moved off it on a tie
-// with the cache there written again elsewhere (T-042). With spentLast,
+// with the cache there written again elsewhere (T-042). Another routed
+// afresh whose request is out counts where it was sent alone, not where
+// it was answered too. With spentLast,
 // one all but used up isn't picked over one with room (ownLeastHeld,
 // groupTurn.spreadOwn).
 func leastHeld(scope, key string, cs []candidate, pl planned, spentLast bool) ([]candidate, planned) {
@@ -683,8 +685,11 @@ func leastHeld(scope, key string, cs []candidate, pl planned, spentLast bool) ([
 	held := map[string]int{}
 	sticks.Lock()
 	defer sticks.Unlock()
-	for _, m := range []map[string]stick{sticks.m, sticks.opening} {
+	for i, m := range []map[string]stick{sticks.m, sticks.opening} {
 		for k, st := range m {
+			if _, sent := sticks.opening[k]; i == 0 && sent {
+				continue // routed afresh and sent: counted where it went, once
+			}
 			if k != key && strings.HasPrefix(k, scope+"|") && now.Sub(st.at) <= heldFor {
 				held[st.who+"/"+provider.WithMemberEffort(st.model, st.effort)]++
 			}
