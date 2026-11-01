@@ -129,8 +129,19 @@ var turnRules = struct {
 
 // ruleKey is the conversation a group's rules keep a turn's decision for:
 // the agent's session and the conversation's first words (firstWords).
-func ruleKey(g provider.Group, in http.Header, req *Request) string {
-	return provider.GroupPrefix + g.ID + "|" + conversationID(in, nil) + "|" + firstWords(req)
+//
+// owner is the user a request is bound to under --bind=user (stickOwner),
+// "" otherwise: without a session header two users opening with the same
+// words were one conversation, each one's turn held to what the other's
+// had decided — its member, intent, effort, cache (T-046, as T-043 for
+// sticks). It goes after the group, as in stickKey; unbound, the key is as
+// it was.
+func ruleKey(g provider.Group, owner string, in http.Header, req *Request) string {
+	key := provider.GroupPrefix + g.ID + "|"
+	if owner != "" {
+		key += "user:" + owner + "|"
+	}
+	return key + conversationID(in, nil) + "|" + firstWords(req)
 }
 
 // firstWords tells an agent's subagents from it: they share its session

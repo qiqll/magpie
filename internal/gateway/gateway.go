@@ -2236,7 +2236,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		return g.Ruled() || slices.ContainsFunc(m.Via, provider.Group.Ruled)
 	}) {
 		if req, err := parse(from, body); err == nil {
-			ruleReq, ruleAt, words = req, ruleKey(g, r.Header, req), firstWords(req)
+			// a bound user's turns are kept apart from another's, the same
+			// first words or not (T-046), as its sticks are (T-043)
+			owner := ""
+			if s.bind.byUser() {
+				user, _ := userOf(r.Header)
+				owner = stickOwner(user)
+			}
+			ruleReq, ruleAt, words = req, ruleKey(g, owner, r.Header, req), firstWords(req)
 		}
 	}
 	if ruleReq != nil && g.Ruled() {
