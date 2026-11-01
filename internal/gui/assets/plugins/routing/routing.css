@@ -709,7 +709,9 @@ button.rt-session { cursor: pointer; }
   transition: color .15s, border-color .15s, background .15s;
 }
 .rt-addc.wide { width: auto; height: 26px; padding: 0 10px 0 8px; border: 1px dashed var(--line); }
-.rt-addc:hover, .rt-addc.open, .rt-addc:focus-visible, .rt-adduse:hover, .rt-adduse.open, .rt-adduse:focus-visible { color: var(--fg); background: var(--card-2); }
+.rt-addc:hover, .rt-addc.open, .rt-adduse:hover, .rt-adduse.open { color: var(--fg); background: var(--card-2); }
+/* :focus-visible in a rule of its own: Safari before 15.4 drops a list holding it */
+.rt-addc:focus-visible, .rt-adduse:focus-visible { color: var(--fg); background: var(--card-2); }
 .rt-addc.wide:hover, .rt-addc.wide.open { border-color: var(--muted); }
 /* the rule's ⋯, always drawn, in the icons' quiet grey: it is the only
    way to move or remove a rule, and drawn on hover alone nobody found it
@@ -721,8 +723,9 @@ button.rt-session { cursor: pointer; }
 .rt-rule > .rt-rneed[hidden] { display: none; }
 /* how a part works, under an ⓘ beside it */
 .rt-info { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; color: var(--muted); cursor: help; outline: none; }
-.rt-info:hover, .rt-info:focus-visible { color: var(--fg); }
-.rt-info:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }
+.rt-info:hover { color: var(--fg); }
+/* its own rule: Safari before 15.4 drops a list holding :focus-visible */
+.rt-info:focus-visible { color: var(--fg); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }
 .rt-info[hidden] { display: none; }
 .rt-gadds { align-items: center; }
 .rt-pickrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

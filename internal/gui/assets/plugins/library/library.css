@@ -89,7 +89,9 @@ body.window .lib-head { top: -2px; margin: -2px 0 0; padding: 8px 0 4px; --bleed
 .lib-hubsub > span { display: inline-block; }
 .lib-hubsearch { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 7px; background: var(--pill); color: var(--muted); }
 .lib-hubsearch input { flex: 1; min-width: 0; border: 0; padding: 0; background: transparent; font: inherit; font-size: 13px; color: var(--fg); outline: none; box-shadow: none; }
-.lib-hubsheet .lib-hubsearch input:is(:focus, :focus-visible) { border: 0; box-shadow: none; outline: none; }
+/* :focus, not :is(:focus, :focus-visible): Safari before 15.4 drops a
+   rule holding :focus-visible, and :focus covers it */
+.lib-hubsheet .lib-hubsearch input:focus { border: 0; box-shadow: none; outline: none; }
 .lib-hubsearch input::-webkit-search-cancel-button { -webkit-appearance: none; }
 .lib-hubsearch:focus-within { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 /* a group: a quiet heading, its count, a fold; then its inset list */

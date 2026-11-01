@@ -133,7 +133,8 @@
 .msk-vals { overflow: hidden; }
 .msk-vrow { display: flex; align-items: center; gap: 12px; width: 100%; height: 38px; padding: 0 12px; border: 0; background: none; color: var(--fg); font: inherit; font-size: 12.5px; text-align: left; cursor: default; outline: none; }
 .msk-vrow + .msk-vrow { border-top: 1px solid var(--line); }
-.msk-vrow:hover, .msk-vrow:focus-visible { background: var(--pill); }
+.msk-vrow:hover { background: var(--pill); }
+.msk-vrow:focus-visible { background: var(--pill); } /* its own rule: Safari before 15.4 drops a list holding it */
 .msk-vrow .i { flex: none; width: 16px; font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .msk-vrow .sh { flex: 0 1 150px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--code); font-size: 12px; }
 .msk-vrow .k { flex: 0 1 130px; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; color: var(--fg-2); }
@@ -196,7 +197,9 @@ body.window .msk-onebar::before { inset: -6px calc(var(--bar, 0px) - 16px) -6px 
 .msk-text { padding: 9px 12px; font-family: var(--code); font-size: 12px; line-height: 1.75; color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .msk-gap { color: var(--faint); }
 .msk-ph, .msk-orig { --k: var(--accent); padding: 1px 4px; border-radius: 4px; font: inherit; color: var(--fg); background: color-mix(in srgb, var(--k) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--k) 30%, transparent); outline: none; cursor: default; transition: opacity .15s, box-shadow .15s; }
-.msk-ph:hover, .msk-ph:focus-visible, .msk-orig:hover, .msk-orig:focus-visible { background: color-mix(in srgb, var(--k) 26%, transparent); }
+.msk-ph:hover, .msk-orig:hover { background: color-mix(in srgb, var(--k) 26%, transparent); }
+/* :focus-visible in a rule of its own: Safari before 15.4 drops a list holding it */
+.msk-ph:focus-visible, .msk-orig:focus-visible { background: color-mix(in srgb, var(--k) 26%, transparent); }
 .msk-orig { background: transparent; box-shadow: inset 0 -1.5px 0 var(--k); border-radius: 2px; }
 .msk-orig.gone { color: var(--faint); }
 .msk-one.picking mark[data-p]:not(.lit) { opacity: .4; }
