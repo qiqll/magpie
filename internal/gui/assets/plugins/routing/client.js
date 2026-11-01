@@ -5153,7 +5153,12 @@ function routingPage(part) {
     const to = n.getBoundingClientRect().height;
     if (Math.abs(to - from) < 1) return false;
     const shape = opening ? { duration: 570, easing: SPRING } : { duration: 420, easing: IOS_EASE };
+    // clipped, not a box that scrolls: a control the keyboard reaches past
+    // its foot as it opens would scroll it, and that scroll shuts the menu
+    // the control just opened (scrollCloses). An engine without clip
+    // (Safari 15) keeps hidden
     n.style.overflow = "hidden";
+    n.style.overflow = "clip";
     const grow = n.animate([{ height: from + "px" }, { height: to + "px" }], shape);
     grow.finished.then(() => { n.style.overflow = ""; }, () => { n.style.overflow = ""; });
     if (!opening && top < 0) foldInSight(n, grow, from, to, top);
