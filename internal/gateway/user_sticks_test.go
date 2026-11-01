@@ -70,8 +70,15 @@ func TestUserSameFirstWordsKeptApart(t *testing.T) {
 			t.Fatalf("a bound user's stick without its user: %q", k)
 		}
 	}
+	// fresh leaves the opening count as other tests left it: only this
+	// test's users' are looked at
 	sticks.Lock()
-	n := len(sticks.opening)
+	n := 0
+	for k := range sticks.opening {
+		if strings.Contains(k, "|user:") {
+			n++
+		}
+	}
 	sticks.Unlock()
 	if n != 0 {
 		t.Fatalf("%d conversations still counted as opening", n)
