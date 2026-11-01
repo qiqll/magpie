@@ -2918,10 +2918,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// (#63): its reasoning, sealed by the account that wrote it, is refused
 	// by another.
 	before := len(cands)
+	leadOn := spread // a subagent goes with its lead (ownWithLead)
 	if userBound != nil {
 		// a user's accounts aren't gone round by requests, nor spread by
 		// the routing's own count: a new conversation goes to the one of
-		// them the fewest are held on, below
+		// them the fewest are held on, below, a subagent with its lead
+		// where the routing spreads sessions (ownWithLead)
 		rotate, spread = false, false
 	}
 	inOrder := isGroup && routingOf(g.Routing) == provider.Ordered
@@ -2934,13 +2936,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// owner's choice A of 2026-11-02), and a pin is to its one alone.
 		// Within a turn only, its next turn goes to the first as a new one
 		// does, so its first turn spread there would only move it
-		cands, pl = ownLeastHeld(scope, stuck, cands, pl)
+		cands, pl = ownWithLead(scope, stuck, cands, pl, leadOn)
 	}
 	if gt != nil && aff.afresh() && mode != provider.AffinityTurn && pin == "" {
 		// a group's the same, on each member's provider as the tries
 		// reach it, among the user's own there (groupTurn.spreadOwn,
 		// T-041); a pin is to its one alone, as above
-		gt.spread(scope, stuck)
+		gt.spread(scope, stuck, leadOn)
 	}
 	// a strict conversation left with its own account of several: its
 	// failure rests the account as it would with the others still there,

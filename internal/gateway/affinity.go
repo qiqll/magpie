@@ -749,6 +749,25 @@ func ownLeastHeld(scope, key string, cs []candidate, pl planned) ([]candidate, p
 	return leastHeld(scope, key, cs, pl, true, false)
 }
 
+// ownWithLead is ownLeastHeld, but a subagent's first request under a
+// routing that spreads sessions (lead, spreadsSessions) goes with its
+// lead (withLead) when the lead is on one of the user's own, cs: the
+// session keeps one account, its subagents included, as unbound.
+func ownWithLead(scope, key string, cs []candidate, pl planned, lead bool) ([]candidate, planned) {
+	if lead && strings.Contains(key, "|agent:") {
+		at, _, _ := strings.Cut(key, "|agent:")
+		sticks.Lock()
+		st, ok := stickOf(at)
+		sticks.Unlock()
+		if ok && time.Since(st.at) <= heldFor && slices.ContainsFunc(cs, func(c candidate) bool {
+			return c.who() == st.who && c.model == st.model && c.effort == st.effort
+		}) {
+			return withLead(key, cs, pl)
+		}
+	}
+	return ownLeastHeld(scope, key, cs, pl)
+}
+
 // backToMain says whether the one that answered last, order[at], is a
 // provider's fallback while the provider's own model stands first, ready:
 // restLast puts a resting one behind every ready one, so the first is the
