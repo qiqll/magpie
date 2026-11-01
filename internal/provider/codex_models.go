@@ -182,19 +182,27 @@ func (s *seenVersion) saw(v string) {
 	s.Unlock()
 }
 
-// CodexSeenForTests forgets the Codex versions clients said they were, for
-// a test whose turns must be signed as its own client says: a newer Codex
-// another test of the binary sent through the gateway stays behind in
-// codexSeen. It returns what puts them back.
+// CodexSeenForTests forgets the newest Codex version a client said it was,
+// and the cached lookup, for a test whose turns must be signed as its own
+// client says: a newer Codex another test of the binary sent through the
+// gateway, or a models_cache.json it wrote, stays behind otherwise. It
+// returns what puts them back.
 func CodexSeenForTests() (restore func()) {
 	codexSeen.Lock()
 	was := codexSeen.v
 	codexSeen.v = ""
 	codexSeen.Unlock()
+	codexVersionCache.Lock()
+	cachedV, cachedAt := codexVersionCache.v, codexVersionCache.at
+	codexVersionCache.at = time.Time{}
+	codexVersionCache.Unlock()
 	return func() {
 		codexSeen.Lock()
 		codexSeen.v = was
 		codexSeen.Unlock()
+		codexVersionCache.Lock()
+		codexVersionCache.v, codexVersionCache.at = cachedV, cachedAt
+		codexVersionCache.Unlock()
 	}
 }
 
