@@ -30,6 +30,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -393,12 +394,12 @@ func turnIn(req *Request) (turn int, within bool) {
 // isn't brought back, the user's own setting, and the conversation doesn't
 // move either: held is it, for the request to be refused as held. Neither
 // for another mode, nor for a conversation nobody has answered yet.
-func strictKeep(scope, mode string, in http.Header, body []byte, cs []candidate, pl planned) ([]candidate, planned, []Weighed) {
+func strictKeep(scope, owner, mode string, in http.Header, body []byte, cs []candidate, pl planned) ([]candidate, planned, []Weighed) {
 	if mode != provider.AffinityStrict {
 		return cs, pl, nil
 	}
 	sticks.Lock()
-	st, had := stickOf(stickKey(scope, in, body))
+	st, had := stickOf(stickKey(scope, owner, in, body))
 	sticks.Unlock()
 	if !had || time.Since(st.at) > stickKeep || slices.ContainsFunc(cs, func(c candidate) bool { return c.sameVendor(st.who, st.model) }) {
 		return cs, pl, nil
@@ -484,12 +485,34 @@ func strictOnly(cs []candidate, pl planned, at int) ([]candidate, planned) {
 // X: two Pro accounts' 5 hours spent in ten minutes). The lead's key is
 // the session's as before, so what is kept of it, and Codex's leadFirst,
 // which reads a lead's stick by its thread id, are as they were.
-func stickKey(scope string, in http.Header, body []byte) string {
-	key := scope + "|" + conversationID(in, body)
+//
+// owner is the user a request is bound to under --bind=user (stickOwner),
+// "" otherwise: without a session header the id is the first user
+// message's hash, so two users opening with the same words shared a
+// stick, each one's answer taking the other's over and its open count
+// ended by the other's (T-043). It goes between scope and the id, so a
+// count by scope (leastHeld) and a lead found by its thread id's suffix
+// (leadFirst, leadProvider) read it as before; unbound, the key is as it
+// was.
+func stickKey(scope, owner string, in http.Header, body []byte) string {
+	key := scope + "|"
+	if owner != "" {
+		key += "user:" + owner + "|"
+	}
+	key += conversationID(in, body)
 	if sub := subOf(in); sub != "" {
 		key += "|agent:" + sub
 	}
 	return key
+}
+
+// stickOwner is a bound user's part of stickKey: the gateway key it is of
+// and its id, escaped so neither can spell the key's separator.
+func stickOwner(gatewayKey, user string) string {
+	if user == "" {
+		return ""
+	}
+	return url.QueryEscape(gatewayKey) + "/" + url.QueryEscape(user)
 }
 
 // affine puts first whoever answered the conversation last, while its
@@ -498,8 +521,8 @@ func stickKey(scope string, in http.Header, body []byte) string {
 // (dirOf): one parse of a held body serves both (factsOf), where counting
 // it in the masked body parsed the conversation a second time, ~27 MB
 // more for each 4 MB Codex request in flight.
-func affine(scope, mode string, rotate bool, in http.Header, from provider.Protocol, body, written []byte, cs []candidate, pl planned) ([]candidate, planned, *Affinity, string) {
-	key := stickKey(scope, in, body)
+func affine(scope, owner, mode string, rotate bool, in http.Header, from provider.Protocol, body, written []byte, cs []candidate, pl planned) ([]candidate, planned, *Affinity, string) {
+	key := stickKey(scope, owner, in, body)
 	a := &Affinity{Mode: mode}
 	a.Turn, a.Within = turnOf(from, written)
 	sticks.Lock()

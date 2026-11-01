@@ -2572,7 +2572,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// account past the usage cap set on it, and is refused there, not
 	// moved, while the account is held as it won't spend its credits
 	// (#1797)
-	cands, pl, strictHeld := strictKeep(scope, mode, r.Header, body, cands, pl)
+	// a bound user's conversations are kept apart from another's, the
+	// same first words or not (T-043); unbound, as they were
+	owner := stickOwner(userKey(r), limitedUser)
+	cands, pl, strictHeld := strictKeep(scope, owner, mode, r.Header, body, cands, pl)
 	grew := false // a spare was added to the user's accounts, once a request
 	if userBound != nil && strictHeld == nil && pin == "" {
 		// none of the user's accounts has room: a spare, when each is out
@@ -2688,7 +2691,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// conversation goes to the one of them the fewest are held on, below
 		rotate = false
 	}
-	cands, pl, aff, stuck := affine(scope, mode, rotate, r.Header, from, body, plain, cands, pl)
+	cands, pl, aff, stuck := affine(scope, owner, mode, rotate, r.Header, from, body, plain, cands, pl)
 	if userBound != nil && aff.Why == "first" && mode != provider.AffinityTurn {
 		// the user's sessions spread over its own accounts, never another's,
 		// none bound for it (T-013, the owner's choice A); one already
