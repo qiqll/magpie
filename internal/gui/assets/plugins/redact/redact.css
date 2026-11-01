@@ -253,6 +253,29 @@ body.window .msk-onebar::before { inset: -6px calc(var(--bar, 0px) - 16px) -6px 
   .msk-msgs.both .msk-text + .msk-text { border-left: 0; border-top: 1px solid var(--line); }
   .msk-vrow .by, .msk-vrow .bar { display: none; }
 }
+/* Safari before 16 (macOS 12's, #220) has no container queries: the
+   window's width instead. Under 1030px the sidebar folds away and the
+   page is the window less its padding (32px; 24px in a browser under
+   770px); above it the page is wider than any of these */
+@supports not (container-type: inline-size) {
+  @media (max-width: 792px) {
+    .msk-onegrid { grid-template-columns: minmax(0, 1fr); }
+    .msk-steps { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); row-gap: 12px; }
+    .msk-steps li + li::before { display: none; }
+  }
+  @media (max-width: 812px) {
+    .msk-band { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+    .mo-flow { grid-template-columns: fit-content(150px) minmax(80px, 1fr) fit-content(150px); }
+  }
+  @media (max-width: 672px) {
+    .mo-flow { grid-template-columns: fit-content(120px) minmax(48px, 1fr) fit-content(120px); gap: 4px; }
+    .msk-model, .msk-kind:not(:first-child), .msk-kind.more { display: none; }
+    .msk-msgs.both .msk-mbody, .msk-cols { grid-template-columns: minmax(0, 1fr); }
+    .msk-cols span:last-child { display: none; }
+    .msk-msgs.both .msk-text + .msk-text { border-left: 0; border-top: 1px solid var(--line); }
+    .msk-vrow .by, .msk-vrow .bar { display: none; }
+  }
+}
 @media (prefers-reduced-motion: reduce) { .mo-scan, .msk-live i { animation: none; } }
 
 /* How masking works (demo.js): a row that opens onto 小鹊 taking one request
@@ -364,3 +387,6 @@ body.window .msk-onebar::before { inset: -6px calc(var(--bar, 0px) - 16px) -6px 
 .xq-steps button.on { background: var(--accent-soft); font-weight: 600; color: var(--accent); }
 .xq-steps button.done { color: var(--fg-2); }
 @container (max-width: 560px) { .xq-steps { display: none; } .md-len { display: none; } }
+@supports not (container-type: inline-size) {
+  @media (max-width: 592px) { .xq-steps { display: none; } .md-len { display: none; } }
+}

@@ -22,7 +22,17 @@ const sess = (id, min) => ({
   carry: [{ agent: "codex", command: "codex resume x" }, { agent: "opencode", command: "opencode -s x" }],
 });
 
-function serve(lang) {
+// a stylesheet as Safari 15.0 reads it: no container queries (container
+// and container-type are properties it doesn't know, @container a rule it
+// skips, and @supports not (container-type: inline-size) holds) and no
+// :has(), whose rule it drops whole
+const asSafari15 = (css) => css.replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/@supports not \(container-type: inline-size\)/g, "@supports (display: block)")
+  .replace(/@container[^{]*\{/g, "@media not all {")
+  .replace(/(^|[{;\s])container(-type)?\s*:/g, "$1x-container$2:")
+  .replace(/:has\(/g, ":x-has(");
+
+function serve(lang, old) {
   const sessions = [sess("s-1", 1), sess("s-2", 30)];
   const state = { agents: [], profiles: [], settings: { lang, theme: "light" } };
   return async (route) => {
@@ -43,6 +53,7 @@ function serve(lang) {
     if (url.pathname.startsWith("/api/")) return json({});
     const file = path.join(assets, url.pathname === "/" ? "index.html" : url.pathname);
     const contentType = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png" }[path.extname(file)];
+    if (old && url.pathname.endsWith("/sessions.css")) return route.fulfill({ body: asSafari15(await fs.readFile(file, "utf8")), contentType });
     await route.fulfill({ body: await fs.readFile(file), contentType });
   };
 }
@@ -90,4 +101,41 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.deepEqual(errors, []);
     });
   }
+}
+
+// Safari 15 (macOS 12's window) has no container queries and no :has():
+// sessions.css's fallbacks, by the window's width, give each row what its
+// container queries give it, a ticked one's title beside its box too
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  test(`${engine}: a Sessions row is laid out the same where container queries and :has() are missing`, async (t) => {
+    const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+    t.after(() => browser.close());
+    const errors = [];
+    const open = async (old) => {
+      const page = await (await browser.newContext({ viewport: { width: 1100, height: 600 }, reducedMotion: "reduce" })).newPage();
+      page.setDefaultTimeout(5000);
+      page.on("pageerror", (e) => errors.push(e.message));
+      await page.route("**/*", serve("en", old));
+      await page.goto("http://magpie.test/?view=providers");
+      await page.locator("#nav").getByRole("button", { name: "Sessions", exact: true }).click();
+      await page.locator('#view-sessions .row.sm-sess[data-id="s-1"]').waitFor();
+      await page.locator("#view-sessions .sm-select").click();
+      await page.locator('#view-sessions .row.sm-sess[data-id="s-1"] > .sm-check').waitFor();
+      return page;
+    };
+    const now = await open(false), old = await open(true);
+    const look = (page) => page.evaluate(() => [...document.querySelectorAll('#view-sessions .row.sm-sess[data-id="s-1"], #view-sessions .row.sm-sess[data-id="s-1"] > *, #view-sessions .row.sm-sess[data-id="s-1"] .num, #view-sessions .row.sm-sess[data-id="s-1"] .cost')].map((e) => {
+      const c = getComputedStyle(e), box = e.getBoundingClientRect();
+      return `${e.className}: ${c.display} ${c.flexWrap} ${c.flexBasis} ${c.justifyContent} ${c.rowGap} ${c.columnGap} ${c.paddingTop} ${c.paddingBottom} ${c.minWidth} ${Math.round(box.width)}x${Math.round(box.height)}`;
+    }));
+    // 720 and 620 are under the queries' 700 and 600px of list, 740 and 640 over
+    for (const width of [1100, 1000, 800, 740, 720, 660, 640, 620, 560, 440, 360]) {
+      for (const page of [now, old]) {
+        await page.setViewportSize({ width, height: 600 });
+        await page.waitForFunction(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true)))));
+      }
+      assert.deepEqual(await look(old), await look(now), `at ${width}px`);
+    }
+    assert.deepEqual(errors, []);
+  });
 }

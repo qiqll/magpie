@@ -68,6 +68,16 @@ const records = [
     values: [{ p: NAME, k: "PERSON", b: "model", h: "", l: 3, n: 1 }], snips: { [NAME]: `ask ${NAME} about it` } },
 ];
 
+// a stylesheet as Safari 15.0 reads it: no container queries (container
+// and container-type are properties it doesn't know, @container a rule it
+// skips, and @supports not (container-type: inline-size) holds) and no
+// :has(), whose rule it drops whole
+const asSafari15 = (css) => css.replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/@supports not \(container-type: inline-size\)/g, "@supports (display: block)")
+  .replace(/@container[^{]*\{/g, "@media not all {")
+  .replace(/(^|[{;\s])container(-type)?\s*:/g, "$1x-container$2:")
+  .replace(/:has\(/g, ":x-has(");
+
 function serve(lang, sum, asked, opts = {}) {
   const settings = { theme: "light", lang, tray: "panel", currency: "usd", redact: !opts.off, redactPersonal: !opts.off, redactActions: { PRIVATE_KEY: "block" }, ...opts.settings };
   let cleared = false;
@@ -132,6 +142,7 @@ function serve(lang, sum, asked, opts = {}) {
     if (url.pathname.startsWith("/api/")) return json({});
     const file = path.join(assets, url.pathname === "/" ? "index.html" : url.pathname);
     const contentType = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png" }[path.extname(file)];
+    if (opts.safari15 && url.pathname.endsWith("/redact.css")) return route.fulfill({ body: asSafari15(await fs.readFile(file, "utf8")), contentType });
     try { await route.fulfill({ body: await fs.readFile(file), contentType }); } catch { await route.fulfill({ status: 404, body: "" }); }
   };
 }
@@ -551,5 +562,52 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     await list.locator(".msk-row").first().waitFor();
     assert.equal(await list.locator(".msk-row").count(), 3, "every record still listed");
     assert.deepEqual(errors, []);
+  });
+}
+
+// Safari 15 (macOS 12's window) has no container queries: redact.css's
+// fallbacks, by the window's width, give the card, the list, the demo and
+// a request opened what its container queries give them
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  test(`${engine}: the masking page is laid out the same where container queries are missing`, async (t) => {
+    const now = await open(engine, "en", 1100, summary), old = await open(engine, "en", 1100, summary, null, { safari15: true });
+    t.after(() => Promise.all([now.browser.close(), old.browser.close()]));
+    const look = (page) => page.evaluate(() => [...document.querySelectorAll("#view-masking *")].filter((e) => !(e instanceof SVGElement) && e.getClientRects().length).map((e) => {
+      const c = getComputedStyle(e), box = e.getBoundingClientRect();
+      return `${e.tagName} ${e.className}: ${c.display} ${c.gridTemplateColumns} ${c.rowGap} ${c.columnGap} ${c.borderLeftWidth} ${c.borderTopWidth} ${getComputedStyle(e, "::before").display} ${Math.round(box.width)}`;
+    }));
+    // each query's width of page, and 8 to 40px of window either side of it
+    const same = async (what) => {
+      for (const width of [1100, 1000, 900, 800, 700, 640, 600, 500, 420]) {
+        for (const { page } of [now, old]) {
+          await page.setViewportSize({ width, height: 1000 });
+          await page.waitForFunction(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true)))));
+          // a segment's thumb glides to the one picked: read where it ends
+          await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getComputedTiming().endTime === Infinity));
+        }
+        assert.deepEqual(await look(old.page), await look(now.page), `${what} at ${width}px`);
+      }
+    };
+    for (const { page } of [now, old]) {
+      await page.locator("#maskCard .msk-num").waitFor();
+      await page.locator("#maskList .msk-row").first().waitFor();
+      await page.locator("#mdRow").click();
+      await page.locator("#view-masking .xq-steps").waitFor({ state: "attached" });
+    }
+    await same("the card, the requests and the demo");
+    for (const { page } of [now, old]) {
+      await page.setViewportSize({ width: 1100, height: 1000 });
+      await page.locator("#maskList .msk-bar .segs .opt").nth(1).click();
+      await page.locator("#maskList .msk-vrow").first().waitFor();
+    }
+    await same("the values");
+    for (const { page } of [now, old]) {
+      await page.setViewportSize({ width: 1100, height: 1000 });
+      await page.locator("#maskList .msk-bar .segs .opt").first().click();
+      await page.locator("#maskList .msk-row:not(.held)").first().click();
+      await page.locator("#maskOne .msk-msg").first().waitFor();
+    }
+    await same("a request");
+    assert.deepEqual([...now.errors, ...old.errors], []);
   });
 }
