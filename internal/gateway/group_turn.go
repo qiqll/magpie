@@ -32,6 +32,10 @@ type groupTurn struct {
 	refused error      // the first provider's refusal of the user (a userRefusedError)
 	lapsed  error      // the refusal of the user's last own of a provider to be signed in again, no spare left
 	ub      *UserBound // the first binding narrowed, for the routing log
+	// pinLapsed is why the user's own account pinned has to be signed in
+	// again, the turn gone as an unpinned one (pinned): told as a limit
+	// when none of its own takes it in its place
+	pinLapsed string
 }
 
 // groupTurnOf is the groupTurn of r, a turn to the group of members ms,
@@ -129,7 +133,11 @@ func (g *groupTurn) narrow(pid string) (order, left []Weighed) {
 // names none of the user's own, another user's or an account it isn't
 // on: the turn goes as an unpinned one, and the account named is never
 // asked for it. user-accounts.json unread is none of its own, the turn's
-// narrowing then saying why.
+// narrowing then saying why. Pinned to its own that has to be signed in
+// again, the turn goes as an unpinned one too, on its other own that can
+// answer, as a provider's turn's lapsed pin does (the owner's decision of
+// 2026-11-01, T-037): those to be signed in again are left out, and with
+// none of its own left the turn is refused as a limit (refusal).
 func (g *groupTurn) pinned(pin string, cs []candidate, pl planned) (_ []candidate, _ planned, own string) {
 	user, _ := userOf(g.r.Header)
 	key := userKey(g.r)
@@ -150,11 +158,14 @@ func (g *groupTurn) pinned(pin string, cs []candidate, pl planned) (_ []candidat
 		}
 		return userSeat{}, false
 	}
-	var pid, id string // its provider, and its row's ID, as pinTo knows it
+	var pid, id, lapsed string // its provider, its row's ID, as pinTo knows it, and why it is to be signed in again
 	var seat userSeat
 	for i, c := range cs {
 		if s, ok := named(c.p.ID); ok && i < len(pl.order) && seatIn([]userSeat{s}, c.who()) {
 			pid, id, seat = c.p.ID, pl.order[i].ID, s
+			if c.p.Account != nil {
+				lapsed = provider.SignInLapsed(c.p.Account)
+			}
 			break
 		}
 	}
@@ -163,11 +174,21 @@ func (g *groupTurn) pinned(pin string, cs []candidate, pl planned) (_ []candidat
 			break
 		}
 		if s, ok := named(w.Provider); ok && leftIs(w, w.Provider, s.Who) {
-			pid, id, seat = w.Provider, w.ID, s
+			pid, id, seat, lapsed = w.Provider, w.ID, s, w.Lapsed
 		}
 	}
 	if pid == "" {
 		return cs, pl, ""
+	}
+	if lapsed != "" {
+		// its own to be signed in again: none of those is asked, one
+		// brought back as none other could answer (lapsedBack) included;
+		// its use is stamped as its own are narrowed (reach)
+		g.pinLapsed = lapsed
+		out, opl := keepAligned(cs, pl, func(c candidate) bool {
+			return c.p.Account == nil || provider.SignInLapsed(c.p.Account) == ""
+		})
+		return out, opl, ""
 	}
 	// its use kept as any bound user's, so it isn't let go as idle
 	now := time.Now().UTC()
@@ -305,13 +326,25 @@ func (g *groupTurn) spare(c candidate, status int, body []byte, rest []candidate
 // refusal is why none of the user's own was left to ask: its last own of
 // a provider to be signed in again with no spare left, else the first
 // provider's refusal, else that none of the accounts it is on of the
-// group's members can take the request now.
+// group's members can take the request now. Pinned to its own to be
+// signed in again (pinned), that none can is told as a limit, back in
+// lapsedRetry, as a provider's turn's lapsed pin is (userLapsedRefused);
+// a refusal that is a limit already, or of a binding that can't be
+// read, goes as it is.
 func (g *groupTurn) refusal() (*UserBound, userRefusal) {
 	var ur *userRefusedError
-	if errors.As(g.lapsed, &ur) || errors.As(g.refused, &ur) {
+	if errors.As(g.lapsed, &ur) {
 		return ur.u, ur.refused
 	}
+	refused := errors.As(g.refused, &ur)
 	user, _ := userOf(g.r.Header)
+	if g.pinLapsed != "" && (!refused || !ur.refused.unknown && ur.refused.status == http.StatusServiceUnavailable) {
+		return &UserBound{User: user}, userRefusal{status: http.StatusTooManyRequests, limit: failQuota, until: time.Now().Add(lapsedRetry),
+			msg: AccountHeader + ": " + g.pinLapsed + "; none of the user's accounts can take it in its place, and none is free to bind it to"}
+	}
+	if refused {
+		return ur.u, ur.refused
+	}
 	return nil, userRefusal{status: http.StatusServiceUnavailable, until: time.Now().Add(lapsedRetry),
 		msg: fmt.Sprintf("%s: none of the accounts %q is on of the group's members can take this request now; no other is tried in its place", UserHeader, user)}
 }

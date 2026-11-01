@@ -2544,9 +2544,18 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			limitedUser, _ = userOf(r.Header)
 			// a pin holds only to one of the user's own, that one alone
 			// tried; one to another's is served as if unpinned, never on
-			// that account (T-009's decision, T-036)
+			// that account (T-009's decision, T-036), and one to its own
+			// to be signed in again on its other own (T-037)
 			if pin != "" {
 				cands, pl, pin = gt.pinned(pin, cands, pl)
+			}
+			// pinned to its own to be signed in again, with nothing of the
+			// group's left to ask in its place: told as a limit (T-037)
+			if gt.pinLapsed != "" && len(cands) == 0 {
+				s.groupTurnRefused(w, from, nil, &call, gt)
+				finishCapture()
+				s.record(call)
+				return
 			}
 		}
 	}
