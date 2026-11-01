@@ -83,13 +83,18 @@ function serve(lang, posts) {
 // still: the control held in one place for three frames in turn. A wheel's
 // scroll glides on for some frames, and a box read on the way was pressed
 // where the control had been, off it
-const still = (loc) => loc.evaluate((e) => new Promise((done) => {
-  let last = NaN, same = 0;
+// One drawn again meanwhile is out of the page and read again by the next
+// look; one that never holds still fails here, not at the test's timeout.
+const still = (loc) => loc.evaluate((e) => new Promise((done, fail) => {
+  let last = NaN, same = 0, frames = 0;
   const look = () => {
+    if (!e.isConnected) return done();
     const y = e.getBoundingClientRect().top;
     same = y === last ? same + 1 : 0;
     last = y;
-    if (same >= 3) done(); else requestAnimationFrame(look);
+    if (same >= 3) done();
+    else if (++frames > 300) fail(new Error("still: kept moving, its top at " + y));
+    else requestAnimationFrame(look);
   };
   requestAnimationFrame(look);
 }));

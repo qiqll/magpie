@@ -80,8 +80,8 @@ async function reveal(page, loc) {
   for (let i = 0; i < 40; i++) {
     const b = await loc.boundingBox();
     const h = page.viewportSize().height;
-    if (b && await loc.evaluate((o, b) => [b.y + 1, b.y + b.height / 2, b.y + b.height - 1]
-      .every((y) => o.contains(document.elementFromPoint(b.x + b.width / 2, y))), b)) return b;
+    if (b && await loc.evaluate((o, [x, ys]) => ys.every((y) => o.contains(document.elementFromPoint(x, y))),
+      [mid(b)[0], [b.y + 1, mid(b)[1], b.y + b.height - 1]])) return b;
     await page.mouse.move(page.viewportSize().width / 2, h / 2);
     const was = await page.evaluate(() => document.getElementById("view-settings").scrollTop);
     await page.mouse.wheel(0, b && b.y < h / 2 ? -150 : 150);
