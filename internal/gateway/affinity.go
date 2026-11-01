@@ -759,10 +759,14 @@ func ownWithLead(scope, key string, cs []candidate, pl planned, lead bool) ([]ca
 		sticks.Lock()
 		st, ok := stickOf(at)
 		sticks.Unlock()
-		if ok && time.Since(st.at) <= heldFor && slices.ContainsFunc(cs, func(c candidate) bool {
-			return c.who() == st.who && c.model == st.model && c.effort == st.effort
-		}) {
-			return withLead(key, cs, pl)
+		// while the lead's is ready for a new one (withLead's own test);
+		// else the subagent is spread as a new conversation is
+		if ok && time.Since(st.at) <= heldFor && len(pl.order) >= len(cs) {
+			for i, c := range cs {
+				if c.who() == st.who && c.model == st.model && c.effort == st.effort && readyForNew(pl.order, i) {
+					return withLead(key, cs, pl)
+				}
+			}
 		}
 	}
 	return ownLeastHeld(scope, key, cs, pl)

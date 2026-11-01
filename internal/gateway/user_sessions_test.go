@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/provider"
 )
@@ -170,5 +171,38 @@ func TestUserSubagentGoesWithItsLead(t *testing.T) {
 	}
 	if got := strings.Join(asked(true), ","); got != "acct-2" {
 		t.Fatalf("s2's subagent asked %s, not s2's acct-2", got)
+	}
+}
+
+// A subagent goes with its lead (ownWithLead) only while the lead's
+// account is ready for a new conversation (readyForNew); with it resting
+// the subagent is spread over the user's own, not put on the user's
+// first: the review of T-050's lead fix.
+func TestUserSubagentSpreadWhileItsLeadRests(t *testing.T) {
+	c := func(key string) candidate {
+		return candidate{p: provider.Provider{ID: "t050", Key: key}, model: "m", rest: "t050#" + key}
+	}
+	a, b, l := c("ka"), c("kb"), c("kl")
+	now := time.Now()
+	sticks.Lock()
+	sticks.m["t050|s"] = stick{rest: l.rest, who: l.who(), model: "m", at: now}
+	sticks.m["t050|x"] = stick{rest: a.rest, who: a.who(), model: "m", at: now}
+	sticks.Unlock()
+	t.Cleanup(func() {
+		sticks.Lock()
+		for _, k := range []string{"t050|s", "t050|x", "t050|s|agent:sub"} {
+			delete(sticks.m, k)
+			delete(sticks.opening, k)
+		}
+		sticks.Unlock()
+	})
+	cs := []candidate{a, b, l}
+	ready := planned{order: []Weighed{{}, {}, {}}}
+	if got, _ := ownWithLead("t050", "t050|s|agent:sub", cs, ready, true); got[0].who() != l.who() {
+		t.Fatalf("with its lead ready, the subagent went to %s, want %s", got[0].who(), l.who())
+	}
+	resting := planned{order: []Weighed{{}, {}, {Rest: &Rest{Why: failQuota, Until: now.Add(time.Hour)}}}}
+	if got, _ := ownWithLead("t050", "t050|s|agent:sub", cs, resting, true); got[0].who() != b.who() {
+		t.Fatalf("with its lead resting, the subagent went to %s, want %s (a holds one, kb none)", got[0].who(), b.who())
 	}
 }
