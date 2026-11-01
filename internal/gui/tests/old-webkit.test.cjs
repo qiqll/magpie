@@ -154,11 +154,11 @@ test("the styles hold up in Safari 15.0", async () => {
     const css = (await read(f)).replace(/\/\*[\s\S]*?\*\//g, "");
     const lineOf = (i) => css.slice(0, i).split("\n").length;
     const each = (re, what) => { for (const m of css.matchAll(re)) bad.push(`${f}:~${lineOf(m.index)} ${what}: ${m[0].trim().slice(0, 90)}`); };
-    // the plugins' styles skip two checks for now: sessions.css has a
-    // :has(), and it and redact.css an @container with no fallback, which
-    // a task of their own takes up
-    const plugin = f.startsWith("plugins/");
-    if (!plugin) each(/:has\(/g, ":has() (Safari 15.4)");
+    // two files skip a check each for now: sessions.css has a :has(), and
+    // it and redact.css an @container with no fallback, which a task of
+    // their own takes up; every other file, a new one too, is held to both
+    const later = { has: ["plugins/sessions/sessions.css"], container: ["plugins/sessions/sessions.css", "plugins/redact/redact.css"] };
+    if (!later.has.includes(f)) each(/:has\(/g, ":has() (Safari 15.4)");
     each(/[\d.]+(dvh|svh|lvh|dvw|svw|lvw)\b/g, "dynamic viewport units (Safari 15.4)");
     each(/[^{}]*&[^{}]*\{/g, "nesting (Safari 16.5)");
     // a selector list with :focus-visible and more: all of it is dropped
@@ -178,7 +178,7 @@ test("the styles hold up in Safari 15.0", async () => {
     }
     // a rule kept off a focused control drops whole there: one for :focus beside it
     if (/:not\([^)]*:focus-visible/.test(css) && !/@supports not selector\(:focus-visible\)/.test(css)) bad.push(`${f}: :not(:focus-visible) (Safari 15.4) with no @supports not selector(:focus-visible) fallback`);
-    if (!plugin && /@container\b/.test(css) && !/@supports not \(container-type: inline-size\)/.test(css)) bad.push(`${f}: @container (Safari 16) with no @supports not (container-type: inline-size) fallback`);
+    if (!later.container.includes(f) && /@container\b/.test(css) && !/@supports not \(container-type: inline-size\)/.test(css)) bad.push(`${f}: @container (Safari 16) with no @supports not (container-type: inline-size) fallback`);
     if (/:\s*subgrid\b/.test(css) && !/@supports not \(grid-template-columns: subgrid\)/.test(css)) {
       // a subgrid that only lines rows up across cards may go without
       for (const m of css.matchAll(/grid-template-columns:\s*subgrid/g)) bad.push(`${f}:~${lineOf(m.index)} grid-template-columns: subgrid (Safari 16) with no fallback`);
