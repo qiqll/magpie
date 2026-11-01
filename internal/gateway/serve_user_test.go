@@ -157,6 +157,10 @@ var serveCallers = map[string]string{
 	"askChat":         "a classifier's ask, its turn's user (askFor, askAsUser)",
 	"searchWith":      "a web search, its request's user (forUser, askAsUser), a Claude run's its turn's (runSearch)",
 	"askVisionWith":   "an image description or question, its request's user (forUser, askAsUser)",
+	// its own responsesSocket.serve, not Server.serve: each turn is the
+	// upgrade's request again as a POST (responsesSocket.request), its
+	// headers and X-Magpie-User kept, through the whole handler
+	"serveResponsesSocket": "a Responses WebSocket's turns, each a POST /v1/responses through the handler, past userNeeded",
 }
 
 // Every call of serve in the package is from a function serveCallers names,

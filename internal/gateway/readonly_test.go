@@ -26,7 +26,7 @@ var readOnlyRefused = []string{
 	// writes, another key's routes, the whole trace, debugging
 	"POST /v1/magpie/usage/requests", "POST " + provider.RemoteRefreshPath,
 	"GET /v1/magpie/route", "GET /v1/magpie/trace",
-	"GET " + ClaudeRunsPath, "GET " + HeapPath, "GET " + CPUPath, "GET " + GoroutinesPath,
+	"GET " + ClaudeRunsPath, "GET " + RestsPath, "GET " + HeapPath, "GET " + CPUPath, "GET " + GoroutinesPath,
 	"POST " + RestartPath,
 	"POST " + KeysPath, "GET " + KeysPath, "DELETE " + KeysPath + "/{id}", "POST " + OIDCKeysPath,
 	"GET /v1/magpie/omarchy", "OPTIONS /v1/magpie/omarchy",
