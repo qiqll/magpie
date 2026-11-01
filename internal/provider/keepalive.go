@@ -26,10 +26,12 @@ package provider
 // signed out when turned on again it was no reserve (#4532).
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -124,6 +126,15 @@ func renewLogins(ctx context.Context, every time.Duration, atOnce int) []Renewal
 	}
 	ls := readLogins()
 	loginsMu.Unlock()
+	// the lapsed after the due: one whose refresh is refused takes no due
+	// one's turn of atOnce (#4532), however it comes in logins.json
+	lapsedLast := func(l savedLogin) int {
+		if l.Lapsed != "" {
+			return 1
+		}
+		return 0
+	}
+	slices.SortStableFunc(ls, func(a, b savedLogin) int { return cmp.Compare(lapsedLast(a), lapsedLast(b)) })
 	out := []Renewal{}
 	tried := 0
 	for _, l := range ls {
@@ -144,15 +155,17 @@ func renewLogins(ctx context.Context, every time.Duration, atOnce int) []Renewal
 			continue
 		}
 		r := Renewal{Agent: l.Agent, User: l.User}
-		// one whose refresh was refused is due at each run, its last
-		// failure no wait: routing leaves it out (SignInLapsed), so this
-		// is its only way back short of a sign-in anew; a run still
-		// renews at most atOnce
-		if every > 0 && l.Lapsed == "" && (!renewalDue(l, every, time.Now()) || renewWaiting(l.Agent, l.User, time.Now())) || atOnce > 0 && tried >= atOnce {
+		// one whose refresh was refused is tried at each run, its last
+		// failure no wait, and outside atOnce, after the due ones: routing
+		// leaves it out (SignInLapsed), so this is its only way back short
+		// of a sign-in anew
+		if l.Lapsed == "" && (every > 0 && (!renewalDue(l, every, time.Now()) || renewWaiting(l.Agent, l.User, time.Now())) || atOnce > 0 && tried >= atOnce) {
 			out = append(out, r)
 			continue
 		}
-		tried++
+		if l.Lapsed == "" {
+			tried++
+		}
 		if l.Agent == "claude" {
 			r = renewClaude(ctx, r)
 			noteRenewal(r)
