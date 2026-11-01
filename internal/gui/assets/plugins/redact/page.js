@@ -70,7 +70,15 @@ const maskSettings = () => prefs || state?.settings || {};
 // switch on
 const maskOn = () => { const s = maskSettings(); return !!(s.redact || s.redactPersonal || s.redactWords?.length); };
 
+// Safari before 16 (macOS 12's, #220) has no container queries: the
+// page's width, in the steps redact.css's twins of them read
+let maskWidthKept = false;
 function maskPageOpen() {
+  if (!maskWidthKept && !CSS.supports("container-type", "inline-size")) {
+    maskWidthKept = true;
+    const v = $("#view-masking");
+    new ResizeObserver(([e]) => { v.dataset.cq = [780, 760, 640, 560].filter((n) => e.contentRect.width <= n).join(" "); }).observe(v);
+  }
   if (!providers && !maskProvAsked) {
     maskProvAsked = true;
     api("providers").then((r) => { maskProv = r; maskDrawn = ""; maskDrawAll(); }).catch(() => { maskProvAsked = false; });

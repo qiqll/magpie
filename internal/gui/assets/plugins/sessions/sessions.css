@@ -102,20 +102,15 @@ body.window .sm-group .row.sm-sess { padding-left: 32px; }
   .row.sm-sess > .sm-check + .who { flex-basis: calc(100% - 22px); }
 }
 /* Safari before 16 (macOS 12's, #220) has no container queries: the
-   window's width instead. Under 1030px the sidebar folds away and the
-   list is the window less its 32px of padding; above it the list is
-   wider than either */
+   list's width, as client.js keeps it in data-cq, instead. Not the
+   window's: the sidebar beside the list can be any width */
 @supports not (container-type: inline-size) {
-  @media (max-width: 732px) {
-    .row.sm-sess .num { display: none; }
-    .row.sm-sess .cost { min-width: 0; }
-    .row.sess.sm-sess { gap: 8px; }
-  }
-  @media (max-width: 632px) {
-    .row.sess.sm-sess { flex-wrap: wrap; justify-content: flex-end; row-gap: 4px; padding-top: 7px; padding-bottom: 7px; }
-    .row.sm-sess > .who { flex-basis: 100%; }
-    .row.sm-sess > .sm-check + .who { flex-basis: calc(100% - 22px); }
-  }
+  :where(.sm-tree[data-cq~="700"]) .row.sm-sess .num { display: none; }
+  :where(.sm-tree[data-cq~="700"]) .row.sm-sess .cost { min-width: 0; }
+  :where(.sm-tree[data-cq~="700"]) .row.sess.sm-sess { gap: 8px; }
+  :where(.sm-tree[data-cq~="600"]) .row.sess.sm-sess { flex-wrap: wrap; justify-content: flex-end; row-gap: 4px; padding-top: 7px; padding-bottom: 7px; }
+  :where(.sm-tree[data-cq~="600"]) .row.sm-sess > .who { flex-basis: 100%; }
+  :where(.sm-tree[data-cq~="600"]) .row.sm-sess > .sm-check + .who { flex-basis: calc(100% - 22px); }
 }
 @media (max-width: 420px) {
   .sm-head { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; row-gap: 6px; }

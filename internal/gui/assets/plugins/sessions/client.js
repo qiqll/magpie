@@ -436,7 +436,11 @@ magpie.plugin("sessions", (ctx) => {
     }
     const prov = providerBar();
     if (prov) box.append(prov);
-    box.append(selectBar(), el("div", "sm-tree"));
+    const tree = el("div", "sm-tree");
+    // Safari before 16 (macOS 12's, #220) has no container queries: the
+    // list's width, in the steps sessions.css's twins of them read
+    if (!CSS.supports("container-type", "inline-size")) new ResizeObserver(([e]) => { tree.dataset.cq = [700, 600].filter((n) => e.contentRect.width <= n).join(" "); }).observe(tree);
+    box.append(selectBar(), tree);
     queueMicrotask(redrawList);
     return box;
   }
