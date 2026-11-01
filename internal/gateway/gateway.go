@@ -2700,6 +2700,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// does, so its first turn spread there would only move it
 		cands, pl = ownLeastHeld(scope, stuck, cands, pl)
 	}
+	if gt != nil && aff.Why == "first" && mode != provider.AffinityTurn && pin == "" {
+		// a group's the same, on each member's provider as the tries
+		// reach it, among the user's own there (groupTurn.spreadOwn,
+		// T-041); a pin is to its one alone, as above
+		gt.spread(scope, stuck)
+	}
 	// a strict conversation left with its own account of several: its
 	// failure rests the account as it would with the others still there,
 	// for new conversations to go elsewhere meanwhile (#1797)

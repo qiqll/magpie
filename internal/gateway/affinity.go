@@ -642,12 +642,15 @@ const heldFor = 30 * time.Minute
 // was sent (sticks.opening, under key until opened ends it): many started
 // at once all went to the one holding the fewest before any of them was
 // answered (#1342: 24 requests at once over 5 accounts). With spentLast,
-// one all but used up isn't picked over one with room (ownLeastHeld).
+// one all but used up isn't picked over one with room (ownLeastHeld,
+// groupTurn.spreadOwn).
 func leastHeld(scope, key string, cs []candidate, pl planned, spentLast bool) ([]candidate, planned) {
 	if len(cs) < 2 || len(pl.order) < len(cs) {
 		return cs, pl
 	}
-	if strings.HasPrefix(scope, provider.GroupPrefix) {
+	if strings.HasPrefix(scope, provider.GroupPrefix) && !spentLast {
+		// a user's own (spentLast) are spread whatever the routing, a
+		// group's member's (groupTurn.spreadOwn) as a provider's
 		if g, ms, ok := provider.FindGroup(scope); ok {
 			for _, m := range ms {
 				// a group in the group, or a provider routed its own way:
