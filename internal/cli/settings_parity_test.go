@@ -254,6 +254,8 @@ var notYet = map[string]string{
 	"GET /api/fonts":                             W,  // fonts.go
 	"POST /api/settings/gateway-mode":            S2, // gatewaymode.go
 	"POST /api/gateway/restart":                  A,  // gateway_takeover.go
+	"GET /api/gateway/users":                     A,  // gateway_users.go
+	"POST /api/gateway/users/unbind":             A,  // gateway_users.go
 	"POST /api/gateway/take-over":                A,  // gateway_takeover.go
 	"GET /api/importapps":                        P,  // importapps.go
 	"GET /api/importapps/discovery":              P,  // importapps.go
@@ -325,6 +327,7 @@ var notYet = map[string]string{
 	"POST /api/icons/favicon":                    W,  // providers.go
 	"POST /api/icons/url":                        W,  // providers.go
 	"POST /api/keys/{action}":                    P,  // providers.go
+	"POST /api/login/cliproxy":                   P,  // providers.go
 	"POST /api/login/{action}":                   P,  // providers.go
 	"POST /api/open":                             W,  // providers.go
 	"POST /api/partner":                          P,  // providers.go
