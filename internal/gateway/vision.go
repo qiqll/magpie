@@ -415,11 +415,17 @@ func dataURLBytes(src string) ([]byte, bool) {
 // and leaves nothing behind, so the next asks again. Only a failure of
 // the describing itself is handed to those waiting; it isn't kept.
 func (s *Server) describe(ctx context.Context, model, src string) (text, by string, err error) {
-	key := sightKey(src)
+	return s.describeKeyed(ctx, model, src, sightKeyFor(ctx, src))
+}
+
+// sightKeyFor is sightKey for the request ctx is: bound by user, each
+// user's description is its own, asked on its own accounts; a request
+// without one keys as it always has.
+func sightKeyFor(ctx context.Context, src string) string {
 	if u := askedUser(ctx); u != "" {
-		key = u + "\x00" + key
+		return u + "\x00" + sightKey(src)
 	}
-	return s.describeKeyed(ctx, model, src, key)
+	return sightKey(src)
 }
 
 func (s *Server) describeKeyed(ctx context.Context, model, src, key string) (text, by string, err error) {
@@ -758,7 +764,7 @@ func (s *Server) seenBody(ctx context.Context, proto provider.Protocol, body []b
 			return nil, nil
 		}
 		if _, ok := keyOf[im.Src]; !ok {
-			k := sightKey(im.Src)
+			k := sightKeyFor(ctx, im.Src)
 			keyOf[im.Src] = k
 			if !have[k] {
 				have[k] = true
