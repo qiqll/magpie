@@ -2100,7 +2100,8 @@ already of its members, only that one is tried; pinned to another's,
 it goes as an unpinned group's request. Pinned to one of the user's own
 whose sign-in has to be made again, a provider's request or a group's
 goes to another of its own that can answer, and is a 429 that names no
-account only when none can. Listing models and counting tokens don't.
+account only when none can; a refusal of its binding (a limit already,
+or user-accounts.json unread, a 503) goes as it is. Listing models and counting tokens don't.
 magpie's own MCP tools that draw, search or look at an image need it as
 well, and refuse a call without it. The web searches and image
 descriptions magpie makes for a request go to the accounts that

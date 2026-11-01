@@ -208,6 +208,34 @@ func TestUserGroupPinnedToItsOwnLapsedAccountGoesToItsOther(t *testing.T) {
 			t.Fatalf("route pinned %q user %+v", r.Pinned, r.User)
 		}
 	})
+	t.Run("its other lapsed left out", func(t *testing.T) {
+		// codex's only accounts are alice's two lapsed (me@ turned off):
+		// neither is asked, the one not pinned left out as the pinned is
+		codexSignedIn(t, "spare@example.com", "third@example.com")
+		codex, _ := usersUpstream(t, nil)
+		noRests()
+		t.Cleanup(noRests)
+		f := &chatFleet{status: map[string]int{}}
+		codexGroup(t, f, "codex/gpt-5.5", "ca/m")
+		lapseSaved(t, "spare@example.com")
+		lapseSaved(t, "third@example.com")
+		if err := provider.SetLoginOn("codex", "me@example.com", false); err != nil {
+			t.Fatal(err)
+		}
+		writeUsers(t, userFile{Users: map[string]map[string]userBinding{
+			"ca": {"alice": {Who: keyWho("ca", "kc1"), Account: "kc1", At: time.Now().UTC()}},
+			"codex": {"alice": {Who: "codex@spare@example.com", Account: "spare@example.com", At: time.Now().UTC(),
+				More: []userSeat{{Who: "codex@third@example.com", Account: "third@example.com", At: time.Now().UTC()}}}},
+		}})
+		s := byUserUpTo(t, New(), 2)
+		rec := pinnedGroupChat(s, "alice", "spare@example.com")
+		if got := codex(true); rec.Code != 200 || len(got) != 0 {
+			t.Fatalf("%d %s, codex asked %v", rec.Code, rec.Body.String(), got)
+		}
+		if got := f.took(); !slices.Equal(got, []string{"kc1"}) {
+			t.Fatalf("asked %v, want alice's kc1", got)
+		}
+	})
 	t.Run("of the same provider", func(t *testing.T) {
 		codexSignedIn(t, "spare@example.com", "third@example.com")
 		codex, _ := usersUpstream(t, nil)
@@ -284,5 +312,40 @@ func TestUserGroupPinnedToItsOwnLapsedAccountWithNoOtherLimited(t *testing.T) {
 				t.Fatalf("usage log: %+v", r)
 			}
 		})
+	}
+}
+
+// A group's turn pinned to the user's own lapsed account whose first
+// member's binding can't be told, user-accounts.json unread since it was
+// read, is the 503 that says so, not a limit to wait out (review of
+// d53756b1, H1): only a provider's "none of its accounts can answer now"
+// is told as the pin's limit.
+func TestUserGroupPinnedToItsOwnLapsedAccountWithBindingsUnread503(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	codex, _ := usersUpstream(t, nil)
+	noRests()
+	t.Cleanup(noRests)
+	f := &chatFleet{status: map[string]int{}}
+	codexGroup(t, f, "ca/m", "codex/gpt-5.5")
+	lapseSaved(t, "spare@example.com")
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"alice": {Who: "codex@spare@example.com", Account: "spare@example.com", At: time.Now().UTC()},
+		"bob":   {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC()},
+	}}})
+	s := byUserUpTo(t, New(), 1)
+	if rec := groupChat(s, "bob"); rec.Code != 200 { // the file read once
+		t.Fatalf("bob: %d %s", rec.Code, rec.Body.String())
+	}
+	f.took()
+	codex(true)
+	if err := os.WriteFile(usersPath(), []byte(`{"users": {"ca": {"alice": `), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := pinnedGroupChat(s, "alice", "spare@example.com")
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get(UserLimitHeader) != "" || !strings.Contains(rec.Body.String(), "user-accounts.json") {
+		t.Fatalf("%d %v %s", rec.Code, rec.Header(), rec.Body.String())
+	}
+	if got, gotCodex := f.took(), codex(true); len(got)+len(gotCodex) != 0 {
+		t.Fatalf("asked %v %v", got, gotCodex)
 	}
 }

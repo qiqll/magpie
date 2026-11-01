@@ -122,6 +122,10 @@ type userRefusal struct {
 	// unknown: what the user is bound to can't be told (the file doesn't
 	// read), a 503 that goes as it is
 	unknown bool
+	// none: none of a provider's accounts the user is on can answer now
+	// (usersOn), a 503 a group's turn pinned to its user's own lapsed
+	// account tells as a limit (groupTurn.refusal)
+	none bool
 }
 
 // UserHeaderEnv names another header a caller's user is read from, for a

@@ -328,9 +328,11 @@ func (g *groupTurn) spare(c candidate, status int, body []byte, rest []candidate
 // provider's refusal, else that none of the accounts it is on of the
 // group's members can take the request now. Pinned to its own to be
 // signed in again (pinned), that none can is told as a limit, back in
-// lapsedRetry, as a provider's turn's lapsed pin is (userLapsedRefused);
-// a refusal that is a limit already, or of a binding that can't be
-// read, goes as it is.
+// lapsedRetry, as a provider's turn's lapsed pin is (userLapsedRefused):
+// in place of the first provider's refusal only when it said none of
+// the accounts the user is on there can answer now (usersOn); any other,
+// a limit already, user-accounts.json unread, an account paused, goes
+// as it is, as a provider's turn's binding refusal does.
 func (g *groupTurn) refusal() (*UserBound, userRefusal) {
 	var ur *userRefusedError
 	if errors.As(g.lapsed, &ur) {
@@ -338,7 +340,7 @@ func (g *groupTurn) refusal() (*UserBound, userRefusal) {
 	}
 	refused := errors.As(g.refused, &ur)
 	user, _ := userOf(g.r.Header)
-	if g.pinLapsed != "" && (!refused || !ur.refused.unknown && ur.refused.status == http.StatusServiceUnavailable) {
+	if g.pinLapsed != "" && (!refused || ur.refused.none) {
 		return &UserBound{User: user}, userRefusal{status: http.StatusTooManyRequests, limit: failQuota, until: time.Now().Add(lapsedRetry),
 			msg: AccountHeader + ": " + g.pinLapsed + "; none of the user's accounts can take it in its place, and none is free to bind it to"}
 	}

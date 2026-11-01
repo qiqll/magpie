@@ -302,7 +302,7 @@ func (s *Server) usersOn(r *http.Request, p provider.Provider, cs []candidate, p
 	// (a turn is routed among them, a probe: this isn't). Back when the
 	// first of them is
 	if ub != nil && ub.Why == "none" || len(own) == 0 {
-		return nil, opl, nil, &userRefusedError{u: ub, refused: userRefusal{status: http.StatusServiceUnavailable, until: firstBack(cs),
+		return nil, opl, nil, &userRefusedError{u: ub, refused: userRefusal{status: http.StatusServiceUnavailable, until: firstBack(cs), none: true,
 			msg: fmt.Sprintf("%s: none of %s's accounts %q is on can take this request now; no other is tried in its place", UserHeader, p.Name, user)}}
 	}
 	return own, opl, &userTry{ub: ub, pool: cs, poolPl: pl}, nil
