@@ -103,7 +103,7 @@ func TestOwnAsksWithoutAUserAskNobody(t *testing.T) {
 		ask  func(ctx context.Context) error
 	}{
 		{"classifier", func(ctx context.Context) error {
-			_, err := s.askChat(ctx, "codex/gpt-5.5", classifyBody("codex/gpt-5.5", "", []string{"feature", "bug"}, before{}, "fix this"))
+			_, err := s.askChat(ctx, classifyTimeout(), "codex/gpt-5.5", classifyBody("codex/gpt-5.5", "", []string{"feature", "bug"}, before{}, "fix this"))
 			return err
 		}},
 		{"search", func(ctx context.Context) error {
@@ -111,7 +111,7 @@ func TestOwnAsksWithoutAUserAskNobody(t *testing.T) {
 			return err
 		}},
 		{"description", func(ctx context.Context) error {
-			_, err := s.describe(ctx, "codex/gpt-5.5", img)
+			_, _, err := s.describe(ctx, "codex/gpt-5.5", img)
 			return err
 		}},
 	}

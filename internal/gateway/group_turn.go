@@ -313,7 +313,7 @@ func (g *groupTurn) spreadOwn(cs []candidate, i int) (_ []candidate, picked int)
 		}
 		at, sub, pl.order = append(at, j), append(sub, c), append(pl.order, g.plans[c.p.ID][k])
 	}
-	got, _ := leastHeld(g.scope, g.key, sub, pl, true)
+	got, _ := leastHeld(g.scope, g.key, sub, pl, true, false)
 	if len(got) == 0 || ownRow(got[0]) == ownRow(first) {
 		return cs, 0
 	}

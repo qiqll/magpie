@@ -270,7 +270,7 @@ func TestLeastHeldCountsARoutedAfreshOnce(t *testing.T) {
 		}
 		sticks.Unlock()
 	})
-	got, _ := leastHeld("t042", "t042|n", []candidate{a, b}, planned{order: []Weighed{{}, {}}}, true)
+	got, _ := leastHeld("t042", "t042|n", []candidate{a, b}, planned{order: []Weighed{{}, {}}}, true, false)
 	if got[0].who() != a.who() {
 		t.Fatalf("went to %s, want %s", got[0].who(), a.who())
 	}

@@ -1068,10 +1068,23 @@ function uidOf(a) {
   return typeof a?.uid === "string" ? a.uid : ""
 }
 
+// renamedBy tells a sign-in to an account a plugin once named another way:
+// the same uid, and one of the two named by that uid, so the uid is the
+// account's own id (#4473: officeace-auth 0.1.14 named an account by its
+// masked phone, uid its Huawei domain id; the CodeArts plugin names it by
+// the domain id). A uid alone is not enough: Kiro keeps how an account was
+// signed in to as its uid, "google" for every Google sign-in.
+function renamedBy(now, was) {
+  const uid = uidOf(now)
+  return !!uid && uidOf(was) === uid && whoOf(now) !== whoOf(was) && (whoOf(now) === uid || whoOf(was) === uid)
+}
+
 // settle keeps a sign-in just saved at key once: one to an account already
-// signed in (the same account id and, where both have one, the same uid,
-// else the same secret) replaces that one's and goes. It gives where it is
-// kept.
+// signed in (the same account id and, where both have one, the same uid;
+// the same uid that one of them is named by; else the same secret)
+// replaces that one's and goes. It gives where it is kept. An account
+// named another way before keeps its account id, which the user's name
+// for it, its proxy and gateway keys are kept by.
 function settle(provider, key) {
   const k = changeAuth((all) => {
     const now = all[key]
@@ -1082,8 +1095,9 @@ function settle(provider, key) {
       if (k === key) continue
       const was = all[k]
       const other = uidOf(now) && uidOf(was) && uidOf(now) !== uidOf(was)
-      if ((who && whoOf(was) === who && !other) || (!who && !whoOf(was) && secret && secretOf(was) === secret)) {
-        all[k] = now
+      const renamed = renamedBy(now, was)
+      if ((who && whoOf(was) === who && !other) || renamed || (!who && !whoOf(was) && secret && secretOf(was) === secret)) {
+        all[k] = renamed && typeof was.accountId === "string" && was.accountId ? { ...now, accountId: was.accountId } : now
         delete all[key]
         return k
       }
@@ -1250,7 +1264,7 @@ async function loadPlugins(list) {
     // magpie's own (OpenCode has none): the plugin's options as the user
     // set them in magpie, read when wanted, so a change reaches the
     // plugin without a restart (#2038)
-    magpie: { option: optionValue, options: optionValues },
+    magpie: { option: optionValue, options: optionValues, load: reportLoad, usage: reportUsage, account: keyFor },
   }
   // pi's packages and extensions are loaded as pi loads them (pi.js)
   let pi
@@ -1705,7 +1719,15 @@ function kinds(c) {
   return out.length ? out : undefined
 }
 
+// kindsSaid is whether a capabilities.input or .output says yes or no to a kind
+// at all: one that says no to each (an embedding's {"text": false}, #3279)
+// gives no kinds, and is not one that said nothing.
+const kindsSaid = (c) => !!c && typeof c === "object" && MODALITIES.some((k) => typeof c[k] === "boolean")
+
 // fromModelsDev is a models.dev model as OpenCode's provider list has it.
+// temperature is what models.dev itself said of it, left out where it said
+// nothing: capabilities.temperature is OpenCode's own, and its false is
+// what OpenCode reads a model.dev silence as, not a refusal said.
 function fromModelsDev(p, m) {
   return {
     id: m.id,
@@ -1718,6 +1740,7 @@ function fromModelsDev(p, m) {
     options: {},
     cost: cost(m.cost),
     limit: { context: m.limit?.context ?? 0, input: m.limit?.input, output: m.limit?.output ?? 0 },
+    ...(m.temperature !== undefined ? { temperature: m.temperature } : {}),
     capabilities: {
       temperature: m.temperature ?? false,
       reasoning: m.reasoning ?? false,
@@ -1781,6 +1804,9 @@ async function info(id, key, strict, limit) {
         ...(m.modalities?.output ? { output: modalities(m.modalities.output) } : {}),
       },
       variants: m.variants ?? was?.variants ?? {},
+      // what the config itself says of the model's sampling, as Factory's
+      // config models say temperature of their OpenAI route (plugins#154)
+      ...(m.temperature !== undefined ? { temperature: m.temperature } : {}),
       // magpie's own mark: a decision model, answering System One
       ...(typeof m.decides === "boolean" ? { decides: m.decides } : was?.decides !== undefined ? { decides: was.decides } : {}),
       // and one that searches the web by itself, asked in plain words
@@ -1795,13 +1821,18 @@ async function info(id, key, strict, limit) {
     // would be asked with the serving plugin's account
     if (server && h.spec !== server && signsIn(h.spec).includes(id)) continue
     const k = key ?? accountsOf(readAuth(), id)[0] ?? id
+    // the wait for a due renewal spends the hook's own budget: one
+    // provider then costs one listWait in a listing, not listWait plus
+    // the renewal wait — the sum (15s + 20s) took a single provider past
+    // refreshDeadline, and the whole listing with it (#4065)
+    const began = Date.now()
     await fresh(id, k)
     const all = readAuth()
     try {
       const given = JSON.parse(JSON.stringify(out))
       const l = { tried: false, lastOk: false }
       const ask = () => listing.run(l, () => inScope(id, k, () => ph.models(given, { auth: authCopy(k) })))
-      const next = limit > 0 ? await inTime(ask, limit, "the plugin's model list") : await ask()
+      const next = limit > 0 ? await inTime(ask, Math.max(limit - (Date.now() - began), 0), "the plugin's model list") : await ask()
       // a hook that asked its vendor, got no list and gave back the one it
       // was given fell back: magpie keeps the list it had, as a built-in
       // whose fetch failed keeps the one it fetched last; so does one that
@@ -1863,14 +1894,34 @@ const shown = (v, n) => (typeof v === "string" ? v.trim().slice(0, n) : "")
 
 // optionsOf are the switches a plugin declares for its provider, magpie's
 // own field (#2038, Vocllum): auth.options, each {key, label, description?,
-// default?, confirm?}. magpie shows each as an Off/On switch in the
-// provider's editor and keeps what the user sets; the plugin reads it with
-// input.magpie.option(provider, key). A switch is kept and handed over,
-// and the models listed again (one may go by it); nothing else is run. Keys are [a-z0-9_-], 1–40 long,
-// the first of a key kept; at most MAX_OPTIONS; one without a key or a
-// label is left out.
+// default?, confirm?, labels?, descriptions?, confirms?, filtersModels?}.
+// magpie shows each as an Off/On switch in the provider's editor and keeps
+// what the user sets; the plugin reads it with input.magpie.option(provider,
+// key). A switch is kept and handed over, and the models listed again (one
+// may go by it); nothing else is run. Keys are [a-z0-9_-], 1–40 long, the
+// first of a key kept; at most MAX_OPTIONS; one without a key or a label is
+// left out. labels, descriptions and confirms are the same words in the
+// window's other languages ({"zh": "…", "zh-TW": "…", "ja": "…", "de":
+// "…"}), as a page's titles are (plugins#590): label stays a string beside
+// them, so an older magpie still reads the option. filtersModels says the
+// plugin's model list leaves models out while the switch is on, which the
+// editor says by the models.
 const MAX_OPTIONS = 16
 const OPTION_KEY = /^[a-z0-9_-]{1,40}$/
+// inLanguages are words by language, each capped at n, at most 16, without
+// the empty ones; undefined for none or for what isn't an object
+function inLanguages(m, n) {
+  if (!m || typeof m !== "object" || Array.isArray(m)) return undefined
+  let out
+  for (const [k, v] of Object.entries(m)) {
+    const lang = k.trim(), said = shown(v, n)
+    if (!lang || lang.length > 16 || !said) continue
+    out ??= {}
+    if (Object.keys(out).length >= 16) break
+    out[lang] = said
+  }
+  return out
+}
 function optionsOf(auth) {
   const out = []
   if (!Array.isArray(auth?.options)) return out
@@ -1886,6 +1937,10 @@ function optionsOf(auth) {
       description: shown(o.description, 300),
       default: o.default === true,
       confirm: shown(o.confirm, 300),
+      labels: inLanguages(o.labels, 60),
+      descriptions: inLanguages(o.descriptions, 300),
+      confirms: inLanguages(o.confirms, 300),
+      filtersModels: o.filtersModels === true,
     })
   }
   return out
@@ -1898,6 +1953,65 @@ function optionValues(provider) {
   const out = {}
   for (const o of optionsOf(auths().get(provider)?.auth)) out[o.key] = typeof own[o.key] === "boolean" ? own[o.key] : o.default
   return out
+}
+
+// reportLoad is magpie.load(provider, loads): how busy each of the
+// provider's models is now, as a plugin knows from its vendor, for the
+// model list to show and routing to weigh (axelburks on Discord). loads
+// maps a model id to a percent from 0, past 100 for a vendor that queues
+// (200 is twice what it serves at once; capped at LOAD_MOST), or to null
+// to say it isn't known any more. Called whenever the plugin
+// likes, from its own timer: a model's load counts for five minutes from
+// the call that reported it, so a plugin that stops calling leaves its
+// models unknown, never idle. It returns the count of models taken.
+const LOAD_MODELS = 1000
+const LOAD_MOST = 10000 // a sanity cap: 100 times full, so the UI stays sane
+function reportLoad(provider, loads) {
+  if (typeof provider !== "string" || !provider || provider.length > 200) throw new TypeError("magpie.load: provider must be a provider id")
+  if (!loads || typeof loads !== "object" || Array.isArray(loads)) throw new TypeError("magpie.load: loads must map model ids to a number from 0 up, or null")
+  const out = {}
+  let n = 0
+  for (const [id, v] of Object.entries(loads)) {
+    if (n >= LOAD_MODELS) break
+    if (!id || id.length > 200) continue
+    if (v === null) out[id] = -1 // cleared
+    else if (typeof v === "number" && Number.isFinite(v)) out[id] = Math.min(LOAD_MOST, Math.max(0, v))
+    else continue
+    n++
+  }
+  if (n) send({ event: "load", provider, loads: out })
+  return n
+}
+
+// reportUsage is magpie.usage(provider, call): a request a plugin sent its
+// vendor on its own, outside any request magpie handed it (Devin's cache
+// keepalive ping, plugins#592), for the request log and the usage totals
+// to list and count. call is {kind, model, input?, output?, cacheRead?,
+// cacheWrite?, status?, ms?, error?, account?}: kind says what the
+// request was for ([a-z0-9_-], 1–40: "cache_keepalive"), model the
+// model's id as magpie handed it to the plugin; the tokens are whole
+// numbers from 0 (input without the cache's), status the vendor's (0 for
+// none), ms how long it took. account is the account the request was
+// sent for, as magpie.account(provider) named it while a request of
+// magpie's was in the plugin's hands; without it, the account of the
+// request being served now, else the provider's first. It returns true
+// when the call was sent on.
+const USAGE_KIND = /^[a-z0-9_-]{1,40}$/
+function reportUsage(provider, call) {
+  if (typeof provider !== "string" || !provider || provider.length > 200) throw new TypeError("magpie.usage: provider must be a provider id")
+  if (!call || typeof call !== "object" || Array.isArray(call)) throw new TypeError("magpie.usage: call must be an object")
+  if (typeof call.kind !== "string" || !USAGE_KIND.test(call.kind)) throw new TypeError("magpie.usage: kind must be 1–40 of [a-z0-9_-]")
+  const model = shown(call.model, 200)
+  if (!model) throw new TypeError("magpie.usage: model must be the model's id")
+  const n = (v, most = 1e12) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.min(Math.floor(v), most) : 0)
+  const account = typeof call.account === "string" && call.account && providerOf(call.account) === provider ? call.account : keyFor(provider)
+  send({
+    event: "usage",
+    provider,
+    account,
+    usage: { kind: call.kind, model, input: n(call.input), output: n(call.output), cacheRead: n(call.cacheRead), cacheWrite: n(call.cacheWrite), status: n(call.status, 999), ms: n(call.ms), error: shown(call.error, 500) },
+  })
+  return true
 }
 
 // optionValue is one of provider's options as it stands; false for a key
@@ -1948,11 +2062,25 @@ function iconOf(a) {
 // package.json's magpie.maxConcurrency. A whole number over 0, else none
 // (0); the user's setting on the provider goes over it.
 function concurrencyOf(a) {
+  return declared(a, "maxConcurrency")
+}
+
+// atOnceOf is how many of its accounts the plugin says may take requests
+// at the same time, magpie's own field: the auth hook's maxAccounts, else
+// package.json's magpie.maxAccounts, as concurrencyOf reads its own. The
+// user's setting on the provider goes over it.
+function atOnceOf(a) {
+  return declared(a, "maxAccounts")
+}
+
+// declared is a whole number over 0 the plugin declares under key, on its
+// auth hook or else in its package.json's magpie, at most 1000; else 0.
+function declared(a, key) {
   const ok = (v) => (Number.isInteger(v) && v > 0 ? Math.min(v, 1000) : 0)
-  const own = ok(a.auth.maxConcurrency)
+  const own = ok(a.auth[key])
   if (own || !a.target) return own
   const dir = fs.statSync(a.target, { throwIfNoEntry: false })?.isDirectory() ? a.target : path.dirname(a.target)
-  return ok(readJSON(path.join(dir, "package.json"))?.magpie?.maxConcurrency)
+  return ok(readJSON(path.join(dir, "package.json"))?.magpie?.[key])
 }
 
 // rateOf reads a model's credit rate as a plugin gives it: a number (0.5)
@@ -1987,13 +2115,18 @@ async function providers({ proxies } = {}) {
     const keys = accountsOf(stored, id)
     const through = (k) => proxies?.[id]?.[k ?? keys[0] ?? ""] ?? proxies?.[id]?.[""] ?? ""
     const gen = infoGen
-    const p = await via.run(through(), () => info(id, undefined, false, listWait))
-    keepInfo(keys[0] ?? id, p, gen)
-    // each account's own models, as the built-ins read each account's: a
-    // plan may serve fewer, or others, than the first account's. One that
-    // can't be read is taken to have them all, or the ones it was last
-    // told to have, as a built-in account whose fetch failed keeps its own.
-    const own = await Promise.all(keys.slice(1).map((k) => via.run(through(k), () => info(id, k, true, listWait)).then((q) => (keepInfo(k, q, gen), q)).catch((e) => ({ failed: true, listError: e?.message ?? String(e) }))))
+    // every account is listed side by side, each hook given listWait: a
+    // second account no longer waits behind the first, where two
+    // listWaits back to back took one provider past refreshDeadline twice
+    // over (#4065)
+    const [p, own] = await Promise.all([
+      via.run(through(), () => info(id, undefined, false, listWait)).then((q) => (keepInfo(keys[0] ?? id, q, gen), q)),
+      // each account's own models, as the built-ins read each account's: a
+      // plan may serve fewer, or others, than the first account's. One that
+      // can't be read is taken to have them all, or the ones it was last
+      // told to have, as a built-in account whose fetch failed keeps its own.
+      Promise.all(keys.slice(1).map((k) => via.run(through(k), () => info(id, k, true, listWait)).then((q) => (keepInfo(k, q, gen), q)).catch((e) => ({ failed: true, listError: e?.message ?? String(e) })))),
+    ])
     const models = { ...p.models }
     for (const q of own) for (const [k, m] of Object.entries(q?.models ?? {})) models[k] ??= m
     const ids = (q) => Object.values(q.models).filter((m) => m.status !== "deprecated").map((m) => m.id)
@@ -2013,6 +2146,7 @@ async function providers({ proxies } = {}) {
       decide: p.decide === true,
       searches: p.searches === true,
       maxConcurrency: concurrencyOf(a),
+      maxAccounts: atOnceOf(a),
       signedIn: keys.length > 0,
       authType: first?.type ?? "",
       accountId: whoOf(first),
@@ -2044,6 +2178,11 @@ async function providers({ proxies } = {}) {
           // every kind it takes and gives, not image alone (#1595)
           inputs: kinds(m.capabilities?.input),
           outputs: kinds(m.capabilities?.output),
+          outputsSaid: kindsSaid(m.capabilities?.output),
+          // whether the model takes temperature and top_p, where something
+          // said so (models.dev, the config, the models hook); unsaid goes
+          // to magpie as nothing, which keeps them (#2492)
+          ...(typeof m.temperature === "boolean" ? { temperature: m.temperature } : {}),
           released: m.release_date ?? "",
           cost: m.cost,
           variants: Object.keys(m.variants ?? {}),

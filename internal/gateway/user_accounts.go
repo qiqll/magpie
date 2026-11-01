@@ -1308,15 +1308,15 @@ func seatState(st userSeat, pid string, pool []candidate, pl planned) (Rest, Wei
 // setRefusal is why none of the accounts u is bound to can take the
 // request: those resting (rests) and held at a cap (held), the first of
 // them back the user's limit until then, and note why no spare was added.
-// With neither, why its first can't (boundRefusal).
+// With neither, why its first can't (userBoundRefusal).
 func setRefusal(u *UserBound, rests []Rest, held []Weighed, pl planned, note string) userRefusal {
 	b := bindingOf(u.seats)
 	if len(rests) == 0 && len(held) == 0 {
-		return boundRefusal(u.User, b, u.pid, nil, pl)
+		return userBoundRefusal(u.User, b, u.pid, nil, pl)
 	}
 	var r userRefusal
 	if len(rests) > 0 {
-		r = boundRefusal(u.User, b, u.pid, rests, pl)
+		r = userBoundRefusal(u.User, b, u.pid, rests, pl)
 	}
 	if len(held) > 0 {
 		msg, back := cappedError(held[0].Model, held, time.Now())
@@ -1345,11 +1345,11 @@ func accountsOf(seats []userSeat) []string {
 	return out
 }
 
-// boundRefusal is why the accounts b names, which user is bound to, can't
+// userBoundRefusal is why the accounts b names, which user is bound to, can't
 // take the request: resting (rests), left out of the plan, or narrowed
 // away before (sealed by another account). Resting, they are back when the
 // first of their rests ends: a limit's, the user's limit until then.
-func boundRefusal(user string, b userBinding, pid string, rests []Rest, pl planned) userRefusal {
+func userBoundRefusal(user string, b userBinding, pid string, rests []Rest, pl planned) userRefusal {
 	seats := b.seats()
 	names := strings.Join(accountsOf(seats), ", ")
 	if len(rests) > 0 {

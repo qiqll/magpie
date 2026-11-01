@@ -33,17 +33,85 @@ type ExternalSession struct {
 // read-only (no file of the agent's to resume or open) with a gateway transcript
 // reader; magpie's own record of one is deleted by DeleteGateway.
 func MergeExternal(native []Session, external []ExternalSession) []Session {
-	names := desktopExternalTitles(external)
-	seen := map[string]bool{}
-	for _, s := range native {
-		seen[s.Agent+"|"+s.ID] = true
-		for _, id := range s.Copies {
-			seen[s.Agent+"|"+id] = true
+	added := externalAdded(native, external)
+	out := make([]Session, len(native), len(native)+len(added))
+	copy(out, native)
+	out = append(out, added...)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Last.After(out[j].Last) })
+	return out
+}
+
+// EachMerged calls each with every session MergeExternal(native, external)
+// lists, in its order, until each returns false, without making that list:
+// the Sessions page's poll copied all ~17k sessions into it, then into its
+// own rows. external holds none of native's sessions, as GatewaySessions
+// gives them for native's GatewayKeys: the set of native's keys made again
+// to look was ~2 MB a poll. native is written by neither; when it isn't
+// newest first, as List gives it, it is sorted in a copy first.
+func EachMerged(native []Session, external []ExternalSession, each func(*Session) bool) {
+	newest := func(a, b Session) int { return b.Last.Compare(a.Last) }
+	if !slices.IsSortedFunc(native, newest) {
+		native = slices.Clone(native)
+		slices.SortStableFunc(native, newest)
+	}
+	added := externalSessions(external)
+	slices.SortStableFunc(added, newest)
+	// a merge of the two, natives first among equals, as SliceStable over
+	// native then added gives
+	i, j := 0, 0
+	for i < len(native) || j < len(added) {
+		var s *Session
+		if j < len(added) && (i == len(native) || added[j].Last.After(native[i].Last)) {
+			s, j = &added[j], j+1
+		} else {
+			s, i = &native[i], i+1
+		}
+		if !each(s) {
+			return
 		}
 	}
-	out := append([]Session(nil), native...)
+}
+
+// externalAdded are the external sessions MergeExternal adds to native, in
+// external's order.
+func externalAdded(native []Session, external []ExternalSession) []Session {
+	// keyed by the pair, not "agent|id": a string made for each of ~5000
+	// sessions on each of a poll's listings, and the set and the list grown
+	// an append at a time, were ~200 MB in 80s of polls (#2278)
+	type agentID struct{ agent, id string }
+	seen := make(map[agentID]struct{}, len(native))
+	for _, s := range native {
+		// GatewayKeys, as pairs
+		seen[agentID{s.Agent, s.ID}] = struct{}{}
+		if s.Agent == "raft" {
+			seen[agentID{"pi", s.ID}] = struct{}{}
+		}
+		if s.App != "" {
+			seen[agentID{s.App, s.ID}] = struct{}{}
+		}
+		for _, id := range s.Copies {
+			seen[agentID{s.Agent, id}] = struct{}{}
+		}
+		for _, id := range s.Subs {
+			seen[agentID{s.Agent, id}] = struct{}{}
+		}
+	}
+	var not []ExternalSession
 	for _, e := range external {
-		if e.Agent == "" || e.ID == "" || seen[e.Agent+"|"+e.ID] {
+		if _, dup := seen[agentID{e.Agent, e.ID}]; !dup {
+			not = append(not, e)
+		}
+	}
+	return externalSessions(not)
+}
+
+// externalSessions are external's sessions as a list shows them, those
+// with an agent and an id, in external's order.
+func externalSessions(external []ExternalSession) []Session {
+	names := desktopExternalTitles(external)
+	var out []Session
+	for _, e := range external {
+		if e.Agent == "" || e.ID == "" {
 			continue
 		}
 		s := Session{ReadOnly: true, Gateway: true, Transcript: true, Agent: e.Agent, ID: e.ID, Title: cmp.Or(names[e.Agent+"|"+e.ID], e.Title, e.ID), Start: e.Start, Last: e.Last, Models: []Model{}, Unpriced: e.Unpriced}
@@ -54,7 +122,6 @@ func MergeExternal(native []Session, external []ExternalSession) []Session {
 		s.Cost = e.Cost
 		out = append(out, s)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Last.After(out[j].Last) })
 	return out
 }
 
@@ -100,7 +167,6 @@ type ExternalDayUsage struct {
 // read (keptStats), so what is changed is copied first.
 func MergeExternalStats(st Stats, days []ExternalDayUsage, external []ExternalSession) Stats {
 	oldFirst, _ := time.ParseInLocation(time.DateOnly, st.From, time.Local)
-	sessionsOwn := false
 	for _, d := range days {
 		if d.Date <= st.To && (st.From == "" || d.Date < st.From) {
 			st.From = d.Date
@@ -108,19 +174,8 @@ func MergeExternalStats(st Stats, days []ExternalDayUsage, external []ExternalSe
 	}
 	first, _ := time.ParseInLocation(time.DateOnly, st.From, time.Local)
 	if !oldFirst.IsZero() && !first.Equal(oldFirst) {
-		shift := int(math.Round(oldFirst.Sub(first).Hours() / 24))
-		st.Sessions, sessionsOwn = slices.Clone(st.Sessions), true
-		for i := range st.Sessions {
-			s := &st.Sessions[i]
-			s.Days = slices.Clone(s.Days)
-			for j := range s.Days {
-				s.Days[j] += shift
-			}
-			s.perDay = slices.Clone(s.perDay)
-			for j := range s.perDay {
-				s.perDay[j].day += shift
-			}
-		}
+		// noted, not written into a copy of every session
+		st.shift += int(math.Round(oldFirst.Sub(first).Hours() / 24))
 	}
 	st.Days = slices.Clone(st.Days)
 	byDate, own := map[string]int{}, map[int]bool{}
@@ -157,6 +212,8 @@ func MergeExternalStats(st Stats, days []ExternalDayUsage, external []ExternalSe
 		}
 	}
 	names := desktopExternalTitles(external)
+	// the gateway's go beside Sessions, not into a copy of them (#2278)
+	st.gateway = slices.Clip(st.gateway)
 	for _, e := range external {
 		if e.ID == "" || e.Agent == "" {
 			continue
@@ -168,7 +225,8 @@ func MergeExternalStats(st Stats, days []ExternalDayUsage, external []ExternalSe
 			if err != nil {
 				continue
 			}
-			d := int(math.Round(day.Sub(first).Hours() / 24))
+			// in Sessions' days, st.shift after the range's
+			d := int(math.Round(day.Sub(first).Hours()/24)) - st.shift
 			if first.IsZero() || u.Date < st.From || u.Date > st.To {
 				continue
 			}
@@ -188,15 +246,9 @@ func MergeExternalStats(st Stats, days []ExternalDayUsage, external []ExternalSe
 			s.Models = append(s.Models, m.Model)
 			s.Priced = s.Priced && m.Priced
 		}
-		if !sessionsOwn {
-			st.Sessions, sessionsOwn = slices.Clip(st.Sessions), true
-		}
-		st.Sessions = append(st.Sessions, s)
+		st.gateway = append(st.gateway, s)
 	}
 	sort.Slice(st.Days, func(i, j int) bool { return st.Days[i].Date < st.Days[j].Date })
-	if sessionsOwn {
-		// st's own come sorted so
-		sort.SliceStable(st.Sessions, func(i, j int) bool { return st.Sessions[i].Last.After(st.Sessions[j].Last) })
-	}
+	sort.SliceStable(st.gateway, func(i, j int) bool { return st.gateway[i].Last.After(st.gateway[j].Last) })
 	return st
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
@@ -283,5 +284,46 @@ func TestDecisionGroupClassifierKeepsTheKeysAccounts(t *testing.T) {
 		if k != "ke" {
 			t.Fatalf("asked %v, want ke alone", asked)
 		}
+	}
+}
+
+// A decision model's keys share the one classifier's wait, as Settings
+// says it is given, its failover included: a key that never answers
+// spends it, and the next is not asked with a whole wait of its own. Each
+// try given the whole wait held a request a wait per key before routing
+// it (Jason on Discord, held 2m and stopped with a 504).
+func TestDecisionTriesShareTheClassifierWait(t *testing.T) {
+	fresh(t)
+	was := classifyUnit
+	classifyUnit = 25 * time.Millisecond // the 8 seconds unset are 200ms
+	t.Cleanup(func() { classifyUnit = was })
+	var mu sync.Mutex
+	var asked []string
+	stop := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked = append(asked, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		mu.Unlock()
+		// never answers: the body read, so a client gone ends r's context
+		io.Copy(io.Discard, r.Body)
+		select {
+		case <-r.Context().Done():
+		case <-stop:
+		}
+	}))
+	t.Cleanup(up.Close)
+	t.Cleanup(func() { close(stop) }) // runs before up.Close
+	if err := provider.Save(provider.Provider{ID: "jw", Name: "JW", Key: "w1", Keys: []provider.KeyAccount{{Key: "w2"}, {Key: "w3"}}, Decide: up.URL + "/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	s := New()
+	_, err := s.askClassifier("jw/jev-latest", []string{"feature", "bug"}, before{}, false, "fix this")
+	if err == nil || !strings.Contains(err.Error(), "no answer in 200ms") {
+		t.Fatalf("a decision model that never answers: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) != 1 {
+		t.Fatalf("asked %v in one classifier's wait, want the first key alone", asked)
 	}
 }

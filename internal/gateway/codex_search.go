@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -184,12 +185,23 @@ func (s *Server) usersSearchers(r *http.Request, id string, ons []provider.Provi
 // needn't be signed in again, for the caller's output.
 func (s *Server) alphaSearchOn(w http.ResponseWriter, r *http.Request, body []byte, model string, ons []provider.Provider) (answered bool, why, told string) {
 	start := time.Now()
+	// as written only when every account it may be asked on is set to go
+	// unmasked (provider.SkipsRedaction, isee1_1 on Discord); magpie's own
+	// search in its place masks its query itself (maskedQuery)
+	if len(ons) > 0 && !slices.ContainsFunc(ons, func(p provider.Provider) bool { return !p.SkipsRedaction() }) {
+		return s.alphaSearchAsked(w, r, body, model, ons, start)
+	}
 	w, body, unmask, hits, err := redactedHits(r.Context(), w, body)
 	defer unmask()
 	if err != nil {
 		return false, err.Error(), err.Error()
 	}
 	noteMasked(r, "search", hits, sentOf(hits, body), 0, "openai", model)
+	return s.alphaSearchAsked(w, r, body, model, ons, start)
+}
+
+// alphaSearchAsked is alphaSearchOn once body is as it goes.
+func (s *Server) alphaSearchAsked(w http.ResponseWriter, r *http.Request, body []byte, model string, ons []provider.Provider, start time.Time) (answered bool, why, told string) {
 	var errs, said []string
 	for _, on := range ons {
 		who := "OpenAI (" + on.Account.User + "): "

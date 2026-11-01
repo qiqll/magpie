@@ -55,6 +55,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       t.after(() => browser.close());
       const page = await (await browser.newContext({ viewport: { width: 1100, height: 900 } })).newPage();
       page.setDefaultTimeout(5000);
+      page.setDefaultNavigationTimeout(60000);
       const errors = [];
       page.on("pageerror", (e) => errors.push(e.message));
       const saved = [];
@@ -64,8 +65,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await settingsDrawn(page); // rows found are the ones that stay (#1659)
       const row = page.locator("#searchList #searchFirstRow");
       await row.waitFor();
-      // wheeled to, as the reader would: the app undoes a scroll of its own
-      // (Playwright's), and the rows have grown since (208bd5c4)
+      // the reader wheels it into sight, as the reader would: the app undoes a
+      // scroll that isn't the reader's (Playwright's), and rows below it
+      // (searchAllRow) can put it under the window's foot (208bd5c4)
       await reach(page, row);
       assert.equal(await row.locator(".name").textContent(), w.name);
       const model = row.locator(".segs button", { hasText: w.model });
@@ -73,6 +75,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert(await model.evaluate((b) => b.classList.contains("on")), "model search first at first");
       assert(!await apis.evaluate((b) => b.classList.contains("on")));
 
+      await reach(page, apis);
       const before = await page.evaluate(() => [scrollX, scrollY, document.scrollingElement.scrollTop]);
       const b = await apis.boundingBox();
       await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
@@ -89,6 +92,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.deepEqual(await page.evaluate(() => [scrollX, scrollY, document.scrollingElement.scrollTop]), before, "the click moved nothing");
 
       // and back
+      await reach(page, page.locator("#searchFirstRow .segs button", { hasText: w.model }));
       const m = await page.locator("#searchFirstRow .segs button", { hasText: w.model }).boundingBox();
       await page.mouse.click(m.x + m.width / 2, m.y + m.height / 2);
       for (let i = 0; i < 50 && saved.length < 2; i++) await page.waitForTimeout(50);
@@ -101,6 +105,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       t.after(() => browser.close());
       const page = await (await browser.newContext({ viewport: { width: 1100, height: 900 } })).newPage();
       page.setDefaultTimeout(5000);
+      page.setDefaultNavigationTimeout(60000);
       await page.route("**/*", serve(lang, [], { provider: false }));
       await watchSettingsReads(page);
       await page.goto("http://magpie.test/?view=settings&tab=models");
