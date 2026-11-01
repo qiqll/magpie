@@ -68,7 +68,10 @@ async function open(engine, lang, width, tab, posted, st, t, touch = false) {
 
 const settle = (page) => page.evaluate(() => new Promise((ok) => setTimeout(ok, 80)));
 // brought out from under the header and the foot by the reader's wheel, as
-// code's scrolls are put back, till the pointer at its middle is on it.
+// code's scrolls are put back, till it is on top at its middle and at its
+// top and bottom edges. A finger is wider than a point: German's On at
+// 440px stopped 0.4px above the foot, half under it, and Chromium gave the
+// tap at its middle to the foot.
 // Each wheel's scroll lands before the option is looked at again: WebKit's
 // glides on for some 200ms (a wheel of 150px is at 9, 111, 142, 149 and
 // 150 by its frames), and a box read on the way was pressed where the
@@ -77,7 +80,8 @@ async function reveal(page, loc) {
   for (let i = 0; i < 40; i++) {
     const b = await loc.boundingBox();
     const h = page.viewportSize().height;
-    if (b && await loc.evaluate((o, [x, y]) => o.contains(document.elementFromPoint(x, y)), mid(b))) return b;
+    if (b && await loc.evaluate((o, b) => [b.y + 1, b.y + b.height / 2, b.y + b.height - 1]
+      .every((y) => o.contains(document.elementFromPoint(b.x + b.width / 2, y))), b)) return b;
     await page.mouse.move(page.viewportSize().width / 2, h / 2);
     const was = await page.evaluate(() => document.getElementById("view-settings").scrollTop);
     await page.mouse.wheel(0, b && b.y < h / 2 ? -150 : 150);

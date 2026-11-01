@@ -5,6 +5,7 @@ const run = require("node:util").promisify(execFile);
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
 const { fixture } = require("./fixtures/caller-keys.cjs");
+const { reach } = require("./reader.cjs");
 
 // FourLeafTec on #1514: at home on Windows, but mostly running things on a
 // Linux server over ssh. Connect's Shell and curl snippets start as the
@@ -70,7 +71,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await snip(page), `$env:OPENAI_BASE_URL="http://192.168.1.10:3999/v1"\n$env:OPENAI_API_KEY='k''ey"$HOME!\`x\\y'`);
         assert.equal(await os(page, "Windows").getAttribute("aria-pressed"), "true");
 
-        // picked macOS · Linux: export, and nothing moves under the click
+        // picked macOS · Linux: export, and nothing moves under the click.
+        // Wheeled wholly into sight first, as the reader would: at 390 in
+        // WebKit, Chinese, it sat at the window's foot, cut off, and
+        // Playwright's click scrolled it up itself before the app saw it
+        await reach(page, os(page, "macOS · Linux"));
         const at = async () => page.evaluate(() => [document.querySelector("#connect .snip-os").getBoundingClientRect().top,
           document.scrollingElement.scrollTop, document.querySelector("#view-gateway").scrollTop]);
         const before = await at();

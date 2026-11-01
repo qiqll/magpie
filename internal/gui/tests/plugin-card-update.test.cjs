@@ -42,8 +42,8 @@ function server(lang) {
 }
 
 const L = {
-  en: { button: "Update", title: "Update to v0.0.9" },
-  zh: { button: "更新", title: "更新到 v0.0.9" },
+  en: { button: "Update", title: "Update to v0.0.9", discover: "Discover" },
+  zh: { button: "更新", title: "更新到 v0.0.9", discover: "发现" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -60,6 +60,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         page.on("pageerror", (e) => errors.push(e.message));
         await page.route("**/*", server(lang));
         await page.goto("http://magpie.test/?view=plugins");
+        // Discover, as the reader picks it: Plugins opens on Installed when
+        // the count of updates is in before the page is shown (the
+        // sidebar's dot, followed), on Discover when it comes after
+        await page.locator("#view-plugins .lib-tabs .opt", { hasText: w.discover }).click();
         const card = page.locator('#view-plugins .pm-card[data-pkg="opencode-copilot-auth"]').first();
         const up = card.locator("button.pm-act.pm-up");
         await up.waitFor();

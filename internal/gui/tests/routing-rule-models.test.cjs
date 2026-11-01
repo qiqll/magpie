@@ -80,18 +80,40 @@ function serve(lang, posts) {
   };
 }
 
+// still: the control held in one place for three frames in turn. A wheel's
+// scroll glides on for some frames, and a box read on the way was pressed
+// where the control had been, off it
+const still = (loc) => loc.evaluate((e) => new Promise((done) => {
+  let last = NaN, same = 0;
+  const look = () => {
+    const y = e.getBoundingClientRect().top;
+    same = y === last ? same + 1 : 0;
+    last = y;
+    if (same >= 3) done(); else requestAnimationFrame(look);
+  };
+  requestAnimationFrame(look);
+}));
+
 // wheel to a control, as the reader would (the page keeps still for any
-// other scroll), and click it where it is
-async function press(page, loc) {
+// other scroll, Playwright's own before a hover or a click too), and
+// return where it is once it holds still
+async function reach(page, loc) {
   const height = page.viewportSize().height;
   await page.mouse.move(Math.min(550, (page.viewportSize().width / 2) | 0), 300);
   for (let i = 0; i < 30; i++) {
+    await still(loc);
     const y = (await loc.boundingBox()).y;
     if (y > 80 && y < height - 160) break;
     await page.mouse.wheel(0, y < 80 ? -300 : 300);
     await page.waitForTimeout(150);
   }
-  const b = await loc.boundingBox();
+  await still(loc);
+  return loc.boundingBox();
+}
+
+// and click it where it is
+async function press(page, loc) {
+  const b = await reach(page, loc);
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
 }
 const pick = async (page, label) => {
@@ -125,11 +147,19 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const ed = page.locator(".rt-gedit");
         const row = ed.locator(".rt-rule").first();
         await row.waitFor();
+        // the editor grown to its height (slotMorph, some 570ms), cut off
+        // at its foot till then
+        await page.waitForFunction(() => {
+          const e = document.querySelector(".rt-gedit");
+          return e && !e.getAnimations().some((a) => a.playState === "running");
+        });
         assert.deepEqual(await chips(row), ["flash", "mini"]);
         assert.equal(await page.locator("select").count(), 0, "the app menu, not a native select");
 
         // the × takes one out; the last has none
-        await row.locator(".rt-c", { has: page.locator(".rt-model", { hasText: "flash" }) }).hover();
+        const flash = row.locator(".rt-c", { has: page.locator(".rt-model", { hasText: "flash" }) });
+        await reach(page, flash);
+        await flash.hover();
         await press(page, row.locator(`.rt-cx[title="${w.rm}"]`));
         assert.deepEqual(await chips(row), ["mini"]);
         assert.equal(await row.locator(".rt-then .rt-cx").count(), 0, "a rule's one model can't be taken out");

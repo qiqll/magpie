@@ -72,17 +72,33 @@ function serve(lang, posts) {
   };
 }
 
+// still: the control held in one place for three frames in turn. A wheel's
+// scroll glides on for some frames, and a box read on the way was pressed
+// where the control had been, off it
+const still = (loc) => loc.evaluate((e) => new Promise((done) => {
+  let last = NaN, same = 0;
+  const look = () => {
+    const y = e.getBoundingClientRect().top;
+    same = y === last ? same + 1 : 0;
+    last = y;
+    if (same >= 3) done(); else requestAnimationFrame(look);
+  };
+  requestAnimationFrame(look);
+}));
+
 // wheel to a control, as the reader would (the page keeps still for any
-// other scroll), and return where it is
+// other scroll), and return where it is once it holds still
 async function reach(page, loc) {
   const height = page.viewportSize().height;
   await page.mouse.move(Math.min(550, (page.viewportSize().width / 2) | 0), 300);
   for (let i = 0; i < 30; i++) {
+    await still(loc);
     const y = (await loc.boundingBox()).y;
     if (y > 80 && y < height - 160) break;
     await page.mouse.wheel(0, y < 80 ? -300 : 300);
     await page.waitForTimeout(150);
   }
+  await still(loc);
   return loc.boundingBox();
 }
 
@@ -97,8 +113,17 @@ async function openEditor(page, w) {
   await press(page, group.locator("button", { hasText: w.edit }));
   const ed = page.locator(".rt-gedit");
   await ed.locator(".rt-rule").first().waitFor();
+  await opened(page);
   return ed;
 }
+// opened: the editor grows to its height (slotMorph, some 570ms), cut off
+// at its foot till then. A rule's condition pressed there was the list
+// under it, and a control focused in it scrolled the editor itself, which
+// shut the ⋯'s menu just opened
+const opened = (page) => page.waitForFunction(() => {
+  const e = document.querySelector(".rt-gedit");
+  return e && !e.getAnimations().some((a) => a.playState === "running");
+});
 
 const saves = (posts) => posts.filter((p) => p.path === "/api/groups/save");
 
@@ -150,6 +175,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await row.locator(".rt-model").focus({ preventScroll: true });
         for (let i = 0; i < 6 && !(await row.locator(".rt-rmore").evaluate((b) => b === document.activeElement)); i++) await page.keyboard.press(TAB);
         assert(await row.locator(".rt-rmore").evaluate((b) => b === document.activeElement), "Tab reaches the rule's ⋯");
+        // what Tab's focus scrolled settled first, as it has by a reader's
+        // next key: one landing in ArrowUp's 400ms shut the menu (WebKit,
+        // 390, 2 runs in 4) and Enter then went to no item
+        await still(row.locator(".rt-rmore"));
         await page.keyboard.press("Enter");
         await page.locator(".row-menu").waitFor();
         await page.keyboard.press("ArrowUp");
