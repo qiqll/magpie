@@ -52,9 +52,18 @@ func TestUserSameFirstWordsRuledApart(t *testing.T) {
 	if got := f.took(); len(got) != 1 || !strings.HasPrefix(got[0], "kc") {
 		t.Fatalf("bob's turn asked %q: want ca's, the group's first, not alice's rule", got)
 	}
-	ks := ruleKeys()
-	if len(ks) != 1 || !strings.Contains(ks[0], "|user:alice|") {
-		t.Fatalf("rule keys %q", ks)
+	// alice's turn is kept under her name, and nothing of bob's under it
+	alices := 0
+	for _, k := range ruleKeys() {
+		if !strings.Contains(k, "|user:") {
+			t.Fatalf("a bound user's rule turn without its user: %q", k)
+		}
+		if strings.Contains(k, "|user:alice|") {
+			alices++
+		}
+	}
+	if alices != 1 {
+		t.Fatalf("rule keys %q", ruleKeys())
 	}
 }
 
