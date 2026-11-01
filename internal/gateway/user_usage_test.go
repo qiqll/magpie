@@ -1,11 +1,14 @@
 package gateway
 
 import (
+	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/usage"
 )
 
 // Each call's record keeps the caller's user it named (T-020), for the
@@ -52,5 +55,20 @@ func TestRecordKeepsTheCallersUser(t *testing.T) {
 	}
 	if got := lastRecord(t); got.User != "bob" {
 		t.Errorf("bound by user: the record's user is %q, want bob", got.User)
+	}
+}
+
+// A web search's own rows keep the user they were made for too (T-020):
+// main's logSearch (a search API, a plan's search service) and
+// logNativeSearches write past appendUsage, and the merge had them name
+// none (T-050).
+func TestSearchRowsKeepTheUser(t *testing.T) {
+	fresh(t)
+	ctx := context.WithValue(context.Background(), askedForKey{}, askedFor{user: "alice"})
+	logSearch(ctx, usage.Record{Requested: "search"}, "q", time.Now(), 1, nil)
+	logNativeSearches(context.Background(), 1, time.Now(), "codex", "codex", "chatgpt.com", "gpt-5.5", "bob")
+	rows, text := searchRows(t)
+	if len(rows) != 2 || rows[0].User != "alice" || rows[1].User != "bob" {
+		t.Fatalf("search rows %+v, want alice's then bob's (%s)", rows, text)
 	}
 }

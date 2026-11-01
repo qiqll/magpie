@@ -102,11 +102,11 @@ const maxNativeSearchRows = 20
 // model, and how it ended (the reply came, so 200). The query is never
 // kept, as no search row keeps one, and the row is counted nowhere: its
 // tokens are the request's.
-func logNativeSearches(ctx context.Context, n int, at time.Time, agent, providerID, host, model string) {
+func logNativeSearches(ctx context.Context, n int, at time.Time, agent, providerID, host, model, user string) {
 	who := access.Caller(ctx)
 	for range min(n, maxNativeSearchRows) {
 		budget.Append(usage.Record{Time: at, Agent: cmp.Or(agent, "magpie"), Kind: "web_search", Source: usage.SourceSearch,
 			Provider: providerID, Host: host, Requested: model, Model: model, Status: http.StatusOK,
-			CallerKeyID: who.KeyID, CallerKeyName: who.KeyName, CallerIssuerID: who.IssuerID()})
+			CallerKeyID: who.KeyID, CallerKeyName: who.KeyName, CallerIssuerID: who.IssuerID(), User: user})
 	}
 }

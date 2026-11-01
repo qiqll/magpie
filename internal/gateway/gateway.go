@@ -4912,7 +4912,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		appendUsage(r, rec)
 		if call.Status < 400 {
 			// what its model searched with its provider's own tool
-			logNativeSearches(r.Context(), call.Usage.searches, start, call.Agent, call.Provider, where, model)
+			user, _ := userOf(r.Header) // the caller's user, as appendUsage keeps it (T-020)
+			logNativeSearches(r.Context(), call.Usage.searches, start, call.Agent, call.Provider, where, model, user)
 		}
 	}
 }
