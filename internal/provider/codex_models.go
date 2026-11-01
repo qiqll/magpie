@@ -182,6 +182,22 @@ func (s *seenVersion) saw(v string) {
 	s.Unlock()
 }
 
+// CodexSeenForTests forgets the Codex versions clients said they were, for
+// a test whose turns must be signed as its own client says: a newer Codex
+// another test of the binary sent through the gateway stays behind in
+// codexSeen. It returns what puts them back.
+func CodexSeenForTests() (restore func()) {
+	codexSeen.Lock()
+	was := codexSeen.v
+	codexSeen.v = ""
+	codexSeen.Unlock()
+	return func() {
+		codexSeen.Lock()
+		codexSeen.v = was
+		codexSeen.Unlock()
+	}
+}
+
 // SawCodexClient notes the version a Codex client's request says it is —
 // its `version` header, else the one in its User-Agent (codex_cli_rs/0.159.0,
 // Codex Desktop/0.159.0) — when the request is Codex's (it names an
