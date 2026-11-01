@@ -194,10 +194,13 @@ func logSearch(ctx context.Context, rec usage.Record, query string, start time.T
 	}
 	who := access.Caller(ctx)
 	rec.CallerKeyID, rec.CallerKeyName, rec.CallerIssuerID = who.KeyID, who.KeyName, who.IssuerID()
-	// the user it was made for (forUser), for the Usage page's Users
-	// (T-020), as appendUsage keeps a request's
+	// the user it was made for (forUser, else the request's own), for
+	// the Usage page's Users (T-020), as appendUsage keeps a request's
 	if f, ok := ctx.Value(askedForKey{}).(askedFor); ok && rec.User == "" {
 		rec.User = f.user
+	}
+	if f := searchFor(ctx); f != nil && rec.User == "" {
+		rec.User = f.User
 	}
 	switch {
 	case err != nil && found == 0 && errors.Is(err, errFoundNothing):

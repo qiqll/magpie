@@ -471,6 +471,13 @@ func pinnedOwn(seat userSeat, pid string, pool []candidate, pl planned) ([]candi
 	return out, n
 }
 
+// callerUser is the user r names (userOf), as its usage rows keep it
+// (T-020), bound by user or not: "" for none, or one that can't be taken.
+func callerUser(r *http.Request) string {
+	u, _ := userOf(r.Header)
+	return u
+}
+
 // userOf is the user a request names in the first of userHeaders it
 // sends, "" for none; bad is why a value can't be taken.
 func userOf(h http.Header) (user, bad string) {

@@ -239,7 +239,7 @@ func (s *Server) searchMCPRun(r *http.Request, query string) (string, error) {
 		return "", err
 	}
 	defer release()
-	ctx := context.WithValue(s.forUser(r.Context(), r), searchForKey{}, &CallFor{Agent: callerOf(r).agent, MCP: true})
+	ctx := context.WithValue(s.forUser(r.Context(), r), searchForKey{}, &CallFor{Agent: callerOf(r).agent, MCP: true, User: callerUser(r)})
 	said, _, err := s.webSearch(ctx, query)
 	if err != nil {
 		if r.Context().Err() == nil {

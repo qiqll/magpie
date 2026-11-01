@@ -608,7 +608,7 @@ func appendUsage(r *http.Request, rec usage.Record) {
 	// the caller's user, for the Usage page's Users (T-020); a value
 	// UserHeader can't take is no user
 	if rec.User == "" {
-		rec.User, _ = userOf(r.Header)
+		rec.User = callerUser(r)
 	}
 	rec.Local = local(r)
 	if r.Context().Value(observedKey{}) != nil {

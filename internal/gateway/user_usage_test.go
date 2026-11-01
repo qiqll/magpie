@@ -67,8 +67,11 @@ func TestSearchRowsKeepTheUser(t *testing.T) {
 	ctx := context.WithValue(context.Background(), askedForKey{}, askedFor{user: "alice"})
 	logSearch(ctx, usage.Record{Requested: "search"}, "q", time.Now(), 1, nil)
 	logNativeSearches(context.Background(), 1, time.Now(), "codex", "codex", "chatgpt.com", "gpt-5.5", "bob")
+	// unbound, the request's own user, which its search's CallFor carries
+	unbound := context.WithValue(context.Background(), searchForKey{}, &CallFor{Agent: "claude", User: "carol"})
+	logSearch(unbound, usage.Record{Requested: "search"}, "q", time.Now(), 1, nil)
 	rows, text := searchRows(t)
-	if len(rows) != 2 || rows[0].User != "alice" || rows[1].User != "bob" {
-		t.Fatalf("search rows %+v, want alice's then bob's (%s)", rows, text)
+	if len(rows) != 3 || rows[0].User != "alice" || rows[1].User != "bob" || rows[2].User != "carol" {
+		t.Fatalf("search rows %+v, want alice's, bob's, then carol's (%s)", rows, text)
 	}
 }

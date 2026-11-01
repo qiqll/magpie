@@ -89,6 +89,9 @@ type CallFor struct {
 	NothingFound bool   `json:"nothingFound,omitempty"`
 	NotSearched  bool   `json:"notSearched,omitempty"`
 	Picked       bool   `json:"picked,omitempty"`
+	// User is the caller's user the request named (userOf), bound or not,
+	// for its search rows' User (T-020); the Routing view has its own
+	User string `json:"-"`
 }
 
 func searchFor(ctx context.Context) *CallFor {
@@ -1208,7 +1211,7 @@ func textCallRound(tools []Tool, ask round) round {
 // reply. The first round's failure is a status, as another provider may
 // take over.
 func (s *Server) searchReply(w http.ResponseWriter, r *http.Request, from provider.Protocol, name string, req *Request, usage *Usage, ask round) (int, string) {
-	ctx, cancel := context.WithCancel(context.WithValue(s.forUser(r.Context(), r), searchForKey{}, &CallFor{Agent: callerOf(r).agent, Model: unprefixed(req.Model)}))
+	ctx, cancel := context.WithCancel(context.WithValue(s.forUser(r.Context(), r), searchForKey{}, &CallFor{Agent: callerOf(r).agent, Model: unprefixed(req.Model), User: callerUser(r)}))
 	defer cancel()
 	q := *req
 	q.WebSearch = false
