@@ -60,4 +60,40 @@ for (const [name, engine] of [["webkit", webkit], ["chromium", chromium]]) {
       }
     } finally { await browser.close(); }
   });
+
+  // A part wider than the window on its own (zh "1,689.01 / 2,400 积分 ·"
+  // a fraction of a pixel over 120px at 1100) breaks between its words
+  // rather than being cut, and its · stays on the line with the word before
+  // it. In every language, as the counts' widths differ by a few pixels.
+  test(`${name}: a count part wider than its window breaks, its · not alone`, async () => {
+    const browser = await engine.launch();
+    try {
+      for (const lang of ["zh", "ja", "de", "en"]) {
+        for (const width of [980, 1090, 1100]) {
+          const page = await (await browser.newContext({ viewport: { width, height: 820 }, reducedMotion: "reduce" })).newPage();
+          page.setDefaultTimeout(5000);
+          await page.route("**/*", serve(lang, [...wb, trae.after]));
+          await page.goto("http://magpie.test/?view=usage");
+          await page.locator(".subscription-card .quota-n").nth(2).waitFor();
+          await page.waitForTimeout(300);
+          const counts = await page.evaluate(() => [...document.querySelectorAll(".quota-n")].map((n) => {
+            const part = n.children[0], text = part.firstChild, dot = text.data.lastIndexOf("·");
+            const at = (i) => { const r = document.createRange(); r.setStart(text, i); r.setEnd(text, i + 1); return r.getBoundingClientRect(); };
+            const over = (el) => { const r = document.createRange(); r.selectNodeContents(el); return r.getBoundingClientRect().width - el.getBoundingClientRect().width; };
+            return {
+              text: n.textContent,
+              over: Math.max(...[...n.children].map(over)),
+              alone: dot > 1 && at(dot).top - at(dot - 2).top > 2,
+            };
+          }));
+          assert.equal(counts.length, 3);
+          for (const c of counts) {
+            assert.ok(c.over < 0.01, `${lang} ${width}px: "${c.text}" runs ${c.over}px past its window`);
+            assert.equal(c.alone, false, `${lang} ${width}px: "${c.text}" leaves its · on a line alone`);
+          }
+          await page.close();
+        }
+      }
+    } finally { await browser.close(); }
+  });
 }
