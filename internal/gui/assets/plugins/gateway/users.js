@@ -47,10 +47,10 @@ async function loadUserBinds() {
 }
 
 // a gateway key a user came with (one of its keys), as the page names it
-function userKeyLabel(u) {
-  if (!u.key) return t("without a gateway key");
-  if (u.keyName) return u.keyName;
-  return u.keyGone ? t("a removed gateway key") : t("gateway key {id}", { id: u.key.slice(0, 8) });
+function userKeyLabel(k) {
+  if (!k.key) return t("without a gateway key");
+  if (k.keyName) return k.keyName;
+  return k.keyGone ? t("a removed gateway key") : t("gateway key {id}", { id: k.key.slice(0, 8) });
 }
 
 // what an account's row says under its name
@@ -172,7 +172,7 @@ function userModeSays(m) {
 // a user's tier under a key (one of its keys): the one its last request
 // there named, the default for one bound before tiers; "" while the tiers
 // aren't known
-const userTierOf = (u) => u.tier || userBindMode?.tiers?.default || "";
+const userTierOf = (k) => k.tier || userBindMode?.tiers?.default || "";
 
 function renderUserBinds() {
   const block = $("#userBindsBlock");

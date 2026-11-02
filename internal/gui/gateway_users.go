@@ -64,7 +64,8 @@ type userSpareJSON struct {
 // then the rest in the order the keys were bound. Whether each is out is
 // its account's, in accounts, by Seat. Keys is each key's binding as
 // user-accounts.json keeps it, for one of its accounts to be let go of
-// under a key.
+// under a key; the page reads each key's name and tier there, Key,
+// KeyName, KeyGone and Tier being its first key's alone.
 type userJSON struct {
 	User         string          `json:"user"`
 	Provider     string          `json:"provider"`

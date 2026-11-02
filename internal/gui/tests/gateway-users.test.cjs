@@ -90,7 +90,12 @@ function serve(lang, users) {
       users.all = users.all.flatMap((u) => {
         // one of several keys: let go of under that key alone
         if (u.keys && u.user === body.user && u.provider === body.provider) {
-          return [{ ...u, keys: u.keys.map((k) => k.key === body.key ? { ...k, seats: k.seats.filter((x) => x !== body.seat) } : k).filter((k) => k.seats.length) }];
+          const keys = u.keys.map((k) => k.key === body.key ? { ...k, seats: k.seats.filter((x) => x !== body.seat) } : k).filter((k) => k.seats.length);
+          // the row again from the keys left: its accounts each once
+          const named = Object.fromEntries([{ account: u.account, seat: u.seat }, ...(u.spares || [])].map((x) => [x.seat, x.account]));
+          const seats = [...new Set(keys.flatMap((k) => k.seats))];
+          if (!seats.length) return [];
+          return [{ ...u, keys, account: named[seats[0]], seat: seats[0], spares: seats.slice(1).map((x) => ({ account: named[x], seat: x, at: u.at })) }];
         }
         if (u.user !== body.user || (u.key || "") !== body.key || u.provider !== body.provider) return [u];
         const seats = [{ account: u.account, seat: u.seat, at: u.at }, ...(u.spares || [])].filter((x) => x.seat !== body.seat);
@@ -102,7 +107,7 @@ function serve(lang, users) {
       users.asked.push(url.searchParams.get("q") || "");
       if (users.error) return json({ error: "user-accounts.json can't be read: unexpected end of JSON input", why: "unexpected end of JSON input" }, 400);
       const words = (url.searchParams.get("q") || "").toLowerCase().split(/\s+/).filter(Boolean);
-      const hay = (u) => `${u.user} ${u.account} ${(u.spares || []).map((s) => s.account).join(" ")} ${u.providerName} ${u.keyName}`.toLowerCase();
+      const hay = (u) => `${u.user} ${u.account} ${(u.spares || []).map((s) => s.account).join(" ")} ${u.providerName} ${(u.keys || [u]).map((k) => k.keyName).join(" ")}`.toLowerCase();
       const hit = users.all.filter((u) => words.every((w) => hay(u).includes(w)));
       // a search leaves the accounts and the mode out, as the server does
       const out = { total: users.all.length, matched: hit.length + (users.more || 0), users: hit.map(withKeys) };
@@ -346,6 +351,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(users.unbinds, [{ key: "k1", provider: "codex", user: "7", seat: "codex@a@x.com" }]);
         assert.deepEqual(await held.nth(0).locator(".user-unbind").allTextContents(), [w.unbind]);
         assert((await text(userRows.nth(0).locator(".sub").last())).startsWith(`ChatGPT · Tenant B · ${w.tierFree}`), "one key left, its tier once");
+        // an account under its only key let go of: its chip gone
+        await held.nth(1).locator(".user-unbind").click();
+        await dialog.waitFor();
+        assert.equal(await text(dialog.locator("p")), w.unbindSpare, "one key left, none named");
+        await dialog.locator(".bar button").last().click();
+        await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-seat").length === 1);
+        assert.deepEqual(users.unbinds.at(-1), { key: "k2", provider: "codex", user: "7", seat: "codex@b@x.com" });
+        assert.equal(await text(mchips.nth(0).locator(".name")), "a@x.com");
         users.all = [merged];
         await page.reload();
         await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-unbind").length === 3);
