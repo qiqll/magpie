@@ -2304,7 +2304,14 @@ place. A 429 magpie gives says only Anthropic's own words, "This request
 would exceed your account's rate limit. Please try again later.", as
 `rate_limit_error` in your protocol's shape; which accounts the user is on,
 their caps and rests, and why no spare was added are in the request's
-error in the usage log (`userRefused`), not the reply. Another refusal (a
+error in the usage log (`userRefused`), not the reply. Since 2026-11-02 a
+429 the vendor gives is told the same way, streamed or not, on every
+protocol and on a System One decision: the last of the user's accounts out
+of its allowance mid-request, or rate limited until magpie's patience is
+spent. Once the stream has begun (its 200 sent to keep you waiting), that
+sentence is the stream's error event, typed as before. The vendor's words
+and its name are the request's error in the usage log and Recent calls,
+and the limit headers below are as they were. Another refusal (a
 400 when none of the user's accounts serves the model, a 503 when they are
 paused or the conversation was sealed by another account) says why
 without naming them. When that error is a

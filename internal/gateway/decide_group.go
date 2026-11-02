@@ -444,6 +444,13 @@ func (s *Server) serveDecideUsers(w http.ResponseWriter, r *http.Request, body [
 		}
 		if status >= 400 {
 			keepRetryOut(w.Header(), header, b)
+			if status == http.StatusTooManyRequests && us[c.p.ID] != nil {
+				// a bound user's 429 says only userLimitSaid, as a
+				// turn's does (T-067); the vendor's words are the
+				// routing log's
+				writeError(w, provider.Chat, status, userLimitSaid)
+				return
+			}
 			b = hideAccountsBody(b) // the vendor's words, without the account
 		}
 		w.Header().Set("Content-Type", ctype)

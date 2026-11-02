@@ -3250,6 +3250,34 @@ func (h *holdWriter) release() {
 	h.flush()
 }
 
+// releaseSaid sends a held error as release does, its status and headers
+// the vendor's, but said only as msg in proto's shape (writeError), or as
+// its stream's error once the agent has the stream's headers: a bound
+// user's limit told as userLimitSaid (T-067). The vendor's words stay the
+// call's error, the operator's.
+func (h *holdWriter) releaseSaid(proto provider.Protocol, msg string) {
+	if h.passing || h.status == 0 {
+		return
+	}
+	if h.alive != nil && h.alive.sent {
+		h.passing = true
+		streamError(h.w, h.alive.proto, h.alive.model, h.code(), msg)
+		return
+	}
+	dst := h.w.Header()
+	for k, v := range h.header {
+		switch k {
+		case resetsHeader, refusedHeader, zdrHeader, answeredThereHeader, keyLimitThereHeader, // magpie's own notes, as pass
+			"Content-Length", "Content-Encoding", "Content-Type": // of the vendor's body, not this one
+			continue
+		}
+		dst[k] = v
+	}
+	h.passing, h.wrote, h.atLine = true, time.Now(), true
+	writeError(h.w, proto, h.code(), msg)
+	h.flush()
+}
+
 // watchEvery is how often watch looks at a try.
 var watchEvery = time.Second
 

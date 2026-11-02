@@ -4773,7 +4773,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			if !hw.passing && call.Status >= 400 && userBound != nil && !hw.refused && !hw.turnedAway && !promptRefused(call.Status, []byte(call.Error)) {
 				userRested = s.userLimitedAfter(hw.header, userBound, c, call.Status, []byte(call.Error), heldBack, &try)
 			}
-			hw.release()
+			if !hw.passing && hw.code() == http.StatusTooManyRequests && (userBound != nil || gt.user() != nil) {
+				// a bound user's 429 says only userLimitSaid, as one
+				// refused before any account was asked (T-067): the
+				// vendor's words and name are the call's error, the
+				// operator's; its headers stay as they came
+				hw.releaseSaid(from, userLimitSaid)
+			} else {
+				hw.release()
+			}
 			if hw.passing {
 				clientResponseID = call.Usage.ResponseID
 			}
