@@ -2881,6 +2881,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acc .acc-tools { flex-basis: 100%; display: none; align-items: center; flex-wrap: wrap; gap: 6px; padding-left: 25px; min-width: 0; }
 .acc.tools-open .acc-tools { display: flex; }
 .acc .acc-tools > :is(.amodels, .acap, .alane, .text.quiet) { opacity: 1; }
+.acc .acc-tools > .acc-export:not(.busy) { opacity: 1; }
 /* Remove ends the line, and where the line wraps it ends the next */
 .acc .acc-tools > .text.quiet { margin-left: auto; }
 /* a key's row (#841): what shows only on hover takes no room till then,

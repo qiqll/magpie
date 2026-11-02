@@ -13291,13 +13291,13 @@ function renderAccounts(a, p) {
         line.append(forget, use);
       }
     }
-    // its sign-in as CLIProxyAPI's auth file
-    if (CLIPROXY_AGENTS.includes(a.agent) && !sub?.plugin && !unusable(l) && !(a.agent === "antigravity" && l.own)) row.append(cliproxyButton(a, l));
     if (quota && !l.lapsed) line.querySelector(".plan").after(accountRefresh(a.agent, p, l.user));
     row.append(accountQuota(l.lapsed ? { [l.user]: { error: t(l.lapsed) } } : quota, l.user, capFor, p ? (m, w) => windowCapMeter(m, p, l.user, w) : null, a.agent));
     row.classList.add("with-aq"); // not :has(.aq), which Safari 15.0 lacks (#220)
     // Remove goes under ⋯ too, but beside Sign in again while signed out
     if (!row.classList.contains("signed-out")) tools.append(...line.querySelectorAll(":scope > .text.quiet"));
+    // its sign-in as CLIProxyAPI's file
+    if (CLIPROXY_AGENTS.includes(a.agent) && !sub?.plugin && !unusable(l) && !(a.agent === "antigravity" && l.own)) tools.append(cliproxyButton(a, l));
     if (tools.childElementCount) {
       const key = (p?.id || a.agent) + "@" + String(l.user).toLowerCase(), more = el("button", "acc-more");
       more.type = "button";

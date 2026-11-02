@@ -75,11 +75,18 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.locator(".row.provider", { hasText: name }).first().click();
       await page.locator(".editor .acc").first().waitFor();
     };
+    // Export waits under ⋯ with Remove: the row's ⋯ opens that line
+    const toolsOf = async (page, user) => {
+      const row = page.locator(".editor .acc", { hasText: user });
+      if (!(await row.evaluate((r) => r.classList.contains("tools-open")))) await row.locator(".acc-more").click();
+    };
 
     test(`${engine} ${lang}: magpie web downloads the account's CLIProxyAPI file, asked first`, async (t) => {
       const { page, errors, posts } = await open(t, true);
       await edit(page, "Codex");
       const exp = page.locator(".editor .acc", { hasText: "me@example.com" }).getByRole("button", { name: w.export, exact: true });
+      assert.equal(await page.locator(".editor .acc", { hasText: "me@example.com" }).locator(".acc-tools > .acc-export").isVisible(), false, "Export waits under ⋯");
+      await toolsOf(page, "me@example.com");
       assert.equal(await exp.count(), 1);
       assert.ok(await exp.getAttribute("title"));
       await exp.click();
@@ -108,6 +115,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     test(`${engine} ${lang}: in the app it goes to Downloads, and the status says where`, async (t) => {
       const { page, errors, posts } = await open(t, false);
       await edit(page, "Codex");
+      await toolsOf(page, "me@example.com");
       await page.locator(".editor .acc", { hasText: "me@example.com" }).getByRole("button", { name: w.export, exact: true }).click();
       await page.locator("dialog.action-confirm[open]").getByRole("button", { name: w.export, exact: true }).click();
       await page.waitForFunction((s) => document.querySelector("#status")?.textContent.includes(s), w.saved);
@@ -119,8 +127,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const { page, errors } = await open(t, true, 420);
       await edit(page, "Claude Code");
       const row = (user) => page.locator(".editor .acc", { hasText: user }).getByRole("button", { name: w.export, exact: true });
+      await toolsOf(page, "ok@example.com");
       assert.equal(await row("ok@example.com").count(), 1);
-      assert.equal(await row("gone@example.com").count(), 0, "a Claude account whose sign-in is gone");
+      // under a ⋯ shut or open, a role lookup skips what isn't shown
+      assert.equal(await page.locator(".editor .acc", { hasText: "gone@example.com" }).locator(".acc-export").count(), 0, "a Claude account whose sign-in is gone");
       // nothing hovers on a phone: Export shows as Remove does, a finger's size
       const shown = await row("ok@example.com").evaluate((b) => { const r = b.getBoundingClientRect(); return [getComputedStyle(b).opacity, Math.round(r.width), Math.round(r.height)]; });
       assert.equal(shown[0], "1", "Export is hidden on a phone");
@@ -129,7 +139,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.ok(over <= 0, `the page runs ${over}px past 420px`);
       await page.goto("http://magpie.test/?view=providers");
       await edit(page, "Copilot");
-      assert.equal(await page.locator(".editor .acc").getByRole("button", { name: w.export, exact: true }).count(), 0, "Copilot has none");
+      assert.equal(await page.locator(".editor .acc .acc-export").count(), 0, "Copilot has none");
       assert.deepEqual(errors, []);
     });
   }
