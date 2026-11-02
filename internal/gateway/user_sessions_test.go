@@ -141,6 +141,127 @@ func TestUserSessionsPassAnAlmostSpentAccount(t *testing.T) {
 	}
 }
 
+// A user's account past lowShare (90%), not spending its credits first,
+// takes no new session while another of its own has room, the user's
+// first too and with nobody held anywhere, as readyForNew passes it
+// unbound (T-052, the owner's choice A); a session answered there stays.
+// With every one of them past it, the order stands: each new session goes
+// to the user's first, as unbound.
+func TestUserSessionsPassAnAccountPastLowShare(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		used  map[string]float64
+		first string
+		later string
+	}{
+		{"first-low", map[string]float64{"me@example.com": 92, "spare@example.com": 10}, "acct-2,acct-2,acct-2", "acct-2,acct-2"},
+		{"spare-low", map[string]float64{"me@example.com": 10, "spare@example.com": 92}, "acct-1,acct-1,acct-1", "acct-1,acct-1"},
+		{"both-low", map[string]float64{"me@example.com": 92, "spare@example.com": 93}, "acct-1,acct-1,acct-1", "acct-1,acct-1"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			codexSignedIn(t, "spare@example.com")
+			asked := cachedUpstream(t)
+			writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+				"alice": {Who: "codex@me@example.com", Account: "me@example.com", More: []userSeat{{Who: "codex@spare@example.com", Account: "spare@example.com"}}},
+			}}})
+			capUsage(t, c.used)
+			s := byUser(New())
+			if got := sessionsAsked(t, s, asked, "s1", "s2", "s3"); got != c.first {
+				t.Fatalf("new sessions asked %s, want %s", got, c.first)
+			}
+			if got := sessionsAsked(t, s, asked, "s1", "s2"); got != c.later {
+				t.Fatalf("later turns asked %s, want %s", got, c.later)
+			}
+		})
+	}
+}
+
+// A conversation routed afresh (cold, T-042) passes the user's own account
+// past lowShare as a new one does: s2 went cold on acct-2, now at 92%, and
+// goes to acct-1, though acct-1 holds two and acct-2 nothing else.
+func TestUserColdSessionPassesAnAccountPastLowShare(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	asked := cachedUpstream(t)
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"alice": {Who: "codex@me@example.com", Account: "me@example.com", More: []userSeat{{Who: "codex@spare@example.com", Account: "spare@example.com"}}},
+	}}})
+	s := byUser(New())
+	if got := sessionsAsked(t, s, asked, "s1", "s2", "s3"); got != "acct-1,acct-2,acct-1" {
+		t.Fatalf("new sessions asked %s", got)
+	}
+	capUsage(t, map[string]float64{"me@example.com": 10, "spare@example.com": 92})
+	ageStick(t, "s2", chatGPTCold+time.Minute)
+	if got := sessionsAsked(t, s, asked, "s2"); got != "acct-1" {
+		t.Fatalf("cold session asked %s, want acct-1", got)
+	}
+	if r := lastRoute(s); r.Affinity == nil || r.Affinity.Why != "cold" {
+		t.Fatalf("route %+v", r.Affinity)
+	}
+}
+
+// A group's sessions on a member's provider pass the user's own account
+// past lowShare the same (groupTurn.spreadOwn, T-052).
+func TestUserGroupSessionsPassAnAccountPastLowShare(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	asked := cachedUpstream(t)
+	if err := provider.SaveGroup(provider.Group{ID: "solo", Name: "Solo", Members: []string{"codex/gpt-5.5"}, Routing: provider.Ordered}); err != nil {
+		t.Fatal(err)
+	}
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"alice": {Who: "codex@me@example.com", Account: "me@example.com", More: []userSeat{{Who: "codex@spare@example.com", Account: "spare@example.com"}}},
+	}}})
+	capUsage(t, map[string]float64{"me@example.com": 92, "spare@example.com": 10})
+	s := byUser(New())
+	for _, session := range []string{"s1", "s2", "s3"} {
+		rec := postAt(s, "/v1/responses", `{"model":"group/solo","stream":true,"input":"hi `+session+`"}`,
+			map[string]string{UserHeader: "alice", "session_id": session})
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", session, rec.Code, rec.Body.String())
+		}
+	}
+	if got := strings.Join(asked(true), ","); got != "acct-2,acct-2,acct-2" {
+		t.Fatalf("the group's new sessions asked %s", got)
+	}
+}
+
+// ownLeastHeld's lowShare rule is readyForNew's: one spending its credits
+// first is still taken past it, and a subagent's stick still counts where
+// it is held (ready's own rule isn't brought along), so of two with room
+// the one a subagent holds isn't the one held on fewest (T-052).
+func TestOwnLeastHeldLowShareAsReadyForNew(t *testing.T) {
+	c := func(key string) candidate {
+		return candidate{p: provider.Provider{ID: "t052", Key: key}, model: "m", rest: "t052#" + key}
+	}
+	a, b, d := c("ka"), c("kb"), c("kd")
+	t.Cleanup(func() {
+		sticks.Lock()
+		for _, k := range []string{"t052|s1", "t052|s2", "t052|x|agent:sub"} {
+			delete(sticks.m, k)
+			delete(sticks.opening, k)
+		}
+		sticks.Unlock()
+	})
+	low := Weighed{Known: true, Used: 92}
+	if got, _ := ownLeastHeld("t052", "t052|s1", []candidate{a, b}, planned{order: []Weighed{low, {Known: true, Used: 10}}}); got[0].who() != b.who() {
+		t.Fatalf("past lowShare, the first took a new session: %s", got[0].who())
+	}
+	credits := Weighed{Known: true, Used: 92, CreditsFirst: true}
+	if got, _ := ownLeastHeld("t052", "t052|s2", []candidate{a, b}, planned{order: []Weighed{credits, {Known: true, Used: 10}}}); got[0].who() != a.who() {
+		t.Fatalf("spending its credits first, the first was passed: %s", got[0].who())
+	}
+	sticks.Lock()
+	for k := range sticks.opening {
+		if strings.HasPrefix(k, "t052|") {
+			delete(sticks.opening, k)
+		}
+	}
+	sticks.m["t052|x|agent:sub"] = stick{rest: b.rest, who: b.who(), model: "m", at: time.Now()}
+	sticks.Unlock()
+	if got, _ := ownLeastHeld("t052", "t052|s1", []candidate{b, d, a}, planned{order: []Weighed{{}, {}, low}}); got[0].who() != d.who() {
+		t.Fatalf("a subagent's stick not counted: went to %s, want %s", got[0].who(), d.who())
+	}
+}
+
 // Bound by user under a routing that spreads sessions (Session), a
 // subagent's first request goes to the account its session's lead is on,
 // one of the user's own, not to the one of them the fewest are held on:

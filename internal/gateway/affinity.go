@@ -741,7 +741,8 @@ func affine(scope, owner, mode string, rotate, spread, inOrder bool, in http.Hea
 // in turn: sessions of one user all sent to its first account wrote each
 // one's prompt to that account's cache beside the others' (T-013). One all
 // but used up is passed over while another has room, as ownedBy puts it
-// last; on a tie the first stays first. A conversation answered stays
+// last, and so is one past lowShare not spending its credits first, as
+// readyForNew passes it unbound (T-052); on a tie the first stays first. A conversation answered stays
 // where affine keeps it, and a user with one account goes there. One
 // affine doesn't keep (cold, no-cache, gone, resting, spent: afresh) is
 // put the same way, not back on the user's first (T-042).
@@ -861,8 +862,9 @@ const heldFor = 30 * time.Minute
 // with the cache there written again elsewhere (T-042). Another routed
 // afresh whose request is out counts where it was sent alone, not where
 // it was answered too. With spentLast,
-// one all but used up isn't picked over one with room (ownLeastHeld,
-// groupTurn.spreadOwn). A fallback is none of those while the provider's
+// one all but used up, or past lowShare as readyForNew says, isn't picked
+// over one with room, nobody held or not (ownLeastHeld,
+// groupTurn.spreadOwn); with none that has room, the order stands. A fallback is none of those while the provider's
 // own leads (standsIn): held by nobody, it was the one held on fewest.
 //
 // ready is for a conversation kept for the whole session (spreadsSessions):
@@ -906,7 +908,7 @@ func leastHeld(scope, key string, cs []candidate, pl planned, spentLast, ready b
 		// counted from now until it is answered or ends
 		sticks.opening[key] = stick{rest: cs[0].rest, who: cs[0].who(), model: cs[0].model, effort: cs[0].effort, at: now}
 	}()
-	if len(held) == 0 {
+	if len(held) == 0 && !spentLast {
 		return cs, pl
 	}
 	seat := func(c candidate) string { return c.who() + "/" + provider.WithMemberEffort(c.model, c.effort) }
@@ -915,7 +917,10 @@ func leastHeld(scope, key string, cs []candidate, pl planned, spentLast, ready b
 		if pl.order[i].Rest != nil || pl.order[i].Aside || standsIn(pl.order, i) || lastBehind(pl.order, i) || busyBehind(pl.order, i) || ready && i > 0 && !readyForNew(pl.order, i) {
 			continue
 		}
-		if w := pl.order[i]; spentLast && w.Known && w.Used >= provider.SpentShareOf(c.p.Routing) {
+		if w := pl.order[i]; spentLast && w.Known && (w.Used >= provider.SpentShareOf(c.p.Routing) || w.Used >= lowShare && !w.CreditsFirst) {
+			// nor, as readyForNew, one past lowShare that doesn't spend its
+			// credits first, the user's first too: ownedBy's order is the
+			// user's, not Smart's, which puts it behind (T-052)
 			continue
 		}
 		if best < 0 || held[seat(c)] < held[seat(cs[best])] {
