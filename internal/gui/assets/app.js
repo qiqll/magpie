@@ -6534,8 +6534,7 @@ function unmovedLine(p) {
 
 // renderLapsed: over the list, each account in use to sign in again
 // (signInLapsed), which the gateway leaves out till then, with its Sign in
-// again, which opens the editor with the sign-in under way; the line is
-// drawn by signagain.js, loaded once there is one
+// again, which opens the editor with the sign-in under way (signagain.js)
 function renderLapsed() {
   const box = $("#lapsedAccounts");
   if (!box) return;
@@ -6548,8 +6547,7 @@ function renderLapsed() {
   box.replaceChildren(...lines.map(([p, l]) => lapsedLine(p, l)));
   box.hidden = !lines.length;
 }
-// signagain.js: the lapsed line, a failed sign-in's status and an open
-// editor's accounts read on return, loaded once asked for
+// signagain.js: loaded once asked for
 function signAgainJS() { return signAgainJS.p ||= import("./signagain.js").catch((e) => { signAgainJS.p = null; throw e; }); }
 
 // signInLapsed: account l of agent has to be signed in again, for its row
@@ -12369,9 +12367,9 @@ async function followSignIn(id) {
 // that may hold its code or key (r.said)
 const signInWhy = (r) => r.said ? t(r.said, r) : r.error;
 
-// saySignInFailed: a failure out of sight said on the status line, by
-// signagain.js
-const saySignInFailed = () => signing?.state === "failed" && signAgainJS().then(() => sayFailed(), () => {});
+// saySignInFailed: a failure out of sight said on the status line
+// (signagain.js), its reason alone if that won't load
+const saySignInFailed = () => signing?.state === "failed" && signAgainJS().then(() => sayFailed(), (e) => status(signing?.error || e.message, "err"));
 
 // signingKept: what a sign-in keeps across its updates, for Try again
 function signingKept() {
