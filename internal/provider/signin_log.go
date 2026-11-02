@@ -237,6 +237,10 @@ func logName(s string) string {
 	return s
 }
 
+// LogName is logName, for another package's log line naming an account
+// or a user.
+func LogName(s string) string { return logName(s) }
+
 // runLogged runs a log line kept for after a lock is let go, if any.
 func runLogged(f func()) {
 	if f != nil {

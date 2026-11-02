@@ -191,7 +191,7 @@ func slicesHasOther(got []string, want string) bool {
 // A user with as many accounts as its tier has (free's 2: no tier sent,
 // no user-tiers.json), each out: a 429 that names its accounts, its tier
 // and its most, and says when the first of them is back, and for which
-// model; the third account isn't asked, nor added.
+// model, as "accounts" (T-062); the third account isn't asked, nor added.
 func TestUserAtItsTierMostIsTold(t *testing.T) {
 	codexSignedIn(t, "spare@example.com", "third@example.com")
 	out, asked := limitUpstream(t)
@@ -207,7 +207,7 @@ func TestUserAtItsTierMostIsTold(t *testing.T) {
 	if rec.Code != 429 || slicesHasOther(got, spare) {
 		t.Fatalf("both out, at the max: %d asked %v: %s", rec.Code, got, rec.Body.String())
 	}
-	if limit, until := limitOf(t, rec); limit != "quota" || !near(until, time.Hour) {
+	if limit, until := limitOf(t, rec); limit != "accounts" || !near(until, time.Hour) {
 		t.Fatalf("the vendor's own: %q until %v: %v", limit, until, rec.Header())
 	}
 	rec = userPost(s, "codex/gpt-5.5", "alice", "full again")
@@ -215,7 +215,7 @@ func TestUserAtItsTierMostIsTold(t *testing.T) {
 		t.Fatalf("resting, at the max: %d asked %v", rec.Code, got)
 	}
 	limit, until := limitOf(t, rec)
-	if limit != "quota" || !near(until, time.Hour) {
+	if limit != "accounts" || !near(until, time.Hour) {
 		t.Fatalf("the first back: %q until %v: %v %s", limit, until, rec.Header(), rec.Body.String())
 	}
 	seats := seatsIn(t, "codex")["alice"]

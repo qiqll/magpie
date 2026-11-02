@@ -592,7 +592,7 @@ func (s *Server) serveSystemOne(w http.ResponseWriter, r *http.Request) {
 	// after the key's holds as a turn's, never another user's
 	own, opl, u, err := s.usersOn(r, p, cs, pl)
 	if err != nil {
-		s.answerUserRefused(w, provider.Chat, &Call{}, err)
+		s.answerUserRefused(w, r, provider.Chat, &Call{Model: asked}, err)
 		return
 	} else if u != nil {
 		cs, pl = own, opl

@@ -132,7 +132,7 @@ func (s *Server) serveDecisionGroup(w http.ResponseWriter, r *http.Request, body
 	gu := s.groupUsersOf(r, ms, cs, pl)
 	if gu != nil {
 		if cs, pl = gu.begin(cs, pl); len(cs) == 0 && gu.refused != nil {
-			s.answerUserRefused(w, provider.Chat, &Call{}, gu.refused)
+			s.answerUserRefused(w, r, provider.Chat, &Call{Model: asked}, gu.refused)
 			return
 		}
 	} else {
@@ -400,7 +400,7 @@ func (s *Server) serveDecideUsers(w http.ResponseWriter, r *http.Request, body [
 				}
 				tried(status, errMsg, failAuth, rest, used)
 				if refused != nil && last {
-					s.answerUserRefused(w, provider.Chat, &Call{}, refused)
+					s.answerUserRefused(w, r, provider.Chat, &Call{Model: asked}, refused)
 					return
 				}
 				continue // the next of its own, its spare, or another provider's

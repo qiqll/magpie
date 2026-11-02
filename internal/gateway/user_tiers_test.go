@@ -142,7 +142,7 @@ func TestUserTierSetsItsAccounts(t *testing.T) {
 	}
 
 	got, rec = spend(t, s, "bob", "pro", out, asked)
-	if len(got) != 4 || rec.Code != 429 || !strings.Contains(refusedWhy(s), "at its tier pro's 4 accounts") || rec.Header().Get(UserLimitHeader) != "quota" {
+	if len(got) != 4 || rec.Code != 429 || !strings.Contains(refusedWhy(s), "at its tier pro's 4 accounts") || rec.Header().Get(UserLimitHeader) != "accounts" {
 		t.Fatalf("pro: answered by %v, then %d %v %s", got, rec.Code, rec.Header(), rec.Body.String())
 	}
 	if seats := seatsIn(t, "codex")["bob"]; len(seats) != 4 {

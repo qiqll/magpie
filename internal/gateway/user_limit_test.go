@@ -90,6 +90,8 @@ func near(t time.Time, d time.Duration) bool {
 // A user whose account is out of its allowance is told so, and when it is
 // back, by the reply it fails with and by every reply until then, which
 // asks nobody; a user on another account, or a request with none, isn't.
+// With its one account its tier's most, it is "accounts" (T-062): no
+// spare is added in its place.
 // A new user bound to none, every account out, is told when the one asked
 // is back.
 func TestUserLimitSaysWhenItsAccountIsBack(t *testing.T) {
@@ -104,7 +106,7 @@ func TestUserLimitSaysWhenItsAccountIsBack(t *testing.T) {
 	out(bound, 7200)
 	rec = userPost(s, "codex/gpt-5.5", "alice", "again")
 	limit, until := limitOf(t, rec)
-	if rec.Code != 429 || limit != "quota" || !near(until, 2*time.Hour) {
+	if rec.Code != 429 || limit != "accounts" || !near(until, 2*time.Hour) {
 		t.Fatalf("out of its allowance: %d %q until %v: %v %s", rec.Code, limit, until, rec.Header(), rec.Body.String())
 	}
 	if got := asked(true); slices.ContainsFunc(got, func(a string) bool { return a != bound }) {
@@ -112,7 +114,7 @@ func TestUserLimitSaysWhenItsAccountIsBack(t *testing.T) {
 	}
 	// resting: told the same, nobody asked
 	rec = userPost(s, "codex/gpt-5.5", "alice", "and again")
-	if l, u := limitOf(t, rec); rec.Code != 429 || l != "quota" || !u.Equal(until) {
+	if l, u := limitOf(t, rec); rec.Code != 429 || l != "accounts" || !u.Equal(until) {
 		t.Fatalf("resting: %d %q until %v, first said %v: %s", rec.Code, l, u, until, rec.Body.String())
 	}
 	if got := asked(true); len(got) != 0 {

@@ -2278,10 +2278,11 @@ nobody is on, and nobody joins it. A user of a tier that shares (`share` 2
 or more) goes to the account most users are on that still has a seat
 instead, leaving the empty ones to users who have theirs alone. With no
 account of the provider that has a seat for it, the request is a 429,
-`X-Magpie-User-Limit: quota`, and nothing is sent: with
-`X-Magpie-User-Until` when the accounts it could share rest (the first of
-them back), and without it when every account is taken, as a user leaves
-an account only when the account goes. From then on only its accounts are asked for the user:
+and nothing is sent: with the limit of the accounts it could share and
+`X-Magpie-User-Until` when they rest (the first of them back), and
+`X-Magpie-User-Limit: seats` without it when every account is taken, as a
+user leaves an account only when the account goes (`quota` before
+2026-11-02). From then on only its accounts are asked for the user:
 its first, then its spares, in that order. A conversation under way stays
 on the account of them it is on, as its affinity says; a new one goes to
 the first of them with room, so back to the first once it is back. A user
@@ -2312,7 +2313,19 @@ for you to stop sending the user's requests until then:
 `X-Magpie-User-Limit` is `quota` (the account's allowance is used up),
 `credit` (out of credit), `rate` (rate limited) or `cap` (at the usage cap
 set on it in magpie), and `X-Magpie-User-Until` is when it is back
-(RFC 3339, UTC), as `Retry-After` is in seconds. When only one model of the account is out and its others still
+(RFC 3339, UTC), as `Retry-After` is in seconds. Since 2026-11-02 three
+more values say why no account answers, each told `quota` before:
+`seats` (the user is bound to none, and every account it could be given
+is taken by as many users as can share it, or has no room by its users'
+use), `accounts` (its accounts' allowance is used up, and it has as many
+as its tier's `max_accounts`, so no spare is added) and `signin` (its
+accounts have to be signed in again; which, and why, is the operator's). The values before keep their
+meaning, and the reply's body says no more than before. Every such
+refusal, before any account is asked, is a Rejected row in the usage log
+(Usage › Requests), its error the reason in full, with no tokens or cost
+and counted by no key's limit, and a line in magpie's log naming the
+user, provider, kind and reason: one a user, provider and kind every 5
+minutes, the next saying how many more there were. When only one model of the account is out and its others still
 answer, `X-Magpie-User-Model` names it: stop only that model's requests. A
 limit without `X-Magpie-User-Until` is one magpie doesn't know the end of.
 Every request of the user before then is refused at once, with the same

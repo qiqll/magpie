@@ -174,7 +174,7 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 		// out (#1657), its user's alone bound by user (usersOn)
 		cs, own, code, err := s.onKeys(r, p, model, asked)
 		if err != nil {
-			if s.answerUserRefused(w, provider.Chat, &call, err) {
+			if s.answerUserRefused(w, r, provider.Chat, &call, err) {
 				s.record(call)
 				return
 			}
@@ -312,7 +312,7 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 			if next, refused, lapsed := u.lapsed(c, code, []byte(err.Error()), last); lapsed {
 				if refused != nil {
 					call.Fallback = strings.Join(skipped, "; ")
-					s.answerUserRefused(w, provider.Chat, &call, refused)
+					s.answerUserRefused(w, r, provider.Chat, &call, refused)
 					call.Error += " (" + c.label() + ": " + err.Error() + ")"
 					s.record(call)
 					return

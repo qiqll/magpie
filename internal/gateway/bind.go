@@ -9,6 +9,7 @@ package gateway
 // (user_tiers.go).
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -232,6 +233,11 @@ func ownOf(keyID, user string, tier Tier, named bool, p provider.Provider, pool 
 type userRefusedError struct {
 	u       *UserBound
 	refused userRefusal
+	// pid: the provider asked, for the usage log's row and magpie's log;
+	// tried: an account was asked first (userTry.lapsed), its row the
+	// try's, not a Rejected one (refusedRow)
+	pid   string
+	tried bool
 }
 
 func (e *userRefusedError) Error() string {
@@ -248,19 +254,18 @@ func userRefusedStatus(err error) int {
 	return ur.refused.status
 }
 
-// refusedFor is the userRefusedError of a refusal of status that says msg.
-func refusedFor(status int, msg string) error {
-	return &userRefusedError{refused: userRefusal{status: status, msg: msg}}
-}
-
 // answerUserRefused answers err, when it is a userRefusedError, as serve
 // answers a turn its user's binding refuses (userRefused), and says so.
-func (s *Server) answerUserRefused(w http.ResponseWriter, from provider.Protocol, call *Call, err error) bool {
+// Refused before any account was asked, r's row in the usage log is a
+// Rejected one with why (refusedRow).
+func (s *Server) answerUserRefused(w http.ResponseWriter, r *http.Request, from provider.Protocol, call *Call, err error) bool {
 	var ur *userRefusedError
 	if !errors.As(err, &ur) {
 		return false
 	}
+	call.Provider = cmp.Or(call.Provider, ur.pid)
 	s.userRefused(w, from, call, ur.u, ur.refused)
+	refusedRow(r, call, err)
 	return true
 }
 
@@ -280,29 +285,29 @@ func (s *Server) usersOn(r *http.Request, p provider.Provider, cs []candidate, p
 	}
 	user, bad := userOf(r.Header)
 	if bad != "" {
-		return nil, pl, nil, refusedFor(http.StatusBadRequest, bad)
+		return nil, pl, nil, &userRefusedError{refused: userRefusal{status: http.StatusBadRequest, msg: bad}, pid: p.ID}
 	}
 	if user == "" {
-		return nil, pl, nil, refusedFor(http.StatusBadRequest, noUserSaid())
+		return nil, pl, nil, &userRefusedError{refused: userRefusal{status: http.StatusBadRequest, msg: noUserSaid()}, pid: p.ID}
 	}
 	tier, bad, err := tierOf(r.Header)
 	if bad != "" {
-		return nil, pl, nil, refusedFor(http.StatusBadRequest, bad)
+		return nil, pl, nil, &userRefusedError{u: &UserBound{User: user}, refused: userRefusal{status: http.StatusBadRequest, msg: bad}, pid: p.ID}
 	}
 	if err != nil {
-		return nil, pl, nil, &userRefusedError{refused: userRefusal{status: http.StatusServiceUnavailable, unknown: true,
+		return nil, pl, nil, &userRefusedError{u: &UserBound{User: user}, pid: p.ID, refused: userRefusal{status: http.StatusServiceUnavailable, unknown: true,
 			msg: fmt.Sprintf("%s: magpie can't read user-tiers.json, so it doesn't know how many accounts %q may have; nothing was sent. Its log says why", UserTierHeader, user)}}
 	}
 	own, opl, ub, refused := ownOf(userKey(r), user, tier, tierNamed(r.Header), p, cs, pl)
 	if refused.status != 0 {
-		return nil, opl, nil, &userRefusedError{u: ub, refused: refused}
+		return nil, opl, nil, &userRefusedError{u: ub, refused: refused, pid: p.ID}
 	}
 	// "none": no account of p can answer now, and the user is bound to
 	// none of them yet; those are p's, others' among them, not the user's
 	// (a turn is routed among them, a probe: this isn't). Back when the
 	// first of them is
 	if ub != nil && ub.Why == "none" || len(own) == 0 {
-		return nil, opl, nil, &userRefusedError{u: ub, refused: userRefusal{status: http.StatusServiceUnavailable, until: firstBack(cs), none: true,
+		return nil, opl, nil, &userRefusedError{u: ub, pid: p.ID, refused: userRefusal{status: http.StatusServiceUnavailable, until: firstBack(cs), none: true,
 			msg: fmt.Sprintf("%s: none of %s's accounts %q is on can take this request now; no other is tried in its place", UserHeader, p.Name, user)}}
 	}
 	return own, opl, &userTry{ub: ub, pool: cs, poolPl: pl}, nil
@@ -360,7 +365,7 @@ func (u *userTry) lapsed(c candidate, status int, body []byte, last bool) (next 
 			return next, nil, true
 		}
 	}
-	return nil, &userRefusedError{u: u.ub, refused: userTryRefusal(u.ub, why)}, true
+	return nil, &userRefusedError{u: u.ub, refused: userTryRefusal(u.ub, why), pid: c.p.ID, tried: true}, true
 }
 
 // usersSeated narrows cs, p's candidates for r's count of tokens, bound

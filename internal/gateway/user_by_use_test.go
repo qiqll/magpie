@@ -169,7 +169,7 @@ func TestByUseFullRefusesAndSaysWhy(t *testing.T) {
 	usedLately(t, bobOnMe(t), spread("alice", "z@example.com", 800_000, 6.5))
 	s := byUser(New())
 	rec := tierPost(s, "alice", "free", "hi")
-	if limit, _ := limitOf(t, rec); rec.Code != 429 || limit != "quota" {
+	if limit, _ := limitOf(t, rec); rec.Code != 429 || limit != "seats" {
 		t.Fatalf("alice: %d %q %s", rec.Code, limit, rec.Body.String())
 	}
 	if why := refusedWhy(s); !strings.Contains(why, "no room by their users' use (by_use: me@example.com its 7d window would be 108% used") {

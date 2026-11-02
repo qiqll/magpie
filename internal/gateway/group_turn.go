@@ -437,7 +437,7 @@ func (g *groupTurn) refusal() (*UserBound, userRefusal) {
 	refused := errors.As(g.refused, &ur)
 	user, _ := userOf(g.r.Header)
 	if g.pinLapsed != "" && (!refused || ur.refused.none) {
-		return &UserBound{User: user}, userRefusal{status: http.StatusTooManyRequests, limit: failQuota, until: time.Now().Add(lapsedRetry),
+		return &UserBound{User: user}, userRefusal{status: http.StatusTooManyRequests, limit: limitSignin, until: time.Now().Add(lapsedRetry),
 			msg: AccountHeader + ": " + g.pinLapsed + "; none of the user's accounts can take it in its place, and none is free to bind it to"}
 	}
 	if refused {
@@ -462,6 +462,7 @@ func (s *Server) groupTurnRefused(w http.ResponseWriter, from provider.Protocol,
 		if refused.limit != "" {
 			userLimited(w.Header(), refused.limit, refused.until, refused.model)
 		}
+		logUserRefused(u, call.Provider, refused)
 		failTo(w, kept, from, refused.status, refused.told())
 	}
 	if before != "" {

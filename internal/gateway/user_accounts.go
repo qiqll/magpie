@@ -69,7 +69,12 @@ const userMax = 128
 // can't be answered for a limit until a time: the account it is bound to
 // (bound to none, the provider's accounts) is out of its allowance
 // ("quota"), its credit ("credit"), rate limited ("rate") or at the usage
-// cap set on it in magpie ("cap"). UserUntilHeader is when it is back,
+// cap set on it in magpie ("cap"); or bound to none, no account is free
+// to bind it to, each taken by as many users as can share it ("seats"),
+// its accounts out of their allowance, it has as many as its tier lets it
+// have ("accounts"), or its accounts have to be signed in again
+// ("signin").
+// UserUntilHeader is when it is back,
 // RFC 3339 in UTC, as Retry-After is in seconds: the caller stops sending
 // the user's requests until then. UserModelHeader names the one model
 // out, when the account still answers its others. Neither is there when
@@ -80,6 +85,15 @@ const (
 	UserLimitHeader = "X-Magpie-User-Limit"
 	UserUntilHeader = "X-Magpie-User-Until"
 	UserModelHeader = "X-Magpie-User-Model"
+)
+
+// The UserLimitHeader of a limit that is no account's own (T-062): the
+// pool's seats taken, the tier's max_accounts reached, a sign-in to be
+// made again. Before, each was told "quota".
+const (
+	limitSeats    = "seats"
+	limitAccounts = "accounts"
+	limitSignin   = "signin"
 )
 
 // userLimit is the UserLimitHeader a failure why is, "" for one that
@@ -1097,11 +1111,12 @@ func onlyOf(pid string, cands []candidate, pl planned) ([]candidate, planned) {
 // fullRefusal is why user, of tier, is bound to no account of provider
 // pid: none of cands has a seat for it but those resting, signed out by
 // their vendor or held at a cap (pl's held and capped), and those taken
-// are never asked for it. A 429, the "quota" of the pool: until the first
-// with a seat is back, a rest's end or a window's renewal, else unknown,
-// as a user leaves an account only when it goes.
+// are never asked for it. A 429: the limit of the first with a seat back,
+// until its rest's end or its window's renewal; with none of them
+// resting or held, "seats", unknown until when, as a user leaves an
+// account only when it goes.
 func fullRefusal(user string, tier Tier, pid string, cands []candidate, pl planned, uses seatUses, lapsedWho map[string]string) userRefusal {
-	r := userRefusal{status: http.StatusTooManyRequests, limit: failQuota}
+	r := userRefusal{status: http.StatusTooManyRequests, limit: limitSeats}
 	var why []string
 	marked := false
 	for _, c := range cands {
@@ -1214,7 +1229,11 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 			out = false
 		}
 	}
-	refuse := func(note string) ([]candidate, planned, *UserBound, bool, userRefusal) {
+	// limit, when no spare is added for its tier's max_accounts reached
+	// ("accounts"), is the limit a 429 says in place of "quota", its
+	// accounts' allowance used up: the spare is what it is out of. Out of
+	// credit, rate limited or at a cap is said as it is
+	refuse := func(note, limit string) ([]candidate, planned, *UserBound, bool, userRefusal) {
 		if len(cands) > 0 {
 			return cands, pl, u, false, userRefusal{}
 		}
@@ -1223,13 +1242,17 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 			// only, the others say why (a 400 for one without the model)
 			return nil, pl, u, false, lapsedRefusal(u, note)
 		}
-		return nil, pl, u, false, setRefusal(u, rests, held, pl, note)
+		r := setRefusal(u, rests, held, pl, note)
+		if limit != "" && r.status == http.StatusTooManyRequests && r.limit == failQuota {
+			r.limit = limit
+		}
+		return nil, pl, u, false, r
 	}
 	if !out {
-		return refuse("")
+		return refuse("", "")
 	}
 	if mine >= u.max {
-		return refuse(u.atTier(mine))
+		return refuse(u.atTier(mine), limitAccounts)
 	}
 	tiers, _ := loadTiers()
 	budget := byUseOf(u.pid, pool, tiers, time.Now()) // before the lock, as bindUser's
@@ -1241,7 +1264,7 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 			// again, and whether one could be added can't be told
 			return nil, pl, u, false, userRefusal{status: http.StatusServiceUnavailable, unknown: true, msg: fmt.Sprintf("%s: user-accounts.json can't be read, so no other account can be added for %q now; nothing was sent. magpie's log says why", UserHeader, u.User)}
 		}
-		return refuse("user-accounts.json can't be read to add a spare")
+		return refuse("user-accounts.json can't be read to add a spare", "")
 	}
 	now := userBinds.m[u.key][u.pid][u.User].seats()
 	// another request of the user's added a spare since this one was
@@ -1262,7 +1285,7 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 		return append(added, cands...), planned{order: append(addedPl.order, pl.order...), left: pl.left, held: pl.held, capped: pl.capped, lapsed: pl.lapsed}, &grown, true, userRefusal{}
 	}
 	if n := len(slices.DeleteFunc(slices.Clone(now), func(st userSeat) bool { return keyHeld(st, u.pid, pool, left) })); n >= u.max {
-		return refuse(u.atTier(n))
+		return refuse(u.atTier(n), limitAccounts)
 	}
 	uses := seatUsesBy(u.pid, tiers, u.User, budget, u.tier.Share)
 	pick := spareOf(u.pid, pool, poolPl, now, true, u.tier, uses, lapsedWho)
@@ -1270,9 +1293,9 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 		if !slices.ContainsFunc(pool, func(c candidate) bool {
 			return c.p.ID == u.pid && !seatIn(now, c.who()) && uses.of(c).takes(u.tier.Share)
 		}) {
-			return refuse(fmt.Sprintf("every other account of the provider is taken by as many users as can share it (its %s, %s)%s", u.tier.shares(), UserTierHeader, uses.byUseSaid(u.pid, pool)))
+			return refuse(fmt.Sprintf("every other account of the provider is taken by as many users as can share it (its %s, %s)%s", u.tier.shares(), UserTierHeader, uses.byUseSaid(u.pid, pool)), "")
 		}
-		return refuse("no other account of the provider has room to be added")
+		return refuse("no other account of the provider has room to be added", "")
 	}
 	seats := append(slices.Clone(now), userSeat{Who: pool[pick].who(), Account: shownAs(pool[pick]), At: time.Now().UTC()})
 	setSeats(u.key, u.pid, u.User, seats)
@@ -1300,15 +1323,16 @@ func userTryRefusal(u *UserBound, refused userRefusal) userRefusal {
 
 // lapsedRefusal is why none of the accounts u is bound to is asked when
 // they all have to be signed in again: a 429 back in lapsedRetry, which
-// the caller is told as any limit (userLimitSaid), never that a sign-in
-// lapsed; the call's error, the operator's, says it and why no spare was
-// added (note).
+// the caller is told as any limit (userLimitSaid), its UserLimitHeader
+// "signin" alone saying a sign-in lapsed (T-062), never which; the
+// call's error, the operator's, says it and why no spare was added
+// (note).
 func lapsedRefusal(u *UserBound, note string) userRefusal {
 	msg := fmt.Sprintf("%s: %q is bound to %s, to be signed in again; no other account is tried in its place", UserHeader, u.User, strings.Join(accountsOf(u.seats), ", "))
 	if note != "" {
 		msg += ". No spare was added: " + note
 	}
-	return userRefusal{status: http.StatusTooManyRequests, msg: msg, limit: failQuota, until: time.Now().Add(lapsedRetry)}
+	return userRefusal{status: http.StatusTooManyRequests, msg: msg, limit: limitSignin, until: time.Now().Add(lapsedRetry)}
 }
 
 // atTier says u has n accounts of the provider, as many as its tier lets
@@ -1512,8 +1536,10 @@ func (r userRefusal) told() string {
 
 // userRefused writes refused, why a request of the user u goes to none
 // of its accounts, with its limit when it is one. The caller is told it
-// without the user's accounts (told); they are in the call's error.
+// without the user's accounts (told); they are in the call's error, and
+// in magpie's log (logUserRefused).
 func (s *Server) userRefused(w http.ResponseWriter, from provider.Protocol, call *Call, u *UserBound, refused userRefusal) {
+	logUserRefused(u, call.Provider, refused)
 	call.Status, call.Error = refused.status, "user bound: "+u.accountOr()
 	if refused.limit != "" {
 		userLimited(w.Header(), refused.limit, refused.until, refused.model)
@@ -1589,8 +1615,26 @@ func (s *Server) userLimitedAfter(h http.Header, u *UserBound, c candidate, stat
 			}
 		}
 	}
+	if limit == failQuota && u.atMost() {
+		// out of its allowance with as many accounts as its tier lets it
+		// have: told as growUser tells the next request, no spare added
+		limit = limitAccounts
+	}
 	userLimited(h, limit, until, model)
 	return rested
+}
+
+// atMost says u has as many accounts of its provider as its tier lets it
+// have, or more (lowered since), those the gateway key may not use not
+// counted, as growUser counts them.
+func (u *UserBound) atMost() bool {
+	mine := 0
+	for _, st := range u.seats {
+		if !keyHeld(st, u.pid, nil, u.left) {
+			mine++
+		}
+	}
+	return u.max > 0 && mine >= u.max
 }
 
 // seatRest is the rest of the account st, or of its model, while it

@@ -960,7 +960,7 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 	call.Fallback = strings.Join(skipped, "; ")
 	if err != nil && !v.asked {
 		// turned away before any vendor was asked: nothing was spent
-		if s.answerUserRefused(w, provider.Chat, &call, err) {
+		if s.answerUserRefused(w, r, provider.Chat, &call, err) {
 			call.Millis = time.Since(start).Milliseconds()
 			s.record(call)
 			return

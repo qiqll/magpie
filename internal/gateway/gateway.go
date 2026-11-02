@@ -2665,14 +2665,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		cands, pl = ofProvider(pinProvider, cands, pl)
 	}
 	// a user's request (--bind=user) is told only as a limit: a 429,
-	// back in lapsedRetry, that names no sign-in; why is the call's error,
-	// the operator's, and the account's row and the log say it lapsed
+	// back in lapsedRetry, that names no sign-in but in its
+	// UserLimitHeader ("signin"); why is the call's error, the
+	// operator's, and the account's row and the log say it lapsed
 	userLapsedRefused := func(user, more string) {
 		limitedUser := user
+		call.Provider = p.ID
 		s.userRefused(w, from, &call, &UserBound{User: limitedUser}, userRefusal{status: http.StatusTooManyRequests,
-			msg: AccountHeader + ": " + pinLapsed + "; " + more, limit: failQuota, until: time.Now().Add(lapsedRetry)})
-		finishCapture()
-		s.record(call)
+			msg: AccountHeader + ": " + pinLapsed + "; " + more, limit: limitSignin, until: time.Now().Add(lapsedRetry)})
+		turnedAway()
 	}
 	// with no user bound, told as a limit too: a 429 back in lapsedRetry
 	// that names no sign-in (the owner's decision, 2026-10-29); why is the
@@ -2701,11 +2702,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	if s.bind.byUser() && !isGroup && (pinLapsed == "" || pinProvider == p.ID) {
 		user, bad := userOf(r.Header)
 		bindsUser, limitedUser = user != "" || bad != "", user
+		// refused here, before any account is asked, the usage log has
+		// the request's Rejected row with why, and magpie's log a line
+		// (T-062): turnedAway, as any request turned away first
+		call.Provider = p.ID
 		if bad != "" {
 			call.Status, call.Error = 400, bad
+			noteRefused("", p.ID, "request", 400, "", bad)
 			writeError(w, from, 400, bad)
-			finishCapture()
-			s.record(call)
+			turnedAway()
 			return
 		}
 		if user != "" {
@@ -2719,9 +2724,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 					status, msg = 503, fmt.Sprintf("%s: magpie can't read user-tiers.json, so it doesn't know how many accounts %q may have; nothing was sent. Its log says why", UserTierHeader, user)
 				}
 				call.Status, call.Error = status, msg
+				kind := "request"
+				if err != nil {
+					kind = "unread"
+				}
+				noteRefused(user, p.ID, kind, status, "", msg)
 				writeError(w, from, status, msg)
-				finishCapture()
-				s.record(call)
+				turnedAway()
 				return
 			}
 			var refused userRefusal
@@ -2730,8 +2739,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// full keeps its limit headers (429)
 			if cands, pl, userBound, refused = bindUser(userKey(r), user, tier, tierNamed(r.Header), p, cands, pl); refused.status != 0 {
 				s.userRefused(w, from, &call, userBound, refused)
-				finishCapture()
-				s.record(call)
+				turnedAway()
 				return
 			}
 			// pinned to an account that isn't one of the user's: served as
@@ -2773,8 +2781,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// group's left to ask in its place: told as a limit (T-037)
 			if gt.pinLapsed != "" && len(cands) == 0 {
 				s.groupTurnRefused(w, from, nil, &call, gt)
-				finishCapture()
-				s.record(call)
+				turnedAway()
 				return
 			}
 		}
@@ -2802,9 +2809,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// a while, or why none is asked
 		var refused userRefusal
 		if cands, pl, userBound, grew, refused = growUser(userBound, pool, poolPl, cands, pl); refused.status != 0 {
+			call.Provider = p.ID
 			s.userRefused(w, from, &call, userBound, refused)
-			finishCapture()
-			s.record(call)
+			turnedAway()
 			return
 		}
 	}
@@ -3042,16 +3049,23 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		if cands, pl, status, msg, lapsed = pinTo(pin, cands, pl); status != 0 {
 			call.Status, call.Error = status, "account pinned: "+pin
 			if lapsed.Lapsed != "" {
-				// one to be signed in again: told as a limit, as above
+				// one to be signed in again: told as a limit, as above, a
+				// user's "signin" (lapsedRefusal)
 				call.Error += ": " + msg
 				noteLapseRefused(lapsed.ID, lapsed.Lapsed)
 				lapsedRetryAfter(w.Header())
+				if limitedUser != "" {
+					w.Header().Set(UserLimitHeader, limitSignin)
+				}
 				msg = userLimitSaid
 			}
-			// a user's limit is said only as one (saidToUser)
+			// a user's limit is said only as one (saidToUser); turned away
+			// before any account was asked, the usage log has its row
+			if limitedUser != "" {
+				noteRefused(limitedUser, p.ID, cmp.Or(w.Header().Get(UserLimitHeader), "pin"), status, "", call.Error)
+			}
 			writeError(w, from, status, saidToUser(limitedUser, status, msg))
-			finishCapture()
-			s.record(call)
+			turnedAway()
 			return
 		}
 	}

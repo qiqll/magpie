@@ -40,8 +40,8 @@ func TestParseTiersShare(t *testing.T) {
 // With the built-in tiers, a user of a tier with its account alone (pro)
 // is bound to one nobody else is on, and nobody joins it; free users
 // share one, two to an account at most. With every account taken, a new
-// user, free or pro, is a 429 that says the pool is full ("quota", with
-// no time it is back), and nobody is asked.
+// user, free or pro, is a 429 that says the pool is full ("seats", with
+// no time it is back; "quota" before T-062), and nobody is asked.
 func TestPaidUserHasItsAccountAlone(t *testing.T) {
 	codexSignedIn(t, "b@example.com", "c@example.com")
 	asked, _ := usersUpstream(t, nil)
@@ -60,7 +60,7 @@ func TestPaidUserHasItsAccountAlone(t *testing.T) {
 	for _, u := range []struct{ user, tier string }{{"erin", ""}, {"frank", "pro"}} {
 		rec := tierPost(s, u.user, u.tier, "hi")
 		limit, until := limitOf(t, rec)
-		if rec.Code != 429 || limit != "quota" || !until.IsZero() || !strings.Contains(refusedWhy(s), "no account of the provider is free") {
+		if rec.Code != 429 || limit != "seats" || !until.IsZero() || !strings.Contains(refusedWhy(s), "no account of the provider is free") {
 			t.Fatalf("%s, every account taken: %d %q until %v %s", u.user, rec.Code, limit, until, rec.Body.String())
 		}
 	}

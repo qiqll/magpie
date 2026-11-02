@@ -625,7 +625,7 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 		}
 		if err != nil {
 			call.Error = err.Error()
-			if s.answerUserRefused(w, provider.Chat, &call, err) {
+			if s.answerUserRefused(w, r, provider.Chat, &call, err) {
 				s.record(call)
 				return
 			}
