@@ -412,6 +412,16 @@ func maskedState(ctx context.Context, text, user, reply string) (string, string,
 	return out[0], out[1], out[2], nil
 }
 
+// decideForKey carries, to systemOne's usage row alone, the user a
+// classifier's ask is made for (forUser): askDecideTries asks on a
+// context of its own (T-020).
+type decideForKey struct{}
+
+func decideFor(ctx context.Context) string {
+	u, _ := ctx.Value(decideForKey{}).(string)
+	return u
+}
+
 // systemOne posts body to p's System One API and returns the answer,
 // counting it in the usage as magpie's own. A gateway serving Jev is asked
 // and answers in its own way (decideAsk, decideAnswer).
@@ -440,7 +450,7 @@ func (s *Server) systemOne(ctx context.Context, p provider.Provider, model strin
 		keyID, keyName = provider.KeyID(p.Key), p.KeyName
 	}
 	usage.Append(usage.Record{Time: start, Agent: usage.AgentOf(RouterAgent), Kind: "routing", Provider: p.ID, Host: p.Where(), Model: model, Requested: model, Served: use.Model,
-		ProviderKeyID: keyID, ProviderKeyName: keyName, ProviderAccount: accountOf(p),
+		ProviderKeyID: keyID, ProviderKeyName: keyName, ProviderAccount: accountOf(p), User: decideFor(ctx),
 		Input: use.Usage.Input, Output: use.Usage.Output, Millis: time.Since(start).Milliseconds(), Status: status})
 	return b, nil
 }

@@ -827,6 +827,7 @@ func TestDecisionClassifierAskedOfTheUsersKeys(t *testing.T) {
 	if b := boundIn(t, "jev"); len(b) != 2 {
 		t.Fatalf("bound %v, want alice and bob on the decision provider", b)
 	}
+	routingRowsKeepTheirUser(t)
 }
 
 // Bound by user, a routing group's classifier that is a decision group is
@@ -877,6 +878,7 @@ func TestDecisionGroupClassifierAskedOfTheUsersKeys(t *testing.T) {
 	if b := boundIn(t, "jev"); len(b) != 2 {
 		t.Fatalf("bound %v, want alice and bob on the decision group's provider", b)
 	}
+	routingRowsKeepTheirUser(t)
 }
 
 // A gateway key held to some accounts asks a decision classifier on those

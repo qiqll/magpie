@@ -510,7 +510,7 @@ func (s *Server) askDecisionGroup(ctx context.Context, wait time.Duration, model
 	if len(cs) == 0 {
 		return verdict{}, true, fmt.Errorf("no decision model of the group %s can be asked now", g.Name)
 	}
-	v, err = s.askDecideTries(wait, cs, intents, prev, effort, text, gu)
+	v, err = s.askDecideTries(ctx, wait, cs, intents, prev, effort, text, gu)
 	return v, true, err
 }
 
@@ -545,7 +545,7 @@ func (s *Server) askDecider(ctx context.Context, wait time.Duration, p provider.
 	if len(cs) == 0 {
 		return verdict{}, fmt.Errorf("no key or account of %s may be asked %s now", p.Name, model)
 	}
-	return s.askDecideTries(wait, cs, intents, prev, effort, text, nil)
+	return s.askDecideTries(ctx, wait, cs, intents, prev, effort, text, nil)
 }
 
 // askDecideTries asks each of cs as Jev is (askJev) until one answers, the
@@ -556,10 +556,16 @@ func (s *Server) askDecider(ctx context.Context, wait time.Duration, p provider.
 // hold). wait is that wait, or what a request has left of it (askWaited):
 // a try cut off by less than the whole wait is not rested for it. A
 // decision group's next provider is narrowed to its user's own as a
-// failed ask hands on to it (gu, nil for none).
-func (s *Server) askDecideTries(wait time.Duration, cs []candidate, intents []string, prev before, effort bool, text string, gu *groupUsers) (v verdict, err error) {
+// failed ask hands on to it (gu, nil for none). as is the ask's own
+// context, read for its user alone.
+func (s *Server) askDecideTries(as context.Context, wait time.Duration, cs []candidate, intents []string, prev before, effort bool, text string, gu *groupUsers) (v verdict, err error) {
 	full := classifyTimeout()
-	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	// as names only the user its usage rows are kept for (decideFor)
+	var user string
+	if f, ok := as.Value(askedForKey{}).(askedFor); ok {
+		user = f.user
+	}
+	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), decideForKey{}, user), wait)
 	defer cancel()
 	for i := 0; i < len(cs); i++ {
 		c := cs[i]

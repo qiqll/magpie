@@ -75,3 +75,24 @@ func TestSearchRowsKeepTheUser(t *testing.T) {
 		t.Fatalf("search rows %+v, want alice's, bob's, then carol's (%s)", rows, text)
 	}
 }
+
+// routingRowsKeepTheirUser fails unless every routing row (systemOne's,
+// magpie's ask of a decision classifier) keeps the user its turn was
+// for: an alice turn's words name alice, a bob turn's bob (T-020).
+// Before, they named none.
+func routingRowsKeepTheirUser(t *testing.T) {
+	t.Helper()
+	n := 0
+	for _, r := range usage.Load(time.Time{}) {
+		if r.Kind != "routing" {
+			continue
+		}
+		n++
+		if r.User != "alice" && r.User != "bob" {
+			t.Errorf("a routing row of %s/%s keeps the user %q, want alice or bob", r.Provider, r.Model, r.User)
+		}
+	}
+	if n == 0 {
+		t.Fatal("no routing row in the usage log")
+	}
+}
