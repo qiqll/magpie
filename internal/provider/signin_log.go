@@ -277,7 +277,8 @@ func logLapsed(agent, user, why string, status int, by string) {
 }
 
 // logUnlapsed logs that the account of agent and user, marked to be signed
-// in again, isn't any more, how. A sign-in done says it on its own line.
+// in again, isn't any more, how: a sign-in done to an account listed
+// already says it too, after its own line.
 func logUnlapsed(agent, user, how string) {
 	log.Printf("sign-in: %s account %s is signed in again: %s", agent, logName(user), how)
 	refreshFailedSaid.Delete(refreshKey(agent, user))

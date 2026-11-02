@@ -4355,6 +4355,7 @@ async function load(again) {
     // an open provider editor is someone typing: coming back to the window
     // must not rebuild it under them
     if ((view === "providers" || providersPage(view)) && !(editing || adding)) await loadProviders();
+    else if (view === "providers" && typeof editing == "string") await acctsBack();
     // the window back on the Usage page reads the tab shown as its own timer
     // does: drawn again only on a change, with no skeleton between; on the
     // Overview, where the allowances are, that is opening them (#1588)
@@ -12350,12 +12351,8 @@ async function startSignIn(agent, risky, site, o = {}) {
   }
 }
 
-// openSignInPage opens a sign-in's page for the window. In a browser tab
-// (magpie web: a server, Docker) that's a new tab the viewer's browser may
-// block, as it was asked for after the sign-in started, not on the click:
-// then it says so, and the page opens from Open again, a click
-// (treeMan on Discord). A tab opened without noopener is the one way to
-// learn it was blocked, so the page it opens is cut from this one at once.
+// openSignInPage: in a browser tab a new tab may be blocked, then Open again
+// opens it (treeMan on Discord); no noopener, the one way to learn of it
 const openBlocked = "\u0000blocked";
 function openSignInPage(url) {
   if (!web) return api("open", { url });
@@ -12390,30 +12387,23 @@ async function followSignIn(id) {
   }
 }
 
-// signInWhy: a sign-in's failure reason, or the sentence the server said
-// in place of one that may hold its code or key (r.said, an i18n.js key)
-// in the reader's language
+// signInWhy: a failure's reason, or the i18n.js key said in place of one
+// that may hold its code or key (r.said)
 const signInWhy = (r) => r.said ? t(r.said, r) : r.error;
 
-// saySignInFailed: a sign-in that failed where its box isn't in sight
-// (the editor closed, another page open) says so on the status line, as
-// one done says it is.
+// saySignInFailed: a failure out of sight said on the status line
 function saySignInFailed() {
   if (signing?.state !== "failed" || $(".signing.failed")?.getClientRects().length) return;
   const name = signInName(signing.agent);
   status(signing.error ? t("Sign-in to {name} didn't finish: {error}", { name, error: signing.error }) : t("Sign-in to {name} didn't finish", { name }), "err");
 }
 
-// signingKept: what a sign-in under way keeps across its updates, for Try
-// again and a proxy picked for it — its site and way, the account signed
-// in to again, the proxy picked
+// signingKept: what a sign-in keeps across its updates, for Try again
 function signingKept() {
   return { site: signing.site, method: signing.method, inputs: signing.inputs, forUser: signing.forUser, picked: signing.picked, askProxy: signing.askProxy, customProxy: signing.customProxy, openError: signing.openError, linkOnly: signing.linkOnly };
 }
 
-// signInProxyOf: the proxy an account's sign-in goes through when none is
-// picked, as the server picks it (#1663): the account's own, else its
-// subscription's, else the global one ("")
+// signInProxyOf: the proxy a sign-in goes through when none is picked (#1663)
 function signInProxyOf(agent, user) {
   const p = providers?.providers?.find((x) => x.account?.agent === agent);
   const own = user && p?.accountProxies?.[String(user).trim().toLowerCase()];
@@ -12432,6 +12422,8 @@ async function signedIn(st) {
   const who = st.user || subOf(st.agent)?.name || st.agent;
   // signed in but listed nowhere (#155): say so rather than "added"
   if (!p) status(t("{user} signed in, but magpie can't list it — please report this", { user: who }), "err");
+  // another account than the row's
+  else if (st.for) status(t("Signed in to {user}, another account: {was} still has to be signed in again", { user: who, was: st.for }), "err");
   // an account listed already is said to be, not added (#413)
   else if (st.again) status(t("{user} is already listed — its sign-in was renewed", { user: who }), "ok");
   else if (st.token) status(t("{user} added; requests through magpie use it beside your other accounts", { user: who }), "ok");
@@ -24203,6 +24195,13 @@ if (mode === "window") {
   // the address shown from the start, not only once a page has read the
   // providers: read for the sidebar only while there is one
   setTimeout(() => { sideGwRead.due = true; sideGwRead(); }, 1500);
+}
+
+// acctsBack: an open editor redrawn on return if its accounts changed
+async function acctsBack() {
+  const ls = (r) => JSON.stringify(r?.providers?.find((p) => p.id === editing)?.account?.logins);
+  const next = await api("providers").catch(() => null);
+  if (next && typeof editing == "string" && ls(next) !== ls(providers)) { providers = next; renderProviders(); }
 }
 
 // loadBack: a window shown again hears visibilitychange and focus together;

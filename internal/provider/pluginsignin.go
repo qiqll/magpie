@@ -28,7 +28,7 @@ func StartPluginSignIn(id string, method int, inputs map[string]string) (SignInS
 // StartPluginSignInWith is StartPluginSignIn through the proxy o picks,
 // else the one the provider's requests go through (#1663).
 func StartPluginSignInWith(id string, method int, inputs map[string]string, o SignInOptions) (SignInState, error) {
-	s := &signInFlow{done: make(chan struct{})}
+	s := &signInFlow{done: make(chan struct{}), ofPlugin: true}
 	s.st = SignInState{ID: randomToken(9), Agent: PluginID(id), State: "waiting"}
 	s.secrets = PluginInputSecrets(id, method, inputs)
 	logSignIn(SignInState{ID: s.st.ID, Agent: s.st.Agent, User: strings.TrimSpace(o.User)}, "started", 0, "")

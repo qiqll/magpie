@@ -153,6 +153,51 @@ func loginsLookDue() bool {
 	return at == 0 || time.Since(time.Unix(0, at)) >= 30*time.Second
 }
 
+// signInFiles is what signInFilesMoved saw at its last look.
+var signInFiles struct {
+	sync.Mutex
+	at           time.Time
+	paths, stamp string
+}
+
+// signInFilesMoved says Claude Code's or Codex's sign-in on this computer
+// changed since the last look (its credentials file, or the account
+// ~/.claude.json names, as a Mac's keychain holds the credential): a
+// `claude auth login` or `codex login` run in a terminal. What Claude Code
+// said of it last is let go, so the look it makes due reads the new
+// one. Looked at once a second at most; the first look at the files
+// (another HOME's too) notes them.
+func signInFilesMoved() bool {
+	signInFiles.Lock()
+	defer signInFiles.Unlock()
+	if time.Since(signInFiles.at) < time.Second {
+		return false
+	}
+	signInFiles.at = time.Now()
+	paths := []string{claudeCredentialsPath(), codexAuthPath(), claudeProfilePath()}
+	if p := strings.Join(paths, "\x00"); p != signInFiles.paths {
+		signInFiles.paths, signInFiles.stamp = p, ""
+	}
+	st := ""
+	for _, p := range paths[:2] {
+		if fi, err := os.Stat(p); err == nil {
+			st += fmt.Sprintf("%d %d;", fi.ModTime().UnixNano(), fi.Size())
+		} else {
+			st += "-;"
+		}
+	}
+	if acct, ok := claudeProfileAccount(); ok {
+		st += fmt.Sprint(acct["accountUuid"], acct["emailAddress"])
+	}
+	moved := signInFiles.stamp != "" && st != signInFiles.stamp
+	signInFiles.stamp = st
+	if moved {
+		forgetClaudeCredential()
+		forgetClaudeSignedOut()
+	}
+	return moved
+}
+
 // switchable agents: those whose sign-in magpie can save and put back.
 var loginAgents = []string{"claude", "codex"}
 
@@ -844,12 +889,22 @@ func rememberLogins(force bool) {
 	// first, every ask (each list of accounts, each page's read) made and
 	// locked logins.json.lock, ~370 times in a start's first 25s on
 	// Windows, where an antivirus' filter driver works on each (#1665)
+	// a sign-in changed on disk (`claude auth login` run in a terminal)
+	// is looked at now, not up to 30 seconds on
+	force = signInFilesMoved() || force
 	if !force && !loginsLookDue() {
 		return
 	}
-	// accounts Claude Code let go of, logged once written and unlocked
+	// accounts Claude Code let go of, and those signed in again in it or
+	// in Codex, logged once written and unlocked
 	var lapsed []string
-	defer func() { logClaudeLoggedOut(lapsed) }()
+	var unlapsed []savedLogin
+	defer func() {
+		logClaudeLoggedOut(lapsed)
+		for _, l := range unlapsed {
+			logUnlapsed(l.Agent, l.User, "its own sign-in on this computer is a new one")
+		}
+	}()
 	loginsMu.Lock()
 	defer loginsMu.Unlock()
 	// another ask may have looked while this one waited for the lock
@@ -871,7 +926,10 @@ func rememberLogins(force bool) {
 			// default profile's account read a quota)
 			for _, h := range codexHomeLogins(l, ok) {
 				h.Seen = now
-				ls = upsertLogin(ls, h)
+				var back bool
+				if ls, back = upsertNoted(ls, h); back {
+					unlapsed = append(unlapsed, h)
+				}
 				changed = true
 			}
 		}
@@ -890,7 +948,10 @@ func rememberLogins(force bool) {
 			}
 			l.Held = true
 		}
-		ls = upsertLogin(ls, l)
+		var back bool
+		if ls, back = upsertNoted(ls, l); back {
+			unlapsed = append(unlapsed, l)
+		}
 		changed = true
 	}
 	// every magpie run from a terminal is a new process, which the 30
@@ -898,11 +959,32 @@ func rememberLogins(force bool) {
 	// that recently, writes nothing (#1674)
 	if changed && !onlySeenMoved(was, ls, now) {
 		if writeLogins(ls) != nil {
-			lapsed = nil
+			lapsed, unlapsed = nil, nil
 		}
 	} else {
-		lapsed = nil
+		lapsed, unlapsed = nil, nil
 	}
+}
+
+// upsertNoted is upsertLogin, and whether it took away the mark that had
+// the account signed in again: the agent's own sign-in of it is a new one.
+func upsertNoted(ls []savedLogin, l savedLogin) ([]savedLogin, bool) {
+	i := slices.IndexFunc(ls, func(x savedLogin) bool { return sameLogin(x, l) })
+	if i < 0 || savedLapse(ls[i]) == "" {
+		return upsertLogin(ls, l), false
+	}
+	ls = upsertLogin(ls, l)
+	i = slices.IndexFunc(ls, func(x savedLogin) bool { return sameLogin(x, l) })
+	return ls, i >= 0 && savedLapse(ls[i]) == ""
+}
+
+// savedLapse is why a saved account has to be signed in again, as its
+// row says it; "" when it needn't.
+func savedLapse(l savedLogin) string {
+	if l.Agent == "claude" {
+		return claudeSignedOut(l)
+	}
+	return l.Lapsed
 }
 
 // seenEvery is how often an account still signed in has the time it was

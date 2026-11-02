@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -86,7 +87,10 @@ type SignInState struct {
 	Using      bool   `json:"using,omitempty"` // the agent was signed in to it too
 	// Again is an account listed already: its sign-in was renewed rather
 	// than a new account added (#413)
-	Again bool   `json:"again,omitempty"`
+	Again bool `json:"again,omitempty"`
+	// For is the account the sign-in was started for again, when the one
+	// signed in to is another: that one still has to be signed in again
+	For   string `json:"for,omitempty"`
 	Error string `json:"error,omitempty"`
 	// CallbackBlocked says why the port the browser is sent back to
 	// couldn't be opened: "reserved" (Windows keeps it for Hyper-V, WSL or
@@ -149,6 +153,12 @@ type signInFlow struct {
 	chosen bool
 	// user is the account signed in to again, "" for a new one
 	user string
+	// listed are the agent's accounts (accountKey) when the sign-in
+	// started: one done on one of them is Again
+	listed []string
+	// ofPlugin is a plugin's sign-in, whose account its own lapse says
+	// is signed in again (clearPluginLapse)
+	ofPlugin bool
 	// secrets are what the user gave the sign-in (a plugin's answers, a
 	// code or address pasted), which its state never says back
 	secrets SignInSecrets
@@ -213,10 +223,14 @@ func (s *signInFlow) keep(store func() error) error {
 	return nil
 }
 
-// pickProxy sets the proxy a sign-in to agent goes through.
+// pickProxy sets the proxy a sign-in to agent goes through, and notes the
+// accounts it has listed already.
 func (s *signInFlow) pickProxy(agent string, o SignInOptions) error {
 	s.user = strings.TrimSpace(o.User)
 	s.proxy = ProxyOfLogin(agent, s.user)
+	for _, l := range Logins(agent) {
+		s.listed = append(s.listed, accountKey(l.User))
+	}
 	if o.Proxy == nil {
 		return nil
 	}
@@ -707,6 +721,12 @@ func (s *signInFlow) finish(out SignInState) bool {
 	}
 	s.finished = true
 	if out.State == "done" {
+		// signed in to an account listed already, or, started for one, to
+		// another, which leaves that one to be signed in again still
+		out.Again = slices.Contains(s.listed, accountKey(out.User))
+		if s.user != "" && accountKey(s.user) != accountKey(out.User) {
+			out.For = s.user
+		}
 		agent, proxy, chosen := s.st.Agent, s.proxy, s.chosen
 		s.mu.Unlock()
 		// signing in again brings back an account removed from magpie
@@ -721,7 +741,7 @@ func (s *signInFlow) finish(out SignInState) bool {
 	}
 	out.ID, out.Agent, out.URL, out.Code, out.Proxy = s.st.ID, s.st.Agent, s.st.URL, s.st.Code, s.st.Proxy
 	s.st = out
-	stop, srv, said, user := s.stop, s.srv, s.said, s.user
+	stop, srv, said, user, ofPlugin := s.stop, s.srv, s.said, s.user, s.ofPlugin
 	s.mu.Unlock()
 	// the window says how it ended only while it is open: the log keeps it,
 	// after the lock, as its writer can block
@@ -734,7 +754,18 @@ func (s *signInFlow) finish(out SignInState) bool {
 		}
 		logSignIn(at, "failed", out.status, out.Error)
 	case "done":
-		logSignIn(SignInState{ID: out.ID, Agent: out.Agent, User: out.User}, "done", 0, out.Error)
+		line := signInLine(SignInState{ID: out.ID, Agent: out.Agent, User: out.User}, "done", 0)
+		if out.Error != "" {
+			line += ": " + logReason(out.Error)
+		}
+		if out.For != "" {
+			line += " (another account than " + logName(out.For) + ", the one it was started for, which still has to be signed in again)"
+		}
+		log.Print(line)
+		// a plugin's account says so as its lapse is cleared
+		if out.Again && !ofPlugin {
+			logUnlapsed(out.Agent, out.User, "signed in again in magpie")
+		}
 	case "canceled":
 		logSignIn(SignInState{ID: out.ID, Agent: out.Agent, User: user}, "canceled", 0, "")
 	}

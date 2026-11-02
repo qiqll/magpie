@@ -1837,6 +1837,19 @@ func copilotModels(ctx context.Context, app copilotApp) ([]catalog.Model, error)
 	return out, nil
 }
 
+// forgetClaudeSignedOut drops what `claude auth status` said when it said
+// nobody is signed in, so the next look asks it again before it answers:
+// a sign-in said of an account (claudeSignedInUser reads ~/.claude.json
+// first) costs no wait on the CLI.
+func forgetClaudeSignedOut() {
+	claudeStatusMu.Lock()
+	out := claudeStatusOut
+	claudeStatusMu.Unlock()
+	if out {
+		forgetClaudeStatus()
+	}
+}
+
 // forgetClaudeStatus drops what `claude auth status` said; tests use it.
 func forgetClaudeStatus() {
 	claudeStatusMu.Lock()
