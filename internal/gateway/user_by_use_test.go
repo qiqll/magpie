@@ -51,18 +51,25 @@ func spread(user, account string, tokens int, days float64) []usage.Record {
 // read now, looking back 7 days.
 func usedLately(t *testing.T, recs ...[]usage.Record) {
 	t.Helper()
+	usedLatelyBack(t, 7, recs...)
+}
+
+// usedLatelyBack is usedLately looking back days.
+func usedLatelyBack(t *testing.T, days int, recs ...[]usage.Record) {
+	t.Helper()
+	back := time.Duration(days) * 24 * time.Hour
 	var all []usage.Record
 	for _, r := range recs {
 		all = append(all, r...)
 	}
 	now := time.Now()
-	s := buildUseSnapshot(now, now.Add(-7*24*time.Hour), func(fn func(usage.Record)) {
+	s := buildUseSnapshot(now, now.Add(-back), func(fn func(usage.Record)) {
 		for _, r := range all {
 			fn(r)
 		}
 	})
 	useSnap.Lock()
-	useSnap.s, useSnap.lookback = s, 7*24*time.Hour
+	useSnap.s, useSnap.lookback = s, back
 	useSnap.Unlock()
 	t.Cleanup(func() {
 		useSnap.Lock()
@@ -254,5 +261,121 @@ func TestParseByUse(t *testing.T) {
 		if _, err := parseTiers([]byte(base + `, "by_use": ` + bad + "}")); err == nil {
 			t.Fatalf("%s taken", bad)
 		}
+	}
+}
+
+// A user of a tier with no limit (share 0) on an account, with no use of
+// its own yet, counts nothing toward it rather than a whole account: a
+// free user still shares it.
+func TestByUseUnlimitedTierCountsByUseOnly(t *testing.T) {
+	codexSignedIn(t)
+	asked, _ := usersUpstream(t, nil)
+	writeTiers(t, `{"default": "team", "tiers": {"free": {"max_accounts": 2, "share": 2}, "team": {"max_accounts": 6, "share": 0}}, "by_use": {"on": true}}`)
+	weekUsed(t, map[string]float64{"me@example.com": 60})
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob": {Who: "codex@me@example.com", Account: "me@example.com", At: ago(time.Minute), Used: ago(time.Minute)}}}})
+	// me@ holds 2M, routed for nobody's user; alice ~11% of it
+	usedLately(t, spread("", "me@example.com", 1_200_000, 6.5), spread("alice", "z@example.com", 200_000, 6.5))
+	s := byUser(New())
+	if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
+		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
+	}
+	asked(true)
+	if seats := seatsIn(t, "codex"); len(seats["alice"]) != 1 {
+		t.Fatalf("seats %v", seats)
+	}
+}
+
+// A user on two accounts has its use spread over them: bob's ~1.29M a
+// week over two accounts that each hold 1M is ~65% of each, and alice's
+// ~21% fits beside him; counted whole on each, he'd fill both.
+func TestByUseSpreadsAUsersUseOverItsAccounts(t *testing.T) {
+	codexSignedIn(t, "b@example.com")
+	asked, _ := usersUpstream(t, nil)
+	byUseTiers(t, `{"on": true}`)
+	weekUsed(t, map[string]float64{"me@example.com": 60, "b@example.com": 60})
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob": {Who: "codex@me@example.com", Account: "me@example.com", At: ago(time.Minute), Tier: "free", Used: ago(time.Minute),
+			More: []userSeat{{Who: "codex@b@example.com", Account: "b@example.com", At: ago(time.Minute)}}}}}})
+	usedLately(t, spread("bob", "me@example.com", 600_000, 6.5), spread("bob", "b@example.com", 600_000, 6.5), spread("alice", "z@example.com", 200_000, 6.5))
+	s := byUser(New())
+	if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
+		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
+	}
+	asked(true)
+	if a := seatsIn(t, "codex")["alice"]; len(a) != 1 {
+		t.Fatalf("alice on %v", a)
+	}
+}
+
+// An account whose allowance isn't read is unknown, never room: it takes
+// its provider's others' median, and a heavy user goes to the empty one.
+func TestByUseUnreadAccountIsNotRoom(t *testing.T) {
+	codexSignedIn(t, "b@example.com")
+	asked, _ := usersUpstream(t, nil)
+	byUseTiers(t, `{"on": true}`)
+	// me@'s allowance not read; b@ holds 2M (0.3M routed at 15%)
+	weekUsed(t, map[string]float64{"b@example.com": 15})
+	usedLately(t, bobOnMe(t), spread("", "b@example.com", 300_000, 6.5), spread("alice", "z@example.com", 800_000, 6.5))
+	s := byUser(New())
+	if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
+		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
+	}
+	asked(true)
+	if a := seatsIn(t, "codex")["alice"]; len(a) != 1 || a[0] != "b@example.com" {
+		t.Fatalf("alice on %v", a)
+	}
+}
+
+// With lookback_days under a week, an account's week is still told: its
+// calls are read from the week's start, the users' over the lookback.
+func TestByUseShortLookbackStillWeighsTheWeek(t *testing.T) {
+	codexSignedIn(t, "b@example.com")
+	asked, _ := usersUpstream(t, nil)
+	byUseTiers(t, `{"on": true, "lookback_days": 3}`)
+	weekUsed(t, map[string]float64{"me@example.com": 60, "b@example.com": 10})
+	usedLatelyBack(t, 3, bobOnMe(t), spread("alice", "z@example.com", 800_000, 6.5))
+	s := byUser(New())
+	if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
+		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
+	}
+	asked(true)
+	if a := seatsIn(t, "codex")["alice"]; len(a) != 1 || a[0] != "b@example.com" {
+		t.Fatalf("alice on %v", a)
+	}
+}
+
+// A free user whose account is out for hours is given no spare that has
+// no room by use: the 429's error says every other account is taken or
+// has none, by_use naming it.
+func TestByUseKeepsASpareOff(t *testing.T) {
+	codexSignedIn(t, "b@example.com")
+	out, asked := limitUpstream(t)
+	byUseTiers(t, `{"on": true}`)
+	weekUsed(t, map[string]float64{"me@example.com": 60, "b@example.com": 60})
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"alice": bound("me@example.com", "free", ago(time.Minute)),
+		"bob":   {Who: "codex@b@example.com", Account: "b@example.com", At: ago(time.Minute), Tier: "free", Used: ago(time.Minute)}}}})
+	// alice's ~1.72M a week over the two accounts she'd be on: ~43% of
+	// b@'s 2M, past 90% beside bob's ~65%
+	usedLately(t, spread("bob", "b@example.com", 1_200_000, 6.5), spread("alice", "me@example.com", 1_600_000, 6.5))
+	s := byUser(New())
+	if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
+		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
+	}
+	out(asked(true)[0], 7200)
+	if rec := tierPost(s, "alice", "free", "spent"); rec.Code != 429 {
+		t.Fatalf("alice out: %d %s", rec.Code, rec.Body.String())
+	}
+	asked(true)
+	rec := tierPost(s, "alice", "free", "again")
+	if why := refusedWhy(s); rec.Code != 429 || !strings.Contains(why, "by_use: b@example.com its 7d window") {
+		t.Fatalf("alice again: %d %s; %s", rec.Code, rec.Body.String(), why)
+	}
+	if got := asked(true); len(got) != 0 {
+		t.Fatalf("asked: %v", got)
+	}
+	if n := len(seatsIn(t, "codex")["alice"]); n != 1 {
+		t.Fatalf("alice on %d accounts", n)
 	}
 }

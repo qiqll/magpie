@@ -104,25 +104,28 @@ const useEvery = 10 * time.Minute
 // as 1/share of an account.
 const useHistory = 24 * time.Hour
 
-// useTally is tokens by the hour (Unix hour → tokens), and the first
-// call's time.
+// useTally is tokens by the bucket of unit seconds (Unix time / unit →
+// tokens), and the first call's time: a user's by the hour, an
+// account's by the minute, so a window's start takes in no more than a
+// minute before it.
 type useTally struct {
-	first time.Time
-	hours map[int64]int64
+	first   time.Time
+	unit    int64
+	buckets map[int64]int64
 }
 
 func (t *useTally) add(at time.Time, n int64) {
 	if t.first.IsZero() || at.Before(t.first) {
 		t.first = at
 	}
-	t.hours[at.Unix()/3600] += n
+	t.buckets[at.Unix()/t.unit] += n
 }
 
-// since is the tokens from the hour at holds on.
+// since is the tokens from the bucket at is in on.
 func (t *useTally) since(at time.Time) int64 {
 	var n int64
-	from := at.Unix() / 3600
-	for h, v := range t.hours {
+	from := at.Unix() / t.unit
+	for h, v := range t.buckets {
 		if h >= from {
 			n += v
 		}
@@ -130,36 +133,52 @@ func (t *useTally) since(at time.Time) int64 {
 	return n
 }
 
+// useAccountSpan is how far back an account's calls are read, whatever
+// lookback_days says: its week is told only from the week's start.
+const useAccountSpan = 7 * 24 * time.Hour
+
 // useSnapshot is the usage log as by_use read it: each user's tokens by
-// provider (provider id + "\x00" + user) and each account's (its who
-// lower-cased, "<provider>@<account>"), from since to at.
+// provider (provider id + "\x00" + user), from since to at, and each
+// account's (its who lower-cased, "<provider>@<account>"), from
+// accSince (useAccountSpan back, or since when that is earlier).
 type useSnapshot struct {
-	at, since time.Time
-	users     map[string]*useTally
-	accounts  map[string]*useTally
+	at, since, accSince time.Time
+	users               map[string]*useTally
+	accounts            map[string]*useTally
 }
 
-// buildUseSnapshot reads each call visit gives from since on.
+// accountsSince is how far back buildUseSnapshot reads accounts' calls,
+// for a snapshot of users' from since.
+func accountsSince(now, since time.Time) time.Time {
+	if a := now.Add(-useAccountSpan); a.Before(since) {
+		return a
+	}
+	return since
+}
+
+// buildUseSnapshot reads each call visit gives from accountsSince on,
+// users' from since.
 func buildUseSnapshot(now, since time.Time, visit func(func(usage.Record))) *useSnapshot {
-	s := &useSnapshot{at: now, since: since, users: map[string]*useTally{}, accounts: map[string]*useTally{}}
-	tally := func(m map[string]*useTally, k string) *useTally {
+	accSince := accountsSince(now, since)
+	s := &useSnapshot{at: now, since: since, accSince: accSince, users: map[string]*useTally{}, accounts: map[string]*useTally{}}
+	tally := func(m map[string]*useTally, k string, unit int64) *useTally {
 		t := m[k]
 		if t == nil {
-			t = &useTally{hours: map[int64]int64{}}
+			t = &useTally{unit: unit, buckets: map[int64]int64{}}
 			m[k] = t
 		}
 		return t
 	}
 	visit(func(r usage.Record) {
-		if r.Time.Before(since) || r.Time.After(now) || r.IsRejected() || r.IsReported() || r.Input+r.Output == 0 || r.Provider == "" {
+		if r.Time.Before(accSince) || r.Time.After(now) || r.IsRejected() || r.IsReported() || r.Input+r.Output == 0 || r.Provider == "" {
 			return
 		}
 		n := int64(r.Input + r.Output)
-		if r.User != "" {
-			tally(s.users, r.Provider+"\x00"+r.User).add(r.Time, n)
+		if r.User != "" && !r.Time.Before(since) {
+			tally(s.users, r.Provider+"\x00"+r.User, 3600).add(r.Time, n)
 		}
 		if a := r.Account(); a != "" {
-			tally(s.accounts, strings.ToLower(r.Provider+"@"+a)).add(r.Time, n)
+			tally(s.accounts, strings.ToLower(r.Provider+"@"+a), 60).add(r.Time, n)
 		}
 	})
 	return s
@@ -191,7 +210,7 @@ func (s *useSnapshot) demand(pid, user string, span time.Duration) (_ float64, o
 	for end := first + k - 1; end <= last; end++ {
 		var n int64
 		for h := end - k + 1; h <= end; h++ {
-			n += t.hours[h]
+			n += t.buckets[h]
 		}
 		sums = append(sums, float64(n))
 	}
@@ -224,10 +243,12 @@ func readUse(lookback time.Duration) *useSnapshot {
 		go func() {
 			now := time.Now()
 			since := now.Add(-lookback)
-			n := buildUseSnapshot(now, since, func(fn func(usage.Record)) { usage.Visit(since, fn) })
+			from := accountsSince(now, since)
+			n := buildUseSnapshot(now, since, func(fn func(usage.Record)) { usage.Visit(from, fn) })
 			useSnap.Lock()
 			useSnap.s, useSnap.lookback, useSnap.building = n, lookback, false
 			useSnap.Unlock()
+			overSaid.Clear() // said again, if still so, by the new read
 			log.Printf("user accounts: by use, read %d user(s)' and %d account(s)' calls of the last %d days", len(n.users), len(n.accounts), int(lookback/(24*time.Hour)))
 		}()
 	}
@@ -243,19 +264,15 @@ type useCap struct {
 }
 
 // useBudget is what by_use binds a request's user by: each account's
-// windows (caps, by who lower-cased), the user's tier's share (share)
-// and the tiers each other user's share is read from.
+// windows (caps, by who lower-cased).
 type useBudget struct {
-	pid   string
-	snap  *useSnapshot
-	caps  map[string][]useCap
-	share int
-	tiers Tiers
+	pid  string
+	snap *useSnapshot
+	caps map[string][]useCap
 }
 
 // byUseOf is the budget a new seat of provider pid among cands is bound
-// by, nil with by_use off or before the log is first read; the asking
-// user's share is set where it is counted (seatUsesBy). It reads the
+// by, nil with by_use off or before the log is first read. It reads the
 // allowances routing keeps, never with userBinds held.
 func byUseOf(pid string, cands []candidate, tiers Tiers, now time.Time) *useBudget {
 	if !tiers.ByUse.On {
@@ -265,7 +282,7 @@ func byUseOf(pid string, cands []candidate, tiers Tiers, now time.Time) *useBudg
 	if snap == nil {
 		return nil
 	}
-	b := &useBudget{pid: pid, snap: snap, caps: map[string][]useCap{}, tiers: tiers}
+	b := &useBudget{pid: pid, snap: snap, caps: map[string][]useCap{}}
 	target := func(span time.Duration) float64 {
 		if span >= 24*time.Hour {
 			return float64(cmp.Or(tiers.ByUse.WeekTarget, byUseWeek)) / 100
@@ -278,6 +295,7 @@ func byUseOf(pid string, cands []candidate, tiers Tiers, now time.Time) *useBudg
 		span time.Duration
 	}
 	var have []span
+	var unread []string // accounts whose allowance isn't known
 	told := map[time.Duration][]float64{}
 	for _, c := range cands {
 		if c.p.ID != pid || c.p.Account == nil {
@@ -289,6 +307,9 @@ func byUseOf(pid string, cands []candidate, tiers Tiers, now time.Time) *useBudg
 		}
 		a, ok := c.allowance()
 		if !ok {
+			if !slices.Contains(unread, who) {
+				unread = append(unread, who)
+			}
 			continue
 		}
 		for _, l := range a {
@@ -297,7 +318,9 @@ func byUseOf(pid string, cands []candidate, tiers Tiers, now time.Time) *useBudg
 			}
 			have = append(have, span{who, l.Span})
 			start := l.Resets.Add(-l.Span)
-			if l.Used < provider.HoldsFloor || !l.Resets.After(now) || start.Before(snap.since) {
+			// a window that goes on past itself on credits may have had
+			// calls paid so: its share used doesn't tell what it holds
+			if l.Credits || l.Used < provider.HoldsFloor || !l.Resets.After(now) || start.Before(snap.accSince) {
 				continue
 			}
 			t := snap.accounts[who]
@@ -309,6 +332,13 @@ func byUseOf(pid string, cands []candidate, tiers Tiers, now time.Time) *useBudg
 				b.caps[who] = append(b.caps[who], useCap{l.Span, holds, target(l.Span)})
 				told[l.Span] = append(told[l.Span], holds)
 			}
+		}
+	}
+	// an account whose allowance isn't read is unknown, never room: it has
+	// each window its provider's others are told of
+	for _, who := range unread {
+		for sp := range told {
+			have = append(have, span{who, sp})
 		}
 	}
 	// one not told takes the median of its provider's others of its span
@@ -327,29 +357,32 @@ func byUseOf(pid string, cands []candidate, tiers Tiers, now time.Time) *useBudg
 	return b
 }
 
-// load is how much of a window c holds user, of a tier with share, is
-// reckoned to use: 1/share with under a day of use.
-func (b *useBudget) load(user string, share int, c useCap) float64 {
+// seatLoad is a user on an account, as by_use counts it: its tier's
+// share, and how many accounts of the provider it is on (its use spread
+// over them).
+type seatLoad struct{ share, seats int }
+
+// load is how much of a window c holds user, on l, is reckoned to use:
+// its use over the accounts it is on; with under a day of use, 1/share,
+// and nothing for a tier of no limit (share 0), which no share holds.
+func (b *useBudget) load(user string, l seatLoad, c useCap) float64 {
 	if d, ok := b.snap.demand(b.pid, user, c.span); ok {
-		return d / c.holds
+		return d / float64(max(l.seats, 1)) / c.holds
 	}
-	if share <= 0 {
-		if share = b.tiers.shareOf(b.tiers.Default); share <= 0 {
-			share = 1
-		}
+	if l.share <= 0 {
+		return 0
 	}
-	return 1 / float64(share)
+	return 1 / float64(l.share)
 }
 
-// over is why the account who, with others on it (user → its tier's
-// share), has no room by use for user: the first window its users with
-// user would be reckoned past its target in; "" when it has room or its
-// windows aren't known.
-func (b *useBudget) over(who string, others map[string]int, user string) string {
+// over is why the account who, with others on it, has no room by use for
+// user, on mine: the first window its users with user would be reckoned
+// past its target in; "" when it has room or its windows aren't known.
+func (b *useBudget) over(who string, others map[string]seatLoad, user string, mine seatLoad) string {
 	for _, c := range b.caps[who] {
-		sum := b.load(user, b.share, c)
-		for u, share := range others {
-			sum += b.load(u, share, c)
+		sum := b.load(user, mine, c)
+		for u, l := range others {
+			sum += b.load(u, l, c)
 		}
 		if sum > c.target {
 			return fmt.Sprintf("its %s window would be %.0f%% used by its users' use, past its %.0f%%", spanSaid(c.span), sum*100, c.target*100)

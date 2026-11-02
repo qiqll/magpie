@@ -963,16 +963,21 @@ func seatUsesOf(pid string, tiers Tiers, user string) seatUses {
 
 // seatUsesBy is seatUsesOf, each account others are on with no room by
 // their use for user, of a tier with share, marked so (seatUse.over) by
-// budget: none with budget nil or share 1 (an account it takes is one
-// nobody is on).
+// budget: none with budget nil, or for a tier that doesn't share (1: an
+// account it takes is one nobody is on) or shares with no limit (0).
 func seatUsesBy(pid string, tiers Tiers, user string, budget *useBudget, share int) seatUses {
 	uses := seatUses{}
-	on := map[string]map[string]int{} // who → the users counted on it, each its tier's share
+	on := map[string]map[string]int{}       // who → the users counted on it, each its tier's share
+	seatsOf := map[string]map[string]bool{} // a user name → the accounts it is on, under any key
 	for _, ps := range userBinds.m {
 		for name, b := range ps[pid] {
 			share := tiers.shareOf(b.Tier)
 			for _, s := range b.seats() {
 				who := strings.ToLower(s.Who)
+				if seatsOf[name] == nil {
+					seatsOf[name] = map[string]bool{}
+				}
+				seatsOf[name][who] = true
 				u := uses[who]
 				if name == user {
 					// its own seat: counted toward which is picked,
@@ -997,16 +1002,21 @@ func seatUsesBy(pid string, tiers Tiers, user string, budget *useBudget, share i
 			}
 		}
 	}
-	if budget == nil || share == 1 {
+	if budget == nil || share < 2 {
 		return uses
 	}
-	budget.share = share
-	for who, others := range on {
+	// the user on one more account than it is: the one it would be given
+	mine := seatLoad{share, len(seatsOf[user]) + 1}
+	for who, names := range on {
 		u := uses[who]
 		if u.n == 0 {
 			continue
 		}
-		u.over = budget.over(who, others, user)
+		others := make(map[string]seatLoad, len(names))
+		for name, sh := range names {
+			others[name] = seatLoad{sh, len(seatsOf[name])}
+		}
+		u.over = budget.over(who, others, user, mine)
 		noteOver(who, user, u.over)
 		uses[who] = u
 	}

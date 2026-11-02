@@ -2411,14 +2411,18 @@ percent of each shorter one, besides `share`. A user's use is the
 tokens (`unit`, the only one, is `tokens`) it sent the provider over the
 last `lookback_days` (1 to 30), from the usage log's user (`X-Magpie-User`):
 over the week its total scaled to a week, over the five hours the 90th
-percentile of what it sent in any five hours. A user with under a day of
-use counts as 1/`share` of an account, as many as it takes without
-`by_use`. What an account's window holds is what magpie routed through it
+percentile of what it sent in any five hours. A user on several accounts of the provider
+has its use spread evenly over them. A user with under a day of use
+counts as 1/`share` of an account, as many as it takes without
+`by_use`, and one of a tier with no limit (`share` 0) as nothing.
+A tier with `share` 0 or 1 is never weighed by use itself. What an account's window holds is what magpie routed through it
 since the window began over the share its vendor says is used, read from
 the usage magpie reads for routing already, never an extra read of the
-account; one under 5% used, or begun before magpie's log, takes the
-median of the provider's other accounts, and with none the tiers' `share`
-alone holds. The log is read every 10 minutes in the background: a user
+account, from its calls since the window began (read back a week
+whatever `lookback_days` is); one under 5% used, begun before magpie's
+log, going on past itself on credits, or whose usage magpie hasn't read
+yet, takes the median of the provider's other accounts, and with none the
+tiers' `share` alone holds. The log is read every 10 minutes in the background: a user
 binds by what was read last, and nothing binds by use until the first
 read is done. It holds only when a user is bound to an account, its first
 or a spare: nobody bound already is moved. An account left alone, or a
