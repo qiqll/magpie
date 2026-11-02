@@ -4355,7 +4355,7 @@ async function load(again) {
     // an open provider editor is someone typing: coming back to the window
     // must not rebuild it under them
     if ((view === "providers" || providersPage(view)) && !(editing || adding)) await loadProviders();
-    else if (view === "providers" && typeof editing == "string") await acctsBack();
+    else if (view === "providers" && typeof editing == "string") await signAgainJS().then(() => acctsBack(), () => {});
     // the window back on the Usage page reads the tab shown as its own timer
     // does: drawn again only on a change, with no skeleton between; on the
     // Overview, where the allowances are, that is opening them (#1588)
@@ -6534,18 +6534,23 @@ function unmovedLine(p) {
 
 // renderLapsed: over the list, each account in use to sign in again
 // (signInLapsed), which the gateway leaves out till then, with its Sign in
-// again, which opens the editor with the sign-in under way.
+// again, which opens the editor with the sign-in under way; the line is
+// drawn by signagain.js, loaded once there is one
 function renderLapsed() {
   const box = $("#lapsedAccounts");
   if (!box) return;
   const lines = [];
   for (const p of providers.providers) {
     if (p.off || !p.account) continue;
-    for (const l of p.account.logins || []) if (((l.active && !l.paused) || l.on) && signInLapsed(p.account.agent, l)) lines.push(lapsedLine(p, l));
+    for (const l of p.account.logins || []) if (((l.active && !l.paused) || l.on) && signInLapsed(p.account.agent, l)) lines.push([p, l]);
   }
-  box.replaceChildren(...lines);
+  if (lines.length && !window.lapsedLine) return void signAgainJS().then(renderLapsed, () => {});
+  box.replaceChildren(...lines.map(([p, l]) => lapsedLine(p, l)));
   box.hidden = !lines.length;
 }
+// signagain.js: the lapsed line, a failed sign-in's status and an open
+// editor's accounts read on return, loaded once asked for
+function signAgainJS() { return signAgainJS.p ||= import("./signagain.js").catch((e) => { signAgainJS.p = null; throw e; }); }
 
 // signInLapsed: account l of agent has to be signed in again, for its row
 // in the editor and the line over the list alike. A plugin's whose vendor
@@ -6557,36 +6562,11 @@ function signInLapsed(agent, l) {
   return !!l.lapsed && (agent === "claude" || agent === "copilot" || plugin || SIGN_IN_GONE.test(l.lapsed)) || plugin && SIGN_IN_GONE.test(loginUsageOf(agent)?.[l.user]?.error || "");
 }
 
-// signInName: agent's name on the status line, its provider's in the list
-// as the line over it says
-const signInName = (agent) => providers.providers.find((p) => p.account?.agent === agent)?.name || subOf(agent)?.name || agent;
-
 // signInAgainSite: where account user of agent signs in again — a Copilot
 // account on an enterprise's GHE.com is named login@host, and signs in
 // again there
 function signInAgainSite(agent, user) {
   return !subOf(agent)?.plugin && agent === "copilot" && String(user).includes("@") ? String(user).split("@").pop() : undefined;
-}
-
-function lapsedLine(p, l) {
-  const card = el("div", "deprecation lapsed");
-  card.setAttribute("role", "note");
-  card.dataset.id = p.id;
-  card.dataset.user = l.user;
-  const body = el("div", "dep-body");
-  const head = el("div", "dep-head", t("{name}: {user} has to be signed in again", { name: p.name, user: l.user }));
-  head.title = t(l.lapsed);
-  body.append(head, el("p", "dep-why", t("magpie leaves it out of requests until it is signed in again.")));
-  const acts = el("div", "dep-acts");
-  const b = el("button", "text action", t("Sign in again"));
-  b.onclick = () => {
-    // the editor opens over the list, the sign-in under way in it
-    editing = p.id; draft = null; adding = false;
-    startSignIn(p.account.agent, false, signInAgainSite(p.account.agent, l.user), { user: l.user });
-  };
-  acts.append(b);
-  card.append(el("span", "dep-dot"), body, acts);
-  return card;
 }
 
 // Sign-ins magpie found but leaves alone, so nobody wonders why an agent that
@@ -12389,12 +12369,9 @@ async function followSignIn(id) {
 // that may hold its code or key (r.said)
 const signInWhy = (r) => r.said ? t(r.said, r) : r.error;
 
-// saySignInFailed: a failure out of sight said on the status line
-function saySignInFailed() {
-  if (signing?.state !== "failed" || $(".signing.failed")?.getClientRects().length) return;
-  const name = signInName(signing.agent);
-  status(signing.error ? t("Sign-in to {name} didn't finish: {error}", { name, error: signing.error }) : t("Sign-in to {name} didn't finish", { name }), "err");
-}
+// saySignInFailed: a failure out of sight said on the status line, by
+// signagain.js
+const saySignInFailed = () => signing?.state === "failed" && signAgainJS().then(() => sayFailed(), () => {});
 
 // signingKept: what a sign-in keeps across its updates, for Try again
 function signingKept() {
@@ -13145,40 +13122,15 @@ function loginsInOrder(a, p) {
 // (provider.CLIProxyAgents)
 const CLIPROXY_AGENTS = ["codex", "claude", "antigravity"];
 
-// cliproxyButton downloads an account's sign-in as CLIProxyAPI's auth file,
-// asked first: the file holds the refresh token, and a ChatGPT or Claude
-// one refreshed on one side stops working on the other. To the browser in
-// magpie web, to Downloads in the app.
+// cliproxyButton: an account's sign-in as CLIProxyAPI's auth file, asked
+// first, in cliproxy.js, loaded when pressed. An icon, not a word:
+// "Exportieren" took a line of its own beside Remove and a cap pill
 function cliproxyButton(a, l) {
-  // an icon, not a word: "Exportieren" beside Remove and a by-window cap
-  // pill took a line of its own, blank until hovered, and WebKit left the
-  // row its old height, so the meters ran under the next account's row
   const b = el("button", "key-edit acc-export");
   b.setAttribute("aria-label", t("Export"));
   b.append(svg(DOWNLOAD, 12, 1.5));
   b.title = t("Download this account's sign-in as a CLIProxyAPI auth file");
-  b.onclick = async () => {
-    const shared = a.agent === "antigravity" ? "" : " " + t("magpie renews this sign-in by itself, about once a day, and the copy in the file then stops working: to use the account in CLIProxyAPI, remove it from magpie after exporting.");
-    if (!await confirmAction(t("Export {user} for CLIProxyAPI?", { user: l.user }),
-      t("The file holds this account's sign-in, its refresh token too: anyone with it can use the account. Keep it private.") + shared, t("Export"))) return;
-    b.classList.add("busy");
-    b.disabled = true;
-    try {
-      const r = await api("login/cliproxy", { agent: a.agent, user: l.user });
-      if (web) {
-        const link = el("a");
-        link.href = URL.createObjectURL(new Blob([r.file], { type: "application/json" }));
-        link.download = r.name;
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-      } else status(t("Saved to {path}", { path: r.path }), "ok");
-    } catch (e) {
-      status(t(e.message), "err");
-    } finally {
-      b.classList.remove("busy");
-      b.disabled = false;
-    }
-  };
+  b.onclick = () => import("./cliproxy.js").then(() => cliproxyExport(a, l, b), statusErr);
   return b;
 }
 
@@ -24193,13 +24145,6 @@ if (mode === "window") {
   // the address shown from the start, not only once a page has read the
   // providers: read for the sidebar only while there is one
   setTimeout(() => { sideGwRead.due = true; sideGwRead(); }, 1500);
-}
-
-// acctsBack: an open editor redrawn on return if its accounts changed
-async function acctsBack() {
-  const ls = (r) => JSON.stringify(r?.providers?.find((p) => p.id === editing)?.account?.logins?.map((l) => [l.user, l.lapsed, l.active, l.paused]));
-  const next = await api("providers").catch(() => null);
-  if (next && typeof editing == "string" && ls(next) !== ls(providers) && !$(".editor :is(input,textarea,select):focus")) { providers = next; renderProviders(); }
 }
 
 // loadBack: a window shown again hears visibilitychange and focus together;
