@@ -236,6 +236,7 @@ func (g *groupTurn) reach(cs []candidate, i int, seen func(order, left []Weighed
 		pid := cs[i].p.ID
 		if !g.done[pid] {
 			order, left := g.narrow(pid)
+			g.restsOut(pid, cs[i:])
 			cs = append(slices.Clone(cs[:i]), slices.DeleteFunc(slices.Clone(cs[i:]), func(c candidate) bool { return c.p.ID == pid && !g.mine(c) })...)
 			var picked int
 			if cs, picked = g.spreadOwn(cs, i); picked > 0 && picked < len(order) {
@@ -259,6 +260,43 @@ func (g *groupTurn) reach(cs []candidate, i int, seen func(order, left []Weighed
 		cs = slices.Delete(slices.Clone(cs), i, i+1)
 	}
 	return cs
+}
+
+// restsOut keeps, as the first provider's refusal, why the turn can't be
+// asked of pid when every one of its in cs, those the turn may ask there,
+// is one of the user's own that rests, which its narrowing leaves out
+// (ownedBy): a conversation staying strictly on its account (strictOnly)
+// whose account rests is refused as a provider's turn is (strictRests),
+// with its limit and when it is back, not as none of the user's able to
+// answer (T-066).
+func (g *groupTurn) restsOut(pid string, cs []candidate) {
+	ut := g.us[pid]
+	if g.refused != nil || ut == nil || ut.ub == nil {
+		return
+	}
+	u := ut.ub
+	var rests []Rest
+	for _, c := range cs {
+		if c.p.ID != pid {
+			continue
+		}
+		r, ok := restingOf(c)
+		if g.mine(c) || !seatIn(u.seats, c.who()) || !ok {
+			return
+		}
+		r.Key = strings.ToLower(c.who()) // whose, for the refusal to say
+		if !slices.ContainsFunc(rests, func(o Rest) bool { return o.Key == r.Key }) {
+			rests = append(rests, r)
+		}
+	}
+	if len(rests) == 0 {
+		return
+	}
+	refused := setRefusal(u, rests, nil, planned{}, "")
+	if refused.limit == failQuota && u.atMost() {
+		refused.limit = limitAccounts // as userLimitedAfter says it
+	}
+	g.refused = &userRefusedError{u: u, refused: refused, pid: pid}
 }
 
 // spread has the turn, of a conversation nobody has answered yet under

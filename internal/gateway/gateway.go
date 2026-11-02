@@ -2803,6 +2803,21 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// same first words or not (T-043); unbound, as they were
 	owner := stickOwner(limitedUser)
 	cands, pl, strictHeld := strictKeep(scope, owner, mode, r.Header, body, cands, pl)
+	if userBound != nil && strictHeld == nil && pin == "" {
+		// its account resting, left out of the user's: refused there, as
+		// one whose accounts all rest is, not moved to another (T-066)
+		if rest, ok := strictRests(scope, owner, mode, r.Header, body, userBound, pool, cands); ok {
+			refused := setRefusal(userBound, []Rest{rest}, nil, pl, "")
+			if refused.limit == failQuota && userBound.atMost() {
+				refused.limit = limitAccounts // as userLimitedAfter says it
+			}
+			refused.msg += ". The conversation stays strictly on that account (Stays: Strict), so magpie doesn't move it to another"
+			call.Provider = p.ID
+			s.userRefused(w, from, &call, userBound, refused)
+			turnedAway()
+			return
+		}
+	}
 	grew := false // a spare was added to the user's accounts, once a request
 	if userBound != nil && strictHeld == nil && pin == "" {
 		// none of the user's accounts has room: a spare, when each is out

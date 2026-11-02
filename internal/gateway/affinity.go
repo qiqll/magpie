@@ -495,6 +495,35 @@ func strictKeep(scope, owner, mode string, in http.Header, body []byte, cs []can
 	return cs, pl, nil
 }
 
+// strictRests is, for a conversation of the bound user u that stays
+// strictly where it is, the rest of its account when that one rests: the
+// user's accounts left it out (ownedBy), and affine, not finding it,
+// would have the conversation go to another of them as a new one (T-066).
+// It is refused there instead, as a user whose accounts all rest is, and
+// no other is asked. pool is the provider's candidates before the user's
+// narrowing; cs after it, which has the account when it doesn't rest.
+func strictRests(scope, owner, mode string, in http.Header, body []byte, u *UserBound, pool, cs []candidate) (Rest, bool) {
+	if mode != provider.AffinityStrict || u == nil {
+		return Rest{}, false
+	}
+	sticks.Lock()
+	st, had := stickOf(stickKey(scope, owner, in, body))
+	sticks.Unlock()
+	if !had || time.Since(st.at) > stickKeep || slices.ContainsFunc(cs, func(c candidate) bool { return c.sameVendor(st.who, st.model) }) {
+		return Rest{}, false
+	}
+	for _, c := range pool {
+		if c.p.ID != u.pid || !seatIn(u.seats, c.who()) || !c.sameVendor(st.who, st.model) {
+			continue
+		}
+		if r, ok := restingOf(c); ok {
+			r.Key = strings.ToLower(c.who()) // whose, for the refusal to say
+			return r, true
+		}
+	}
+	return Rest{}, false
+}
+
 // strictOnly leaves of cs, for a conversation kept strictly, the key or
 // account cs[at] alone: first as it answered, then its other models a
 // group has on it, which a rule may still pick between. Nobody else is
