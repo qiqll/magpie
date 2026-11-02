@@ -20,13 +20,8 @@ func lapsedClaude(t *testing.T, user string) savedLogin {
 		Lapsed:  claudeLogoutLapse}
 }
 
-// logTo has the log written to a buffer for the test. The test's looks at
-// the agents' sign-ins are its own: the next test's first look is as due
-// as it was before this one (claudeAuthFixture's All saves Claude Code's
-// own account only on a look that is due).
+// logTo has the log written to a buffer for the test.
 func logTo(t *testing.T) *syncBuffer {
-	seen := loginsSeenAt.Load()
-	t.Cleanup(func() { loginsSeenAt.Store(seen) })
 	var b syncBuffer
 	old := log.Writer()
 	log.SetOutput(&b)
@@ -98,6 +93,30 @@ func TestSignInAgainRenewsTheAccount(t *testing.T) {
 	}
 	if out := logged.String(); !strings.Contains(out, "sign-in: claude account old@example.com is signed in again: signed in again in magpie") {
 		t.Fatalf("log:\n%s", out)
+	}
+}
+
+// A sign-in to an account listed already that didn't have to be signed in
+// again is Again, but the log says nothing of its being signed in again.
+func TestSignInAgainToAHealthyAccountSaysNoLapse(t *testing.T) {
+	claudeHome(t)
+	noAnthropic(t)
+	fakeClaudeLogin(t, fakeClaudeAccount{email: "old@example.com", plan: "max", refresh: "sk-ant-ort01-new"}, "", true)
+	l := lapsedClaude(t, "old@example.com")
+	l.Lapsed = ""
+	saveLogins(t, l)
+	logged := logTo(t)
+
+	st, err := StartSignIn("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishInBrowser(t, st, "the-code")
+	if st = waitDone(t, st.ID); st.State != "done" || !st.Again || st.For != "" {
+		t.Fatalf("state %+v", st)
+	}
+	if out := logged.String(); strings.Contains(out, "is signed in again") {
+		t.Fatalf("a healthy account said signed in again:\n%s", out)
 	}
 }
 

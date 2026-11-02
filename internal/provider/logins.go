@@ -167,7 +167,7 @@ var signInFiles struct {
 // said of it last is let go, so the look it makes due reads the new
 // one. Looked at once a second at most; the first look at the files
 // (another HOME's too) notes them.
-func signInFilesMoved() bool {
+func signInFilesSeen() bool {
 	signInFiles.Lock()
 	defer signInFiles.Unlock()
 	if time.Since(signInFiles.at) < time.Second {
@@ -191,11 +191,20 @@ func signInFilesMoved() bool {
 	}
 	moved := signInFiles.stamp != "" && st != signInFiles.stamp
 	signInFiles.stamp = st
-	if moved {
-		forgetClaudeCredential()
-		forgetClaudeSignedOut()
-	}
 	return moved
+}
+
+// signInFilesMoved is signInFilesSeen, and what was kept of the sign-in
+// it saw change let go, outside its lock: a Claude Code that said nobody
+// is signed in is asked again (the one look that waits on the CLI), and
+// the credential read again, the keychain's backoff after a denial kept.
+func signInFilesMoved() bool {
+	if !signInFilesSeen() {
+		return false
+	}
+	staleClaudeCredential()
+	forgetClaudeSignedOut()
+	return true
 }
 
 // switchable agents: those whose sign-in magpie can save and put back.
@@ -888,10 +897,13 @@ func rememberLogins(force bool) {
 	// the time first, and the lock only for a look that is due: taken
 	// first, every ask (each list of accounts, each page's read) made and
 	// locked logins.json.lock, ~370 times in a start's first 25s on
-	// Windows, where an antivirus' filter driver works on each (#1665)
-	// a sign-in changed on disk (`claude auth login` run in a terminal)
-	// is looked at now, not up to 30 seconds on
-	force = signInFilesMoved() || force
+	// Windows, where an antivirus' filter driver works on each (#1665).
+	// A sign-in changed on disk (`claude auth login` run in a terminal) is
+	// looked at now, not up to 30 seconds on: its files' stat, once a
+	// second, takes no lock.
+	if signInFilesMoved() {
+		force = true
+	}
 	if !force && !loginsLookDue() {
 		return
 	}

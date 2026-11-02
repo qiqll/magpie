@@ -90,11 +90,26 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.waitForTimeout(200);
         assert.equal(await page.locator(".editor[data-kept]").count(), 1, "drawn again with nothing changed");
         assert.equal(await bob.getByText(w.required, { exact: true }).count(), 1);
-        // signed in again in a terminal meanwhile
+        // someone typing in the editor isn't drawn over, a change or not
         back.back = true;
-        await page.waitForTimeout(1100); // loadBack's one read a second
+        const field = page.locator(".editor input:visible").first();
+        await field.focus();
+        const typing = asked.providers;
+        await page.waitForTimeout(1100); // loadBack reads once a second
         await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-        await bob.getByText(w.required, { exact: true }).waitFor({ state: "detached" });
+        for (let i = 0; i < 100 && asked.providers === typing; i++) await page.waitForTimeout(20);
+        assert.ok(asked.providers > typing, "the accounts weren't read again");
+        await page.waitForTimeout(200);
+        assert.equal(await page.locator(".editor[data-kept]").count(), 1, "drawn over a field being typed in");
+        await page.evaluate(() => document.activeElement.blur());
+        // signed in again in a terminal meanwhile: the window comes back
+        // until it has read that (loadBack reads once a second)
+        const required = bob.getByText(w.required, { exact: true });
+        for (let i = 0; i < 200 && await required.count(); i++) {
+          await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+          await page.waitForTimeout(50);
+        }
+        assert.equal(await required.count(), 0, "still marked after the window came back");
         assert.equal(await bob.count(), 1, "the account is still listed");
         assert.deepEqual(errors, []);
         await page.context().close();

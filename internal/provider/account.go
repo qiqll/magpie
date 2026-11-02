@@ -648,6 +648,14 @@ func cacheClaudeCredential(c claudeCredentials, loc claudeCredentialLocation) {
 	claudeCacheMu.Unlock()
 }
 
+// staleClaudeCredential has the credential read again at its next look,
+// the keychain's backoff after a denial (claudeAskAt) kept.
+func staleClaudeCredential() {
+	claudeCacheMu.Lock()
+	claudeCacheAt = time.Time{}
+	claudeCacheMu.Unlock()
+}
+
 // forgetClaudeCredential drops the cache; tests use it between homes.
 func forgetClaudeCredential() {
 	claudeCacheMu.Lock()
@@ -1838,9 +1846,8 @@ func copilotModels(ctx context.Context, app copilotApp) ([]catalog.Model, error)
 }
 
 // forgetClaudeSignedOut drops what `claude auth status` said when it said
-// nobody is signed in, so the next look asks it again before it answers:
-// a sign-in said of an account (claudeSignedInUser reads ~/.claude.json
-// first) costs no wait on the CLI.
+// nobody is signed in, so the next look asks it again before it answers.
+// That look waits on the CLI; one that said an account costs none.
 func forgetClaudeSignedOut() {
 	claudeStatusMu.Lock()
 	out := claudeStatusOut

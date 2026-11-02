@@ -81,6 +81,11 @@ func isolate(t testing.TB) {
 	forgetClaudeCredential()
 	forgetClaudeStatus()
 	devinStatus.forget()
+	// a new HOME's first look at the sign-ins is due, as a new magpie's is:
+	// not held back by the last test's look (TestSignInLapsedClaude saves
+	// Claude Code's own account only on a look that is due)
+	loginsSeenAt.Store(0)
+	signInFilesDue()
 	// nor Codex's keychain item (#2367): a test's has nothing in it,
 	// whatever the system
 	oldCodexKeychain, oldCodexHere := codexKeychain, codexKeychainHere

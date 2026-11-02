@@ -154,8 +154,9 @@ type signInFlow struct {
 	// user is the account signed in to again, "" for a new one
 	user string
 	// listed are the agent's accounts (accountKey) when the sign-in
-	// started: one done on one of them is Again
-	listed []string
+	// started: one done on one of them is Again; lapsed those of them
+	// that had to be signed in again
+	listed, lapsed []string
 	// ofPlugin is a plugin's sign-in, whose account its own lapse says
 	// is signed in again (clearPluginLapse)
 	ofPlugin bool
@@ -230,6 +231,9 @@ func (s *signInFlow) pickProxy(agent string, o SignInOptions) error {
 	s.proxy = ProxyOfLogin(agent, s.user)
 	for _, l := range Logins(agent) {
 		s.listed = append(s.listed, accountKey(l.User))
+		if l.Lapsed != "" {
+			s.lapsed = append(s.lapsed, accountKey(l.User))
+		}
 	}
 	if o.Proxy == nil {
 		return nil
@@ -720,13 +724,15 @@ func (s *signInFlow) finish(out SignInState) bool {
 		return false
 	}
 	s.finished = true
+	back := false
 	if out.State == "done" {
 		// signed in to an account listed already, or, started for one, to
 		// another, which leaves that one to be signed in again still
 		out.Again = slices.Contains(s.listed, accountKey(out.User))
-		if s.user != "" && accountKey(s.user) != accountKey(out.User) {
+		if s.user != "" && out.User != "" && accountKey(s.user) != accountKey(out.User) {
 			out.For = s.user
 		}
+		back = slices.Contains(s.lapsed, accountKey(out.User))
 		agent, proxy, chosen := s.st.Agent, s.proxy, s.chosen
 		s.mu.Unlock()
 		// signing in again brings back an account removed from magpie
@@ -762,8 +768,9 @@ func (s *signInFlow) finish(out SignInState) bool {
 			line += " (another account than " + logName(out.For) + ", the one it was started for, which still has to be signed in again)"
 		}
 		log.Print(line)
-		// a plugin's account says so as its lapse is cleared
-		if out.Again && !ofPlugin {
+		// one that had to be signed in again isn't any more; a plugin's
+		// account says so as its lapse is cleared
+		if back && !ofPlugin {
 			logUnlapsed(out.Agent, out.User, "signed in again in magpie")
 		}
 	case "canceled":

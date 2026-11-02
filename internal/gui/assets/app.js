@@ -5973,11 +5973,9 @@ async function loadProvidersNow() {
   discoverLocalProviders();
 }
 
-// Accounts' lists still on their way from their vendors (#541: the page no
-// longer waits for them): asked again every few seconds until they are in,
-// and drawn again only when something changed — never under an open editor.
-// A read that failed, or a reload that did, is asked again rather than ending
-// the asking: this timer is what brings the lists in.
+// Accounts' lists still on their way from their vendors (#541): asked again
+// every few seconds until in, drawn again only on a change, never under an
+// open editor; a failed read is asked again.
 function providersWhileFetching() {
   clearTimeout(providersWhileFetching.timer);
   if (!providers?.fetching) return;
@@ -24199,9 +24197,9 @@ if (mode === "window") {
 
 // acctsBack: an open editor redrawn on return if its accounts changed
 async function acctsBack() {
-  const ls = (r) => JSON.stringify(r?.providers?.find((p) => p.id === editing)?.account?.logins);
+  const ls = (r) => JSON.stringify(r?.providers?.find((p) => p.id === editing)?.account?.logins?.map((l) => [l.user, l.lapsed, l.active, l.paused]));
   const next = await api("providers").catch(() => null);
-  if (next && typeof editing == "string" && ls(next) !== ls(providers)) { providers = next; renderProviders(); }
+  if (next && typeof editing == "string" && ls(next) !== ls(providers) && !$(".editor :is(input,textarea,select):focus")) { providers = next; renderProviders(); }
 }
 
 // loadBack: a window shown again hears visibilitychange and focus together;
