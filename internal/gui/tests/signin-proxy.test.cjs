@@ -10,7 +10,8 @@
 // other accounts; picking one starts the sign-in again through it, the one
 // before canceled; Custom… asks for the address in place. A subscription
 // with no proxy and one account offers the global proxy, ticked. Nothing
-// moves the page, the link stays inside the sheet at a phone's width. In
+// moves the page, the link stays inside the sheet at a phone's width, and
+// no row of the account list draws past its own bottom (T-061). In
 // every language, Chromium and WebKit; no backend, the API is faked here.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
@@ -106,6 +107,16 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // Bob, signed in to again: through his own proxy, his name sent
         await page.locator(".row.provider", { hasText: "Claude" }).first().click();
         const bob = page.locator(".editor .accts .acc", { hasText: "bob@example.com" });
+        // every row of the list is as tall as what it draws: WebKit gave a
+        // row of the list the height it had at a width the editor hadn't
+        // settled on, and at 380 in Chinese "Switch accounts only" lay over
+        // Bob's Sign in again (T-061)
+        await bob.waitFor();
+        const spills = await page.evaluate(() => [...document.querySelectorAll(".editor .accts > *")].flatMap((row) => {
+          const r = row.getBoundingClientRect();
+          return [...row.querySelectorAll("*")].filter((e) => e.getBoundingClientRect().height && e.getBoundingClientRect().bottom > r.bottom + 0.5).map((e) => `${row.className} > ${e.className}`);
+        }));
+        assert.deepEqual(spills, [], "no row draws past its own bottom");
         await bob.locator("button", { hasText: w.again }).click();
         const box = page.locator(".editor .signing");
         const via = box.locator(".acts .via");

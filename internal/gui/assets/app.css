@@ -2698,8 +2698,11 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acct { display: flex; align-items: center; gap: 8px; min-height: 26px; font-size: 12.5px; }
 .acct .n { font-weight: 500; }
 .acct .plan { color: var(--muted); font-size: 11.5px; padding: 1px 6px; border-radius: 5px; background: var(--pill-hover); }
-/* a subscription's accounts: the one in use first, a way to add another */
-.accts { display: grid; grid-template-columns: minmax(0, 1fr); border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; }
+/* a subscription's accounts: the one in use first, a way to add another.
+   A column, not a grid of one: in the editor's grid WebKit sized a grid's
+   rows at a width the editor hadn't settled on, so a row wrapped narrower
+   (a signed-out account at 380) drew over the next one (T-061) */
+.accts { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; }
 .acc { display: flex; align-items: center; gap: 9px; min-height: 38px; padding: 5px 8px 5px 11px; font-size: 12.5px; text-align: left; }
 .acc + .acc, .accts .signing { border-top: 1px solid var(--line-2); }
 /* every row of the box ruled off from the one above it, a setting's too
