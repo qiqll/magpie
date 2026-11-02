@@ -610,6 +610,11 @@ func appendUsage(r *http.Request, rec usage.Record) {
 	if rec.User == "" {
 		rec.User = callerUser(r)
 	}
+	if rec.User == "" {
+		// a classifier's ask through serve, bound by session: its turn's
+		// user, which no header carries (askFor)
+		rec.User = decideFor(r.Context())
+	}
 	rec.Local = local(r)
 	if r.Context().Value(observedKey{}) != nil {
 		rec.Watched = true

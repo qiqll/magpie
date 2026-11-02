@@ -803,7 +803,7 @@ func TestDecisionClassifierAskedOfTheUsersKeys(t *testing.T) {
 	var alice, bob []string
 	for _, round := range []string{"first", "second"} {
 		for _, user := range []string{"alice", "bob"} {
-			before := len(u.asked("/v1/systemone"))
+			before, rows := len(u.asked("/v1/systemone")), usageCount()
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(chat("add the "+round+" unit test for "+user+"'s parser", nil, 0, "")))
 			req.Header.Set("x-session-id", user+"-"+round)
@@ -812,6 +812,7 @@ func TestDecisionClassifierAskedOfTheUsersKeys(t *testing.T) {
 			if rec.Code != 200 {
 				t.Fatalf("%s, %s turn: %d %s", user, round, rec.Code, rec.Body.String())
 			}
+			routingRowsKeepTheirUser(t, rows, user)
 			got := u.asked("/v1/systemone")
 			if len(got) <= before {
 				t.Fatalf("%s, %s turn: Jev wasn't asked", user, round)
@@ -827,7 +828,6 @@ func TestDecisionClassifierAskedOfTheUsersKeys(t *testing.T) {
 	if b := boundIn(t, "jev"); len(b) != 2 {
 		t.Fatalf("bound %v, want alice and bob on the decision provider", b)
 	}
-	routingRowsKeepTheirUser(t)
 }
 
 // Bound by user, a routing group's classifier that is a decision group is
@@ -854,7 +854,7 @@ func TestDecisionGroupClassifierAskedOfTheUsersKeys(t *testing.T) {
 	var alice, bob []string
 	for _, round := range []string{"first", "second"} {
 		for _, user := range []string{"alice", "bob"} {
-			before := len(u.asked("/v1/systemone"))
+			before, rows := len(u.asked("/v1/systemone")), usageCount()
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(chat("add the "+round+" unit test for "+user+"'s parser", nil, 0, "")))
 			req.Header.Set("x-session-id", user+"-"+round)
@@ -863,6 +863,7 @@ func TestDecisionGroupClassifierAskedOfTheUsersKeys(t *testing.T) {
 			if rec.Code != 200 {
 				t.Fatalf("%s, %s turn: %d %s", user, round, rec.Code, rec.Body.String())
 			}
+			routingRowsKeepTheirUser(t, rows, user)
 			got := u.asked("/v1/systemone")
 			if len(got) <= before {
 				t.Fatalf("%s, %s turn: the decision group wasn't asked", user, round)
@@ -878,7 +879,6 @@ func TestDecisionGroupClassifierAskedOfTheUsersKeys(t *testing.T) {
 	if b := boundIn(t, "jev"); len(b) != 2 {
 		t.Fatalf("bound %v, want alice and bob on the decision group's provider", b)
 	}
-	routingRowsKeepTheirUser(t)
 }
 
 // A gateway key held to some accounts asks a decision classifier on those

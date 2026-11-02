@@ -551,7 +551,10 @@ func (s *Server) classifierFor(ctx context.Context) classifier {
 // nor its flight and watch (noteRoute, noteWait), whose first route is
 // r's own, begun after the classifier answers.
 func (s *Server) askFor(r *http.Request) context.Context {
-	return s.forUser(access.WithIdentity(context.Background(), access.Caller(r.Context())), r)
+	// the caller's user for its usage rows alone (decideFor), bound by
+	// session too, as appendUsage keeps a request's (T-020)
+	ctx := context.WithValue(context.Background(), decideForKey{}, callerUser(r))
+	return s.forUser(access.WithIdentity(ctx, access.Caller(r.Context())), r)
 }
 
 // askerRefused says w, serve's answer to a classifier's ask in ctx

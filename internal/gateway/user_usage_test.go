@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/usage"
 )
@@ -76,23 +77,80 @@ func TestSearchRowsKeepTheUser(t *testing.T) {
 	}
 }
 
-// routingRowsKeepTheirUser fails unless every routing row (systemOne's,
-// magpie's ask of a decision classifier) keeps the user its turn was
-// for: an alice turn's words name alice, a bob turn's bob (T-020).
-// Before, they named none.
-func routingRowsKeepTheirUser(t *testing.T) {
+// usageCount is how many rows the usage log has, for a turn's own rows
+// after it (routingRowsKeepTheirUser).
+func usageCount() int { return len(usage.Load(time.Time{})) }
+
+// routingRowsKeepTheirUser fails unless the routing rows written since the
+// log had from rows (magpie's ask of a classifier, through System One or
+// serve) are there and keep user, the user of the turn they were asked
+// for (T-020). Before, they named none.
+func routingRowsKeepTheirUser(t *testing.T, from int, user string) {
 	t.Helper()
 	n := 0
-	for _, r := range usage.Load(time.Time{}) {
+	for _, r := range usage.Load(time.Time{})[from:] {
 		if r.Kind != "routing" {
 			continue
 		}
 		n++
-		if r.User != "alice" && r.User != "bob" {
-			t.Errorf("a routing row of %s/%s keeps the user %q, want alice or bob", r.Provider, r.Model, r.User)
+		if r.User != user {
+			t.Errorf("%s's turn: a routing row of %s/%s keeps the user %q", user, r.Provider, r.Model, r.User)
 		}
 	}
 	if n == 0 {
-		t.Fatal("no routing row in the usage log")
+		t.Fatalf("%s's turn: no routing row in the usage log", user)
+	}
+}
+
+// Bound by session, a classifier's ask keeps the user its turn named in
+// X-Magpie-User too, as the turn's own row does (appendUsage): asked
+// through System One (askDecideTries) or through serve (askChat), where
+// no header carries it on (T-020, review M1).
+func TestRoutingRowsKeepTheUserBoundBySession(t *testing.T) {
+	t.Run("decision", func(t *testing.T) {
+		s, _, _, _ := intented(t, provider.Rule{Use: "b/big", Intent: "writing or fixing tests"})
+		u := newRoutesUp(t)
+		if err := provider.Save(provider.Provider{ID: "jev", Name: "Jev", Key: "kA", Decide: u.URL + "/v1", Models: []string{"jev-latest"}}); err != nil {
+			t.Fatal(err)
+		}
+		g, _, _ := provider.FindGroup("group/r")
+		g.Classifier = "jev/jev-latest"
+		if err := provider.SaveGroup(g); err != nil {
+			t.Fatal(err)
+		}
+		routingTurns(t, s)
+	})
+	t.Run("chat", func(t *testing.T) {
+		s, _, _, c := intented(t, provider.Rule{Use: "b/big", Intent: "writing or fixing tests"})
+		c.set("1", 0)
+		up, _, users := keysSeen(t, c)
+		if err := provider.Save(provider.Provider{ID: "c", Name: "C", Key: "kc", Models: []string{"cls"}, Chat: up.URL + "/v1"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := catalog.SaveLive("c", up.URL+"/v1", []catalog.Model{{ID: "cls", Context: 32000}}); err != nil {
+			t.Fatal(err)
+		}
+		routingTurns(t, s)
+		if n := users(); n != 0 {
+			t.Fatalf("%d classifier asks took the user header to the vendor", n)
+		}
+	})
+}
+
+// routingTurns sends alice's then bob's turn to group/r, bound by session,
+// and checks each turn's routing rows keep its user.
+func routingTurns(t *testing.T, s *Server) {
+	t.Helper()
+	for _, user := range []string{"alice", "bob"} {
+		rows := usageCount()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(chat("add the unit test for "+user+"'s parser", nil, 0, "")))
+		req.Header.Set("x-session-id", user)
+		req.Header.Set(UserHeader, user)
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", user, rec.Code, rec.Body.String())
+		}
+		routingRowsKeepTheirUser(t, rows, user)
 	}
 }

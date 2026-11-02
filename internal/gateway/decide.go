@@ -412,9 +412,9 @@ func maskedState(ctx context.Context, text, user, reply string) (string, string,
 	return out[0], out[1], out[2], nil
 }
 
-// decideForKey carries, to systemOne's usage row alone, the user a
-// classifier's ask is made for (forUser): askDecideTries asks on a
-// context of its own (T-020).
+// decideForKey carries, to the usage rows of a classifier's ask alone,
+// the user of the turn it is made for (askFor), bound by session too:
+// never sent on, nor read for binding (T-020).
 type decideForKey struct{}
 
 func decideFor(ctx context.Context) string {

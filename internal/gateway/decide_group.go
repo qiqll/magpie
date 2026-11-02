@@ -561,8 +561,8 @@ func (s *Server) askDecider(ctx context.Context, wait time.Duration, p provider.
 func (s *Server) askDecideTries(as context.Context, wait time.Duration, cs []candidate, intents []string, prev before, effort bool, text string, gu *groupUsers) (v verdict, err error) {
 	full := classifyTimeout()
 	// as names only the user its usage rows are kept for (decideFor)
-	var user string
-	if f, ok := as.Value(askedForKey{}).(askedFor); ok {
+	user := decideFor(as)
+	if f, ok := as.Value(askedForKey{}).(askedFor); ok && user == "" {
 		user = f.user
 	}
 	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), decideForKey{}, user), wait)
