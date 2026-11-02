@@ -589,7 +589,7 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 			capBack time.Time
 			skipped []string
 		)
-		var told []string // of skipped, those the caller is told of: no lapse
+		var told []string // of skipped, those the caller is told of: no lapse, no bound user's limit
 		for i, m := range tries {
 			call.Provider, model = m.Provider.ID, m.Model
 			drew, out, code, capBack, err = s.drawOnAccounts(ctx, r, m.Provider, m.Model, d)
@@ -600,7 +600,7 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 				break
 			}
 			skipped = append(skipped, m.Provider.ID+"/"+m.Model+": "+err.Error())
-			if !isLapsed(err) {
+			if !isLapsed(err) && !isUserLimit(err) {
 				told = append(told, skipped[len(skipped)-1])
 			}
 		}
@@ -1051,7 +1051,8 @@ func (s *Server) drawOnAccounts(ctx context.Context, r *http.Request, p provider
 			break
 		}
 	}
-	return p, out, code, time.Time{}, err
+	// a bound user's 429 is told only as its limit (userLimitAs)
+	return p, out, code, time.Time{}, userLimitAs(u != nil, code, err)
 }
 
 // restDrawer rests the image model on c's account when the account is out

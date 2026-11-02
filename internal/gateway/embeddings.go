@@ -325,16 +325,19 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 				continue
 			}
 		}
+		// a bound user's 429 is told only as its limit (userLimitAs)
+		bound := u != nil || gt.user() != nil
 		if err != nil && !last && r.Context().Err() == nil {
 			skipped = append(skipped, c.label()+": "+err.Error())
-			if !lapsedTry(c, code, []byte(err.Error())) {
-				// a lapse is the operator's, never among those the caller
-				// is told were tried
+			if !lapsedTry(c, code, []byte(err.Error())) && !isUserLimit(userLimitAs(bound, code, err)) {
+				// a lapse, or a bound user's limit, is the operator's,
+				// never among those the caller is told were tried
 				told = append(told, c.label()+": "+err.Error())
 			}
 			continue
 		}
 		code, err = lapsedAs(c, code, err)
+		err = userLimitAs(bound, code, err)
 		call.Status = code
 		in, outTokens := retrievedTokens(b), answeredTokens(b)
 		if res != nil {

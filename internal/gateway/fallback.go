@@ -1225,13 +1225,46 @@ func isLapsed(err error) bool {
 	return errors.As(err, &l)
 }
 
+// userLimitErr is a vendor's 429 to a request that isn't a turn (a
+// drawing or an edit, a video, an embedding or rerank, audio) of a user
+// bound by user (userLimitAs): its caller is told only userLimitSaid
+// (saidOf), as a turn's is (releaseSaid, T-067); the vendor's words and
+// name stay the call's error, the operator's (T-069).
+type userLimitErr struct{ err error }
+
+func (e *userLimitErr) Error() string { return e.err.Error() }
+func (e *userLimitErr) Unwrap() error { return e.err }
+
+// userLimitAs is err, a vendor's failure at code of a try that isn't a
+// turn, as a userLimitErr when its user is bound (bound) and it is a 429:
+// not a prompt refused at 429 (promptRefused), which is no limit, nor
+// magpie's own refusal (a userRefusedError, a lapse), told as they are.
+// Else err as it is.
+func userLimitAs(bound bool, code int, err error) error {
+	if !bound || code != http.StatusTooManyRequests || err == nil || isLapsed(err) || isUserLimit(err) ||
+		userRefusedStatus(err) != 0 || promptRefused(code, []byte(err.Error())) {
+		return err
+	}
+	return &userLimitErr{err}
+}
+
+// isUserLimit says err is a userLimitErr.
+func isUserLimit(err error) bool {
+	var l *userLimitErr
+	return errors.As(err, &l)
+}
+
 // saidOf is what the caller of a request that isn't a turn is told of
 // err, its last failure, with told those tried before it: for a lapse
-// only userLimitSaid, Retry-After set on h; else err, and the tries
-// before it (" (tried first: …)").
+// only userLimitSaid, Retry-After set on h; for a bound user's limit
+// (userLimitErr) only userLimitSaid, its headers as they came; else err,
+// and the tries before it (" (tried first: …)").
 func saidOf(h http.Header, err error, told []string) string {
 	if isLapsed(err) {
 		lapsedRetryAfter(h)
+		return userLimitSaid
+	}
+	if isUserLimit(err) {
 		return userLimitSaid
 	}
 	msg := err.Error()

@@ -938,7 +938,7 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 		v       videoStart
 		code    int
 		skipped []string
-		told    []string // of skipped, those the caller is told of: no lapse
+		told    []string // of skipped, those the caller is told of: no lapse, no bound user's limit
 	)
 	for i, m := range tries {
 		model = m.Model
@@ -953,7 +953,7 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		skipped = append(skipped, m.Provider.ID+"/"+m.Model+": "+err.Error())
-		if !isLapsed(err) {
+		if !isLapsed(err) && !isUserLimit(err) {
 			told = append(told, skipped[len(skipped)-1])
 		}
 	}
@@ -1040,44 +1040,49 @@ func (s *Server) startVideo(ctx context.Context, r *http.Request, p provider.Pro
 	// says it doesn't serve the model
 	var keys []candidate
 	onKey, own := false, false
+	bound := false // on its user's own (onKeys): a 429 told only as its limit
 	if !p.IsRemoteMagpie() && filmsCustom(p, model) {
 		// at a provider's own videos API: sent on the first key a chat
 		// for the model would go to (#1657), never one whose own list of
 		// models leaves it out, nor one the calling key may not use
 		// (#905); the video's id names the key, which it is asked after on
-		cs, _, code, err := s.onKeys(r, p, model, f.Model)
+		cs, ut, code, err := s.onKeys(r, p, model, f.Model)
 		if err != nil {
 			return videoStart{p: p}, code, err
 		}
+		bound = ut != nil
 		p, keys = cs[0].p, cs[1:]
 	} else if makesMiniMaxVideo(p, model) {
 		// on the first key a chat for the model would go to that the
 		// calling key may use, the next while one's plan doesn't make H3
 		// (a Token Plan's); the video's id names the key it is asked on
-		cs, _, code, err := s.onKeys(r, p, model, f.Model)
+		cs, ut, code, err := s.onKeys(r, p, model, f.Model)
 		if err != nil {
 			return videoStart{p: p}, code, err
 		}
+		bound = ut != nil
 		p, keys = cs[0].p, cs[1:]
 		onKey = true
 	} else if !p.IsRemoteMagpie() && p.PlansMixed() {
 		// keys on plans of their own (KeyAccount.Plan): sent on a key
 		// whose plan makes the model, the Agent Plan's Seedance on the
 		// Agent Plan's key, never a pay-as-you-go key beside it
-		cs, _, code, err := s.onKeys(r, p, model, f.Model)
+		cs, ut, code, err := s.onKeys(r, p, model, f.Model)
 		if err != nil {
 			return videoStart{p: p}, code, err
 		}
+		bound = ut != nil
 		p = cs[0].p
 		onKey = true
 	} else if s.usersOwnRoute(r) {
 		// a user's, bound by user: sent on the first key or account of
 		// its own a chat for the model would go to (usersOn), never
 		// another user's, the calling key's holds kept as above
-		cs, _, code, err := s.onKeys(r, p, model, f.Model)
+		cs, ut, code, err := s.onKeys(r, p, model, f.Model)
 		if err != nil {
 			return videoStart{p: p}, code, err
 		}
+		bound = ut != nil
 		p = cs[0].p
 		own = true
 	} else if keyWho, held := accountHolds(r); held {
@@ -1142,7 +1147,7 @@ func (s *Server) startVideo(ctx context.Context, r *http.Request, p provider.Pro
 		// an account to be signed in again: told only as a limit
 		code, err = lapsedAs(candidate{p: p, rest: p.ID}, code, err)
 	}
-	return v, code, err
+	return v, code, userLimitAs(bound, code, err)
 }
 
 // videoAsker is p on a key or account the calling key may use, to ask
@@ -1224,7 +1229,7 @@ func (s *Server) videosGet(w http.ResponseWriter, r *http.Request) {
 	if filmsOpenAI(p) {
 		obj, model, code, err := s.openAIVideo(ctx, p, vendorID, id)
 		if err != nil {
-			videoAskFailed(w, p, code, err)
+			videoAskFailed(w, p, code, userLimitAs(s.videoAskBound(r, p), code, err))
 			return
 		}
 		if held := videoModelHeld(r, p, model); held != "" {
@@ -1236,7 +1241,7 @@ func (s *Server) videosGet(w http.ResponseWriter, r *http.Request) {
 	}
 	st, code, err := s.videoStatus(ctx, p, vendorID)
 	if err != nil {
-		videoAskFailed(w, p, code, err)
+		videoAskFailed(w, p, code, userLimitAs(s.videoAskBound(r, p), code, err))
 		return
 	}
 	model := st.Model
@@ -1274,7 +1279,7 @@ func (s *Server) videosContent(w http.ResponseWriter, r *http.Request) {
 			// the bytes say no model: the video's own answer does
 			_, model, code, err := s.openAIVideo(ctx, p, vendorID, id)
 			if err != nil {
-				videoAskFailed(w, p, code, err)
+				videoAskFailed(w, p, code, userLimitAs(s.videoAskBound(r, p), code, err))
 				return
 			}
 			if held := videoModelHeld(r, p, model); held != "" {
@@ -1282,12 +1287,12 @@ func (s *Server) videosContent(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		s.remoteVideoContent(ctx, w, p, vendorID)
+		s.remoteVideoContent(ctx, w, p, vendorID, s.videoAskBound(r, p))
 		return
 	}
 	st, code, err := s.videoStatus(ctx, p, vendorID)
 	if err != nil {
-		videoAskFailed(w, p, code, err)
+		videoAskFailed(w, p, code, userLimitAs(s.videoAskBound(r, p), code, err))
 		return
 	}
 	if held := videoModelHeld(r, p, cmp.Or(st.Model, "grok-imagine-video")); held != "" {
@@ -1337,8 +1342,8 @@ func (s *Server) videosContent(w http.ResponseWriter, r *http.Request) {
 
 // remoteVideoContent passes on the bytes of a video another magpie, or a
 // provider's OpenAI-shaped videos API, made, or what it says of one it
-// hasn't.
-func (s *Server) remoteVideoContent(ctx context.Context, w http.ResponseWriter, p provider.Provider, vendorID string) {
+// hasn't: to a bound user (bound) a 429 only as its limit (userLimitAs).
+func (s *Server) remoteVideoContent(ctx context.Context, w http.ResponseWriter, p provider.Provider, vendorID string, bound bool) {
 	ctx = p.Via(ctx)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, remoteVideoURL(p, vendorID, "/content"), nil)
 	if err != nil {
@@ -1368,7 +1373,8 @@ func (s *Server) remoteVideoContent(ctx context.Context, w http.ResponseWriter, 
 		if !ok {
 			said = vendorMessage(b)
 		}
-		writeError(w, provider.Chat, res.StatusCode, p.Name+": "+said)
+		err := userLimitAs(bound, res.StatusCode, errors.New(p.Name+": "+said))
+		writeError(w, provider.Chat, res.StatusCode, saidOf(w.Header(), err, nil))
 		return
 	}
 	w.Header().Set("Content-Type", cmp.Or(res.Header.Get("Content-Type"), "video/mp4"))
@@ -1417,10 +1423,17 @@ func maskStrings(ctx context.Context, v any, h *maskHits) error {
 }
 
 // videoAskFailed answers a failed ask after a video on p: err as it is,
-// or, on an account to be signed in again, only a limit (lapsedAs).
+// or, on an account to be signed in again, only a limit (lapsedAs); a
+// bound user's 429 (userLimitAs, videoAskBound) only as its limit too.
 func videoAskFailed(w http.ResponseWriter, p provider.Provider, code int, err error) {
 	if p.Account != nil {
 		code, err = lapsedAs(candidate{p: p, rest: p.ID}, code, err)
 	}
 	writeError(w, provider.Chat, code, saidOf(w.Header(), err, nil))
+}
+
+// videoAskBound says an ask after a video on p is of a user bound by
+// user, as starting it was (usersOn): p a key or account of its own.
+func (s *Server) videoAskBound(r *http.Request, p provider.Provider) bool {
+	return s.usersOwnRoute(r) && (p.Account != nil || p.Key != "")
 }

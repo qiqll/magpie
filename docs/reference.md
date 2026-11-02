@@ -2311,7 +2311,13 @@ of its allowance mid-request, or rate limited until magpie's patience is
 spent. Once the stream has begun (its 200 sent to keep you waiting), that
 sentence is the stream's error event, typed as before. The vendor's words
 and its name are the request's error in the usage log and Recent calls,
-and the limit headers below are as they were. Another refusal (a
+and the limit headers below are as they were. So is a vendor's 429 on a
+request that isn't a turn: a drawing or an edit (`/v1/images/…`, and the
+image MCP server's `generate_image`, whose error says "no image: " and
+that sentence), an embedding, a rerank, audio (`/v1/audio/…`), a video
+and the asks after it (`/v1/videos…`). A 429 that refuses the prompt
+itself, which no wait helps, and any other status keep the vendor's words,
+as they do with no user bound. Another refusal (a
 400 when none of the user's accounts serves the model, a 503 when they are
 paused or the conversation was sealed by another account) says why
 without naming them. When that error is a
