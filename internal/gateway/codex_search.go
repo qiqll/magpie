@@ -90,8 +90,9 @@ func (s *Server) alphaSearchBody(w http.ResponseWriter, r *http.Request, body []
 		// a failure would end the turn: magpie searches in its place
 		log.Printf("web search on ChatGPT for %s: %s", q.Model, why)
 		if told == "" {
-			// every account failed as one to be signed in again: that
-			// is the log's alone
+			// every account failed as one to be signed in again, or,
+			// bound by user, as anything but a limit: that is the
+			// log's alone
 			note = "ChatGPT's web search failed; magpie searched in its place.\n\n"
 		} else {
 			note = "ChatGPT's web search failed (" + told + "); magpie searched in its place.\n\n"
@@ -182,7 +183,8 @@ func (s *Server) usersSearchers(r *http.Request, id string, ons []provider.Provi
 // the backend's answer as it is. It says whether one answered: when none
 // did, nothing is written, and the search is magpie's (alphaSearchHere),
 // with why returned, and told, of why, the failures of accounts that
-// needn't be signed in again, for the caller's output.
+// needn't be signed in again, for the caller's output (bound by user,
+// userLimitSaid for a limit alone).
 func (s *Server) alphaSearchOn(w http.ResponseWriter, r *http.Request, body []byte, model string, ons []provider.Provider) (answered bool, why, told string) {
 	start := time.Now()
 	// as written only when every account it may be asked on is set to go
@@ -203,23 +205,31 @@ func (s *Server) alphaSearchOn(w http.ResponseWriter, r *http.Request, body []by
 // alphaSearchAsked is alphaSearchOn once body is as it goes.
 func (s *Server) alphaSearchAsked(w http.ResponseWriter, r *http.Request, body []byte, model string, ons []provider.Provider, start time.Time) (answered bool, why, told string) {
 	var errs, said []string
+	bound := s.bind.byUser()
 	for _, on := range ons {
 		who := "OpenAI (" + on.Account.User + "): "
 		// each failure is the log's; the caller's output has those of
 		// accounts that needn't be signed in again (the owner's
-		// decision, 2026-10-29), as any lapse is the operator's
-		fail := func(msg string) {
+		// decision, 2026-10-29), as any lapse is the operator's. Bound
+		// by user, the output names neither the account nor the
+		// vendor's words, as a bound user's 429 doesn't (T-067): a
+		// limit (a 429 that isn't a prompt refused) is userLimitSaid,
+		// anything else only that the search failed (T-071)
+		fail := func(code int, msg string) {
 			errs = append(errs, who+msg)
-			if provider.SignInLapsed(on.Account) == "" && !provider.SignInRevoked(http.StatusUnauthorized, []byte(msg)) {
-				said = append(said, who+msg)
-			} else {
+			switch {
+			case provider.SignInLapsed(on.Account) != "" || provider.SignInRevoked(http.StatusUnauthorized, []byte(msg)):
 				noteLapseRefused(candidate{p: on, rest: on.ID}.who(), provider.SignInLapsed(on.Account))
+			case !bound:
+				said = append(said, who+msg)
+			case code == http.StatusTooManyRequests && !promptRefused(code, []byte(msg)) && !slices.Contains(said, userLimitSaid):
+				said = append(said, userLimitSaid)
 			}
 		}
 		ctx := on.Via(r.Context())
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.CodexBase+AlphaSearchPath, bytes.NewReader(body))
 		if err != nil {
-			fail(err.Error())
+			fail(0, err.Error())
 			continue
 		}
 		for k, vs := range r.Header {
@@ -230,12 +240,12 @@ func (s *Server) alphaSearchAsked(w http.ResponseWriter, r *http.Request, body [
 		req.Header.Set("Content-Type", "application/json")
 		// a nil body: the search is answered in JSON, not streamed
 		if err := on.Sign(ctx, req, provider.Responses, nil); err != nil {
-			fail(err.Error())
+			fail(0, err.Error())
 			continue
 		}
 		// a sign-in its vendor revoked isn't sent again (#1793)
 		if why, revoked := provider.RevokedSignIn(on.Account, req); revoked {
-			fail(why)
+			fail(0, why)
 			continue
 		}
 		res, err := s.client.Do(req)
@@ -243,7 +253,7 @@ func (s *Server) alphaSearchAsked(w http.ResponseWriter, r *http.Request, body [
 			if r.Context().Err() != nil {
 				return true, "", ""
 			}
-			fail(err.Error())
+			fail(0, err.Error())
 			continue
 		}
 		noteSignIn(ctx, on.Account, req, res)
@@ -252,7 +262,7 @@ func (s *Server) alphaSearchAsked(w http.ResponseWriter, r *http.Request, body [
 		if res.StatusCode < 200 || res.StatusCode > 299 {
 			msg, _ := io.ReadAll(io.LimitReader(res.Body, 4<<10))
 			res.Body.Close()
-			fail(res.Status + ": " + strings.TrimSpace(string(msg)))
+			fail(res.StatusCode, res.Status+": "+strings.TrimSpace(string(msg)))
 			c.Millis, c.Error = time.Since(start).Milliseconds(), res.Status
 			s.record(c)
 			continue
