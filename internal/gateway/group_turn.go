@@ -289,7 +289,8 @@ func spreadMember(c candidate) string {
 // for the one of the user's own of that member (its provider, model and
 // effort) the fewest conversations of the group are held on (leastHeld
 // with spentLast: one all but used up passed over while another has room,
-// resting ones left out, a tie keeping the group's order). The others keep
+// resting ones left out, a tie keeping the group's order, or the one a
+// conversation routed afresh was answered on: T-049). The others keep
 // their places after it. A member is spread once, the first time the
 // tries reach it. Nothing moves for a conversation not spread, a member
 // the user has one of, or one whose rows aren't all known. picked is the
