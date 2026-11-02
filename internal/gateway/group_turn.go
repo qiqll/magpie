@@ -416,6 +416,13 @@ func (g *groupTurn) only(cs []candidate) []candidate {
 	return slices.DeleteFunc(slices.Clone(cs), func(c candidate) bool { return !g.mine(c) })
 }
 
+// boundOn says the provider pid was narrowed to its user's own: a group's
+// member bound by user, not one with nothing bound (free), as usersOn
+// judges each provider (T-069).
+func (g *groupTurn) boundOn(pid string) bool {
+	return g != nil && g.done[pid] && !g.free[pid]
+}
+
 // user is the first binding narrowed, for the routing log; nil for none.
 func (g *groupTurn) user() *UserBound {
 	if g == nil {

@@ -291,3 +291,65 @@ func TestUserLimitSaidOfGenerateImage(t *testing.T) {
 		})
 	}
 }
+
+// A routing group's first member answers a bound user's request with a
+// 429, its next with a 400: the caller is told the 400 as the vendor said
+// it, the 429 never among the "(tried first: …)", nor the first's host.
+// With no user bound the 429 is among them, as before. A drawing, an
+// embedding and a video each go over their group's members so.
+func TestUserLimitNotAmongTheTriedOfAGroup(t *testing.T) {
+	for _, c := range []struct{ name, path, body string }{
+		{"embeddings", "/v1/embeddings", `{"model":"group/g-emb","input":"a magpie"}`},
+		{"images", "/v1/images/generations", `{"model":"group/g-img","prompt":"a magpie"}`},
+		{"videos", "/v1/videos", `{"model":"group/g-vid","prompt":"a kite"}`},
+	} {
+		for _, user := range []string{"alice", ""} {
+			t.Run(c.name+"/"+cmp.Or(user, "unbound"), func(t *testing.T) {
+				fresh(t)
+				noRests()
+				t.Cleanup(noRests)
+				first, next := newLimitRoutesUp(t, "quota"), newLimitRoutesUp(t, "bad")
+				for _, p := range []provider.Provider{
+					{ID: "qa", Name: "Qa", Chat: first.URL + "/v1", Key: "kA", Models: []string{"embed-1", "gpt-image-1"}},
+					{ID: "qb", Name: "Qb", Chat: next.URL + "/v1", Key: "kB", Models: []string{"embed-1", "gpt-image-1"}},
+				} {
+					if err := provider.Save(p); err != nil {
+						t.Fatal(err)
+					}
+				}
+				saveFetched(t, provider.Provider{ID: "va", Name: "Va", Chat: first.URL + "/v1", Key: "kA"})
+				saveFetched(t, provider.Provider{ID: "vb", Name: "Vb", Chat: next.URL + "/v1", Key: "kB"})
+				for _, g := range []provider.Group{
+					{ID: "g-emb", Name: "g-emb", Members: []string{"qa/embed-1", "qb/embed-1"}, Routing: provider.Ordered},
+					{ID: "g-img", Name: "g-img", Members: []string{"qa/gpt-image-1", "qb/gpt-image-1"}, Routing: provider.Ordered},
+					{ID: "g-vid", Name: "g-vid", Members: []string{"va/vid-1", "vb/vid-1"}, Routing: provider.Ordered},
+				} {
+					if err := provider.SaveGroup(g); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var rec *httptest.ResponseRecorder
+				if user == "" {
+					rec = unboundAt(New(), c.path, "", []byte(c.body))
+				} else {
+					rec = userAt(byUserUpTo(t, New(), 1), c.path, "", []byte(c.body), user)
+				}
+				body := rec.Body.String()
+				if rec.Code != 400 || !strings.Contains(body, "VENDOR-BAD") {
+					t.Fatalf("%d %s", rec.Code, body)
+				}
+				if user == "" {
+					if !strings.Contains(body, "VENDOR-QUOTA") {
+						t.Fatalf("unbound: the 429 not among the tried: %s", body)
+					}
+					return
+				}
+				for _, w := range []string{"VENDOR-QUOTA", strings.TrimPrefix(first.URL, "http://"), userLimitSaid} {
+					if strings.Contains(body, w) {
+						t.Fatalf("told %q: %s", w, body)
+					}
+				}
+			})
+		}
+	}
+}

@@ -326,7 +326,7 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 			}
 		}
 		// a bound user's 429 is told only as its limit (userLimitAs)
-		bound := u != nil || gt.user() != nil
+		bound := u != nil || gt.boundOn(c.p.ID)
 		if err != nil && !last && r.Context().Err() == nil {
 			skipped = append(skipped, c.label()+": "+err.Error())
 			if !lapsedTry(c, code, []byte(err.Error())) && !isUserLimit(userLimitAs(bound, code, err)) {
