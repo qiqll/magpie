@@ -3,14 +3,17 @@ package library
 import (
 	"bytes"
 	"encoding/json"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // Where a skill came from, for the page to group it with the others from
@@ -36,13 +39,14 @@ func (tr *tracer) repoOf(s *Skill) string {
 	if o, ok := ccSwitchOrigin(s); ok {
 		return o.Repo
 	}
-	if s.From != "" {
+	if s.From != "" && !tr.staleFrom(s) {
 		return fromKey(s.From)
 	}
 	dir := skillDir(s.Name)
 	if !linked(dir) {
-		// the library's own copy: the skills CLI's, moved in, by its name
-		if e, ok := tr.lock()[s.Name]; ok && (s.Source == nil || within(realDir(s.Source.Dir), realDir(sharedSkillsDir()))) {
+		// the library's own copy: the skills CLI's, moved in, by its name,
+		// when the CLI wrote it (lockRepo)
+		if e := tr.lockRepo(s.Name, dir); e != "" && (s.Source == nil || within(realDir(s.Source.Dir), realDir(sharedSkillsDir()))) {
 			return e
 		}
 		return ""
@@ -54,17 +58,84 @@ func (tr *tracer) repoOf(s *Skill) string {
 // skills CLI's lock for one in ~/.agents/skills, else its git checkout.
 func (tr *tracer) folder(dir string) string {
 	if within(dir, realDir(sharedSkillsDir())) {
-		if e, ok := tr.lock()[filepath.Base(dir)]; ok {
+		if e := tr.lockRepo(filepath.Base(dir), dir); e != "" {
 			return e
 		}
 	}
 	return gitRepoOf(dir)
 }
 
+// staleFrom is whether a skill linked from ~/.agents/skills was given
+// its From by a lock entry left from another skill of its name: brought
+// in before lockRepo judged the folder, it kept the entry's repository.
+func (tr *tracer) staleFrom(s *Skill) bool {
+	if s.Source == nil || s.Source.Kind != "folder" {
+		return false
+	}
+	dir := realDir(s.Source.Dir)
+	if !within(dir, realDir(sharedSkillsDir())) {
+		return false
+	}
+	e, ok := tr.lock()[filepath.Base(dir)]
+	return ok && (e.repo == s.From || e.repo == fromKey(s.From)) && tr.lockRepo(filepath.Base(dir), dir) == ""
+}
+
 // tracer reads what tracing needs once for a whole page.
 type tracer struct {
-	locked map[string]string
+	locked map[string]lockEntry
 	read   bool
+}
+
+// lockEntry is a skill the skills CLI's lock names: the repository, and
+// when the CLI last wrote the skill's folder (updatedAt, else
+// installedAt; zero in a lock that says neither).
+type lockEntry struct {
+	repo string
+	at   time.Time
+}
+
+// lockSlack is how long after its files a lock entry may be written: the
+// CLI writes the folder, then the lock, a few seconds apart at most.
+const lockSlack = time.Minute
+
+// lockRepo is the repository the lock names for the skill called name
+// whose folder is dir, when that folder is the one the CLI wrote. The
+// lock is by name, and an entry outlives its skill: one deleted by hand,
+// or from magpie, leaves it (AzheRise on X: a skill from a GitHub
+// repository deleted, another of the same name made in ~/.dsh/skills was
+// filed under that repository once brought in). A folder the CLI wrote
+// has a file at least as old as the entry; one made since, all its files
+// newer, is another skill that only has the name.
+func (tr *tracer) lockRepo(name, dir string) string {
+	e, ok := tr.lock()[name]
+	if !ok || (!e.at.IsZero() && !madeBy(dir, e.at.Add(lockSlack))) {
+		return ""
+	}
+	return e.repo
+}
+
+// madeBy is whether a file in the skill's folder dir was last written by
+// at: a skill the lock's install wrote, edited since or not, keeps the
+// files it didn't edit as they were written. A folder that can't be read
+// is not.
+func madeBy(dir string, at time.Time) bool {
+	found, seen := false, 0
+	filepath.WalkDir(realDir(dir), func(p string, d fs.DirEntry, err error) error {
+		if err != nil || found {
+			return filepath.SkipDir
+		}
+		if seen++; seen > 5000 {
+			return filepath.SkipAll
+		}
+		if d.Type().IsRegular() {
+			if fi, err := d.Info(); err == nil && !fi.ModTime().After(at) {
+				found = true
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+	return found
 }
 
 // lock is the skills CLI's lock: each skill's repository by its name.
@@ -72,13 +143,13 @@ type tracer struct {
 // (skills 1.7: $XDG_STATE_HOME/skills/.skill-lock.json, the skills still
 // in ~/.agents/skills). Both are read, the XDG one's entries winning: one
 // written before the variable was set names skills the newer doesn't.
-func (tr *tracer) lock() map[string]string {
+func (tr *tracer) lock() map[string]lockEntry {
 	if !tr.read {
 		tr.read, tr.locked = true, readSkillLock(filepath.Join(home(), ".agents", ".skill-lock.json"))
 		if x := appdir.Getenv("XDG_STATE_HOME"); x != "" {
 			for name, r := range readSkillLock(filepath.Join(x, "skills", ".skill-lock.json")) {
 				if tr.locked == nil {
-					tr.locked = map[string]string{}
+					tr.locked = map[string]lockEntry{}
 				}
 				tr.locked[name] = r
 			}
@@ -87,7 +158,7 @@ func (tr *tracer) lock() map[string]string {
 	return tr.locked
 }
 
-func readSkillLock(path string) map[string]string {
+func readSkillLock(path string) map[string]lockEntry {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil
@@ -98,12 +169,14 @@ func readSkillLock(path string) map[string]string {
 			SourceType    string `json:"sourceType"`
 			SourceURL     string `json:"sourceUrl"`
 			SourceBaseURL string `json:"sourceBaseUrl"`
+			InstalledAt   string `json:"installedAt"`
+			UpdatedAt     string `json:"updatedAt"`
 		} `json:"skills"`
 	}
 	if json.Unmarshal(b, &f) != nil {
 		return nil
 	}
-	out := map[string]string{}
+	out := map[string]lockEntry{}
 	for name, e := range f.Skills {
 		r := ""
 		if e.SourceType == "github" && repoRe.MatchString(e.Source) {
@@ -114,7 +187,14 @@ func readSkillLock(path string) map[string]string {
 			r = remoteRepo(e.SourceURL)
 		}
 		if r != "" {
-			out[name] = r
+			le := lockEntry{repo: r}
+			for _, ts := range []string{e.UpdatedAt, e.InstalledAt} {
+				if at, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+					le.at = at
+					break
+				}
+			}
+			out[name] = le
 		}
 	}
 	return out
@@ -175,7 +255,10 @@ func siteOf(s string) string {
 }
 
 // gitRepoOf is the repository of the git checkout a skill's folder is, or
-// is in a few folders down: its remote origin. A checkout that is the home
+// is in a few folders down: its remote origin. The checkout is the one git
+// finds (provider.GitAt): a .git git passes over, an empty one say, is
+// passed over here too (#3675), and its config is in the repository's
+// folder, the common one of a linked worktree. A checkout that is the home
 // folder, or a folder of an app's own in it (~/.claude kept in git), is
 // the user's dotfiles rather than where the skill came from.
 func gitRepoOf(dir string) string {
@@ -184,12 +267,11 @@ func gitRepoOf(dir string) string {
 		if p := filepath.Dir(dir); p == h && strings.HasPrefix(filepath.Base(dir), ".") {
 			return ""
 		}
-		if fi, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			cfg := filepath.Join(dir, ".git", "config")
-			if !fi.IsDir() {
-				cfg = gitdirConfig(dir)
-			}
-			return originURL(cfg)
+		switch git, common, err := provider.GitAt(filepath.Join(dir, ".git")); {
+		case err != nil || git == "no":
+			return ""
+		case git == "yes":
+			return originURL(filepath.Join(common, "config"))
 		}
 		next := filepath.Dir(dir)
 		if next == dir {
@@ -198,31 +280,6 @@ func gitRepoOf(dir string) string {
 		dir = next
 	}
 	return ""
-}
-
-// gitdirConfig is the config of a checkout whose .git is a file (a
-// worktree or a submodule): the folder it names, or its common one.
-func gitdirConfig(dir string) string {
-	b, err := os.ReadFile(filepath.Join(dir, ".git"))
-	if err != nil {
-		return ""
-	}
-	g, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
-	if !ok {
-		return ""
-	}
-	g = strings.TrimSpace(g)
-	if !filepath.IsAbs(g) {
-		g = filepath.Join(dir, g)
-	}
-	if c, err := os.ReadFile(filepath.Join(g, "commondir")); err == nil {
-		cd := strings.TrimSpace(string(c))
-		if !filepath.IsAbs(cd) {
-			cd = filepath.Join(g, cd)
-		}
-		g = cd
-	}
-	return filepath.Join(g, "config")
 }
 
 var originSection = regexp.MustCompile(`^\[\s*remote\s+"origin"\s*\]$`)
@@ -322,7 +379,7 @@ func noteFrom(src Source, root string, cands []Candidate) int {
 			// git checkout), and an edited one stays only grouped.
 			if dir := skillDir(s.Name); s.Source == nil && !linked(dir) && sameTree(dir, filepath.Join(root, filepath.FromSlash(c.Path))) {
 				s.Source = &Source{Kind: "github", Repo: src.Repo, Ref: src.Ref, Path: c.Path}
-				s.Hash, s.Commit, s.From = hashDir(dir), "", ""
+				s.Hash, s.Own, s.Commit, s.From = hashDir(dir), ownHash(dir), "", ""
 				l.seenAt(src.Repo, src.Ref, c.Path)
 				forgetCheck(s.Name)
 				bound++
@@ -378,7 +435,7 @@ func RegroupSkills() (int, error) {
 			continue
 		}
 		fetched++
-		noted += noteFrom(src, root, candidates(root, ""))
+		noted += noteFrom(src, root, candidates(root, "", srcFolder(src)))
 		os.RemoveAll(root)
 	}
 	if fetched == 0 && first != nil {

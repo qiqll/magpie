@@ -205,7 +205,7 @@ func TestUserLimitSaysTheCap(t *testing.T) {
 func TestUserLimitOfOneModel(t *testing.T) {
 	back := time.Now().Add(time.Hour)
 	b := userBinding{Who: "codex@me@example.com", Account: "me@example.com"}
-	refused := boundRefusal("alice", b, "codex", []Rest{{Why: failQuota, Until: back, Model: "gpt-5.5"}}, planned{})
+	refused := userBoundRefusal("alice", b, "codex", []Rest{{Why: failQuota, Until: back, Model: "gpt-5.5"}}, planned{})
 	if refused.status != 429 || refused.limit != "quota" || refused.model != "gpt-5.5" || !refused.until.Equal(back) {
 		t.Fatalf("%+v", refused)
 	}

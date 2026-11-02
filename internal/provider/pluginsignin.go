@@ -241,6 +241,15 @@ func PluginAPIKey(ctx context.Context, id string, method int, inputs map[string]
 	// logged as a sign-in with no session ("key"); the key never is
 	at := SignInState{Agent: PluginID(id)}
 	logSignIn(at, "started", 0, "")
+	// with subscription accounts off, a key is refused as a browser
+	// sign-in is (StartPluginSignInWith), but for a public plugin's: one
+	// saved would be signed in and listed nowhere
+	if settings.AccountDiscoveryOff() {
+		if pp, ok := PluginOf(PluginID(id)); !ok || !publicPlugin(pp) {
+			logSignIn(at, "failed", 0, errAccountDiscoveryOff.Error())
+			return "", errAccountDiscoveryOff
+		}
+	}
 	if strings.TrimSpace(key) == "" {
 		pp, ok := PluginOf(PluginID(id))
 		if !ok || method < 0 || method >= len(pp.Methods) || pp.Methods[method].Type != "api" || !pp.Methods[method].Keyless {

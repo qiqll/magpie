@@ -289,11 +289,11 @@ func TestUserBoundRefusalPassesOverKeyHeld(t *testing.T) {
 	de := Weighed{Provider: "codex", Kind: "account", Who: "De@post.com", Model: "gpt-5.5", Held: true}
 	ka := Weighed{Provider: "codex", Kind: "account", Who: "kaAAw@post.com", Model: "gpt-5.5", Barred: true}
 	both := userBinding{Who: "codex@de@post.com", Account: "De@post.com", More: []userSeat{{Who: "codex@kaaaw@post.com", Account: "kaAAw@post.com"}}}
-	if r := boundRefusal("2", both, "codex", nil, planned{left: []Weighed{de, ka}}); r.status != 400 || !strings.Contains(r.msg, "doesn't serve gpt-5.5") {
+	if r := userBoundRefusal("2", both, "codex", nil, planned{left: []Weighed{de, ka}}); r.status != 400 || !strings.Contains(r.msg, "doesn't serve gpt-5.5") {
 		t.Fatalf("De held, kaAAw not serving: %d %s", r.status, r.msg)
 	}
 	alone := userBinding{Who: "codex@de@post.com", Account: "De@post.com"}
-	if r := boundRefusal("2", alone, "codex", nil, planned{left: []Weighed{de}}); r.status != 403 {
+	if r := userBoundRefusal("2", alone, "codex", nil, planned{left: []Weighed{de}}); r.status != 403 {
 		t.Fatalf("De alone, held: %d %s", r.status, r.msg)
 	}
 }

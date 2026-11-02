@@ -51,6 +51,9 @@ func fresh(t *testing.T) {
 	refusedSeals.Lock()
 	refusedSeals.m = map[string]sealsRefused{}
 	refusedSeals.Unlock()
+	overflowLearned.Lock()
+	overflowLearned.m = map[string]map[string]refusedLong{}
+	overflowLearned.Unlock()
 	turnRules.Lock()
 	turnRules.m = map[string]turnRule{}
 	turnRules.Unlock()

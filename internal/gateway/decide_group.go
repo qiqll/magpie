@@ -91,6 +91,7 @@ func (s *Server) serveDecisionGroup(w http.ResponseWriter, r *http.Request, body
 		return
 	}
 	g = g.Live()
+	r = heldByGroup(r, g) // held to the group's accounts, if it is
 	keyWho, keyHeld := keyHolds(r)
 	accWho, accHeld := accountHolds(r)
 	// a gateway key held to some models (#882) names the group, or the
@@ -472,7 +473,7 @@ func (e decideRefused) Unwrap() error { return e.err }
 // accounts (ctx, askFor) may not use are left out, and bound by user only
 // the user's own of each member's provider are asked (groupUsers), as
 // at /v1/systemone (serveDecisionGroup): never another user's.
-func (s *Server) askDecisionGroup(ctx context.Context, model string, intents []string, prev before, effort bool, text string) (v verdict, ok bool, err error) {
+func (s *Server) askDecisionGroup(ctx context.Context, wait time.Duration, model string, intents []string, prev before, effort bool, text string) (v verdict, ok bool, err error) {
 	if !provider.IsGroupRef(model) {
 		return verdict{}, false, nil
 	}
@@ -483,6 +484,9 @@ func (s *Server) askDecisionGroup(ctx context.Context, model string, intents []s
 	g = g.Live()
 	ms, _ = provider.PausedOut(g, ms, RouterAgent, "", ruleClock())
 	cs, pl, ms := s.decideTries(g, ms)
+	// held to the group's own accounts, if it is: no request carries a
+	// caller here to hold (heldByGroup)
+	cs, pl = keepIn(cs, pl, func(c candidate) bool { return groupHeld(c, []provider.Group{g}) == "" })
 	if who := access.Caller(ctx); len(who.Accounts) > 0 {
 		who.Models = nil // the group's own pick: its accounts hold it, not its models (magpieChose)
 		var held bool
@@ -506,7 +510,7 @@ func (s *Server) askDecisionGroup(ctx context.Context, model string, intents []s
 	if len(cs) == 0 {
 		return verdict{}, true, fmt.Errorf("no decision model of the group %s can be asked now", g.Name)
 	}
-	v, err = s.askDecideTries(cs, intents, prev, effort, text, gu)
+	v, err = s.askDecideTries(wait, cs, intents, prev, effort, text, gu)
 	return v, true, err
 }
 
@@ -516,7 +520,7 @@ func (s *Server) askDecisionGroup(ctx context.Context, model string, intents []s
 // (serveSystemOne), those a gateway key held to some accounts may not use
 // are left out, and bound by user only the user's own are asked (usersOn,
 // for ctx's key and user, askFor): never another user's.
-func (s *Server) askDecider(ctx context.Context, p provider.Provider, model string, intents []string, prev before, effort bool, text string) (verdict, error) {
+func (s *Server) askDecider(ctx context.Context, wait time.Duration, p provider.Provider, model string, intents []string, prev before, effort bool, text string) (verdict, error) {
 	cs, pl := s.decideKeys(p, model)
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://magpie/v1/systemone", nil)
 	if err != nil {
@@ -541,23 +545,37 @@ func (s *Server) askDecider(ctx context.Context, p provider.Provider, model stri
 	if len(cs) == 0 {
 		return verdict{}, fmt.Errorf("no key or account of %s may be asked %s now", p.Name, model)
 	}
-	return s.askDecideTries(cs, intents, prev, effort, text, nil)
+	return s.askDecideTries(wait, cs, intents, prev, effort, text, nil)
 }
 
 // askDecideTries asks each of cs as Jev is (askJev) until one answers, the
 // one that failed resting as it would for a chat; the last one's error
-// when none does. A decision group's next provider is narrowed to its
-// user's own as a failed ask hands on to it (gu, nil for none).
-func (s *Server) askDecideTries(cs []candidate, intents []string, prev before, effort bool, text string, gu *groupUsers) (v verdict, err error) {
+// when none does. Every try shares the one classifier's wait, as Settings
+// says it is given, its failover included: a try each given the whole
+// wait held a request N waits before routing it (Jason on Discord, a 2m
+// hold). wait is that wait, or what a request has left of it (askWaited):
+// a try cut off by less than the whole wait is not rested for it. A
+// decision group's next provider is narrowed to its user's own as a
+// failed ask hands on to it (gu, nil for none).
+func (s *Server) askDecideTries(wait time.Duration, cs []candidate, intents []string, prev before, effort bool, text string, gu *groupUsers) (v verdict, err error) {
+	full := classifyTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
 	for i := 0; i < len(cs); i++ {
 		c := cs[i]
-		if v, err = s.askJev(c.p, c.model, intents, prev, effort, text); err == nil {
+		if ctx.Err() != nil {
+			break // the wait is spent: the rest are not asked, nor rested
+		}
+		if v, err = s.askJev(ctx, wait, c.p, c.model, intents, prev, effort, text); err == nil {
 			servedCandidate(c, 0)
 			return v, nil
 		}
 		var refused decideRefused
 		var answer answerError
 		switch {
+		case wait < full && ctx.Err() != nil && !errors.As(err, &refused) && !errors.As(err, &answer):
+			// cut off by the request's wait running out, not its own
+			return verdict{}, cutShort(c.p.Name+"/"+c.model, wait, full)
 		case errors.As(err, &refused):
 			s.decideFailed(c, refused.status, refused.header, refused.body)
 		case errors.As(err, &answer), errors.Is(err, context.Canceled):

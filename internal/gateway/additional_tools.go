@@ -67,15 +67,30 @@ func withoutReasoningContext(body []byte) []byte {
 }
 
 // liteKept says a Responses request to p goes in Codex's Lite shape as it
-// was sent: to OpenAI, to a ChatGPT account, and to a relay that takes
-// Codex's requests as Codex sent them (Provider.CodexAsSent, #1758).
-func liteKept(p provider.Provider, to provider.Protocol, codex bool) bool {
+// was sent: to OpenAI, to a ChatGPT account, to a relay that takes Codex's
+// requests as Codex sent them (Provider.CodexAsSent, #1758), and to another
+// magpie's codex model, which that magpie serves through its ChatGPT
+// account (codexModel, #4445).
+func liteKept(p provider.Provider, to provider.Protocol, codex bool, model string) bool {
 	if to != provider.Responses {
 		return false
 	}
 	return p.Account != nil && p.Account.Agent == "codex" ||
 		strings.HasSuffix(p.Host(), "openai.com") ||
-		p.CodexAsSent && p.Account == nil && codex
+		p.CodexAsSent && p.Account == nil && codex ||
+		p.IsRemoteMagpie() && codexModel(model)
+}
+
+// codexModel is a magpie's ChatGPT account model: one named codex/<model>,
+// the account's namespace in every magpie's catalog, so a remote magpie
+// lists one only when that account is there to serve it. The backend turns
+// a request for one of its Lite models away without reasoning context
+// "all_turns" (#4445), and what a Lite request carries is that account's to
+// pass on, not this magpie's to take off: the shape and header lifted for
+// anyone else leave the account a request its backend refuses.
+func codexModel(model string) bool {
+	name, _, ok := strings.Cut(model, "/")
+	return ok && name == "codex"
 }
 
 // liteNamespace is the namespace Responses Lite groups Codex's own

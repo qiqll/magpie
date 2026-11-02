@@ -109,7 +109,7 @@ func IngestReported(recs []Record) ([]bool, error) {
 			continue
 		}
 		r.Source = SourceReported
-		r.CallerKeyID, r.CallerKeyName = "", ""
+		r.CallerKeyID, r.CallerKeyName, r.CallerIssuerID = "", "", ""
 		// nor is a user magpie bound: the client's own word
 		r.User = ""
 		b, err := json.Marshal(r)

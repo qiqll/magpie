@@ -171,6 +171,11 @@ func (f *mcpFile) refsOf() envSyntax {
 		// (#1435): the server got the token, and with the variable unset
 		// dsh left the server out, saying its config is invalid.
 		return envSyntax{refDsh, refDsh}
+	case fmtKiro:
+		// Kiro expands ${VARIABLE_NAME} in mcp.json as it reads it
+		// (kiro.dev/docs/mcp/configuration), the ones its Mcp Approved Env
+		// Vars setting approves
+		return envSyntax{refDollar, refDollar}
 	}
 	// None: Claude Desktop gives a command its env as written and only
 	// HOME, LOGNAME, PATH, SHELL, TERM and USER of its own (2.7032's app.asar

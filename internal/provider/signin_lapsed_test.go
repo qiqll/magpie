@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/plugin"
 )
@@ -286,5 +288,62 @@ func TestSignInLapsedPluginServedAndCopilotHost(t *testing.T) {
 	}
 	if got := SignInLapsed(copilotProvider(copilotApp{User: "gh@acme.ghe.com", Token: "t1"}, "").Account); got != copilotLapsedText {
 		t.Fatalf("acme.ghe.com's gh: %q", got)
+	}
+}
+
+// A lapsed saved account takes no due one's turn of the keepalive look's
+// one renewal (keepAliveAtOnce, #4532): tried each look as before, but
+// after the due ones and outside the count, so a due one behind it in
+// logins.json is still renewed (T-050).
+func TestLapsedSignInTakesNoDueOnesTurn(t *testing.T) {
+	home := signIn(t)
+	resetRevoked()
+	t.Cleanup(resetRevoked)
+	codexSignIn(t, home, "old@example.com", "r-old")
+	rememberLogins(true)
+	codexSignIn(t, home, "work@example.com", "r-work")
+	rememberLogins(true)
+	codexSignIn(t, home, "live@example.com", "r-live")
+	rememberLogins(true)
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
+		if strings.HasPrefix(body["refresh_token"], "r-old") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":"invalid_grant"}`))
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"access_token": "fresh", "refresh_token": body["refresh_token"] + "-2"})
+	}))
+	defer fake.Close()
+	old := codexTokenURL
+	codexTokenURL = fake.URL
+	t.Cleanup(func() { codexTokenURL = old })
+	a := &Account{Agent: "codex", User: "old@example.com", token: func(context.Context) (string, error) { return "", nil }}
+	if _, _, err := renewSavedLogin(context.Background(), "codex", "old@example.com", true); err == nil || SignInLapsed(a) == "" {
+		t.Fatalf("a refused refresh isn't held: %v", err)
+	}
+	// work@ was last seen nine days ago: due
+	loginsMu.Lock()
+	ls := readLogins()
+	for i := range ls {
+		if ls[i].User == "work@example.com" {
+			ls[i].Seen = time.Now().Add(-9 * 24 * time.Hour)
+		}
+	}
+	err := writeLogins(ls)
+	loginsMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Renewal{}
+	for _, r := range renewLogins(context.Background(), keepAliveEvery, keepAliveAtOnce) {
+		got[r.User] = r
+	}
+	if !got["work@example.com"].Renewed {
+		t.Fatalf("the due account wasn't renewed behind a lapsed one: %+v", got)
+	}
+	if r := got["old@example.com"]; r.Renewed || r.Err == "" {
+		t.Fatalf("the lapsed account wasn't tried: %+v", r)
 	}
 }

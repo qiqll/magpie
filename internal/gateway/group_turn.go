@@ -39,8 +39,9 @@ type groupTurn struct {
 	// scope and key are a conversation's routed afresh (nobody has answered
 	// it yet, or who did isn't kept: Affinity.afresh), spread over its
 	// user's own as each provider is reached (spreadOwn); key "" for one
-	// that isn't
+	// that isn't; lead: a subagent's goes with its lead (ownWithLead)
 	scope, key string
+	lead       bool
 	rows       map[string]map[string]int // each narrowed provider's own, their place in its plan by ownRow
 	plans      map[string][]Weighed      // each narrowed provider's plan of its own
 	spreadDone map[string]bool           // members spread already, by memberOf
@@ -268,9 +269,9 @@ func (g *groupTurn) reach(cs []candidate, i int, seen func(order, left []Weighed
 // there wrote each one's prompt to its cache beside the others' (T-041).
 // One answered that isn't kept (cold, no-cache, gone, resting, spent) is
 // spread the same (T-042).
-func (g *groupTurn) spread(scope, key string) {
+func (g *groupTurn) spread(scope, key string, lead bool) {
 	if g != nil {
-		g.scope, g.key = scope, key
+		g.scope, g.key, g.lead = scope, key, lead
 	}
 }
 
@@ -313,7 +314,7 @@ func (g *groupTurn) spreadOwn(cs []candidate, i int) (_ []candidate, picked int)
 		}
 		at, sub, pl.order = append(at, j), append(sub, c), append(pl.order, g.plans[c.p.ID][k])
 	}
-	got, _ := leastHeld(g.scope, g.key, sub, pl, true)
+	got, _ := ownWithLead(g.scope, g.key, sub, pl, g.lead)
 	if len(got) == 0 || ownRow(got[0]) == ownRow(first) {
 		return cs, 0
 	}

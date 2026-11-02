@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"slices"
 	"strings"
 
+	"github.com/yetone/magpie/internal/claudetui"
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/provider"
@@ -41,6 +43,9 @@ func askClaude(ctx context.Context, configDir, model string) error {
 	binary, err := claudeBinary()
 	if err != nil {
 		return err
+	}
+	if claudeTUIOn() {
+		return askClaudeTUI(ctx, binary, configDir, model)
 	}
 	tmp, err := os.MkdirTemp("", "magpie-claude-")
 	if err != nil {
@@ -74,8 +79,89 @@ func askClaude(ctx context.Context, configDir, model string) error {
 	return nil
 }
 
+// askClaudeTUI is askClaude with the interactive mode on (claudeTUIOn),
+// whose model requests are never -p: the "hi" is said in it,
+// through its helper as the bridge runs it, and the run ends at its
+// result.
+func askClaudeTUI(ctx context.Context, binary claudeCLI, configDir, model string) error {
+	if _, why := claudeMachineWhy(binary); why != "" {
+		return claudeTUIErr(why)
+	}
+	tmp, err := os.MkdirTemp("", "magpie-claude-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	cmd, err := binary.tuiCommand(ctx, claudeTUIWarmArgs(model)...)
+	if err != nil {
+		return err
+	}
+	cmd.Dir = tmp
+	env, err := binary.proxied(ctx, cleanClaudeEnv(os.Environ()))
+	if err != nil {
+		return err
+	}
+	// the folder is magpie's own: asked whether to trust it, say yes
+	env = append(env, claudetui.TrustEnv+"=1")
+	cmd.Env = binary.tuiEnv(binary.env(binary.asRoot(env), configDir), configDir)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	b, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "hi"}}}})
+	go func() { _, _ = stdin.Write(append(b, '\n')) }()
+	// the run ends once it has its result, its input closed
+	out := &resultLines{done: func() { _ = stdin.Close() }}
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = out, &stderr
+	runErr := runClaudeTree(ctx, cmd, "a Claude Code test on "+model)
+	if out.res != nil {
+		if out.res.IsError {
+			return errors.New("Claude Code: " + clip(out.res.Result))
+		}
+		return nil
+	}
+	if msg := strings.TrimSpace(stderr.String()); msg != "" {
+		return errors.New("Claude Code: " + clip(msg))
+	}
+	if runErr != nil {
+		return runErr
+	}
+	return errors.New("Claude Code ended with no answer")
+}
+
+// resultLines reads the helper's stream-json for its first result, and
+// calls done once it has it.
+type resultLines struct {
+	buf  []byte
+	res  *claudeRun
+	done func()
+}
+
+func (w *resultLines) Write(p []byte) (int, error) {
+	if w.res != nil {
+		return len(p), nil
+	}
+	w.buf = append(w.buf, p...)
+	for w.res == nil {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			break
+		}
+		var r claudeRun
+		if json.Unmarshal(w.buf[:i], &r) == nil && r.Type == "result" {
+			w.res = &r
+			w.done()
+		}
+		w.buf = w.buf[i+1:]
+	}
+	return len(p), nil
+}
+
 func init() {
 	provider.ProbeClaudeVia(askClaude)
+	// Warm up now sends what the scheduled warm-up sends
+	provider.WarmClaudeVia(warmClaude)
 	provider.UsageClaudeVia(claudeUsage)
 }
 
@@ -87,6 +173,9 @@ func claudeUsage(ctx context.Context, configDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if claudeTUIOn() {
+		return claudeUsageTUI(ctx, binary, configDir)
+	}
 	tmp, err := os.MkdirTemp("", "magpie-claude-")
 	if err != nil {
 		return "", err
@@ -95,17 +184,7 @@ func claudeUsage(ctx context.Context, configDir string) (string, error) {
 	cmd := binary.command(ctx, claudeUsageArgs()...)
 	cmd.Dir = tmp
 	cmd.Stdin = strings.NewReader("")
-	// CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC makes /usage skip its request
-	// and print only a reading another run left in the last hour, so it stays
-	// only when the user set it.
-	env := cleanClaudeEnv(os.Environ())
-	if os.Getenv("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC") == "" {
-		env = slices.DeleteFunc(env, func(e string) bool {
-			return strings.HasPrefix(e, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=")
-		})
-	}
-	env = append(env, "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1", "DISABLE_AUTOUPDATER=1")
-	env, err = binary.proxied(ctx, env)
+	env, err := binary.proxied(ctx, claudeUsageEnv())
 	if err != nil {
 		return "", err
 	}
@@ -131,6 +210,74 @@ func claudeUsage(ctx context.Context, configDir string) (string, error) {
 		return "", runErr
 	}
 	return "", errors.New("Claude Code: " + clip(msg))
+}
+
+// claudeUsageEnv is the environment a /usage read runs Claude Code in:
+// CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC makes /usage skip its request
+// and show only a reading another run left in the last hour, so it stays
+// only when the user set it.
+func claudeUsageEnv() []string {
+	env := cleanClaudeEnv(os.Environ())
+	if os.Getenv("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC") == "" {
+		env = slices.DeleteFunc(env, func(e string) bool {
+			return strings.HasPrefix(e, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=")
+		})
+	}
+	return append(env, "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1", "DISABLE_AUTOUPDATER=1")
+}
+
+// claudeUsageTUI is claudeUsage with the interactive mode on
+// (claudeTUIOn): /usage is typed in it, through its helper, which tells
+// the plan's windows its panel shows as -p's /usage lines say them
+// (claudetui's usageText). -p's /usage tells only the session's cost
+// there (Claude Code 2.1.316), so the plan's allowance is read only so.
+func claudeUsageTUI(ctx context.Context, binary claudeCLI, configDir string) (string, error) {
+	if _, why := claudeMachineWhy(binary); why != "" {
+		return "", claudeTUIErr(why)
+	}
+	tmp, err := os.MkdirTemp("", "magpie-claude-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmp)
+	cmd, err := binary.tuiCommand(ctx, claudeTUIUsageArgs()...)
+	if err != nil {
+		return "", err
+	}
+	cmd.Dir = tmp
+	env, err := binary.proxied(ctx, claudeUsageEnv())
+	if err != nil {
+		return "", err
+	}
+	// the folder is magpie's own: asked whether to trust it, say yes
+	env = append(env, claudetui.TrustEnv+"=1")
+	cmd.Env = binary.tuiEnv(binary.env(binary.asRoot(env), configDir), configDir)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return "", err
+	}
+	go func() { _, _ = io.WriteString(stdin, `{"type":"command","command":"/usage"}`+"\n") }()
+	out := &resultLines{done: func() { _ = stdin.Close() }}
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = out, &stderr
+	runErr := runClaudeTree(ctx, cmd, "a Claude Code /usage read")
+	var full *claudeFull
+	if errors.As(runErr, &full) {
+		return "", runErr
+	}
+	if out.res != nil {
+		if out.res.IsError {
+			return "", errors.New("Claude Code: " + clip(out.res.Result))
+		}
+		return out.res.Result, nil
+	}
+	if msg := strings.TrimSpace(stderr.String()); msg != "" {
+		return "", errors.New("Claude Code: " + clip(msg))
+	}
+	if runErr != nil {
+		return "", runErr
+	}
+	return "", errors.New("Claude Code ended with no answer")
 }
 
 // runClaudeTree runs a one-off Claude Code (a test, a /usage) and ends,
@@ -187,9 +334,23 @@ func claudeUsageArgs() []string {
 		"--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence"}
 }
 
+// claudeTUIUsageArgs are claudeUsageArgs for the interactive mode's
+// helper, /usage typed in it rather than given.
+func claudeTUIUsageArgs() []string {
+	return []string{"-p", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose",
+		"--tools", "", "--strict-mcp-config", "--setting-sources", ""}
+}
+
 func claudeWarmArgs(model string) []string {
 	return []string{"-p", "--output-format", "json", "--model", model,
 		"--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence"}
+}
+
+// claudeTUIWarmArgs are claudeWarmArgs for the interactive mode's
+// helper, which takes the bridge's stream-json.
+func claudeTUIWarmArgs(model string) []string {
+	return []string{"-p", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose", "--model", model,
+		"--tools", "", "--strict-mcp-config", "--setting-sources", ""}
 }
 
 func clip(s string) string {

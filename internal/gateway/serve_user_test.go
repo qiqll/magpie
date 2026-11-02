@@ -103,7 +103,7 @@ func TestOwnAsksWithoutAUserAskNobody(t *testing.T) {
 		ask  func(ctx context.Context) error
 	}{
 		{"classifier", func(ctx context.Context) error {
-			_, err := s.askChat(ctx, "codex/gpt-5.5", classifyBody("codex/gpt-5.5", "", []string{"feature", "bug"}, before{}, "fix this"))
+			_, err := s.askChat(ctx, classifyTimeout(), "codex/gpt-5.5", classifyBody("codex/gpt-5.5", "", []string{"feature", "bug"}, before{}, "fix this"))
 			return err
 		}},
 		{"search", func(ctx context.Context) error {
@@ -111,7 +111,7 @@ func TestOwnAsksWithoutAUserAskNobody(t *testing.T) {
 			return err
 		}},
 		{"description", func(ctx context.Context) error {
-			_, err := s.describe(ctx, "codex/gpt-5.5", img)
+			_, _, err := s.describe(ctx, "codex/gpt-5.5", img)
 			return err
 		}},
 	}
@@ -157,6 +157,10 @@ var serveCallers = map[string]string{
 	"askChat":         "a classifier's ask, its turn's user (askFor, askAsUser)",
 	"searchWith":      "a web search, its request's user (forUser, askAsUser), a Claude run's its turn's (runSearch)",
 	"askVisionWith":   "an image description or question, its request's user (forUser, askAsUser)",
+	// its own responsesSocket.serve, not Server.serve: each turn is the
+	// upgrade's request again as a POST (responsesSocket.request), its
+	// headers and X-Magpie-User kept, through the whole handler
+	"serveResponsesSocket": "a Responses WebSocket's turns, each a POST /v1/responses through the handler, past userNeeded",
 }
 
 // Every call of serve in the package is from a function serveCallers names,

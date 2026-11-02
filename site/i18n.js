@@ -138,6 +138,7 @@ const zh = {
   "plat.win": "10 及以上",
   "foot.start": "快速上手",
   "foot.feed": "更新源",
+  "foot.contrib": "贡献墙",
   "foot.apache": "与 <a href=\"https://magpie.apache.org\">Apache Magpie</a> 及 <a href=\"https://apache.org\">Apache 软件基金会</a>没有隶属关系。",
 
   "nav.masking": "脱敏",
@@ -288,6 +289,7 @@ const ja = {
   "plat.win": "10 以降",
   "foot.start": "はじめに",
   "foot.feed": "更新フィード",
+  "foot.contrib": "コントリビューター",
   "foot.apache": "<a href=\"https://magpie.apache.org\">Apache Magpie</a> および <a href=\"https://apache.org\">Apache Software Foundation</a> とは関係ありません。",
 
   "nav.masking": "マスク",
@@ -438,6 +440,7 @@ const de = {
   "plat.win": "10 oder neuer",
   "foot.start": "Erste Schritte",
   "foot.feed": "Update-Feed",
+  "foot.contrib": "Mitwirkende",
   "foot.apache": "Nicht verbunden mit <a href=\"https://magpie.apache.org\">Apache Magpie</a> oder der <a href=\"https://apache.org\">Apache Software Foundation</a>.",
 
   "nav.masking": "Maskierung",

@@ -36,7 +36,7 @@ func TestUserRefusalNamesNoAccount(t *testing.T) {
 		{"paused", planned{}, http.StatusServiceUnavailable, "paused"},
 	} {
 		for _, from := range []provider.Protocol{provider.Chat, provider.Anthropic} {
-			refused := boundRefusal("bob", both, "codex", nil, c.pl)
+			refused := userBoundRefusal("bob", both, "codex", nil, c.pl)
 			rec := httptest.NewRecorder()
 			call := Call{}
 			New().userRefused(rec, from, &call, &UserBound{User: "bob", seats: both.seats()}, refused)
