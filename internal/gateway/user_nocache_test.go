@@ -48,7 +48,9 @@ func usagelessGroup(t *testing.T) (asked func() string) {
 }
 
 // usagelessSetup is a gateway bound by user, alice on kc1 and kc2, its
-// vendor reporting no usage, and a send of one turn of session to model.
+// vendor reporting no usage, and a send of one turn of session to model,
+// which fails on a route with no affinity or one that isn't "first" at the
+// session's first turn and "no-cache" at every later one.
 func usagelessSetup(t *testing.T, model string) func(session string) string {
 	t.Helper()
 	fresh(t)
@@ -57,6 +59,7 @@ func usagelessSetup(t *testing.T, model string) func(session string) string {
 	asked := usagelessGroup(t)
 	aliceOnTwo(t)
 	s := byUserUpTo(t, New(), 3)
+	seen := map[string]bool{}
 	return func(session string) string {
 		t.Helper()
 		rec := postAt(s, "/v1/chat/completions", `{"model":"`+model+`","messages":[{"role":"user","content":"hi `+session+`"}]}`,
@@ -64,8 +67,13 @@ func usagelessSetup(t *testing.T, model string) func(session string) string {
 		if rec.Code != 200 {
 			t.Fatalf("%s: %d %s", session, rec.Code, rec.Body.String())
 		}
-		if r := lastRoute(s); session != "" && r.Affinity != nil && r.Affinity.Why != "first" && r.Affinity.Why != "no-cache" {
-			t.Fatalf("%s routed as %q, want no-cache", session, r.Affinity.Why)
+		want := "first"
+		if seen[session] {
+			want = "no-cache"
+		}
+		seen[session] = true
+		if r := lastRoute(s); r.Affinity == nil || r.Affinity.Why != want {
+			t.Fatalf("%s routed as %+v, want %s", session, r.Affinity, want)
 		}
 		return asked()
 	}
@@ -115,20 +123,25 @@ func TestUserUsagelessSessionMovesOffTheBusier(t *testing.T) {
 
 // On a tie, the account a conversation was answered on is kept only while
 // leastHeld would pick it at all: all but used up, resting or aside, it is
-// passed over as before, and unbound (no spentLast) a tie keeps routing's
-// order (T-049).
+// passed over as before, and unbound (no spentLast) a tie, y on a and z
+// on b, keeps routing's order (T-049).
 func TestLeastHeldKeepsWhereItWasOnlyWhenReady(t *testing.T) {
 	c := func(key string) candidate {
 		return candidate{p: provider.Provider{ID: "t049", Key: key}, model: "m", rest: "t049"}
 	}
 	a, b := c("ka"), c("kb")
 	sticks.Lock()
-	sticks.m["t049|x"] = stick{rest: b.rest, who: b.who(), model: "m", at: time.Now()}
+	now := time.Now()
+	sticks.m["t049|x"] = stick{rest: b.rest, who: b.who(), model: "m", at: now}
+	sticks.m["t049|y"] = stick{rest: a.rest, who: a.who(), model: "m", at: now}
+	sticks.m["t049|z"] = stick{rest: b.rest, who: b.who(), model: "m", at: now}
 	sticks.Unlock()
 	t.Cleanup(func() {
 		sticks.Lock()
-		delete(sticks.m, "t049|x")
-		delete(sticks.opening, "t049|x")
+		for _, k := range []string{"t049|x", "t049|y", "t049|z"} {
+			delete(sticks.m, k)
+			delete(sticks.opening, k)
+		}
 		sticks.Unlock()
 	})
 	for _, tc := range []struct {
