@@ -2385,10 +2385,54 @@ never on one a `share` 1 user has; 0 or left out: no limit, as a file
 written before shares has it), each user's first account and spares
 alike, of every gateway key; a user bound to more before is kept there; a
 binding of a tier no longer in the file counts as the default's; `credits` (0 or
-more) are kept for a later allowance by use and not used yet; `default`
+more) are kept and not used yet; `default`
 names one of the tiers; a tier's name is held to the same rules as a
 user's, and no two may differ only in case. An edited file holds from the
-next request. One that doesn't read or holds a value it can't keeps the
+next request.
+
+Only a tier with `share` 2 or more puts several users on one account;
+a tier with `share` 1 (plus, pro and max above) has each of its accounts
+alone, and may have several of them, up to its `max_accounts`. Nobody
+joins such an account, a `share` 2 (free) user neither, and its user
+joins none another is on: no setting beyond `share` is needed for that.
+
+`by_use` (left out: off) binds a shared account by what its users use
+too, for a tier with `share` 2 or more:
+
+```json
+{"default": "free", "tiers": {…},
+ "by_use": {"on": true, "lookback_days": 7, "week_target": 90, "five_hour_target": 100}}
+```
+
+On, an account other users are on takes a new user of such a tier only
+while its users' use, the new one's with it, fits within `week_target`
+percent of each of its windows of a day or more and `five_hour_target`
+percent of each shorter one, besides `share`. A user's use is the
+tokens (`unit`, the only one, is `tokens`) it sent the provider over the
+last `lookback_days` (1 to 30), from the usage log's user (`X-Magpie-User`):
+over the week its total scaled to a week, over the five hours the 90th
+percentile of what it sent in any five hours. A user with under a day of
+use counts as 1/`share` of an account, as many as it takes without
+`by_use`. What an account's window holds is what magpie routed through it
+since the window began over the share its vendor says is used, read from
+the usage magpie reads for routing already, never an extra read of the
+account; one under 5% used, or begun before magpie's log, takes the
+median of the provider's other accounts, and with none the tiers' `share`
+alone holds. The log is read every 10 minutes in the background: a user
+binds by what was read last, and nothing binds by use until the first
+read is done. It holds only when a user is bound to an account, its first
+or a spare: nobody bound already is moved. An account left alone, or a
+user that would be its only one, is never kept off it. With no account
+that has room, the request is the same 429 as a full pool, and its error
+in the usage log says `by_use` and the window; magpie's log says once a
+change `user accounts: by use, codex@<account> has no room for "<user>":
+its 7d window would be 108% used by its users' use, past its 90%`, and
+`user accounts: by use, read N user(s)' and M account(s)' calls of the
+last 7 days` at each read. A value it can't take (a lookback out of
+range, a target under 1 or over 1000, another unit) is a file that holds
+a value it can't, below.
+
+One that doesn't read or holds a value it can't keeps the
 tiers read before, logged once a change (one that can't be read at all,
 not one that doesn't parse, is tried again on the next request); with none
 read before (a gateway

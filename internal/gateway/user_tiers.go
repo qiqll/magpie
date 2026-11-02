@@ -5,7 +5,9 @@ package gateway
 // how many users an account it is on may be bound to (share). The
 // caller names it in UserTierHeader, a request without it is of the
 // default tier, and user-tiers.json, next to user-accounts.json, says
-// each tier's max_accounts, share and credits (kept, not used yet). No file is
+// each tier's max_accounts, share and credits (kept, not used yet), and
+// by_use whether a shared account binds by its users' use too
+// (user_load.go). No file is
 // defaultTiers, and none is written: the file is the user's to make. One
 // edited is read again. One that doesn't read, or holds a value it
 // can't, is unknown: the tiers read before still hold (logged once a
@@ -55,6 +57,9 @@ type Tiers struct {
 	Default string            `json:"default"`
 	Tiers   []Tier            `json:"tiers"`
 	Aliases map[string]string `json:"aliases,omitempty"`
+	// ByUse is by_use: binding a shared account by its users' use
+	// (user_load.go); off without it
+	ByUse ByUse `json:"by_use,omitzero"`
 }
 
 // find is the tier named name, or one of its aliases, whatever its case.
@@ -117,6 +122,7 @@ type tiersJSON struct {
 		Share       int      `json:"share"`
 		Aliases     []string `json:"aliases"`
 	} `json:"tiers"`
+	ByUse *byUseJSON `json:"by_use"`
 }
 
 // defaultTiers are the tiers without a user-tiers.json: free shares an
@@ -220,6 +226,11 @@ func parseTiers(b []byte) (Tiers, error) {
 		return Tiers{}, fmt.Errorf("default %q is none of its tiers (%s)", f.Default, strings.Join(t.names(), ", "))
 	}
 	t.Default = d.Name
+	bu, err := parseByUse(f.ByUse)
+	if err != nil {
+		return Tiers{}, err
+	}
+	t.ByUse = bu
 	return t, nil
 }
 
