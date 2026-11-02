@@ -15,7 +15,11 @@
 // never shown as nobody. Bound by user, each of a user's accounts has an
 // Unbind, confirmed first: cancelled, nothing is asked; confirmed, the
 // account the page names is let go of and the list read again; a file
-// that can't be changed said why; bound by session, none. In every language, wide and narrow, in Chromium
+// that can't be changed said why; bound by session, none. A user bound
+// under two gateway keys is one row, each key named with its tier, its
+// accounts each once, and an Unbind for each key it is bound to one under,
+// the key named and said in the confirmation, letting go of it under that
+// key alone. In every language, wide and narrow, in Chromium
 // and WebKit.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
@@ -43,6 +47,17 @@ const everyone = [
   // a key the list couldn't be read for: named by its id, not said removed
   { user: "6", provider: "codex", providerName: "ChatGPT", account: "c@x.com", seat: seat("codex", "c@x.com"), key: "0123456789abcdef", keyName: "", at: "0001-01-01T00:00:00Z" },
 ];
+// one id under two gateway keys, as the server merges it: its accounts
+// each once, and each key's binding with its tier
+const merged = {
+  user: "7", provider: "codex", providerName: "ChatGPT", account: "a@x.com", seat: seat("codex", "a@x.com"), spares: [{ account: "b@x.com", seat: seat("codex", "b@x.com"), at }], key: "k2", keyName: "Tenant B", at, tier: "free",
+  keys: [
+    { key: "k2", keyName: "Tenant B", seats: [seat("codex", "a@x.com"), seat("codex", "b@x.com")], at, tier: "free" },
+    { key: "k1", keyName: "Tenant A", seats: [seat("codex", "a@x.com")], at, tier: "pro" },
+  ],
+};
+// a user of one key as the server says it: its binding its only key's
+const withKeys = (u) => u.keys ? u : { ...u, keys: [{ key: u.key, keyName: u.keyName, keyGone: u.keyGone, seats: [u.seat, ...(u.spares || []).map((s) => s.seat)], at: u.at, tier: u.tier, used: u.used }] };
 // user-tiers.json as the serving magpie holds to it
 const tiers = { default: "free", tiers: [{ name: "free", credits: 1000, max_accounts: 2, share: 2 }, { name: "pro", credits: 5000, max_accounts: 4, share: 1 }, { name: "team", credits: 0, max_accounts: 6, share: 0 }], aliases: { 1: "free", 4: "pro", P: "pro" } };
 const accounts = [
@@ -73,6 +88,10 @@ function serve(lang, users) {
       if (users.unbindError) return json({ error: "user-accounts.json can't be changed: it doesn't read, and is left as it is", why: "it doesn't read, and is left as it is" }, 400);
       // the seat let go of: the spare its first, one left with none gone
       users.all = users.all.flatMap((u) => {
+        // one of several keys: let go of under that key alone
+        if (u.keys && u.user === body.user && u.provider === body.provider) {
+          return [{ ...u, keys: u.keys.map((k) => k.key === body.key ? { ...k, seats: k.seats.filter((x) => x !== body.seat) } : k).filter((k) => k.seats.length) }];
+        }
         if (u.user !== body.user || (u.key || "") !== body.key || u.provider !== body.provider) return [u];
         const seats = [{ account: u.account, seat: u.seat, at: u.at }, ...(u.spares || [])].filter((x) => x.seat !== body.seat);
         return seats.length ? [{ ...u, account: seats[0].account, seat: seats[0].seat, spares: seats.slice(1) }] : [];
@@ -86,7 +105,7 @@ function serve(lang, users) {
       const hay = (u) => `${u.user} ${u.account} ${(u.spares || []).map((s) => s.account).join(" ")} ${u.providerName} ${u.keyName}`.toLowerCase();
       const hit = users.all.filter((u) => words.every((w) => hay(u).includes(w)));
       // a search leaves the accounts and the mode out, as the server does
-      const out = { total: users.all.length, matched: hit.length + (users.more || 0), users: hit };
+      const out = { total: users.all.length, matched: hit.length + (users.more || 0), users: hit.map(withKeys) };
       if (!url.searchParams.get("q")) Object.assign(out, { accounts: users.all.length ? accounts : [], mode: users.mode, tiers: users.tiers, idleHours: users.idleHours });
       return json(out);
     }
@@ -296,6 +315,45 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await dialog.locator(".bar button").last().click();
         await page.waitForFunction((cant) => document.querySelector("#status")?.textContent.startsWith(cant), w.unbindCant);
         users.unbindError = false;
+
+        // one id under two keys: one row, each key named with its tier,
+        // its accounts each once, the first under any key first
+        users.all = [merged];
+        users.unbinds.length = 0;
+        await page.reload();
+        await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-bind").length === 1);
+        assert.equal((await page.locator("#userBindsCount").textContent()).trim(), "1");
+        assert((await text(userRows.nth(0).locator(".sub").last())).startsWith(`ChatGPT · Tenant B (${w.tierFree}), Tenant A (${w.tierPro})`), "each key, with its tier");
+        const mchips = userRows.nth(0).locator(".user-seat");
+        assert.deepEqual(await mchips.evaluateAll((cs) => cs.map((c) => c.querySelector(".name").textContent + " " + [...c.classList].filter((k) => k !== "user-seat" && k !== "out").join(" "))), ["a@x.com first", "b@x.com spare"]);
+        // an Unbind for each key it is bound to the account under, named
+        const held = userRows.nth(0).locator(".user-seat-held");
+        assert.deepEqual(await held.nth(0).locator(".user-unbind").allTextContents(), [`${w.unbind} · Tenant B`, `${w.unbind} · Tenant A`]);
+        assert.deepEqual(await held.nth(1).locator(".user-unbind").allTextContents(), [`${w.unbind} · Tenant B`]);
+        // the confirmation names the key and what is left under it
+        await held.nth(0).locator(".user-unbind").nth(0).click();
+        await dialog.waitFor();
+        assert.equal(await text(dialog.locator("p")), `Tenant B: ${w.unbindOthers}`);
+        await dialog.locator(".bar button").first().click();
+        await dialog.waitFor({ state: "detached" });
+        await held.nth(0).locator(".user-unbind").nth(1).click();
+        await dialog.waitFor();
+        assert.equal(await text(dialog.locator("p")), `Tenant A: ${w.unbindOnly}`);
+        await dialog.locator(".bar button").last().click();
+        // under that key alone: the other key's left, its Unbind no
+        // longer naming a key
+        await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-unbind").length === 2);
+        assert.deepEqual(users.unbinds, [{ key: "k1", provider: "codex", user: "7", seat: "codex@a@x.com" }]);
+        assert.deepEqual(await held.nth(0).locator(".user-unbind").allTextContents(), [w.unbind]);
+        assert((await text(userRows.nth(0).locator(".sub").last())).startsWith(`ChatGPT · Tenant B · ${w.tierFree}`), "one key left, its tier once");
+        users.all = [merged];
+        await page.reload();
+        await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-unbind").length === 3);
+        const mover = await page.locator("#view-gateway").evaluate((v) => {
+          const r = v.getBoundingClientRect();
+          return [...v.querySelectorAll("#userBindsBlock *")].filter((e) => e.getBoundingClientRect().right > r.right + 1).map((e) => e.className || e.tagName);
+        });
+        assert.deepEqual(mover, [], "nothing of a user with two keys runs past the page");
         users.all = everyone;
 
         // bound by session: said, the bindings shown as they are, read-only

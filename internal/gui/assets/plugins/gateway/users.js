@@ -1,12 +1,15 @@
 // The Gateway page's User bindings (plugins/gateway): each provider's
 // accounts with how many of the caller's users the gateway keeps on them
 // and whether each is out, and the users with their first account and
-// spares, as /api/gateway/users reads user-accounts.json. Users a service
+// spares, as /api/gateway/users reads user-accounts.json: a user bound
+// under several gateway keys is one row, as the gateway counts it one
+// user, with each key named and its accounts each once. Users a service
 // names in X-Magpie-User (or the header MAGPIE_USER_HEADER names) are
 // bound only while the gateway binds by user (--bind=user); bound by
 // session, the bindings are shown as they are and nothing is bound by
 // them. Bound by user, each of a user's accounts has an Unbind, confirmed
-// first, that lets go of it (/api/gateway/users/unbind): its spare is its
+// first, that lets go of it (/api/gateway/users/unbind) under one key, an
+// Unbind for each key it is bound under: its spare is its
 // first then, and a user left with none is bound afresh on its next
 // request; bound by session nothing is changed here. A user is moved in
 // the file, which the gateway reads again when it changes. Bound by user
@@ -43,7 +46,7 @@ async function loadUserBinds() {
   renderUserBinds();
 }
 
-// the gateway key a user came with, as the page names it
+// a gateway key a user came with (one of its keys), as the page names it
 function userKeyLabel(u) {
   if (!u.key) return t("without a gateway key");
   if (u.keyName) return u.keyName;
@@ -77,37 +80,46 @@ function userSeatState(a) {
 // the account of a provider a user's seat names, as the accounts list has it
 const userAccountOf = (p, seat) => userAccounts.find((a) => a.provider === p && a.seat === seat);
 
-// one of a user's accounts: its name, first or spare, and its state;
-// bound by user, with an Unbind beside it
-function userSeatChip(u, account, seat, first) {
+// one of a user's accounts: its name, first (under any of its keys) or
+// spare, and its state; bound by user, with an Unbind beside it for each
+// key it is bound to it under, the key named when the user has several:
+// each lets go of it under that key alone, nothing under every key at once
+function userSeatChip(u, account, seat) {
   const a = userAccountOf(u.provider, seat);
+  const first = u.keys.some((k) => k.seats[0] === seat);
   const chip = el("span", "user-seat " + (first ? "first" : "spare") + (!a?.outKnown || a.out || a.gone ? " out" : ""));
   chip.append(el("span", "name", account), el("span", "", ` (${t(first ? "first" : "spare")} · ${userSeatState(a)})`));
   if (userBindMode?.mode !== "user") return chip;
-  const go = el("button", "text user-unbind", t("Unbind"));
-  go.type = "button";
-  go.title = t("Lets go of this account for this user");
-  go.onclick = () => unbindUserSeat(u, account, seat, go);
   const held = el("span", "user-seat-held");
-  held.append(chip, go);
+  held.append(chip);
+  for (const k of u.keys.filter((k) => k.seats.includes(seat))) {
+    const go = el("button", "text user-unbind", u.keys.length > 1 ? `${t("Unbind")} · ${userKeyLabel(k)}` : t("Unbind"));
+    go.type = "button";
+    go.title = t("Lets go of this account for this user");
+    go.onclick = () => unbindUserSeat(u, k, account, seat, go);
+    held.append(go);
+  }
   return held;
 }
 
-// what letting go of one of u's accounts leaves it: a spare, its first
-// as it is; its first, the next its first; its only one, bound afresh
-function unbindSays(u, seat) {
-  if (seat !== u.seat) return t("Its first account stays its first, and its other spares stay.");
-  if (u.spares?.length) return t("Its other accounts stay, the next one its first, and take its requests.");
+// what letting go of one of u's accounts under key k leaves it there: a
+// spare, its first as it is; its first, the next its first; its only
+// one, bound afresh
+function unbindSays(u, k, seat) {
+  if (seat !== k.seats[0]) return t("Its first account stays its first, and its other spares stay.");
+  if (k.seats.length > 1) return t("Its other accounts stay, the next one its first, and take its requests.");
   return t("It is the user's only account of {provider}: its next request binds it afresh.", { provider: u.providerName });
 }
 
-// one of u's accounts let go of, once confirmed; the list read again after
-async function unbindUserSeat(u, account, seat, go) {
-  if (!await confirmAction(t("Unbind {account} from {user}?", { account, user: u.user }), unbindSays(u, seat), t("Unbind"))) return;
+// one of u's accounts let go of under key k, once confirmed, the key
+// named when u has several; the list read again after
+async function unbindUserSeat(u, k, account, seat, go) {
+  const says = unbindSays(u, k, seat);
+  if (!await confirmAction(t("Unbind {account} from {user}?", { account, user: u.user }), u.keys.length > 1 ? `${userKeyLabel(k)}: ${says}` : says, t("Unbind"))) return;
   go.classList.add("busy");
   let out;
   try {
-    out = await api("gateway/users/unbind", { key: u.key || "", provider: u.provider, user: u.user, seat });
+    out = await api("gateway/users/unbind", { key: k.key || "", provider: u.provider, user: u.user, seat });
   } catch (e) {
     status(e.why ? t("user-accounts.json can't be changed: {why}", { why: e.why }) : e.message, "err");
     return;
@@ -157,8 +169,9 @@ function userModeSays(m) {
   return says;
 }
 
-// a user's tier: the one its last request named, the default for one
-// bound before tiers; "" while the tiers aren't known
+// a user's tier under a key (one of its keys): the one its last request
+// there named, the default for one bound before tiers; "" while the tiers
+// aren't known
 const userTierOf = (u) => u.tier || userBindMode?.tiers?.default || "";
 
 function renderUserBinds() {
@@ -231,17 +244,22 @@ function renderUserBinds() {
     const who = el("div", "who");
     // its first account, then its spares in order, each with its state
     const seats = el("div", "sub wraps user-seats");
-    seats.append(userSeatChip(u, u.account, u.seat, true));
-    for (const sp of u.spares || []) seats.append(userSeatChip(u, sp.account, sp.seat, false));
-    const tier = userTierOf(u);
-    const sub = el("div", "sub wraps", [u.providerName, userKeyLabel(u), ...(tier ? [t("tier {tier}", { tier })] : [])].join(" · "));
-    // a file edited by hand may leave the time out
+    seats.append(userSeatChip(u, u.account, u.seat));
+    for (const sp of u.spares || []) seats.append(userSeatChip(u, sp.account, sp.seat));
+    // each key it is bound under; their tiers once when they agree, else
+    // each beside its key
+    const tiers = u.keys.map(userTierOf);
+    const same = tiers.every((x) => x === tiers[0]);
+    const keys = u.keys.map((k, i) => userKeyLabel(k) + (!same && tiers[i] ? ` (${t("tier {tier}", { tier: tiers[i] })})` : "")).join(", ");
+    const sub = el("div", "sub wraps", [u.providerName, keys, ...(same && tiers[0] ? [t("tier {tier}", { tier: tiers[0] })] : [])].join(" · "));
+    // when it was first bound, under any key; a file edited by hand may
+    // leave the time out
     if (u.at && !u.at.startsWith("0001-")) {
       const when = el("span", "", " · " + t("bound {when}", { when: ago(u.at) }));
       when.title = stamp(u.at);
       sub.append(when);
     }
-    // when it last sent the provider a request; none kept for one bound
+    // when it last sent the provider a request, under any key; none kept for one bound
     // before magpie noted it
     if (u.used && !u.used.startsWith("0001-")) {
       const used = el("span", "user-used", " · " + t("last used {when}", { when: ago(u.used) }));

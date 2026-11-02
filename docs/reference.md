@@ -2411,9 +2411,18 @@ their first account and spares in order, each marked first or spare with
 its state, provider, gateway key, tier (the default's for one bound before
 tiers), when they were bound and when they last sent the provider a
 request ("last used", none for a binding from before it was kept), 200 at a time,
-narrowed by a search, which matches a spare's account too. Bound by user,
+narrowed by a search, which matches a spare's account too. The same id
+sent with several gateway keys is one user, as the gateway counts it, so
+it is one row (the file keeps a binding a key, unchanged): every key it
+is bound under named, its accounts each once (first when it is the first
+under any key), each key's tier beside it when they differ, when it was
+first bound and last used under any key, and each account counts it once.
+Bound by user,
 each of a user's accounts has an Unbind, confirmed first, that lets go of
-it (`POST /api/gateway/users/unbind`, behind the window's API guard): the
+it (`POST /api/gateway/users/unbind`, behind the window's API guard), one
+for each key it is bound to the account under, naming the key when the
+user has several, under that key alone (nothing lets go of every key's
+at once): the
 user's next account is its first then, and a user left with none is bound
 afresh on its next request (possibly on the same account again, and with
 the default tier for a request that names none). The file is read again

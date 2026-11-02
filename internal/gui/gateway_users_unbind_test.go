@@ -28,8 +28,9 @@ func unbindUser(t *testing.T, body string) (int, map[string]any) {
 
 // The Gateway page's Unbind: one of a user's accounts let go of, of its
 // gateway key and provider, the seat as the page names it; the user's
-// spare is its first then, and a user left with none is gone from the
-// list; one let go of meanwhile is said so; a request that names nobody
+// spare is its first then under that key, the same id's other key kept as
+// it is, and a user left with none under a key is gone from its keys, from
+// the list with none left; one let go of meanwhile is said so; a request that names nobody
 // changes nothing, nor one while the gateway binds by session; a file
 // that doesn't read is said why, and left as it is.
 func TestGatewayUsersUnbind(t *testing.T) {
@@ -41,13 +42,23 @@ func TestGatewayUsersUnbind(t *testing.T) {
   "users": {"antigravity": {"1": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q, "more": [{"who": "antigravity@b@x.com", "account": "b@x.com", "at": %q}]}}},
   "keys": {"k1": {"antigravity": {"1": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q}}}}
 }`, at, at, at))
-	// the seat as the page has it, lower-cased
+	// the seat as the page has it, lower-cased; the same id under the
+	// key and without one is one user, each key's binding apart
+	keysOf := func(out gatewayUsersOut) map[string][]string {
+		t.Helper()
+		if len(out.Users) != 1 || out.Users[0].User != "1" {
+			t.Fatalf("users: %+v", out.Users)
+		}
+		keys := map[string][]string{}
+		for _, k := range out.Users[0].Keys {
+			keys[k.Key] = k.Seats
+		}
+		return keys
+	}
 	_, out := gatewayUsers(t, "")
 	var seat string
-	for _, u := range out.Users {
-		if u.User == "1" && u.Key == "" {
-			seat = u.Seat
-		}
+	if s := keysOf(out)[""]; len(s) == 2 {
+		seat = s[0]
 	}
 	if seat != "antigravity@a@x.com" {
 		t.Fatalf("seat %q: %+v", seat, out.Users)
@@ -56,13 +67,12 @@ func TestGatewayUsersUnbind(t *testing.T) {
 		t.Fatalf("unbind: %d %v", code, out)
 	}
 	_, out = gatewayUsers(t, "")
-	for _, u := range out.Users {
-		switch {
-		case u.Key == "" && (u.Account != "b@x.com" || len(u.Spares) != 0):
-			t.Fatalf("the user without a key: %+v", u)
-		case u.Key == "k1" && u.Account != "a@x.com":
-			t.Fatalf("the key's user of the same id was changed: %+v", u)
-		}
+	keys := keysOf(out)
+	if fmt.Sprint(keys[""]) != "[antigravity@b@x.com]" {
+		t.Fatalf("the user without a key: %+v", out.Users[0])
+	}
+	if fmt.Sprint(keys["k1"]) != "[antigravity@a@x.com]" {
+		t.Fatalf("the key's user of the same id was changed: %+v", out.Users[0])
 	}
 	// let go of already: said so
 	if code, out := unbindUser(t, `{"provider":"antigravity","user":"1","seat":"`+seat+`"}`); code != 200 || out["unbound"] != false {
@@ -72,7 +82,7 @@ func TestGatewayUsersUnbind(t *testing.T) {
 	if code, out := unbindUser(t, `{"key":"k1","provider":"antigravity","user":"1","seat":"antigravity@a@x.com"}`); code != 200 || out["unbound"] != true {
 		t.Fatalf("the key's: %d %v", code, out)
 	}
-	if _, out := gatewayUsers(t, ""); out.Total != 1 || out.Users[0].Key != "" {
+	if _, out := gatewayUsers(t, ""); out.Total != 1 || len(out.Users[0].Keys) != 1 || out.Users[0].Keys[0].Key != "" || out.Users[0].Account != "b@x.com" {
 		t.Fatalf("after: %+v", out)
 	}
 	// naming nobody

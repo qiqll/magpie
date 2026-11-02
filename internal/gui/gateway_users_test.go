@@ -380,3 +380,88 @@ func TestGatewayUsersOwnerSlow(t *testing.T) {
 		t.Errorf("a slow magpie's account said known: %+v", a)
 	}
 }
+
+// A user bound under several gateway keys (the same id, which the gateway
+// counts as one user: the owner's option A2) is one user on the page: its
+// accounts each once, the earliest key's first its first, when it was
+// first bound and last used under any key, and each key's binding apart,
+// its tier and accounts with it, for one to be let go of under a key. An
+// account counts it once, and as a spare only when it is the first under
+// none of its keys. A word matches any of its keys.
+func TestGatewayUsersMergedAcrossKeys(t *testing.T) {
+	sandboxHome(t)
+	noGateway(t)
+	keyNamed := map[string]string{}
+	for _, n := range []string{"Tenant A", "Tenant B"} {
+		if _, err := access.Update("add-key", access.Change{Name: n}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keys, _ := access.List()
+	for _, k := range keys {
+		keyNamed[k.Name] = k.ID
+	}
+	a, b := keyNamed["Tenant A"], keyNamed["Tenant B"]
+	early, late := time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC), time.Date(2026, 10, 30, 1, 0, 0, 0, time.UTC)
+	usedA, usedB := time.Now().UTC().Add(-3*time.Hour).Truncate(time.Second), time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	f := func(v time.Time) string { return v.Format(time.RFC3339) }
+	writeUsers(t, fmt.Sprintf(`{"keys": {
+  %q: {"antigravity": {
+    "2": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q, "tier": "max", "used": %q},
+    "3": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q},
+    "4": {"who": "antigravity@b@x.com", "account": "b@x.com", "at": %q}
+  }},
+  %q: {"antigravity": {
+    "2": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q, "more": [{"who": "antigravity@b@x.com", "account": "b@x.com", "at": %q}], "tier": "free", "used": %q},
+    "4": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q, "more": [{"who": "antigravity@b@x.com", "account": "b@x.com", "at": %q}]}
+  }}
+}}`, a, f(late), f(usedA), f(late), f(late), b, f(early), f(late), f(usedB), f(early), f(early)))
+	code, out := gatewayUsers(t, "")
+	if code != 200 || out.Total != 3 || out.Matched != 3 || len(out.Users) != 3 {
+		t.Fatalf("one row a user: %d total %d %+v", code, out.Total, out.Users)
+	}
+	users := map[string]userJSON{}
+	for _, u := range out.Users {
+		users[u.User] = u
+	}
+	u := users["2"]
+	if u.Account != "a@x.com" || len(u.Spares) != 1 || u.Spares[0].Account != "b@x.com" || !u.Spares[0].At.Equal(late) {
+		t.Errorf("its accounts each once: %+v", u)
+	}
+	if !u.At.Equal(early) || !u.Used.Equal(usedB) || u.Key != b || u.KeyName != "Tenant B" {
+		t.Errorf("first bound and last used under any key, the earliest key first: %+v", u)
+	}
+	if len(u.Keys) != 2 {
+		t.Fatalf("its keys: %+v", u.Keys)
+	}
+	kb, ka := u.Keys[0], u.Keys[1]
+	if kb.Key != b || kb.KeyName != "Tenant B" || kb.Tier != "free" || !kb.At.Equal(early) || !kb.Used.Equal(usedB) || fmt.Sprint(kb.Seats) != "[antigravity@a@x.com antigravity@b@x.com]" {
+		t.Errorf("Tenant B's binding: %+v", kb)
+	}
+	if ka.Key != a || ka.KeyName != "Tenant A" || ka.Tier != "max" || !ka.At.Equal(late) || !ka.Used.Equal(usedA) || fmt.Sprint(ka.Seats) != "[antigravity@a@x.com]" {
+		t.Errorf("Tenant A's binding: %+v", ka)
+	}
+	// a first under one key and a spare under the other: shown once, the
+	// earliest key's first its first
+	if u := users["4"]; u.Account != "a@x.com" || len(u.Spares) != 1 || u.Spares[0].Seat != "antigravity@b@x.com" || len(u.Keys) != 2 {
+		t.Errorf("user 4: %+v", u)
+	}
+	if u := users["3"]; len(u.Keys) != 1 || u.Keys[0].Key != a || fmt.Sprint(u.Keys[0].Seats) != "[antigravity@a@x.com]" {
+		t.Errorf("one key's user: %+v", u)
+	}
+	counts := map[string][2]int{}
+	for _, ac := range out.Accounts {
+		counts[ac.Account] = [2]int{ac.Users, ac.Spares}
+	}
+	// a@x.com: users 2, 3, 4, none a spare; b@x.com: 2 a spare, 4 the
+	// first under Tenant A
+	if counts["a@x.com"] != [2]int{3, 0} || counts["b@x.com"] != [2]int{2, 1} || len(counts) != 2 {
+		t.Errorf("each user counted once: %v", counts)
+	}
+	if _, out := gatewayUsers(t, "?q=tenant+b"); out.Matched != 2 || len(out.Users) != 2 || out.Total != 3 {
+		t.Errorf("a word matches any of its keys: %+v", out)
+	}
+	if _, out := gatewayUsers(t, "?q=tenant+a+3"); out.Matched != 1 || out.Users[0].User != "3" {
+		t.Errorf("q=tenant a 3: %+v", out)
+	}
+}

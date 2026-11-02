@@ -57,26 +57,120 @@ type userSpareJSON struct {
 	At      time.Time `json:"at"`
 }
 
-// userJSON is one user's binding. Whether each of its accounts is out is
-// its account's, in accounts, by Seat.
+// userJSON is one user's binding of a provider, every gateway key's
+// it is bound under as one: the gateway counts a name sent with any key
+// as one user (the owner's option A2, 2026-10-30), and the page shows it
+// so. Its accounts are every key's, each once: the first key's first,
+// then the rest in the order the keys were bound. Whether each is out is
+// its account's, in accounts, by Seat. Keys is each key's binding as
+// user-accounts.json keeps it, for one of its accounts to be let go of
+// under a key.
 type userJSON struct {
 	User         string          `json:"user"`
 	Provider     string          `json:"provider"`
 	ProviderName string          `json:"providerName"`
 	Icon         string          `json:"icon,omitempty"`
-	Account      string          `json:"account"` // its first
+	Account      string          `json:"account"` // its first key's first
 	Seat         string          `json:"seat"`
-	Spares       []userSpareJSON `json:"spares,omitempty"`
-	Key          string          `json:"key,omitempty"`     // the gateway key's id, "" without one
+	Spares       []userSpareJSON `json:"spares,omitempty"`  // its other accounts, At the earliest a key was given it
+	Key          string          `json:"key,omitempty"`     // its first key's id, "" without one
 	KeyName      string          `json:"keyName,omitempty"` // its name, while the keys could be read
 	KeyGone      bool            `json:"keyGone,omitempty"` // the key is removed: the keys were read and it isn't among them
-	At           time.Time       `json:"at"`
-	// Tier: the tier its last request named; "" from a magpie before
-	// tiers, which the page shows as the default tier
+	At           time.Time       `json:"at"`                // when it was first bound, under any key
+	// Tier: the tier its first key's last request named; "" from a
+	// magpie before tiers, which the page shows as the default tier.
+	// Each key's is in Keys
 	Tier string `json:"tier,omitempty"`
-	// Used: when it last sent the provider a request, to within an hour;
-	// left out for one bound before it was kept
-	Used time.Time `json:"used,omitzero"`
+	// Used: when it last sent the provider a request, under any key, to
+	// within an hour; left out for one bound before it was kept
+	Used time.Time     `json:"used,omitzero"`
+	Keys []userKeyJSON `json:"keys"`
+}
+
+// userKeyJSON is a user's binding under one gateway key: its accounts,
+// first then spares, by Seat, and its own time, tier and last use.
+type userKeyJSON struct {
+	Key     string    `json:"key,omitempty"`
+	KeyName string    `json:"keyName,omitempty"`
+	KeyGone bool      `json:"keyGone,omitempty"`
+	Seats   []string  `json:"seats"`
+	At      time.Time `json:"at"`
+	Tier    string    `json:"tier,omitempty"`
+	Used    time.Time `json:"used,omitzero"`
+}
+
+// userMerged is a user's bindings of a provider, one a key, the earliest
+// bound first (a time left out of a file edited by hand last).
+type userMerged []gateway.UserRow
+
+// mergedUsers is rows by user and provider, in the order each first comes.
+func mergedUsers(rows []gateway.UserRow) []userMerged {
+	var out []userMerged
+	at := map[[2]string]int{}
+	for _, r := range rows {
+		k := [2]string{r.Provider, r.User}
+		if i, ok := at[k]; ok {
+			out[i] = append(out[i], r)
+			continue
+		}
+		at[k] = len(out)
+		out = append(out, userMerged{r})
+	}
+	for _, m := range out {
+		slices.SortStableFunc(m, func(a, b gateway.UserRow) int {
+			if a.At.IsZero() != b.At.IsZero() {
+				if a.At.IsZero() {
+					return 1
+				}
+				return -1
+			}
+			return cmp.Or(a.At.Compare(b.At), strings.Compare(a.Key, b.Key))
+		})
+	}
+	return out
+}
+
+// userSeat is one of a user's accounts under a key: who, as candidate.who().
+type userSeat struct {
+	who, account string
+	at           time.Time
+}
+
+// seatsOf is r's accounts, its first then its spares.
+func seatsOf(r gateway.UserRow) []userSeat {
+	seats := []userSeat{{r.Who, r.Account, r.At}}
+	for _, sp := range r.Spares {
+		seats = append(seats, userSeat{sp.Who, sp.Account, sp.At})
+	}
+	return seats
+}
+
+// shown is m as the page shows it, its keys named as keyNames has them.
+func (m userMerged) shown(p providerShown, keyNames map[string]string, keyGone func(string) bool) userJSON {
+	f := m[0]
+	u := userJSON{User: f.User, Provider: f.Provider, ProviderName: p.name, Icon: p.icon, Account: f.Account, Seat: strings.ToLower(f.Who),
+		Key: f.Key, KeyName: keyNames[f.Key], KeyGone: keyGone(f.Key), At: f.At, Tier: f.Tier, Keys: []userKeyJSON{}}
+	spare := map[string]int{u.Seat: -1} // seat → its index in Spares, -1 the first
+	for _, r := range m {
+		k := userKeyJSON{Key: r.Key, KeyName: keyNames[r.Key], KeyGone: keyGone(r.Key), At: r.At, Tier: r.Tier, Used: r.Used}
+		for _, s := range seatsOf(r) {
+			seat := strings.ToLower(s.who)
+			k.Seats = append(k.Seats, seat)
+			i, ok := spare[seat]
+			switch {
+			case !ok:
+				spare[seat] = len(u.Spares)
+				u.Spares = append(u.Spares, userSpareJSON{Account: s.account, Seat: seat, At: s.at})
+			case i >= 0 && !s.at.IsZero() && (u.Spares[i].At.IsZero() || s.at.Before(u.Spares[i].At)):
+				u.Spares[i].At = s.at
+			}
+		}
+		if r.Used.After(u.Used) {
+			u.Used = r.Used
+		}
+		u.Keys = append(u.Keys, k)
+	}
+	return u
 }
 
 // gatewayUserRoutes serves the Gateway page's User bindings: each
@@ -132,11 +226,12 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			return !ok && !settings.AccountDiscoveryOff()
 		}
 		nameOf := func(id string) providerShown { return cmp.Or(providers[id], providerShown{name: id}) }
-		slices.SortFunc(rows, func(a, b gateway.UserRow) int {
-			return cmp.Or(strings.Compare(nameOf(a.Provider).name, nameOf(b.Provider).name), strings.Compare(a.Provider, b.Provider),
-				strings.Compare(a.Account, b.Account), strings.Compare(a.User, b.User), strings.Compare(a.Key, b.Key))
+		merged := mergedUsers(rows)
+		slices.SortFunc(merged, func(a, b userMerged) int {
+			return cmp.Or(strings.Compare(nameOf(a[0].Provider).name, nameOf(b[0].Provider).name), strings.Compare(a[0].Provider, b[0].Provider),
+				strings.Compare(a[0].Account, b[0].Account), strings.Compare(a[0].User, b[0].User))
 		})
-		out := map[string]any{"total": len(rows)}
+		out := map[string]any{"total": len(merged)}
 		if q == "" {
 			bind := servingBinding()
 			out["mode"] = bind.mode
@@ -146,16 +241,19 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			if bind.idleHours > 0 {
 				out["idleHours"] = bind.idleHours
 			}
-			out["accounts"] = userAccounts(rows, byID, seats, bind.rests, nameOf, providerGone)
+			out["accounts"] = userAccounts(merged, byID, seats, bind.rests, nameOf, providerGone)
 		}
 		words := strings.Fields(strings.ToLower(q))
 		users := []userJSON{}
 		matched := 0
-		for _, u := range rows {
-			p := nameOf(u.Provider)
-			hay := []string{u.User, u.Account, p.name, u.Provider, keyNames[u.Key]}
-			for _, sp := range u.Spares {
-				hay = append(hay, sp.Account)
+		for _, m := range merged {
+			p := nameOf(m[0].Provider)
+			hay := []string{m[0].User, p.name, m[0].Provider}
+			for _, r := range m {
+				hay = append(hay, keyNames[r.Key])
+				for _, s := range seatsOf(r) {
+					hay = append(hay, s.account)
+				}
 			}
 			low := strings.ToLower(strings.Join(hay, " "))
 			if slices.ContainsFunc(words, func(w string) bool { return !strings.Contains(low, w) }) {
@@ -165,11 +263,7 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			if len(users) == usersShown {
 				continue
 			}
-			uj := userJSON{User: u.User, Provider: u.Provider, ProviderName: p.name, Icon: p.icon, Account: u.Account, Seat: strings.ToLower(u.Who), Key: u.Key, KeyName: keyNames[u.Key], KeyGone: keyGone(u.Key), At: u.At, Tier: u.Tier, Used: u.Used}
-			for _, sp := range u.Spares {
-				uj.Spares = append(uj.Spares, userSpareJSON{Account: sp.Account, Seat: strings.ToLower(sp.Who), At: sp.At})
-			}
-			users = append(users, uj)
+			users = append(users, m.shown(p, keyNames, keyGone))
 		}
 		out["matched"], out["users"] = matched, users
 		writeJSON(w, out)
@@ -207,8 +301,10 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 }
 
 // userAccounts is every account a user is bound to, as its first or a
-// spare, with its users counted and whether it is out: each read once.
-func userAccounts(rows []gateway.UserRow, byID map[string]provider.Provider, seats map[string]map[string]bool, rests map[string]gateway.Rest,
+// spare, with its users counted and whether it is out: each read once. A
+// user bound to it under several gateway keys is counted once, and as a
+// spare only when it is the first under none of them.
+func userAccounts(users []userMerged, byID map[string]provider.Provider, seats map[string]map[string]bool, rests map[string]gateway.Rest,
 	nameOf func(string) providerShown, providerGone func(string) bool) []userAccountJSON {
 	accounts := []userAccountJSON{}
 	at := map[string]int{}
@@ -239,10 +335,21 @@ func userAccounts(rows []gateway.UserRow, byID map[string]provider.Provider, sea
 			accounts[i].Spares++
 		}
 	}
-	for _, u := range rows {
-		count(u.Provider, u.Who, u.Account, false)
-		for _, sp := range u.Spares {
-			count(u.Provider, sp.Who, sp.Account, true)
+	for _, m := range users {
+		var own []userSeat
+		spare := map[string]bool{} // seat → a spare under every key it is under
+		for _, r := range m {
+			for i, s := range seatsOf(r) {
+				seat := strings.ToLower(s.who)
+				was, ok := spare[seat]
+				if !ok {
+					own = append(own, s)
+				}
+				spare[seat] = (was || !ok) && i > 0
+			}
+		}
+		for _, s := range own {
+			count(m[0].Provider, s.who, s.account, spare[strings.ToLower(s.who)])
 		}
 	}
 	slices.SortStableFunc(accounts, func(a, b userAccountJSON) int {
