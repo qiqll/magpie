@@ -45,6 +45,10 @@ type groupTurn struct {
 	rows       map[string]map[string]int // each narrowed provider's own, their place in its plan by ownRow
 	plans      map[string][]Weighed      // each narrowed provider's plan of its own
 	spreadDone map[string]bool           // members spread already, by memberOf
+	// strict: the turn's conversation stays strictly on its account
+	// (Stays: Strict, kept by affine): its own resting is refused as a
+	// limit (restsOut)
+	strict bool
 }
 
 // groupTurnOf is the groupTurn of r, a turn to the group of members ms,
@@ -271,7 +275,7 @@ func (g *groupTurn) reach(cs []candidate, i int, seen func(order, left []Weighed
 // answer (T-066).
 func (g *groupTurn) restsOut(pid string, cs []candidate) {
 	ut := g.us[pid]
-	if g.refused != nil || ut == nil || ut.ub == nil {
+	if !g.strict || g.refused != nil || ut == nil || ut.ub == nil {
 		return
 	}
 	u := ut.ub
@@ -296,6 +300,7 @@ func (g *groupTurn) restsOut(pid string, cs []candidate) {
 	if refused.limit == failQuota && u.atMost() {
 		refused.limit = limitAccounts // as userLimitedAfter says it
 	}
+	refused.msg += ". The conversation stays strictly on that account (Stays: Strict), so magpie doesn't move it to another"
 	g.refused = &userRefusedError{u: u, refused: refused, pid: pid}
 }
 

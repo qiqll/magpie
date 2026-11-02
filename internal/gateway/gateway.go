@@ -2966,6 +2966,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// T-041); a pin is to its one alone, as above
 		gt.spread(scope, stuck, leadOn)
 	}
+	if gt != nil && aff.Why == "strict" {
+		// its account resting, refused there with the user's limit, not
+		// as none of the user's able to answer (groupTurn.restsOut)
+		gt.strict = true
+	}
 	// a strict conversation left with its own account of several: its
 	// failure rests the account as it would with the others still there,
 	// for new conversations to go elsewhere meanwhile (#1797)
@@ -4676,12 +4681,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				continue
 			}
 		}
-		if last && userBound != nil && !grew && pin == "" && hw.failed() && !hw.passing && !hw.turnedAway && !hw.refused &&
+		if last && userBound != nil && !grew && pin == "" && aff.Why != "strict" && hw.failed() && !hw.passing && !hw.turnedAway && !hw.refused &&
 			slices.Contains([]string{failQuota, failCredit}, failureOf(c, hw.code(), hw.errBody())) {
 			// the last of the user's accounts is out of its allowance or
 			// credit before any of its reply went: it rests, and, each of
 			// them out a while, a spare is added and asked in its place,
-			// once a request
+			// once a request. Not for a strict conversation, which stays
+			// on its account, its limit told (userLimitedAfter, T-066)
 			rest := s.restAfterMarked(c, hw.code(), hw.header, hw.errBody(), hw.sharedPool)
 			try.Fail, try.Rest = rest.Why, &rest
 			var next []candidate

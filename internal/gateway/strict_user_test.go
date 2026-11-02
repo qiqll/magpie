@@ -72,10 +72,17 @@ func strictUserUpstream(t *testing.T) (fail func(acct, how string), asked func()
 
 // strictUserSetup signs Codex in to two accounts, routed in order, its
 // conversations staying as stays says, with no conversation remembered,
-// bound by user, two accounts each, alice on both.
+// bound by user, two accounts each, alice on the first two.
 func strictUserSetup(t *testing.T, stays string) (*Server, func(acct, how string), func() []string) {
 	t.Helper()
-	codexSignedIn(t, "spare@example.com")
+	return strictUserSetupUpTo(t, stays, 2)
+}
+
+// strictUserSetupUpTo is strictUserSetup with each user on max accounts
+// at most, a third account signed in (acct-3) to add as a spare.
+func strictUserSetupUpTo(t *testing.T, stays string, max int) (*Server, func(acct, how string), func() []string) {
+	t.Helper()
+	codexSignedIn(t, "spare@example.com", "third@example.com")
 	sticks.Lock()
 	sticks.m, sticks.opening, sticks.from = map[string]stick{}, map[string]stick{}, ""
 	sticks.Unlock()
@@ -95,8 +102,8 @@ func strictUserSetup(t *testing.T, stays string) (*Server, func(acct, how string
 	if err := provider.SetAffinity("codex", stays); err != nil {
 		t.Fatal(err)
 	}
-	s := byUserUpTo(t, New(), 2)
-	// alice on both, as a spare added for her once makes her
+	s := byUserUpTo(t, New(), max)
+	// alice on the first two, as a spare added for her once makes her
 	now := time.Now().UTC()
 	more := []userSeat{{Who: "codex@spare@example.com", Account: "spare@example.com", At: now}}
 	if err := os.WriteFile(usersPath(), mustJSON(userFile{Users: map[string]map[string]userBinding{"codex": {"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: now, More: more}}}}), 0o600); err != nil {
@@ -235,12 +242,52 @@ func TestStrictUserGroupStaysWhileItsAccountRests(t *testing.T) {
 				t.Fatalf("resting, asked %v", got)
 			}
 			// (a group's Rejected row names no provider, as T-062 wrote it)
-			if row := rejectedOf(t, "alice"); row.Status != 429 || !strings.Contains(row.Error, "rests until") {
+			if row := rejectedOf(t, "alice"); row.Status != 429 || !strings.Contains(row.Error, "rests until") || !strings.Contains(row.Error, "Stays: Strict") {
 				t.Fatalf("alice's row: %+v", row)
 			}
 			if rec := post("s2"); rec.Code != 200 || !strings.Contains(rec.Body.String(), "from acct-2") {
 				t.Fatalf("a new conversation: %d %s", rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+// A strict conversation whose account runs out mid-turn, the user's
+// other account resting a while and its tier letting it have one more:
+// no spare is added and asked in its place (growUser), and its next turn
+// is refused there too, where it went to the spare (acct-3) and stayed.
+func TestStrictUserGetsNoSpareMidTurn(t *testing.T) {
+	s, fail, asked := strictUserSetupUpTo(t, provider.AffinityStrict, 3)
+	if rec := strictUserPost(s, "alice", "s1"); rec.Code != 200 || !strings.Contains(rec.Body.String(), "from acct-1") {
+		t.Fatalf("first turn: %d %s", rec.Code, rec.Body.String())
+	}
+	// alice's other account out of its allowance for two hours
+	p, err := provider.Find("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs, _ := s.plan(*p, "gpt-5.5", provider.Chat)
+	restingUntil.Lock()
+	for _, c := range cs {
+		if strings.EqualFold(c.who(), "codex@spare@example.com") {
+			restingUntil.m[c.restKey()] = time.Now().Add(2 * time.Hour)
+			restingUntil.note[c.restKey()] = Rest{Why: failQuota, Status: 429, Key: c.restKey()}
+		}
+	}
+	restingUntil.Unlock()
+	asked()
+	fail("acct-1", "quota")
+	rec := strictUserPost(s, "alice", "s1")
+	if limit, _ := limitOf(t, rec); rec.Code != 429 || limit != "quota" || strings.Contains(rec.Body.String(), "from acct-") {
+		t.Fatalf("its account out: %d %q %v %s", rec.Code, limit, rec.Header(), rec.Body.String())
+	}
+	if got := asked(); !slices.Equal(got, []string{"acct-1"}) {
+		t.Fatalf("its account out, asked %v", got)
+	}
+	if rec := strictUserPost(s, "alice", "s1"); rec.Code != 429 || strings.Contains(rec.Body.String(), "from acct-") {
+		t.Fatalf("next turn: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := asked(); len(got) != 0 {
+		t.Fatalf("next turn, asked %v", got)
 	}
 }
