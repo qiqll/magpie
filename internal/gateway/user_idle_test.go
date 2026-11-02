@@ -61,14 +61,15 @@ func other(account string) string {
 	return "me@example.com"
 }
 
-// Idle is three days, not a value that moves with the constant.
-func TestUserIdleIsThreeDays(t *testing.T) {
-	if userIdle != 72*time.Hour {
+// Idle is 60 hours (the owner's, 2026-11-02; three days before), not a
+// value that moves with the constant.
+func TestUserIdleIs60Hours(t *testing.T) {
+	if userIdle != 60*time.Hour || UserIdleHours != 60 {
 		t.Fatalf("userIdle %v", userIdle)
 	}
 }
 
-// A user that sent the provider nothing for 3 days, while another sent it
+// A user that sent the provider nothing for 60 hours, while another sent it
 // a request an hour ago, lets go of its accounts, and a pro user that
 // comes after is bound to the one it was on; back, it is bound afresh,
 // never onto the pro user's.
@@ -77,7 +78,7 @@ func TestUserIdleLetsGoOfItsAccounts(t *testing.T) {
 	asked, _ := usersUpstream(t, nil)
 	s := byUser(New())
 	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
-		"carol": bound("me@example.com", "pro", ago(72*time.Hour+time.Hour)),
+		"carol": bound("me@example.com", "pro", ago(60*time.Hour+time.Hour)),
 		"bob":   bound("b@example.com", "pro", ago(time.Hour))}}})
 	if rec := tierPost(s, "alice", "pro", "hi"); rec.Code != 200 {
 		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
@@ -100,13 +101,13 @@ func TestUserIdleLetsGoOfItsAccounts(t *testing.T) {
 	}
 }
 
-// Under 3 days a user keeps its accounts, though the pool is full, and
+// Under 60 hours a user keeps its accounts, though the pool is full, and
 // its last use is left as it is.
-func TestUserIdleUnderThreeDaysKeepsItsAccounts(t *testing.T) {
+func TestUserIdleUnder60HoursKeepsItsAccounts(t *testing.T) {
 	codexSignedIn(t, "b@example.com")
 	asked, _ := usersUpstream(t, nil)
 	s := byUser(New())
-	kept := ago(72*time.Hour - time.Hour)
+	kept := ago(60*time.Hour - time.Hour)
 	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
 		"carol": bound("me@example.com", "pro", kept),
 		"bob":   bound("b@example.com", "pro", ago(time.Minute))}}})

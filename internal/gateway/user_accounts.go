@@ -234,8 +234,9 @@ func (b userBinding) withSeats(seats []userSeat) userBinding {
 }
 
 // userIdle is how long a user sends a provider nothing before it lets go
-// of its accounts there (sweepIdle).
-const userIdle = 3 * 24 * time.Hour
+// of its accounts there (sweepIdle): 60 hours (the owner's, 2026-11-02;
+// 3 days before), counted from its last request to that provider.
+const userIdle = 60 * time.Hour
 
 // UserIdleHours is userIdle in hours, as the gateway tells the Gateway page.
 const UserIdleHours = int(userIdle / time.Hour)

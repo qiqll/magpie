@@ -2320,14 +2320,16 @@ headers, and nothing is sent to the vendor. A user bound to none because
 every account of the provider is out is told when the one asked is back.
 Neither header is there when the account is let go (the user is bound afresh on
 its next request), nor on an error of a stream already begun. A user that
-sends a provider nothing for 3 days lets go of its accounts there too, so
+sends a provider nothing for 60 hours (3 days before 2026-11-02: on the
+upgrade, a binding idle 60 to 72 hours already is let go by the next
+request to its provider) lets go of its accounts there too, so
 another can take them: the release is made by the next user's request to
 that provider, its own never (`sweepIdle`, `userIdle`), and a binding kept
 before magpie noted a last use (no `used`) is stamped then, never let go
 at once. A user waiting out a rest magpie told it of (`X-Magpie-User-Until`)
 is in use until that rest ends. When no user sent the provider anything
 for 12 hours or more (the gateway was down, or nobody came), that time
-doesn't count toward anyone's 3 days. Requests served while
+doesn't count toward anyone's 60 hours. Requests served while
 `user-accounts.json` doesn't read count too, once it reads again. An account goes from a
 user only when it is no longer on the provider (signed out, switched off,
 removed) or its vendor turns it away for good (a sign-in revoked that a
@@ -2399,7 +2401,7 @@ is bound ("No user is bound yet"), bound by session once anyone is: how the
 gateway binds over the list (bound by user, each tier with its most
 accounts, how many users share one ("each its own alone", "each shared by
 up to 2", "shared by any number") and the default marked, and that a user
-idle 3 days lets go of its accounts, or the tiers said unknown; bound by
+idle 60 hours lets go of its accounts, or the tiers said unknown; bound by
 session, "Binding by user is off (start option --bind=user)", the
 bindings left in the file shown as they are and nothing removed, since
 they are used again once it is on), each provider's accounts with how
