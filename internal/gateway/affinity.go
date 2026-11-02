@@ -742,10 +742,11 @@ func affine(scope, owner, mode string, rotate, spread, inOrder bool, in http.Hea
 // one's prompt to that account's cache beside the others' (T-013). One all
 // but used up is passed over while another has room, as ownedBy puts it
 // last, and so is one past lowShare not spending its credits first, as
-// readyForNew passes it unbound (T-052); on a tie the first stays first. A conversation answered stays
-// where affine keeps it, and a user with one account goes there. One
-// affine doesn't keep (cold, no-cache, gone, resting, spent: afresh) is
-// put the same way, not back on the user's first (T-042).
+// readyForNew passes it unbound (T-052); on a tie the first stays first.
+// A conversation answered stays where affine keeps it, and a user with
+// one account goes there. One affine doesn't keep (cold, no-cache, gone,
+// resting, spent: afresh) is put the same way, not back on the user's
+// first (T-042).
 func ownLeastHeld(scope, key string, cs []candidate, pl planned) ([]candidate, planned) {
 	return leastHeld(scope, key, cs, pl, true, false)
 }
@@ -861,11 +862,12 @@ const heldFor = 30 * time.Minute
 // afresh (afresh) would count against where it was, moved off it on a tie
 // with the cache there written again elsewhere (T-042). Another routed
 // afresh whose request is out counts where it was sent alone, not where
-// it was answered too. With spentLast,
-// one all but used up, or past lowShare as readyForNew says, isn't picked
-// over one with room, nobody held or not (ownLeastHeld,
-// groupTurn.spreadOwn); with none that has room, the order stands. A fallback is none of those while the provider's
-// own leads (standsIn): held by nobody, it was the one held on fewest.
+// it was answered too. With spentLast, one all but used up, or past
+// lowShare as readyForNew says, isn't picked over one with room, nor one
+// resting or aside, whether anybody is held or not (ownLeastHeld,
+// groupTurn.spreadOwn); with none that has room, the order stands. A
+// fallback is none of those while the provider's own leads (standsIn):
+// held by nobody, it was the one held on fewest.
 //
 // ready is for a conversation kept for the whole session (spreadsSessions):
 // it goes only to one routing would put a new conversation on as well —

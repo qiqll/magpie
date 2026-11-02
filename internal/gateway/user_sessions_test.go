@@ -260,6 +260,16 @@ func TestOwnLeastHeldLowShareAsReadyForNew(t *testing.T) {
 	if got, _ := ownLeastHeld("t052", "t052|s1", []candidate{b, d, a}, planned{order: []Weighed{{}, {}, low}}); got[0].who() != d.who() {
 		t.Fatalf("a subagent's stick not counted: went to %s, want %s", got[0].who(), d.who())
 	}
+	// with nobody held, a first aside (a key for another protocol) is
+	// passed too, as it is with somebody held
+	t.Cleanup(func() {
+		sticks.Lock()
+		delete(sticks.opening, "t052b|s")
+		sticks.Unlock()
+	})
+	if got, _ := ownLeastHeld("t052b", "t052b|s", []candidate{a, b}, planned{order: []Weighed{{Aside: true}, {}}}); got[0].who() != b.who() {
+		t.Fatalf("with nobody held, an aside first took a new session: %s", got[0].who())
+	}
 }
 
 // Bound by user under a routing that spreads sessions (Session), a
