@@ -53,6 +53,7 @@ magpie.plugin("usage", (ctx) => {
     <div class="list" id="usageKeys" hidden></div>
     <div class="row-head" id="usageUsersHead" hidden><button class="fold" type="button" data-fold="users" aria-expanded="true" aria-controls="usageUsers"><span class="label" data-t>Users</span></button></div>
     <div class="list" id="usageUsers" hidden></div>
+    <p class="usage-note" id="usageUsersNote" data-t hidden>Only requests that name their user in X-Magpie-User, from this update on, are counted by user</p>
     <p class="usage-note" id="usageNote"></p>
     <p class="usage-clear"><button class="text" id="usageClear" type="button" hidden><span data-t>Clear all usage…</span></button></p>
     <div class="plugin-slot" data-slot="usage" hidden></div>

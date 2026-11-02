@@ -4,9 +4,10 @@
 // user's tokens, calls and cost as the other lists have them, and the calls
 // that named none as one "No user" row. The list folds under its heading
 // like the others. A period where no call named a user (no --bind=user, or
-// a magpie from before) has no Users list, nor one with only the no-user
-// row. Every language, both engines, 1000 and 420 wide; no backend, the API
-// is faked.
+// a magpie from before) still has the Users heading, with a note that only
+// requests naming X-Magpie-User since the update are counted by user (需求方
+// 打回 2026-11-02: 线上用量概览里没看到按用户维度的统计). Every language,
+// both engines, 1000 and 420 wide; no backend, the API is faked.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -45,11 +46,11 @@ function server(lang, usage) {
 }
 
 const L = {
-  en: { head: "Users", none: "No user", fold: "Fold the users away", show: "Show the users" },
-  zh: { head: "用户", none: "无用户", fold: "收起用户", show: "展开用户" },
-  "zh-TW": { head: "使用者", none: "無使用者", fold: "收起使用者", show: "展開使用者" },
-  ja: { head: "ユーザー", none: "ユーザーなし", fold: "ユーザーを折りたたむ", show: "ユーザーを表示" },
-  de: { head: "Benutzer", none: "Kein Benutzer", fold: "Benutzer einklappen", show: "Benutzer anzeigen" },
+  en: { head: "Users", none: "No user", fold: "Fold the users away", show: "Show the users", note: "Only requests that name their user in X-Magpie-User, from this update on, are counted by user" },
+  zh: { head: "用户", none: "无用户", fold: "收起用户", show: "展开用户", note: "升级后带 X-Magpie-User 的请求才会按用户统计" },
+  "zh-TW": { head: "使用者", none: "無使用者", fold: "收起使用者", show: "展開使用者", note: "升級後帶 X-Magpie-User 的請求才會按使用者統計" },
+  ja: { head: "ユーザー", none: "ユーザーなし", fold: "ユーザーを折りたたむ", show: "ユーザーを表示", note: "アップデート後に X-Magpie-User を付けたリクエストだけがユーザー別に集計されます" },
+  de: { head: "Benutzer", none: "Kein Benutzer", fold: "Benutzer einklappen", show: "Benutzer anzeigen", note: "Nach Benutzer gezählt werden nur Anfragen mit X-Magpie-User ab diesem Update" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -78,6 +79,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           const head = p.locator("#usageUsersHead");
           assert.equal(await head.isHidden(), false, "the Users heading shows");
           assert.equal((await head.textContent()).trim(), w.head);
+          assert.equal(await p.locator("#usageUsersNote").isHidden(), true, "no note once a call named a user");
           const rows = p.locator("#usageUsers .row.stat");
           assert.deepEqual(await rows.locator(".name").allTextContents(), ["alice", "bob@example.com", w.none]);
           assert.deepEqual(await rows.locator(".name").evaluateAll((ns) => ns.map((n) => n.classList.contains("faint"))), [false, false, true], "the no-user row is faint, as an unrecorded account is");
@@ -102,11 +104,27 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.equal(await p.locator("#usageUsers").evaluate((e) => !!e.offsetParent), true);
           await p.close();
 
-          // no call named a user: no list, nor from a server without users
+          // no call named a user (calls from before the update, or without
+          // the header), or a server without users: the heading still
+          // shows, with why, and folds the note away with the list
           for (const users of [[G("", "", 6, 6000, 600, 6)], [], undefined]) {
+            const of = JSON.stringify(users);
             p = await open(usageOf(users));
-            assert.equal(await p.locator("#usageUsersHead").isHidden(), true, "no Users heading for " + JSON.stringify(users));
-            assert.equal(await p.locator("#usageUsers").isHidden(), true);
+            assert.equal(await p.locator("#usageUsersHead").isHidden(), false, "the Users heading shows for " + of);
+            const note = p.locator("#usageUsersNote");
+            assert.equal(await note.isVisible(), true, "the note shows for " + of);
+            assert.equal((await note.textContent()).trim(), w.note);
+            assert(await note.evaluate((n) => n.scrollWidth <= n.clientWidth + 1), "the note overflows");
+            if (users?.length) {
+              assert.deepEqual(await p.locator("#usageUsers .row.stat .name").allTextContents(), [w.none]);
+            } else {
+              assert.equal(await p.locator("#usageUsers").isHidden(), true, "no list without groups for " + of);
+            }
+            const f = p.locator('#usagePane .row-head .fold[data-fold="users"]');
+            await f.scrollIntoViewIfNeeded();
+            await f.click();
+            assert.equal(await note.isVisible(), false, "the note folds away with the users");
+            await f.click();
             await p.close();
           }
           assert.deepEqual(errors, []);

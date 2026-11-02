@@ -353,7 +353,7 @@ function renderUsageLoading() {
     stats.append(tile);
   }
   $("#chart").hidden = true;
-  for (const id of ["usageAgents", "usageAgentsHid", "usageModels", "usageKeys", "usageUsers"]) $("#" + id).hidden = true;
+  for (const id of ["usageAgents", "usageAgentsHid", "usageModels", "usageKeys", "usageUsers", "usageUsersNote"]) $("#" + id).hidden = true;
   // the allowances' head is renderQuotas' alone: the quotas it heads are
   // still there while the period loads (#809, Hu9956: 用量界面红框这行会延迟几秒才会出现)
   for (const h of $$("#view-usage .row-head:not(#quotaHead, .plugin-panel > .row-head)")) h.hidden = true;
@@ -522,7 +522,7 @@ new ResizeObserver(fitChartLabels).observe($("#view-usage"));
 // stay folded across a reload (magpie.usageFolded, the folded ones' names).
 let usageFolded = new Set();
 try { usageFolded = new Set(JSON.parse(localStorage.getItem("magpie.usageFolded") || "[]")); } catch {}
-const USAGE_FOLDS = { agents: ["usageAgents", "usageAgentsHid"], models: ["usageModels"], accounts: ["usageAccounts"], keys: ["usageKeys"], users: ["usageUsers"] };
+const USAGE_FOLDS = { agents: ["usageAgents", "usageAgentsHid"], models: ["usageModels"], accounts: ["usageAccounts"], keys: ["usageKeys"], users: ["usageUsers", "usageUsersNote"] };
 const USAGE_FOLD_TITLES = {
   agents: ["Show the agents", "Fold the agents away"],
   models: ["Show the models", "Fold the models away"],
@@ -614,9 +614,13 @@ function renderUsage() {
   $("#usageKeysHead").hidden = $("#usageKeys").hidden = empty || !u.callerKeys?.length;
   // each subscription account's share, by the account that answered (#557)
   $("#usageAccountsHead").hidden = $("#usageAccounts").hidden = empty || !u.accounts?.length;
-  // the calls by the caller's user (X-Magpie-User, T-020), once a call
-  // named one: the calls that named none are a "No user" row of their own
-  $("#usageUsersHead").hidden = $("#usageUsers").hidden = empty || !u.users?.some((g) => g.name);
+  // the calls by the caller's user (X-Magpie-User, T-020): the calls that
+  // named none are a "No user" row of their own. Shown when no call named
+  // one too, with why (calls from before the update, or without the
+  // header, name none), not left out of sight
+  $("#usageUsersHead").hidden = empty;
+  $("#usageUsers").hidden = empty || !u.users?.length;
+  $("#usageUsersNote").hidden = empty || !!u.users?.some((g) => g.name);
   if (empty) {
     stats.classList.add("empty");
     const none = noCallsIn(period);
