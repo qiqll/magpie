@@ -313,7 +313,10 @@ func (s *Server) alphaSearchHere(w http.ResponseWriter, r *http.Request, q alpha
 				return
 			}
 			log.Printf("web search for %s: %v", q.Model, err)
-			msg := "magpie couldn't search the web for " + query + ": " + sideSaid(err)
+			msg := "magpie couldn't search the web for " + query
+			if why := s.searchFailSaid(err); why != "" {
+				msg += ": " + why
+			}
 			if errors.Is(err, errNoSearcher) {
 				msg += ": add a search API in magpie's Settings → Models → Web search (or magpie search add <api> <key>), or a provider that can search"
 			}
@@ -326,4 +329,20 @@ func (s *Server) alphaSearchHere(w http.ResponseWriter, r *http.Request, q alpha
 		said = append(said, found)
 	}
 	writeJSON(w, http.StatusOK, alphaSearchReply{Output: note + strings.Join(said, "\n\n")})
+}
+
+// searchFailSaid is why magpie's own search failed (err), as web.run's
+// output tells it (sideSaid). Bound by user, a searcher's own words (a
+// provider's or a search API's) aren't told, as ChatGPT's aren't
+// (alphaSearchAsked, T-071): a limit is userLimitSaid, which a bound
+// user's 429 through serve already says, anything else nothing; magpie's
+// own (errNoSearcher, a key's refusal) is told as it is. err is the log's.
+func (s *Server) searchFailSaid(err error) string {
+	if !s.bind.byUser() || errors.Is(err, errNoSearcher) || errors.As(err, new(sideHeld)) {
+		return sideSaid(err)
+	}
+	if strings.Contains(err.Error(), userLimitSaid) {
+		return userLimitSaid
+	}
+	return ""
 }

@@ -2315,13 +2315,14 @@ and the limit headers below are as they were. So is a vendor's 429 on a
 request that isn't a turn: a drawing or an edit (`/v1/images/…`, and the
 image MCP server's `generate_image`, whose error says "no image: " and
 that sentence), an embedding, a rerank, audio (`/v1/audio/…`), a video
-and the asks after it (`/v1/videos…`). When Codex's web.run fails on
-every one of the user's ChatGPT accounts and magpie searches in its place,
-the tool's output says that sentence for a limit and only that ChatGPT's
-search failed for anything else, never the account or the vendor's words,
-which are magpie's log's. A 429 that refuses the prompt
+and the asks after it (`/v1/videos…`). A 429 that refuses the prompt
 itself, which no wait helps, and any other status keep the vendor's words,
-as they do with no user bound. Another refusal (a
+as they do with no user bound. Codex's web.run is stricter: when it fails on
+every one of the user's ChatGPT accounts and magpie searches in its place,
+the tool's output, which goes on to the model's vendor, says that sentence
+for a limit and only that the search failed for anything else, a refused
+prompt too, and so does magpie's own search failing after it; the
+account and the vendor's words are magpie's log's. Another refusal (a
 400 when none of the user's accounts serves the model, a 503 when they are
 paused or the conversation was sealed by another account) says why
 without naming them. When that error is a
