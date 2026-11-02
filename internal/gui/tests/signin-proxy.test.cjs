@@ -114,7 +114,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await bob.waitFor();
         const spills = await page.evaluate(() => [...document.querySelectorAll(".editor .accts > *")].flatMap((row) => {
           const r = row.getBoundingClientRect();
-          return [...row.querySelectorAll("*")].filter((e) => e.getBoundingClientRect().height && e.getBoundingClientRect().bottom > r.bottom + 0.5).map((e) => `${row.className} > ${e.className}`);
+          return [...row.querySelectorAll("*")].map((e) => [e, e.getBoundingClientRect()]).filter(([, b]) => b.height && b.bottom > r.bottom + 0.5).map(([e]) => `${row.getAttribute("class")} > ${e.getAttribute("class")}`);
         }));
         assert.deepEqual(spills, [], "no row draws past its own bottom");
         await bob.locator("button", { hasText: w.again }).click();
