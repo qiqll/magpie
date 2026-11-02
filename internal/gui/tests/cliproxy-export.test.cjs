@@ -87,6 +87,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const exp = page.locator(".editor .acc", { hasText: "me@example.com" }).getByRole("button", { name: w.export, exact: true });
       assert.equal(await page.locator(".editor .acc", { hasText: "me@example.com" }).locator(".acc-tools > .acc-export").isVisible(), false, "Export waits under ⋯");
       await toolsOf(page, "me@example.com");
+      // on ⋯'s line, and Remove, where the row has one, still ends it
+      const order = await page.locator(".editor .acc", { hasText: "me@example.com" }).locator(".acc-tools").evaluate((x) => [...x.children].map((c) => c.classList.contains("acc-export") ? "export" : c.matches(".text.quiet") ? "remove" : "").filter(Boolean));
+      assert.ok(order.indexOf("export") >= 0 && (order.indexOf("remove") < 0 || order.indexOf("remove") > order.indexOf("export")), `Export under ⋯, before Remove (${order})`);
       assert.equal(await exp.count(), 1);
       assert.ok(await exp.getAttribute("title"));
       await exp.click();

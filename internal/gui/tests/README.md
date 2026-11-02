@@ -2638,8 +2638,8 @@ does. Both engines, at 440px. The reckoning itself is covered by
 
 ## CLIProxyAPI export
 
-`cliproxy-export.test.cjs` checks an account row's Export with local API
-fixtures: asked first, saying the file holds the refresh token; Cancel sends
+`cliproxy-export.test.cjs` checks an account row's Export, under its ⋯
+before Remove, with local API fixtures: asked first, saying the file holds the refresh token; Cancel sends
 nothing; in `magpie web` the browser saves CLIProxyAPI's file under its own
 name, in the app the status says where in Downloads it went; Copilot and a
 Claude account whose sign-in is gone have none; nothing runs past 420px.
