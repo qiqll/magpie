@@ -1249,6 +1249,12 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 		return nil, pl, u, false, r
 	}
 	if !out {
+		// back soon, or one of them still asked: no spare looked for. At
+		// its tier's most, out of its allowance is "accounts" all the
+		// same, as the try that found it said (userLimitedAfter)
+		if mine >= u.max {
+			return refuse("", limitAccounts)
+		}
 		return refuse("", "")
 	}
 	if mine >= u.max {
@@ -1618,6 +1624,7 @@ func (s *Server) userLimitedAfter(h http.Header, u *UserBound, c candidate, stat
 	if limit == failQuota && u.atMost() {
 		// out of its allowance with as many accounts as its tier lets it
 		// have: told as growUser tells the next request, no spare added
+		// (refuse's limit)
 		limit = limitAccounts
 	}
 	userLimited(h, limit, until, model)

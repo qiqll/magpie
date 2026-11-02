@@ -2318,10 +2318,11 @@ more values say why no account answers, each told `quota` before:
 `seats` (the user is bound to none, and every account it could be given
 is taken by as many users as can share it, or has no room by its users'
 use), `accounts` (its accounts' allowance is used up, and it has as many
-as its tier's `max_accounts`, so no spare is added) and `signin` (its
+as its tier's `max_accounts`, so no spare is added: the reply of the
+try that finds it out says so too) and `signin` (its
 accounts have to be signed in again; which, and why, is the operator's). The values before keep their
-meaning, and the reply's body says no more than before. Every such
-refusal, before any account is asked, is a Rejected row in the usage log
+meaning, and the reply's body says no more than before. A user's
+request refused before any account is asked is a Rejected row in the usage log
 (Usage › Requests), its error the reason in full, with no tokens or cost
 and counted by no key's limit, and a line in magpie's log naming the
 user, provider, kind and reason: one a user, provider and kind every 5

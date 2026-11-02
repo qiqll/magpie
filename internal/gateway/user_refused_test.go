@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -184,5 +185,66 @@ func TestUserRefusedLogEvery(t *testing.T) {
 	got = lines()
 	if last := got[len(got)-1]; !strings.Contains(last, `user "eve\ngateway: forged" refused (request, 400)`) || !strings.Contains(last, `bound to "a b\nc"`) || !strings.Contains(last, `"bad\nline"`) {
 		t.Fatalf("names quoted: %q", got)
+	}
+}
+
+// A user out of its allowance with as many accounts as its tier lets it
+// have is told "accounts", by the try that finds it and by each request
+// after, its account back soon or not; with room for a spare it is told
+// "quota" while its account is back soon.
+func TestUserAtItsMostIsToldAccounts(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		max  int
+		secs int
+		want string
+	}{
+		{"most, back soon", 1, 1500, "accounts"},
+		{"most, out a while", 1, 7200, "accounts"},
+		{"room, back soon", 2, 1500, "quota"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			codexSignedIn(t, "spare@example.com")
+			out, asked := limitUpstream(t)
+			s := byUserUpTo(t, New(), c.max)
+			if rec := userPost(s, "codex/gpt-5.5", "alice", "hi"); rec.Code != 200 {
+				t.Fatalf("first: %d %s", rec.Code, rec.Body.String())
+			}
+			out(asked(true)[0], c.secs)
+			for _, input := range []string{"spent", "again"} {
+				rec := userPost(s, "codex/gpt-5.5", "alice", input)
+				if limit, until := limitOf(t, rec); rec.Code != 429 || limit != c.want || !near(until, time.Duration(c.secs)*time.Second) {
+					t.Fatalf("%s: %d %q until %v %s", input, rec.Code, limit, until, rec.Body.String())
+				}
+			}
+		})
+	}
+}
+
+// Past refusedLogMax users, provider and kinds within one window, a new
+// one is logged but not kept: the map grows no further.
+func TestUserRefusedLogBounded(t *testing.T) {
+	lines := refusedLog(t)
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	was := refusedNow
+	refusedNow = func() time.Time { return now }
+	t.Cleanup(func() { refusedNow = was })
+	for i := range refusedLogMax + 10 {
+		noteRefused("u"+strconv.Itoa(i), "codex", limitSeats, 429, "", "taken")
+	}
+	refusedLogged.Lock()
+	n := len(refusedLogged.m)
+	refusedLogged.Unlock()
+	if n != refusedLogMax || len(lines()) != refusedLogMax+10 {
+		t.Fatalf("kept %d, logged %d", n, len(lines()))
+	}
+	// a window on, those over are let go for the new
+	now = now.Add(refusedLogEvery)
+	noteRefused("late", "codex", limitSeats, 429, "", "taken")
+	refusedLogged.Lock()
+	n = len(refusedLogged.m)
+	refusedLogged.Unlock()
+	if n != 1 {
+		t.Fatalf("a window on, kept %d", n)
 	}
 }

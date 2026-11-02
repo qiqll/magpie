@@ -240,6 +240,10 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 			// binding refused it, the tries before it the call's
 			call.Fallback, call.Millis = strings.Join(skipped, "; "), time.Since(start).Milliseconds()
 			s.groupTurnRefused(w, provider.Chat, nil, &call, gt)
+			if i == 0 {
+				// none asked: in the usage log as its binding's refusal
+				rejectedRow(r, &call, call.Provider)
+			}
 			s.record(call)
 			return
 		}

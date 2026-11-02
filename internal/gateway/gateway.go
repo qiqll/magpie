@@ -3059,13 +3059,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				}
 				msg = userLimitSaid
 			}
-			// a user's limit is said only as one (saidToUser); turned away
-			// before any account was asked, the usage log has its row
+			// a user's limit is said only as one (saidToUser); a user's,
+			// turned away before any account was asked, has its row in
+			// the usage log, as its binding's refusals do (T-062)
+			writeError(w, from, status, saidToUser(limitedUser, status, msg))
 			if limitedUser != "" {
 				noteRefused(limitedUser, p.ID, cmp.Or(w.Header().Get(UserLimitHeader), "pin"), status, "", call.Error)
+				turnedAway()
+				return
 			}
-			writeError(w, from, status, saidToUser(limitedUser, status, msg))
-			turnedAway()
+			finishCapture()
+			s.record(call)
 			return
 		}
 	}
@@ -3229,7 +3233,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 		}()
 	}
-	ranOut := false // a group's tries left none of its user's own to ask (groupTurn)
+	ranOut := false      // a group's tries left none of its user's own to ask (groupTurn)
+	ranOutFirst := false // ranOut before any was asked: a Rejected row (T-062)
 	// the plan as it stands for the tries: whether the one that answers
 	// stood in for a member listed ahead of its own (standsInFor)
 	plannedCs, plannedOrder := slices.Clone(cands), pl.order
@@ -3237,7 +3242,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// a group's member is narrowed to its user's own as the tries
 		// reach its provider, another user's left out (groupTurn)
 		if cands = gt.reach(cands, i, seen); i >= len(cands) {
-			ranOut = true
+			ranOut, ranOutFirst = true, i == 0
 			break
 		}
 		c := cands[i]
@@ -4907,6 +4912,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	call.Route = tr.ID
 	call.Masked = s.trace.maskedOf(tr)
 	s.record(call)
+	if call.To == "" && ranOutFirst {
+		// a group's turn none of whose user's own was left before any
+		// was asked: refused by its binding, in the usage log as one
+		logged()
+	}
 	if call.To != "" {
 		rec := usage.Record{RouteID: tr.ID, Time: start, Agent: call.Agent, Via: call.Via, Provider: call.Provider, Host: where, Model: model,
 			ProviderKeyID: providerKeyID, ProviderKeyName: providerKeyName, ProviderAccount: providerAccount,

@@ -27,14 +27,16 @@ import (
 const refusedLogEvery = 5 * time.Minute
 
 // refusedLogMax is how many user, provider and kind lines are kept in
-// memory before those whose window is over are let go.
+// memory: past it, those whose window is over are let go, once a window
+// at most, and a refusal with no room left is logged untracked.
 const refusedLogMax = 4096
 
 // refusedLogged is when each user, provider and kind (refusedKey) was
 // last logged, and how many refusals since weren't.
 var refusedLogged = struct {
 	sync.Mutex
-	m map[string]*refusedLine
+	m      map[string]*refusedLine
+	pruned time.Time // when those whose window was over were last let go
 }{m: map[string]*refusedLine{}}
 
 type refusedLine struct {
@@ -102,16 +104,19 @@ func noteRefused(user, pid, kind string, status int, account, msg string) {
 	if l != nil {
 		merged, since = l.merged, l.at
 	}
-	if len(refusedLogged.m) >= refusedLogMax {
+	if l == nil && len(refusedLogged.m) >= refusedLogMax && now.Sub(refusedLogged.pruned) >= refusedLogEvery {
 		// those whose window is over: their next refusal is logged at
 		// once, the count not logged of them lost
+		refusedLogged.pruned = now
 		for key, o := range refusedLogged.m {
 			if now.Sub(o.at) >= refusedLogEvery {
 				delete(refusedLogged.m, key)
 			}
 		}
 	}
-	refusedLogged.m[k] = &refusedLine{at: now}
+	if l != nil || len(refusedLogged.m) < refusedLogMax {
+		refusedLogged.m[k] = &refusedLine{at: now}
+	}
 	refusedLogged.Unlock()
 	line := fmt.Sprintf("gateway: user %s refused (%s, %d) by %s", provider.LogName(cmp.Or(user, "(none)")), kind, status, cmp.Or(pid, "no provider"))
 	if account != "" {
@@ -131,18 +136,29 @@ func noteRefused(user, pid, kind string, status int, account, msg string) {
 // key's limit count it, with its status and why.
 func refusedRow(r *http.Request, call *Call, err error) {
 	var ur *userRefusedError
-	if r == nil || !errors.As(err, &ur) || ur.tried {
+	if !errors.As(err, &ur) || ur.tried {
 		return
 	}
 	pid := ur.pid
 	if ur.u != nil {
 		pid = cmp.Or(ur.u.pid, pid)
 	}
+	rejectedRow(r, call, pid)
+}
+
+// rejectedRow writes the usage log's Rejected row of r, call refused by
+// its user's binding before provider pid was asked; its agent the
+// caller's when call names none (a System One decision's).
+func rejectedRow(r *http.Request, call *Call, pid string) {
+	if r == nil {
+		return
+	}
 	at := call.Time
 	if at.IsZero() {
 		at = time.Now()
 	}
-	rec := usage.Record{Time: at, Agent: call.Agent, Via: call.Via, Provider: pid, Model: call.Model, Requested: call.Model, Kind: call.Kind,
+	who := callerOf(r)
+	rec := usage.Record{Time: at, Agent: cmp.Or(call.Agent, who.agent), Via: cmp.Or(call.Via, who.via), Provider: pid, Model: call.Model, Requested: call.Model, Kind: call.Kind,
 		Millis: time.Since(at).Milliseconds(), Status: call.Status, Rejected: true, Session: sessionOf(r.Header)}
 	failedWith(&rec, call.Status, call.Error, "")
 	appendUsage(r, rec)
