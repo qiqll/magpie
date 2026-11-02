@@ -29,6 +29,12 @@ func limitSaidUpstream(t *testing.T, how string, after string) (asks *atomic.Int
 		asks.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		switch how {
+		case "refused":
+			w.WriteHeader(429)
+			io.WriteString(w, `{"error":{"type":"invalid_request","message":"VENDOR-REFUSED unapproved channel"}}`)
+		case "bad":
+			w.WriteHeader(400)
+			io.WriteString(w, `{"error":{"type":"invalid_request_error","message":"VENDOR-BAD Unknown parameter: foo"}}`)
 		case "quota":
 			w.WriteHeader(429)
 			io.WriteString(w, `{"error":{"type":"usage_limit_reached","message":"VENDOR-QUOTA The usage limit has been reached","plan_type":"plus","resets_in_seconds":7200}}`)
@@ -235,5 +241,42 @@ func TestUserLimitSaidOfADecision(t *testing.T) {
 	saysOnlyTheLimit(t, rec.Body.String())
 	if rec := decide(false); rec.Code != 429 || !strings.Contains(rec.Body.String(), "VENDOR-RATE") {
 		t.Fatalf("unbound: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// What isn't a limit is told as before to a bound user: a prompt the
+// vendor refused at 429, and a 400.
+func TestUserLimitSaidOnlyOfALimit(t *testing.T) {
+	for _, c := range []struct{ how, words string }{
+		{"refused", "VENDOR-REFUSED"},
+		{"bad", "VENDOR-BAD"},
+	} {
+		t.Run(c.how, func(t *testing.T) {
+			s, _, _ := strictUserSetup(t, provider.AffinitySession)
+			limitSaidUpstream(t, c.how, "")
+			rec := limitSaidPost(s, limitSaidEntries(false)[1], "alice")
+			if rec.Code == 200 || !strings.Contains(rec.Body.String(), c.words) || strings.Contains(rec.Body.String(), userLimitSaid) {
+				t.Fatalf("%d %v %s", rec.Code, rec.Header(), rec.Body.String())
+			}
+		})
+	}
+}
+
+// A routing group's turn of a bound user, each of its accounts out of its
+// allowance: told userLimitSaid, streamed or not.
+func TestUserLimitSaidOfAGroup(t *testing.T) {
+	for _, stream := range []string{"true", "false"} {
+		t.Run("stream="+stream, func(t *testing.T) {
+			s, _, _ := strictUserSetup(t, provider.AffinitySession)
+			limitSaidUpstream(t, "quota", "")
+			if err := provider.SaveGroup(provider.Group{Name: "G", Members: []string{"codex/gpt-5.5"}, Routing: provider.Ordered, Patience: provider.PatienceOff}); err != nil {
+				t.Fatal(err)
+			}
+			rec := limitSaidPost(s, limitSaidEntry{"group", "/v1/responses", `{"model":"G","stream":` + stream + `,"input":"ping"}`}, "alice")
+			if rec.Code != 429 {
+				t.Fatalf("%d %v %s", rec.Code, rec.Header(), rec.Body.String())
+			}
+			saysOnlyTheLimit(t, rec.Body.String())
+		})
 	}
 }

@@ -444,10 +444,10 @@ func (s *Server) serveDecideUsers(w http.ResponseWriter, r *http.Request, body [
 		}
 		if status >= 400 {
 			keepRetryOut(w.Header(), header, b)
-			if status == http.StatusTooManyRequests && us[c.p.ID] != nil {
+			if status == http.StatusTooManyRequests && (len(us) > 0 || gu != nil) && !promptRefused(status, b) {
 				// a bound user's 429 says only userLimitSaid, as a
-				// turn's does (T-067); the vendor's words are the
-				// routing log's
+				// turn's does (T-067), whichever provider's it is; the
+				// vendor's words are the routing log's
 				writeError(w, provider.Chat, status, userLimitSaid)
 				return
 			}
