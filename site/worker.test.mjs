@@ -665,3 +665,47 @@ test("contributors: the pages say how to be left off, and every docs footer link
   }
   assert.ok(readFileSync(new URL("./public/index.html", import.meta.url), "utf8").includes('<a href="/docs/contributors" data-i18n="foot.contrib">'));
 });
+
+test("seo: the sitemap lists the home pages and every docs page, each its own canonical", async () => {
+  const { readFile, readdir } = await import("node:fs/promises");
+  const { LANGS } = await import("./i18n.js");
+  const pub = new URL("./public/", import.meta.url);
+  const xml = await readFile(new URL("sitemap.xml", pub), "utf8");
+  const listed = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
+  const want = ["https://usemagpie.ai/", ...Object.keys(LANGS).map((l) => `https://usemagpie.ai/${l}/`)];
+  for (const dir of ["docs/", "docs/zh/", "docs/ja/"])
+    for (const f of (await readdir(new URL(dir, pub))).filter((f) => f.endsWith(".html")).sort())
+      want.push(`https://usemagpie.ai/${dir}${f.slice(0, -5)}`);
+  assert.deepEqual([...listed].sort(), [...want].sort());
+  const home = await readFile(new URL("index.html", pub), "utf8");
+  assert.match(home, /<link rel="canonical" data-i18n-attr="href:meta.url" href="https:\/\/usemagpie.ai\/">/);
+  for (const [l, { dict }] of Object.entries(LANGS)) assert.equal(dict["meta.url"], `https://usemagpie.ai/${l}/`);
+  for (const u of listed.filter((u) => u.includes("/docs/"))) {
+    const html = await readFile(new URL(u.slice("https://usemagpie.ai/".length) + ".html", pub), "utf8");
+    const canon = [...html.matchAll(/<link rel="canonical" href="([^"]+)">/g)].map((m) => m[1]);
+    assert.deepEqual(canon, [u], `${u} canonical`);
+    assert.ok(html.includes(`<link rel="alternate" hreflang="x-default" href="https://usemagpie.ai/docs/${u.split("/").pop()}">`), `${u} x-default`);
+    assert.ok(!/name="robots" content="[^"]*noindex/.test(html), `${u} is noindex`);
+    // every alternate is a page that exists, so none is listed as a 404
+    for (const [, alt] of html.matchAll(/<link rel="alternate" hreflang="[a-z-]+" href="([^"]+)">/g))
+      assert.ok(listed.includes(alt), `${u}: ${alt}`);
+  }
+});
+
+test("seo: robots.txt names the sitemap and keeps crawlers off the counted links", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const txt = await readFile(new URL("./public/robots.txt", import.meta.url), "utf8");
+  assert.match(txt, /^Sitemap: https:\/\/usemagpie.ai\/sitemap.xml$/m);
+  for (const p of ["/api/", "/go/", "/r/", "/download"]) assert.match(txt, new RegExp(`^Disallow: ${p}$`, "m"));
+});
+
+test("seo: the home page's structured data parses and its title is in every language", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { LANGS } = await import("./i18n.js");
+  const html = await readFile(new URL("./public/index.html", import.meta.url), "utf8");
+  const ld = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+  const app = JSON.parse(ld[1])["@graph"].find((n) => n["@type"] === "SoftwareApplication");
+  assert.equal(app.offers.price, "0");
+  assert.match(html, /<title data-i18n="meta.title">[^<]{20,70}<\/title>/);
+  for (const [l, { dict }] of Object.entries(LANGS)) assert.ok(dict["meta.title"].startsWith("magpie"), l);
+});

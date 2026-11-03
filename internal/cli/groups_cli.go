@@ -113,7 +113,9 @@ const groupUsage = `usage:
                    asked in words — rates how hard it is, and the turn's requests
                    reason at low, medium, high or xhigh in place of the agent's level; only those
                    the agent asked to reason, never one it turned off (none). A route's effort
-                   is what the agent asked, each try's what its model was sent
+                   is what the agent asked, each try's what its model was sent. A group in the
+                   group, effort=auto of its own, is asked only when this one gave no pick:
+                   the outermost pick stands
 
   e.g. magpie group add "Opus anywhere" models=claude/claude-opus-5-5,copilot/claude-opus-5.5 routing=order
        magpie group set opus-anywhere stays=session models+=openrouter/anthropic/claude-opus-5.5

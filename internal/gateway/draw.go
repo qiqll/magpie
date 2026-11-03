@@ -115,9 +115,11 @@ func DrawerMissing() string { return drawerMissing(settings.Load().ImageGen) }
 // with it: pickedMissing's, and a routing group ("group/<id>", 7up6666 on
 // X) none of whose members draws any more.
 func drawerMissing(v string) string {
-	if m := pickedMissing(v); m != "" || !provider.IsGroupRef(v) {
-		return m
+	if !provider.IsGroupRef(v) {
+		return pickedMissing(v)
 	}
+	// a group of image models only is no model agents are offered, so
+	// Resolve doesn't take it: it is missing when none of it draws
 	if !GroupDraws(v) {
 		return v
 	}
@@ -129,7 +131,7 @@ func drawerMissing(v string) string {
 // picked in Settings › Images, and draws on those members in its routing's
 // order, moving on while one fails (drawingGroup, #2005).
 func GroupDraws(ref string) bool {
-	_, ms, ok := provider.FindGroup(ref)
+	_, ms, ok := drawingMembers(ref)
 	if !ok {
 		return false
 	}
@@ -141,6 +143,14 @@ func GroupDraws(ref string) bool {
 	return false
 }
 
+// drawingMembers is the routing group ref with its members ready now to
+// draw on: FindGroup's, and also an image model of a provider whose picks
+// leave it out among them, as the group's editor offers one beside the
+// chat models (jzw690 on X).
+func drawingMembers(ref string) (provider.Group, []provider.Member, bool) {
+	return provider.FindDrawingGroup(ref, drawsModel)
+}
+
 // drawsModel is whether model is one of p's Drawers, a ChatGPT account's
 // other GPT Image names as its one (ListedDrawer).
 func drawsModel(p provider.Provider, model string) bool {
@@ -149,6 +159,18 @@ func drawsModel(p provider.Provider, model string) bool {
 }
 
 func resolveDrawing(id string) (provider.Provider, string, bool) {
+	if provider.IsGroupRef(id) {
+		// its first member that draws: a group of image models only
+		// isn't among the models agents are offered, which Resolve reads
+		if _, ms, ok := drawingMembers(id); ok {
+			for _, m := range ms {
+				if drawsModel(m.Provider, m.Model) {
+					return m.Provider, m.Model, true
+				}
+			}
+		}
+		return provider.Resolve(id)
+	}
 	if strings.Contains(id, "/") {
 		return provider.Resolve(id)
 	}
@@ -166,24 +188,46 @@ func resolveDrawing(id string) (provider.Provider, string, bool) {
 	// (grok-imagine-image-2.0, #1857): its vendor draws it, or says why not
 	for _, p := range provider.All() {
 		if p.On() && !p.DecideOnly() && drawsFamily(p, id) {
-			return p, id, true
+			return p, drawnAs(p, id), true
 		}
 	}
 	return provider.Resolve(id)
 }
 
+// drawnAs is the id p is asked to draw id, a bare name of the family
+// (drawsFamily), by: the one p's own list names it by under a namespace
+// (openai/gpt-image-2 for gpt-image-2, loscoy's relay, #4432), as p
+// serves it, else id as asked.
+func drawnAs(p provider.Provider, id string) string {
+	for _, m := range Drawers(p) {
+		if m.ID != id && strings.HasSuffix(m.ID, "/"+id) {
+			return m.ID
+		}
+	}
+	return id
+}
+
 // drawsFamily is whether a subscription whose image models magpie lists
 // itself (codexDrawers, grokDrawers) draws id, a model of the family those
 // are of: any grok-imagine-image* on a Grok subscription, any gpt-image-*
-// on a ChatGPT account. The vendor's newer ones work before magpie names
-// them, as grok-imagine-video* do for videos; one it doesn't serve is
-// refused by the vendor, in its own words.
+// on a ChatGPT account, and any gpt-image-* on a keyed relay at a Responses
+// base (a Codex backend relay such as sub2api) whose own list draws one of
+// that family already (#4432), by the name past the namespace its list may
+// carry (openai/gpt-image-2, loscoy's). The vendor's newer ones work before
+// magpie names them, as grok-imagine-video* do for videos; one it doesn't
+// serve is refused by the vendor, in its own words. A relay whose list
+// draws no GPT Image isn't taken to: a Codex turn on it draws with the
+// Settings pick, as it did (TestCodexDrawingFallsBackToImageSetting).
 func drawsFamily(p provider.Provider, id string) bool {
 	switch {
 	case drawsGrok(p):
 		return strings.HasPrefix(id, grokDrawerFamily)
 	case drawsCodex(p):
 		return strings.HasPrefix(id, codexDrawerFamily)
+	case p.Account == nil && p.Base(provider.Responses) != "" && strings.HasPrefix(id, codexDrawerFamily):
+		return slices.ContainsFunc(Drawers(p), func(m catalog.Model) bool {
+			return strings.HasPrefix(m.ID[strings.LastIndexByte(m.ID, '/')+1:], codexDrawerFamily)
+		})
 	}
 	return false
 }
@@ -460,6 +504,27 @@ type drawing struct {
 	N      int
 	Images []picture // to edit, or draw from
 	Mask   *picture
+	// Extra are the request's fields magpie doesn't read, which a
+	// vendor's own images API that takes them is sent as they came
+	// (Ark's sequential_image_generation, optimize_prompt_options,
+	// watermark…; drawingRead). Form: they came in a multipart form, as
+	// text.
+	Extra map[string]any
+	Form  bool
+}
+
+// drawingRead are the fields of an images request magpie reads itself.
+var drawingRead = []string{"model", "prompt", "size", "quality", "background", "output_format", "response_format", "n", "image", "image[]", "images", "mask", "user"}
+
+// extraOf keeps v as one of d's Extra under k, unless magpie reads k.
+func (d *drawing) extraOf(k string, v any) {
+	if slices.Contains(drawingRead, k) {
+		return
+	}
+	if d.Extra == nil {
+		d.Extra = map[string]any{}
+	}
+	d.Extra[k] = v
 }
 
 // drawn is what a vendor gave back.
@@ -494,7 +559,7 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 			return
 		}
 		who := callerOf(r)
-		call := Call{Time: start, From: provider.Chat, Agent: who.agent, Via: who.via, Model: d.Model}
+		call := Call{Time: start, From: provider.Chat, Agent: who.agent, Via: who.via, Model: d.Model, headers: headerLogOf(r.Context())}
 		usage.Saw(agentOf(r))
 		fail := func(code int, msg string) {
 			call.Status, call.Error, call.Millis = code, msg, time.Since(start).Milliseconds()
@@ -566,6 +631,13 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 		var hits maskHits
 		w, d.Prompt, unmask, hits, err = redactedPromptHits(r.Context(), w, d.Prompt)
 		defer unmask()
+		// the fields passed on as they came are masked as the prompt is,
+		// as a video's are
+		if err == nil {
+			var extra maskHits
+			err = maskStrings(r.Context(), d.Extra, &extra)
+			hits.add(extra)
+		}
 		if err != nil {
 			fail(maskStatus(err), err.Error())
 			return
@@ -679,6 +751,13 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 // goes by (provider.GroupFor) that resolved to one of its members. Any
 // other names a model on its own.
 func drawingGroup(asked string, p provider.Provider, model string) (provider.Group, []provider.Member, bool) {
+	return groupToMake(asked, p, model, drawingMembers)
+}
+
+// groupToMake is drawingGroup with the group's members found by find:
+// a drawing's take its image models in (drawingMembers), a video's are
+// FindGroup's.
+func groupToMake(asked string, p provider.Provider, model string, find func(ref string) (provider.Group, []provider.Member, bool)) (provider.Group, []provider.Member, bool) {
 	ref := asked
 	if !provider.IsGroupRef(ref) {
 		gid, ok := provider.GroupFor(ref)
@@ -687,7 +766,7 @@ func drawingGroup(asked string, p provider.Provider, model string) (provider.Gro
 		}
 		ref = gid
 	}
-	g, ms, ok := provider.FindGroup(ref)
+	g, ms, ok := find(ref)
 	if !ok || len(ms) == 0 {
 		return provider.Group{}, nil, false
 	}
@@ -758,6 +837,10 @@ func readDrawing(r *http.Request) (drawing, error) {
 		}
 		d.Model, d.Prompt, d.Size, d.Quality, d.Background, d.Format, d.Want = get("model"), get("prompt"), get("size"), get("quality"), get("background"), get("output_format"), get("response_format")
 		d.N, _ = strconv.Atoi(get("n"))
+		d.Form = true
+		for k := range f.Value {
+			d.extraOf(k, get(k))
+		}
 		for _, k := range []string{"image", "image[]"} {
 			for _, fh := range f.File[k] {
 				pic, err := readPart(fh)
@@ -796,6 +879,11 @@ func readDrawing(r *http.Request) (drawing, error) {
 			return d, fmt.Errorf("the request isn't JSON: %v", err)
 		}
 		d = drawing{Model: in.Model, Prompt: in.Prompt, Size: in.Size, Quality: in.Quality, Background: in.Background, Format: in.Format, Want: strings.TrimSpace(in.ResponseFormat), N: in.N}
+		var all map[string]any
+		json.Unmarshal(body, &all)
+		for k, v := range all {
+			d.extraOf(k, v)
+		}
 		for _, raw := range []json.RawMessage{in.Image, in.Images} {
 			for _, src := range imageSources(raw) {
 				pic, err := pictureOf(src)
@@ -814,7 +902,9 @@ func readDrawing(r *http.Request) (drawing, error) {
 		}
 	}
 	d.Model = strings.TrimSpace(d.Model)
-	if strings.TrimSpace(d.Prompt) == "" {
+	// Ark's layer_decomposition splits the image it is given into layers,
+	// and takes no prompt
+	if strings.TrimSpace(d.Prompt) == "" && (d.Extra["layer_decomposition"] == nil || len(d.Images) == 0) {
 		return d, errors.New("say what to draw in prompt")
 	}
 	if d.N <= 0 {

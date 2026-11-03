@@ -230,7 +230,7 @@ func TestUserRefusedLogBounded(t *testing.T) {
 	refusedNow = func() time.Time { return now }
 	t.Cleanup(func() { refusedNow = was })
 	for i := range refusedLogMax + 10 {
-		noteRefused("u"+strconv.Itoa(i), "codex", limitSeats, 429, "", "taken")
+		noteUserRefused("u"+strconv.Itoa(i), "codex", limitSeats, 429, "", "taken")
 	}
 	refusedLogged.Lock()
 	n := len(refusedLogged.m)
@@ -240,7 +240,7 @@ func TestUserRefusedLogBounded(t *testing.T) {
 	}
 	// a window on, those over are let go for the new
 	now = now.Add(refusedLogEvery)
-	noteRefused("late", "codex", limitSeats, 429, "", "taken")
+	noteUserRefused("late", "codex", limitSeats, 429, "", "taken")
 	refusedLogged.Lock()
 	n = len(refusedLogged.m)
 	refusedLogged.Unlock()

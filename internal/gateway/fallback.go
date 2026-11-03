@@ -22,17 +22,22 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/usage"
 )
 
 const fallbackCooldown = time.Minute
@@ -102,6 +107,32 @@ type capHold struct {
 	// unread: held by a careful provider as its usage can't be told, why
 	// (carefulDoubt), cap then the account's own
 	unread string
+	// spend: a key held at the spend cap set on it (provider.SpendCap),
+	// cap then 100 and used the share of it spent
+	spend *spendHold
+}
+
+// spendHold is how a key is held at its spend cap: the cap, what magpie
+// counted spent in its period, and the period (its start for one in all).
+type spendHold struct {
+	usd, spent float64
+	period     string
+	since      time.Time
+}
+
+// spendHeld is how the key k of p is held at the spend cap set on it at
+// now, nil when it has none or is below it.
+func spendHeld(p provider.Provider, k provider.KeyAccount, now time.Time) *capHold {
+	sc, ok := p.KeySpendCap(provider.KeyID(k.Key))
+	if !ok {
+		return nil
+	}
+	start, reset := sc.Window(now)
+	spent := usage.KeySpent(provider.KeyID(k.Key), start)
+	if spent < sc.USD {
+		return nil
+	}
+	return &capHold{cap: 100, used: 100 * spent / sc.USD, back: reset, spend: &spendHold{usd: sc.USD, spent: spent, period: sc.Period, since: start}}
 }
 
 // label names a candidate in a call's record: the provider, and the key
@@ -397,6 +428,13 @@ func perKeyEvery(p provider.Provider, model string, from provider.Protocol) (out
 		}
 		if !p.AccountServes(provider.KeyID(k.Key), model) {
 			barred = append(barred, candidate{p: q, model: model, rest: rest, rank: i})
+			continue
+		}
+		// a key at the spend cap set on it is used up for routing until
+		// the period renews: never tried, so the other keys and the
+		// fallbacks take the request (provider/key_spend.go)
+		if h := spendHeld(p, k, time.Now()); h != nil {
+			barred = append(barred, candidate{p: q, model: model, rest: rest, rank: i, capped: h})
 			continue
 		}
 		if !planHas(k) {
@@ -927,7 +965,25 @@ func capHeld(p, acct provider.Provider, model string, now time.Time) *capHold {
 // would when all are used up; the soonest one is back is the wait.
 func cappedError(model string, ws []Weighed, now time.Time) (string, time.Time) {
 	held, soonest := heldReasons(ws, now)
+	if spendOnly(ws) {
+		again := "once that period renews"
+		if soonest.IsZero() {
+			again = "once its cap is raised"
+		}
+		return fmt.Sprintf("spend cap reached: every key that serves %q has spent the spend cap set on it in magpie — %s. magpie uses it again %s; %s", model, strings.Join(held, "; "), again, spendAdvice), soonest
+	}
 	capped, noCredits := heldBy(ws)
+	if slices.ContainsFunc(ws, func(w Weighed) bool { return w.SpendCap > 0 }) {
+		msg, _ := cappedError(model, slices.DeleteFunc(slices.Clone(ws), func(w Weighed) bool { return w.SpendCap > 0 }), now)
+		var spends []string
+		for _, w := range ws {
+			if w.SpendCap > 0 {
+				r, _ := heldReasons([]Weighed{w}, now)
+				spends = append(spends, r...)
+			}
+		}
+		return msg + "; and " + strings.Join(spends, "; ") + " (to use it, " + spendAdvice + ")", soonest
+	}
 	if unread(ws) {
 		return fmt.Sprintf("usage cap reached: every account that serves %q is held at the usage cap set on it in magpie, or held as its usage can't be told right now — %s. magpie reads it again at the next request and uses it once it is under its cap; %s, or turn off Check usage near the cap (Providers → the provider's accounts, or magpie provider pool <id> --careful off)", model, strings.Join(held, "; "), heldAdvice(capped, noCredits)), soonest
 	}
@@ -960,6 +1016,9 @@ func heldReasons(ws []Weighed, now time.Time) ([]string, time.Time) {
 			continue
 		}
 		s := fmt.Sprintf("%s (%s) is at %.0f%% of a usage window, past its %d%% cap", w.Name, w.Who, w.Used, w.Capped)
+		if w.SpendCap > 0 {
+			s = fmt.Sprintf("%s (%s) has spent %s of the %s spend cap set on it %s, as magpie's usage prices its calls", w.Name, w.Who, usd(w.Spent), usd(w.SpendCap), spendPeriod(w.SpendPeriod, w.SpendSince, now))
+		}
 		if w.NoCredits {
 			s = fmt.Sprintf("%s (%s) has used up a usage window and is set not to spend its credits", w.Name, w.Who)
 		}
@@ -975,6 +1034,44 @@ func heldReasons(ws []Weighed, now time.Time) ([]string, time.Time) {
 		held = append(held, s)
 	}
 	return held, soonest
+}
+
+// spendAdvice is how to go on past a key's spend cap.
+const spendAdvice = "raise or lift the key's spend cap in magpie (Providers → the key's spend cap, or magpie provider spend-cap), or add a fallback"
+
+// spendOnly says whether every one of ws held is held at a key's spend
+// cap.
+func spendOnly(ws []Weighed) bool {
+	n := 0
+	for _, w := range ws {
+		if w.Capped == 0 {
+			continue
+		}
+		if w.SpendCap == 0 {
+			return false
+		}
+		n++
+	}
+	return n > 0
+}
+
+// usd is an amount in dollars as a spend cap is told: cents kept.
+func usd(v float64) string {
+	return "$" + strconv.FormatFloat(math.Floor(v*100+0.5)/100, 'f', 2, 64)
+}
+
+// spendPeriod is the period a spend cap counts over, as a reason tells it.
+func spendPeriod(period string, since *time.Time, now time.Time) string {
+	switch period {
+	case provider.SpendMonth:
+		return "for this month"
+	case provider.SpendTotal:
+		if since == nil || since.IsZero() {
+			return "in all"
+		}
+		return "in all since " + since.In(now.Location()).Format("Jan 2 2006")
+	}
+	return "for today"
 }
 
 // heldAdvice is how to go on now past what heldBy says holds.
@@ -1014,6 +1111,9 @@ func checkpointCappedRecord(ws []Weighed) string {
 // cappedRecord is the call's record of the same refusal as cappedError,
 // told apart the same way.
 func cappedRecord(ws []Weighed) string {
+	if spendOnly(ws) {
+		return "every key at its spend cap"
+	}
 	if unread(ws) {
 		return "every account at its usage cap or its usage unread"
 	}
@@ -1057,7 +1157,7 @@ func creditsHeld(cs []candidate) []candidate {
 func capHeldOnly(cs []candidate) []candidate {
 	var out []candidate
 	for _, c := range cs {
-		if c.capped != nil && !c.capped.noCredits {
+		if c.capped != nil && !c.capped.noCredits && c.capped.spend == nil {
 			out = append(out, c)
 		}
 	}
@@ -1311,6 +1411,12 @@ func barredOf(cs []candidate, q provider.Provider, fallback bool, from provider.
 		w.Unlisted, w.Via = true, via
 		if h := c.capped; h != nil {
 			w.Capped, w.Used, w.NoCredits, w.Unread = h.cap, h.used, h.noCredits, h.unread
+			if sp := h.spend; sp != nil {
+				w.SpendCap, w.Spent, w.SpendPeriod = sp.usd, sp.spent, sp.period
+				if sp.period == provider.SpendTotal {
+					w.SpendSince = &sp.since
+				}
+			}
 			if !h.back.IsZero() {
 				w.CapBack = &h.back
 			}
@@ -1392,12 +1498,14 @@ func restLast(out []candidate, pl planned) ([]candidate, planned) {
 // busyOf is the load c's plugin last reported for its model, and whether
 // that is over the percent over (settings.BusyLoad; 0 is off). A model
 // with no load reported, or none within plugin.LoadFresh, isn't busy:
-// unknown is never taken for idle nor for busy.
+// unknown is never taken for idle nor for busy. The plugin reports it by
+// its own id of the model, so a model the user lists by another is looked
+// up by that (axelburks on Discord).
 func busyOf(c candidate, over int, now time.Time) (float64, bool) {
 	if over <= 0 {
 		return 0, false
 	}
-	load, _, ok := plugin.ModelLoad(c.p.PluginProvider(), c.model, now)
+	load, _, ok := plugin.ModelLoad(c.p.PluginProvider(), c.p.OwnModelID(c.model), now)
 	return load, ok && load > float64(over)
 }
 
@@ -1788,12 +1896,19 @@ var unsaidWords = regexp.MustCompile(`(?i)(^|"|\\"|: )invalid request error trac
 // request's — the words the Codex compaction already reads (#866, #1511) —
 // and another member may answer (#4632: the group's second member never
 // ran, and every turn died on the first seat).
+// GLM's word for a picture it can't read (zhipuImageRefusal, #4732) is
+// one: another vendor takes the webp as it is.
+// A model's demand for an earlier turn's reasoning the history doesn't
+// have (reasoningBackRefused: Beam's "Missing required parameter:
+// 'messages[1].reasoning_content'", EDwinpzy) is one too: the client's
+// request is whole, and a group of Beam then another model stopped at
+// Beam before.
 // One that also says the account is out of quota or credit (quotaWords,
 // creditWords: "请充值") is that, and rests it (#4095).
 func shapeRefused(status int, body []byte) bool {
 	// the words are matched decoded, too (#1669)
 	body = wordsOf(body)
-	return (status == 400 || status == 422) && (shapeWords.Match(body) || unsaidWords.Match(body) || customToolRefusal.Match(body) || wrongEndpoint(status, body) || upstreamFailedWords.Match(body)) &&
+	return (status == 400 || status == 422) && (shapeWords.Match(body) || unsaidWords.Match(body) || customToolRefusal.Match(body) || zhipuImageRefusal.Match(body) || wrongEndpoint(status, body) || upstreamFailedWords.Match(body) || reasoningBackRefused(body)) &&
 		!quotaWords.Match(body) && !creditWords.Match(body) && !unservedWords.Match(body) && !refusedWords.Match(body)
 }
 
@@ -1914,10 +2029,13 @@ func retryable(status int, body []byte) bool {
 		// mycf_711)
 		return true
 	case status == 400, status == 422:
-		return quotaWords.Match(body) || unservedWords.Match(body) || refusedWords.Match(body) || shapeWords.Match(body) || unsaidWords.Match(body) || regionWords.Match(body) || wrongEndpoint(status, body) ||
+		return quotaWords.Match(body) || unservedWords.Match(body) || refusedWords.Match(body) || shapeWords.Match(body) || unsaidWords.Match(body) || regionWords.Match(body) || zhipuImageRefusal.Match(body) || wrongEndpoint(status, body) ||
 			// a relay's own word that the provider behind it turned the
 			// request away (#4632): another member may answer
-			upstreamFailedWords.Match(body)
+			upstreamFailedWords.Match(body) ||
+			// a model's demand for an earlier turn's reasoning (EDwinpzy):
+			// another member's model may not make it
+			reasoningBackRefused(body)
 	}
 	return false
 }
@@ -4281,9 +4399,12 @@ func streamStatus(msg string) int {
 // that one. The error says why none is left: no such account, one that
 // doesn't list the model, or one resting; lapsed is the account left out
 // when it has to be signed in again (its Lapsed, its provider and ID the
-// log's), which the caller isn't told (lapsedRetryAfter).
-func pinTo(want string, cands []candidate, pl planned) ([]candidate, planned, int, string, Weighed) {
-	match := func(w Weighed) bool { return strings.EqualFold(want, w.Who) || want == w.ID }
+// log's), which the caller isn't told (lapsedRetryAfter). A name that
+// isn't ASCII comes percent-encoded (pinnedName), and matches as written
+// or decoded (pinMatches).
+func pinTo(raw string, cands []candidate, pl planned) ([]candidate, planned, int, string, Weighed) {
+	want := pinnedName(raw)
+	match := pinMatches(raw)
 	var out []candidate
 	var order []Weighed
 	var rests []string
@@ -4343,7 +4464,7 @@ func pinnedLapsed(pin string, cands []candidate, pl planned) (why, pid, who stri
 	if pin == "" {
 		return "", "", ""
 	}
-	match := func(w Weighed) bool { return strings.EqualFold(pin, w.Who) || pin == w.ID }
+	match := pinMatches(pin)
 	for _, w := range pl.left {
 		if match(w) && w.Held {
 			return "", "", ""
@@ -4415,6 +4536,31 @@ func keepAligned(cands []candidate, pl planned, keep func(candidate) bool) ([]ca
 	}
 	pl.order = order
 	return out, pl
+}
+
+// pinnedName is the account AccountHeader names, raw as the request sent
+// it. A header value is ASCII on the wire, and fetch refuses to send one
+// that isn't, so a user named in other letters (北冥, plugins#615) is sent
+// percent-encoded (encodeURIComponent): it is read back decoded. A value
+// that isn't a valid encoding of UTF-8 is the name as written.
+func pinnedName(raw string) string {
+	if !strings.Contains(raw, "%") {
+		return raw
+	}
+	if d, err := url.PathUnescape(raw); err == nil && utf8.ValidString(d) {
+		return strings.TrimSpace(d)
+	}
+	return raw
+}
+
+// pinMatches says whether a plan's row is the account raw, AccountHeader
+// as sent, names: by its user or its id, as written or decoded
+// (pinnedName).
+func pinMatches(raw string) func(Weighed) bool {
+	want := pinnedName(raw)
+	return func(w Weighed) bool {
+		return strings.EqualFold(want, w.Who) || want == w.ID || strings.EqualFold(raw, w.Who) || raw == w.ID
+	}
 }
 
 // unservedTry says c's try failed as the vendor refusing the model as one

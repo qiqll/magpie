@@ -172,12 +172,14 @@ func TestForeignReasoningWords(t *testing.T) {
 		`{"error":{"message":"The encrypted content for item rs_1 could not be verified.","code":"invalid_encrypted_content"}}`,
 		"Grok (SuperGrok): Could not decrypt the provided encrypted_content.",
 		`{"error":{"message":"invalid encrypted summary","type":"invalid_request_error","param":null,"code":"validation_error"}}`,
+		relayCompaction,
+		"Could not decode the compaction blob. Ensure it is unmodified from the compact response.",
 	} {
 		if !foreignReasoning.MatchString(m) {
 			t.Errorf("not matched: %s", m)
 		}
 	}
-	for _, m := range []string{"Invalid value for reasoning.effort", "model not found", "could not parse the JSON body"} {
+	for _, m := range []string{"Invalid value for reasoning.effort", "model not found", "could not parse the JSON body", "Could not decode the request body."} {
 		if foreignReasoning.MatchString(m) {
 			t.Errorf("matched: %s", m)
 		}
@@ -334,6 +336,67 @@ func TestForeignSealGrokToCodexAccount(t *testing.T) {
 // no item.
 const azureSummary = `{"error":{"message":"invalid encrypted summary","type":"invalid_request_error","param":null,"code":"validation_error"}}`
 
+// relayCompaction is what a key relay that proxies Grok passes back for
+// the reasoning item Codex hands it with "content": null beside its
+// encrypted_content (zminds #4412): xAI's own compaction-blob refusal,
+// spelled by the relay in front of it. It names no item and says nothing
+// of encrypted content at all.
+const relayCompaction = `{"error":{"code":null,"message":"OpenCode Go: Could not decode the compaction blob. Ensure it is unmodified from the compact response.","param":null,"type":"invalid_request_error"}}`
+
+// grokRelay is a relay-like Responses upstream that proxies Grok: a null
+// content beside a sealed blob it refuses with the compaction-blob words
+// (a null beside no blob goes by — the issue counted 99 such items pass),
+// everything else it answers.
+type grokRelay struct {
+	mu  sync.Mutex
+	got [][]string // the sealed reasoning each request carried
+}
+
+func (g *grokRelay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	b, _ := io.ReadAll(r.Body)
+	var q struct {
+		Input []struct {
+			Type    string          `json:"type"`
+			Content json.RawMessage `json:"content"`
+			Enc     string          `json:"encrypted_content"`
+		} `json:"input"`
+	}
+	json.Unmarshal(b, &q)
+	var got []string
+	refused := false
+	for _, it := range q.Input {
+		if it.Type != "reasoning" {
+			continue
+		}
+		if it.Enc != "" {
+			got = append(got, it.Enc)
+			refused = refused || strings.TrimSpace(string(it.Content)) == "null"
+		}
+	}
+	g.mu.Lock()
+	g.got = append(g.got, got)
+	g.mu.Unlock()
+	if refused {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(400)
+		io.WriteString(w, relayCompaction)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	io.WriteString(w, sse(
+		`data: {"type":"response.created","response":{"id":"r1","model":"grok-4.7"}}`,
+		`data: {"type":"response.output_text.delta","delta":"from relay"}`,
+		`data: {"type":"response.completed","response":{"id":"r1","usage":{"input_tokens":7,"output_tokens":1}}}`))
+}
+
+func (g *grokRelay) sent() [][]string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	out := g.got
+	g.got = nil
+	return out
+}
+
 // A Codex thread the ChatGPT backend served, resumed on a relay in front
 // of an Azure deployment (snowshadow): the deployment can't read the
 // reasoning the ChatGPT backend sealed and refuses it as "invalid
@@ -381,6 +444,62 @@ func TestForeignSealAzureSummary(t *testing.T) {
 		t.Fatalf("next turn: %d %s", code, body)
 	}
 	if got := az.sent(); len(got) != 1 || len(got[0]) != 0 {
+		t.Fatalf("next turn sent %q, want one request without the seal", got)
+	}
+}
+
+// A Codex conversation that reaches a key relay that proxies Grok
+// (zminds #4412): the relay is not api.x.ai, so the #3392 shaping
+// (xaiBody's null-content removal) never runs on its requests, and the
+// reasoning item Codex hands back — "content": null beside its
+// encrypted_content — comes out as xAI's "Could not decode the
+// compaction blob", a 400 that names no item and no encrypted content.
+// It's asked again without the reasoning, and the next turn leaves the
+// seal out up front, instead of 400ing on every turn with nothing
+// retrying.
+func TestForeignSealGrokRelayCompactionBlob(t *testing.T) {
+	fresh(t)
+	refusedSeals.Lock()
+	refusedSeals.m = map[string]sealsRefused{}
+	refusedSeals.Unlock()
+	rel := &grokRelay{}
+	up := httptest.NewServer(rel)
+	t.Cleanup(up.Close)
+	if err := provider.Save(provider.Provider{ID: "relay1", Name: "OpenCode Go", Key: "k", Models: []string{"grok-4.7"}, Responses: up.URL + "/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	s := New()
+	turn := func(items ...string) (int, string) {
+		t.Helper()
+		in := `{"type":"message","role":"user","content":[{"type":"input_text","text":"count the lines"}]}`
+		for _, it := range items {
+			in += "," + it
+		}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"relay1/grok-4.7","stream":true,"input":[`+in+`]}`))
+		req.Header.Set("session_id", "thread-relay")
+		s.Handler().ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	// Codex's shape: the null content beside the seal (#4412's input[681])
+	sealed := `{"type":"reasoning","id":"rs_1","summary":[],"content":null,"encrypted_content":"gAABsealed"}`
+	call := func(id string) string {
+		return `{"type":"function_call","call_id":"` + id + `","name":"shell","arguments":"{}"},{"type":"function_call_output","call_id":"` + id + `","output":"ok"}`
+	}
+
+	// the relay refuses the null content beside the blob, and it's asked
+	// again without the reasoning
+	if code, body := turn(sealed, call("c1")); code != 200 || !strings.Contains(body, "from relay") {
+		t.Fatalf("first: %d %s", code, body)
+	}
+	if got := rel.sent(); len(got) != 2 || len(got[0]) != 1 || len(got[1]) != 0 {
+		t.Fatalf("first turn sent %q, want the seal once, then none", got)
+	}
+	// the next turn doesn't hit it again: the seal is left out up front
+	if code, body := turn(sealed, call("c1")); code != 200 || !strings.Contains(body, "from relay") {
+		t.Fatalf("next turn: %d %s", code, body)
+	}
+	if got := rel.sent(); len(got) != 1 || len(got[0]) != 0 {
 		t.Fatalf("next turn sent %q, want one request without the seal", got)
 	}
 }

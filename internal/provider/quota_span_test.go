@@ -64,6 +64,7 @@ func TestQuotaSpanCarriesEveryWindowField(t *testing.T) {
 		"startsAt":  "the GUI's Pace number (WithWindowStarts)",
 		"trayKind":  "the GUI's menu bar picker (gui.withTrayKinds)",
 		"trayExtra": "the GUI's menu bar picker (gui.withTrayKinds)",
+		"heldBy":    "the GUI's all-accounts sum (WithHeldWindows)",
 	}
 	names := func(t reflect.Type) map[string]bool {
 		out := map[string]bool{}

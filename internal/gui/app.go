@@ -301,6 +301,7 @@ func (h *host) zoomWindows() {
 // stays there, so what the pages kept isn't lost. The browser arguments
 // the user set in WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, which Wails' loader
 // blanks before WebView2 can read them, are merged into Wails' own (#2753).
+// Display changes are read with a callback made once (screens_windows.go).
 func windowsOptions() application.WindowsOptions {
 	disabled, enabled, other := webView2Args(webview2env.Args)
 	return application.WindowsOptions{
@@ -309,6 +310,7 @@ func windowsOptions() application.WindowsOptions {
 		DisabledFeatures:              disabled,
 		EnabledFeatures:               enabled,
 		AdditionalBrowserArgs:         other,
+		WndProcInterceptor:            screensWndProc,
 	}
 }
 
@@ -561,8 +563,9 @@ func Run(version string, showMain bool, link string) error {
 			}
 		}
 		// a set kept in a file of the user's (~/.agents/AGENTS.md) is
-		// edited outside magpie: the agents get each change
-		library.KeepLinked(30 * time.Second)
+		// edited outside magpie: the agents get each change, until this
+		// one has handed the gateway to the new version (#4938)
+		library.KeepLinked(backendCtx, 30*time.Second)
 	}()
 
 	// before the item is made, which starts as hidden as AppKit kept it

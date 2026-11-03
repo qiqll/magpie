@@ -120,7 +120,7 @@ type Session struct {
 	// Gateway: seen only through magpie's gateway, with no file of the
 	// agent's on this computer (external.go)
 	Gateway       bool          `json:"gateway,omitempty"`
-	Agent         string        `json:"agent"` // magpie agent id: claude, codex, opencode, pi, omp, zcode, dsh, cline, qoder, qoder-cn, grok, workbuddy, codebuddy, droid, cursor, hermes, alma, kimi, agy
+	Agent         string        `json:"agent"` // magpie agent id: claude, codex, opencode, pi, omp, zcode, dsh, cline, qoder, qoder-cn, grok, workbuddy, workbuddy-ai, codebuddy, droid, cursor, hermes, alma, kimi, agy
 	ID            string        `json:"id"`
 	Cwd           string        `json:"cwd"`
 	Title         string        `json:"title"` // the name it was given, else the agent's own title, else the first prompt
@@ -192,6 +192,7 @@ type state struct {
 	// the agent whose file it is, for its parseVersions
 	Agent                 string            `json:"agent,omitempty"`
 	Codex                 *codexUsageState  `json:"-"`
+	codexPath             string            // the rollout read, for its fork's parent
 	Claude                *claudeUsageState `json:"claude,omitempty"`
 	DBRevision            string            `json:"db_revision,omitempty"`
 	Head                  string            `json:"head,omitempty"`
@@ -594,34 +595,75 @@ func ccFiles(agent, dir string) []file {
 	return heldFiles("cc\x00"+agent+"\x00"+dir, func() []file { return listCCFiles(agent, dir) })
 }
 
-// ccListed is how many files each folder's last listCCFiles found: its
-// listing grown from none, a file at a time, was ~35 MB of a minute of the
-// page's polls over 13 GB of Claude Code history (#2278).
-var ccListed sync.Map // dir → int
+// ccListed is each folder's last listCCFiles' paths and keys, in its
+// order: its listing grown from none, a file at a time, was ~35 MB of a
+// minute of the page's polls over 13 GB of Claude Code history (#2278),
+// and making each file's path and key again was ~10 MB of every poll
+// over ~15k sessions, while the listing is the same but for a file or
+// two.
+var ccListed sync.Map // dir → []ccName
+
+type ccName struct{ path, key string }
+
+// ccNames gives a file's path and key, the last listing's strings when
+// they are the same, as they are for all but a file or two.
+type ccNames struct {
+	last []ccName
+	at   int // where the last listing is read up to
+	now  []ccName
+}
+
+// of is filepath.Join(dir, name) and agent+":"+id, as last listed.
+func (c *ccNames) of(dir, name, agent, id string) (string, string) {
+	// one file new or gone since is stepped over
+	for i := c.at; i < min(c.at+2, len(c.last)); i++ {
+		if l := c.last[i]; joinedIs(l.path, dir, name) && joinedIs(l.key, agent, id, ':') {
+			c.at = i + 1
+			c.now = append(c.now, l)
+			return l.path, l.key
+		}
+	}
+	n := ccName{filepath.Join(dir, name), agent + ":" + id}
+	c.now = append(c.now, n)
+	return n.path, n.key
+}
+
+// joinedIs is whether s is a, sep, b: filepath.Join(a, b) for a clean a
+// and a b without a separator, as a folder's entries are.
+func joinedIs(s, a, b string, sep ...byte) bool {
+	c := byte(filepath.Separator)
+	if len(sep) > 0 {
+		c = sep[0]
+	}
+	return len(s) == len(a)+1+len(b) && s[len(a)] == c && s[:len(a)] == a && s[len(a)+1:] == b
+}
 
 func listCCFiles(agent, dir string) []file {
 	projects := filepath.Join(dir, "projects")
-	n, _ := ccListed.Load(dir)
-	last, _ := n.(int)
-	out := make([]file, 0, last+last/8)
-	defer func() { ccListed.Store(dir, len(out)) }()
+	last, _ := ccListed.Load(dir)
+	names := ccNames{last: func() []ccName { l, _ := last.([]ccName); return l }()}
+	names.now = make([]ccName, 0, len(names.last)+len(names.last)/8)
+	out := make([]file, 0, cap(names.now))
+	defer func() { ccListed.Store(dir, slices.Clip(names.now)) }()
 	for _, project := range readDirectory(projects) {
 		if !dirent.IsFolder(projects, project) {
 			continue
 		}
 		root := filepath.Join(projects, project.Name())
 		for _, e := range readDirectory(root) {
-			path := filepath.Join(root, e.Name())
 			if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
-				f := file{agent: agent, key: agent + ":" + strings.TrimSuffix(e.Name(), ".jsonl"), path: path, main: true}
+				path, key := names.of(root, e.Name(), agent, strings.TrimSuffix(e.Name(), ".jsonl"))
+				f := file{agent: agent, key: key, path: path, main: true}
 				out = append(out, f)
 			} else if dirent.IsFolder(root, e) {
+				path := filepath.Join(root, e.Name())
 				subs := filepath.Join(path, "subagents")
 				for _, sub := range readDirectory(subs) {
 					if sub.IsDir() || !strings.HasSuffix(sub.Name(), ".jsonl") {
 						continue
 					}
-					f := file{agent: agent, key: agent + ":" + e.Name(), path: filepath.Join(subs, sub.Name())}
+					path, key := names.of(subs, sub.Name(), agent, e.Name())
+					f := file{agent: agent, key: key, path: path}
 					out = append(out, f)
 				}
 				for _, run := range readDirectory(filepath.Join(subs, "workflows")) {
@@ -633,7 +675,8 @@ func listCCFiles(agent, dir string) []file {
 						if sub.IsDir() || !strings.HasPrefix(sub.Name(), "agent-") || !strings.HasSuffix(sub.Name(), ".jsonl") {
 							continue
 						}
-						f := file{agent: agent, key: agent + ":" + e.Name(), path: filepath.Join(dir, sub.Name())}
+						path, key := names.of(dir, sub.Name(), agent, e.Name())
+						f := file{agent: agent, key: key, path: path}
 						out = append(out, f)
 					}
 				}
@@ -656,7 +699,7 @@ func allFiles() []file {
 	// agent's name is held to that agent too
 	return allowed(distinctOf(append(callFileLists(codexFiles()), openCodeFiles(), piFiles(), raftFiles(), cindyFiles(),
 		wslFiles("pi", "raft", "omp", "kimi"), zcodeFiles(), dshFiles(), clineFiles(), ccFiles("qoder", QoderDir("qoder")), ccFiles("qoder-cn", QoderDir("qoder-cn")),
-		grokFiles(), workbuddyFiles(), codebuddyFiles(), droidFiles(), ompFiles(), cursorFiles(), hermesFiles(), almaFiles(), kimiFiles(), agyFiles())...))
+		grokFiles(), workbuddyFiles(), workbuddyAIFiles(), codebuddyFiles(), droidFiles(), ompFiles(), cursorFiles(), hermesFiles(), almaFiles(), kimiFiles(), agyFiles())...))
 }
 
 // distinctOf is lists one after another with each path kept once, the
@@ -743,6 +786,7 @@ func Dirs() []string {
 		{QoderDir("qoder-cn"), filepath.Join(QoderDir("qoder-cn"), "projects")},
 		{GrokDir(), filepath.Join(GrokDir(), "sessions")},
 		{WorkBuddyDir(), filepath.Join(WorkBuddyDir(), "projects")},
+		{WorkBuddyAIDir(), filepath.Join(WorkBuddyAIDir(), "projects")},
 		{CodeBuddyDir(), filepath.Join(CodeBuddyDir(), "projects")},
 		{OmpDir(), filepath.Join(OmpDir(), "sessions")},
 		{FactoryDir(), filepath.Join(FactoryDir(), "sessions")},
@@ -1073,7 +1117,10 @@ const cacheVersion = 29
 // parseVersions is cacheVersion for one agent's parses, 0 when not listed:
 // raised, the parses of that agent's files kept by an older magpie are read
 // again, and the rest stand.
-var parseVersions = map[string]int{}
+//
+// codex 1, zcode 1: a fork's copies of its parent's usage are the
+// parent's (codex_fork.go, zcDB.copied).
+var parseVersions = map[string]int{"codex": 1, "zcode": 1}
 
 type cacheFile struct {
 	Version int    `json:"version"`
@@ -1353,7 +1400,7 @@ func refresh(want, all []file) {
 				j := &jobs[i]
 				// its file's calls lock is taken before a read slot, as
 				// readCalls takes them
-				calls := callsAlong(j.f)
+				calls := callsAlong(j.f, j.old)
 				release := readSlot()
 				end := readBegin()
 				if parseHook != nil {
@@ -1876,7 +1923,7 @@ func parserFor(agent string) sessionParser {
 		return sessionParser{line: codexBody}
 	case "pi", "raft", "cindy", "omp":
 		return sessionParser{line: piParse}
-	case "workbuddy", "codebuddy":
+	case "workbuddy", "workbuddy-ai", "codebuddy":
 		return sessionParser{line: workbuddyLine}
 	default:
 		return sessionParser{line: claudeLine, claude: true}
@@ -1923,14 +1970,15 @@ func parseWith(f file, old *state, calls *callsRide) *state {
 	s.ContentHash = prefixHash(f.path, f.size)
 	var head func([]byte) bool
 	if f.agent == "codex" {
+		s.codexPath = f.path
 		head = func(b []byte) bool { return codexHead(s, b, f.main) }
 	}
 	line := func(b []byte, _, _ int64) bool {
 		parser.line(s, b, f.main)
 		return true
 	}
-	if calls != nil && s.Off != 0 {
-		calls.release() // the summary reads on from where it was
+	if calls != nil && (s.Off != 0 || calls.st.Off != 0) {
+		calls.release() // a read goes on from where it was
 		calls = nil
 	}
 	if calls != nil {

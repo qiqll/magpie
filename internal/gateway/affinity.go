@@ -1052,7 +1052,7 @@ func withLead(key string, cs []candidate, pl planned) ([]candidate, planned) {
 // spreadsSessions says whether new conversations kept for the whole
 // session (Stays: Session or Strict) go to the key, account or member the
 // fewest others are on (leastHeld), under a routing that picks by what
-// each has left: Smart, Least used first, Weekly pace. Several sessions
+// each has left: Smart, Least used first, Use before expiry. Several sessions
 // started side by side then each keep an account of their own until its
 // allowance runs out, as a user picking the mode with several accounts
 // expects (connor_yang on Discord: three sessions on two of three
@@ -1167,8 +1167,14 @@ func unanswered(key string, c candidate) {
 // provided encrypted_content. Ensure the value is the unmodified
 // encrypted_content from a previous response."; Azure's (through a relay
 // in front of a deployment, snowshadow) "invalid encrypted summary",
-// which names no item and spells it with spaces.
-var foreignReasoning = regexp.MustCompile(`(?i)invalid_encrypted_content|invalid[ _]encrypted[ _](summary|content)|encrypted[ _]content.{0,80}could not be (verified|decrypted)|could not (decrypt|verify).{0,40}encrypted[ _]content`)
+// which names no item and spells it with spaces; xAI's compaction-blob
+// refusal, as a key relay that proxies Grok hands it back for the
+// reasoning item Codex writes with "content": null beside its
+// encrypted_content (zminds #4412) — "Could not decode the compaction
+// blob", which names no item and says nothing of encrypted content,
+// where the #3392 shaping (xaiBody's) never runs because the relay's
+// host isn't api.x.ai.
+var foreignReasoning = regexp.MustCompile(`(?i)invalid_encrypted_content|invalid[ _]encrypted[ _](summary|content)|encrypted[ _]content.{0,80}could not be (verified|decrypted)|could not (decrypt|verify).{0,40}encrypted[ _]content|could not (decode|decrypt).{0,20}compaction[ _]blob`)
 
 // refusedSeals remembers, per conversation and the key or account that
 // refused it, the sealed reasoning another one wrote. Codex hands every
@@ -1222,7 +1228,12 @@ func seals(body []byte, kinds ...string) [][sha256.Size]byte {
 // refused notes that who turned away the sealed items of these types in
 // body, in the conversation key names.
 func refused(key, who string, body []byte, kinds ...string) {
-	ss := seals(body, kinds...)
+	noteRefused(key, who, seals(body, kinds...))
+}
+
+// noteRefused notes that who turned away the sealed items of these hashes
+// in the conversation key.
+func noteRefused(key, who string, ss [][sha256.Size]byte) {
 	if len(ss) == 0 {
 		return
 	}

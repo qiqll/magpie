@@ -297,7 +297,7 @@ function gatewayKeysArrange(list, rows) {
 // (zytszone on X: a department shares one magpie, whose app its people
 // can't be given). Its address is the one other machines reach.
 function gatewayKeyPage() {
-  const g = providers?.gateway, lan = g?.lanURLs || [];
+  const g = providers?.gateway, lan = gwFar(g);
   const at = g?.publicURL || (lan.includes(connectURL) ? connectURL : lan[0]);
   if (!at || !gatewayKeys?.length) return null;
   const url = at.replace(/\/+$/, "") + "/me";
@@ -467,7 +467,11 @@ function gatewayModelsBadge(k) {
         seen.add(m.provider);
         opts.push({ v: m.provider + "/*", name: t("Every {provider} model", { provider: m.providerName }), note: m.provider + "/*", literalName: true });
       }
-      opts.push({ v: m.id, name: m.name, note: m.id, literalName: true });
+      // a decision model (Jev, Clef…) no agent lists: a routing group
+      // asks it whatever the key may use, and the key may ask it itself
+      // (/v1/systemone, another magpie's list) only when it is picked
+      // (Kautism on Discord)
+      opts.push({ v: m.id, name: m.name, note: m.decides ? m.id + " · " + t("Decision model: a routing group asks it whatever this key may use; pick it so the key may ask it itself") : m.id, literalName: true });
     }
     endBlock();
     // a provider with accounts and no model in the list (one kept

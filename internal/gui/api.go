@@ -450,7 +450,7 @@ type settingsJSON struct {
 	VisionMissing string `json:"visionMissing,omitempty"`
 	// VisionNotMarked are the custom providers (AddedByAddress) with a model left
 	// out of VisionModels only because nothing says it takes images: the
-	// user can say so in the provider's Names & levels (nexnull on Discord)
+	// user can say so in the provider's Names, prices & levels (nexnull on Discord)
 	VisionNotMarked []string `json:"visionNotMarked,omitempty"`
 	// the reasoning levels of the model that describes images now, and the
 	// one it is asked at when one is picked (VisionEffort fitted to them)
@@ -514,6 +514,9 @@ type settingsJSON struct {
 	// LANURLs are a container's own addresses, not the host's: the page
 	// offers the one it was opened at instead, or says how to set it
 	LANContainer bool `json:"lanContainer,omitempty"`
+	// where other containers on this host reach the gateway while magpie
+	// runs in one (gateway.ContainerHostURL)
+	LANContainerHost string `json:"lanContainerHost,omitempty"`
 	// those of LANURLs at an internet address, which anyone online can
 	// reach, not only this network
 	LANPublic []string `json:"lanPublic,omitempty"`
@@ -594,8 +597,12 @@ type searchChoiceJSON struct {
 	// Service is a Kimi Code plan, which searches by its search service:
 	// named by itself, with no model
 	Service bool `json:"service,omitempty"`
-	// Own is a Google sign-in, which searches for its own models first
+	// Own is a Google sign-in or an AI Studio key, which searches for its
+	// own models first
 	Own bool `json:"own,omitempty"`
+	// Search is a ChatGPT account, which searches by the ChatGPT backend's
+	// search ("<id>/@search") besides its models
+	Search bool `json:"search,omitempty"`
 }
 
 type searchVendorJSON struct {
@@ -634,7 +641,7 @@ func searchState(s *settingsJSON) {
 	s.SearchChoices = []searchChoiceJSON{}
 	for _, c := range gateway.Searchers() {
 		p := c.Provider
-		j := searchChoiceJSON{ID: p.ID, Name: p.Name, Icon: p.Icon, Small: c.Small, SmallName: names[p.ID+"/"+c.Small], Models: []modelRef{}, Service: c.Service, Own: c.Own}
+		j := searchChoiceJSON{ID: p.ID, Name: p.Name, Icon: p.Icon, Small: c.Small, SmallName: names[p.ID+"/"+c.Small], Models: []modelRef{}, Service: c.Service, Own: c.Own, Search: c.Search}
 		for _, m := range c.Models {
 			id := p.ID + "/" + m.ID
 			j.Models = append(j.Models, modelRef{ID: id, Name: cmp.Or(names[id], m.Name, m.ID), Provider: p.ID, PName: p.Name, Icon: p.Icon})
@@ -771,6 +778,7 @@ func settingsState() settingsJSON {
 	s.Login, s.LoginAllow = login != autostart.Off, login == autostart.NeedsAllowing
 	if s.LAN {
 		s.LANURLs, s.LANContainer = gateway.LANURLs(), gateway.ContainerAddrs()
+		s.LANContainerHost = gateway.ContainerHostURL()
 		s.LANPublic = gateway.PublicURLs(s.LANURLs)
 	}
 	s.CodexWarmed, s.ClaudeWarmed = latest(provider.CodexWarmed()), latest(provider.ClaudeWarmed())
@@ -841,10 +849,19 @@ func settingsState() settingsJSON {
 		}
 	}
 	// the routing groups with a member that draws (7up6666 on X): a
-	// group picked here draws on its members in its routing's order
+	// group picked here draws on its members in its routing's order. One
+	// of image models only isn't served to agents (jzw690 on X), so it is
+	// listed from the groups themselves
+	listed := map[string]bool{}
 	for _, e := range provider.Served() {
 		if e.Group != "" && gateway.GroupDraws(e.ID) {
+			listed[e.ID] = true
 			s.ImageGenModels = append(s.ImageGenModels, modelRef{ID: e.ID, Name: e.Name, PName: e.Group})
+		}
+	}
+	for _, g := range provider.Groups() {
+		if ref := g.Ref(); !g.Hidden && !g.Disabled && !listed[ref] && gateway.GroupDraws(ref) {
+			s.ImageGenModels = append(s.ImageGenModels, modelRef{ID: ref, Name: cmp.Or(g.Name, g.ID), PName: g.ID})
 		}
 	}
 	if v := gateway.ListedDrawer(s.ImageGen); v != s.ImageGen {
@@ -1022,6 +1039,13 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			// window's line names from the first paint (coeo91 on Discord)
 			if s.LAN || gateway.OnNetwork() {
 				side["lan"], side["lanURLs"] = true, gateway.LANURLs()
+				// in a container they are its own: the line names the host's
+				if gateway.ContainerAddrs() {
+					side["container"] = true
+				}
+				if u := gateway.ContainerHostURL(); u != "" {
+					side["containerHost"] = u
+				}
 				if u := gateway.PublicURL(); u != "" {
 					side["publicURL"] = u
 				}
@@ -1284,9 +1308,10 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		writeJSON(rw, s)
 	})
 	mux.HandleFunc("POST /api/profile/{action}", func(rw http.ResponseWriter, r *http.Request) {
-		var in struct{ Name string }
+		var in struct{ Name, To string }
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		in.Name = strings.TrimSpace(in.Name)
+		in.To = strings.TrimSpace(in.To)
 		var err error
 		var applied profile.Applied
 		switch r.PathValue("action") {
@@ -1307,6 +1332,8 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			}
 		case "delete":
 			err = profile.Delete(in.Name)
+		case "rename":
+			err = profile.Rename(in.Name, in.To)
 		default:
 			http.NotFound(rw, r)
 			return
@@ -1330,13 +1357,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, err)
 			return
 		}
-		for _, p := range provider.All() {
-			if p.Ready() {
-				c, cancel := context.WithTimeout(ctx, 8*time.Second)
-				p.Fetch(c)
-				cancel()
-			}
-		}
+		provider.RefreshLists(ctx)
 		writeJSON(rw, state())
 	})
 	providerRoutes(mux, w)
@@ -1387,11 +1408,12 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		// the cards the menu bar shows, any of them (TrayUsage is only the first),
 		// how often, with their logos or not, beside the bird or not, as
 		// Windows' icon or not, and
-		// with their Pace numbers or not, with magpie's totals' cost or not, and
-		// which of each subscription's windows
+		// with their Pace numbers or not, with magpie's totals' cost or not,
+		// which of each subscription's windows, and the language the tooltip
+		// is in (yi_time)
 		if (!slices.Equal(settings.Load().TrayUsages, cur.TrayUsages) || in.TrayUsageEvery != cur.TrayUsageEvery ||
 			in.TrayNoLogos != cur.TrayNoLogos || in.TrayNoBird != cur.TrayNoBird || in.TrayNoNumber != cur.TrayNoNumber || in.TrayPace != cur.TrayPace ||
-			in.TrayNoCost != cur.TrayNoCost || !maps.EqualFunc(in.TrayWindows, cur.TrayWindows, slices.Equal)) && onTrayUsage != nil {
+			in.TrayNoCost != cur.TrayNoCost || !maps.EqualFunc(in.TrayWindows, cur.TrayWindows, slices.Equal) || in.Lang != cur.Lang) && onTrayUsage != nil {
 			onTrayUsage()
 		}
 		// an alert turned on or moved is looked at now, the Mac asked for its
@@ -2166,6 +2188,36 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		writeJSON(rw, settingsState())
 	})
+	// an agent whose picks stay on this computer, or go to the others again
+	// (settings' AgentsHere, chenxiang0010 on Discord)
+	mux.HandleFunc("POST /api/agents/here", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Agent string
+			On    bool
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if in.Agent = strings.TrimSpace(in.Agent); in.Agent == "" {
+			fail(rw, errors.New("no agent"))
+			return
+		}
+		s, err := settings.LoadChecked()
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		s.AgentsHere = slices.DeleteFunc(s.AgentsHere, func(x string) bool { return x == in.Agent })
+		if in.On {
+			s.AgentsHere = append(s.AgentsHere, in.Agent)
+		}
+		if err := settings.Save(s); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
 	// the Usage page's order of its cards, which the tray panel's Allowances
 	// tab follows, what that tab leaves out, the clients the page's Agents
 	// list leaves out, the allowance cards its Overview leaves out
@@ -2564,6 +2616,15 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		case "main":
 			w.ShowMain(mainView(r.URL.Query()))
 		case "quit":
+			// the question's "Don't ask again" (noAsk=1, zhujiu on
+			// Discord) is saved before the quit; a save that fails keeps
+			// magpie open, saying why
+			if r.URL.Query().Get("noAsk") == "1" {
+				if err := settings.SetQuitNoAsk(true); err != nil {
+					fail(rw, err)
+					return
+				}
+			}
 			// the user's Quit asks first while agents are connected
 			// (quitask.go); the question's own Quit is now=1
 			if a, ok := w.(quitAsker); ok && r.URL.Query().Get("now") == "" {

@@ -893,6 +893,10 @@ func TestUserSystemOneOnARevokedAccount(t *testing.T) {
 	if got := took(); !slices.Equal(got, []string{"true"}) {
 		t.Fatalf("at its tier's most, asked %v (true: the revoked one)", got)
 	}
+	// Recent calls has the refusal as the caller was told it
+	if c := lastCallOf(t, s); c.Status != http.StatusTooManyRequests || c.Error == "" {
+		t.Fatalf("recorded %d %q", c.Status, c.Error)
+	}
 
 	rec := decide(2)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "bug") {
@@ -986,5 +990,8 @@ func TestSystemOneWithoutAUserOnARevokedAccount(t *testing.T) {
 	}
 	if r := lastRoute(srv); r.Status != http.StatusTooManyRequests {
 		t.Fatalf("route ended %d, the caller was told 429", r.Status)
+	}
+	if c := lastCallOf(t, srv); c.Status != http.StatusTooManyRequests || c.Error == "" {
+		t.Fatalf("recorded %d %q", c.Status, c.Error)
 	}
 }

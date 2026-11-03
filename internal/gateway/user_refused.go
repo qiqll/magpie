@@ -82,14 +82,14 @@ func logUserRefused(u *UserBound, pid string, refused userRefusal) {
 	if u != nil {
 		user, account, pid = u.User, u.Account, cmp.Or(u.pid, pid)
 	}
-	noteRefused(user, pid, refusalKind(refused), refused.status, account, refused.msg)
+	noteUserRefused(user, pid, refusalKind(refused), refused.status, account, refused.msg)
 }
 
-// noteRefused logs a refusal of user's request to provider pid, of kind,
+// noteUserRefused logs a refusal of user's request to provider pid, of kind,
 // with status and why (msg), account the one it is bound to: at once
 // when none of the same user, provider and kind was logged within
 // refusedLogEvery, else counted into the next line.
-func noteRefused(user, pid, kind string, status int, account, msg string) {
+func noteUserRefused(user, pid, kind string, status int, account, msg string) {
 	now := refusedNow()
 	k := refusedLogKey(user, pid, kind)
 	refusedLogged.Lock()

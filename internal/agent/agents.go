@@ -97,16 +97,29 @@ func codexAppRoute() (route string, out, known bool) {
 	}
 	out = a.AppOut != nil && a.AppOut()
 	var b strings.Builder
+	var mp string
 	for _, k := range []string{"model_provider", "openai_base_url"} {
 		v, _ := edit.GetTOMLTop(a.Path, k)
+		if k == "model_provider" {
+			mp = v
+		}
 		b.WriteString(k + "=" + v + "\n")
 	}
 	t, _ := edit.GetTOMLTable(a.Path, "model_providers."+magpieID)
 	b.WriteString("magpie.base_url=" + t["base_url"] + "\n")
-	// and whether it requires OpenAI auth, which decides whether the app
-	// has its ChatGPT account at all (openaiAuth in codex.go): read as the
-	// app-server starts, like the rest
-	b.WriteString("magpie.requires_openai_auth=" + t["requires_openai_auth"] + "\n")
+	// and, while magpie's table is Codex's provider, whether it requires
+	// OpenAI auth, which decides whether the app has its ChatGPT account
+	// at all (openaiAuth in codex.go): read as the app-server starts, like
+	// the rest. The app-server reads the account of the provider Codex is
+	// on (codex-rs account_state), so beside the sign-in, on Codex's
+	// built-in provider, the key follows the account running out and
+	// coming back (openaiAuth) with nothing for the app to read again:
+	// counted there, it ended the app's app-server at the limit and again
+	// at the reset, and the ChatGPT app showed an error and relaunched
+	// each time (xiaoq6285 on Discord, #4550)
+	if mp == magpieID {
+		b.WriteString("magpie.requires_openai_auth=" + t["requires_openai_auth"] + "\n")
+	}
 	if out {
 		b.WriteString("out\n")
 	}
@@ -242,6 +255,7 @@ func onMachine(home, cfg string) []*Agent {
 		zooCode(home, cfg),
 		copilotJetBrains(home),
 		air(home, cfg),
+		airIDE(home, cfg),
 		copilot(home),
 		crush(home, cfg),
 		dsh(home),
@@ -274,6 +288,7 @@ func onMachine(home, cfg string) []*Agent {
 		codebuddy(home),
 		pencil(home),
 		openPencil(home, cfg),
+		openBot(home, cfg),
 		newMax(home),
 		raycast(home),
 		kiroCrew(home),
@@ -482,10 +497,14 @@ func ownProvider(native func(p string) []catalog.Model, p string) []Option {
 		ms = codexServed(p)
 	}
 	opts := group(name, options(ms, p+"/"))
-	if ic := providerIcon(p); ic != "" {
-		for i := range opts {
-			opts[i].GroupIcon = ic
-		}
+	ic := providerIcon(p)
+	for i := range opts {
+		opts[i].GroupIcon = ic
+		// asked of the vendor on the agent's own sign-in or key: picked on
+		// a connected agent it takes the agent off magpie, which the
+		// picker says and asks first (maxleebeta: Pi's own OpenCode Go
+		// model turned 「接入」 off, with nothing said)
+		opts[i].Direct = name
 	}
 	return opts
 }
@@ -1346,8 +1365,17 @@ func piLikeKeyed(at place, id, name, dir string, key func() string) *Agent {
 		b["apiKey"] = key()
 		return b
 	})
+	// Pi's own: magpie's decision and image models, for codemode
+	// (pi_extension.go); a fork's extensions may not be Pi's
+	extension := func() error { return nil }
+	if id == "pi" {
+		extension = func() error { return piExtensionSynced(dir, modelsPath, at.v1(), key()) }
+	}
 	writeMagpie := func() error {
-		return edit.SetJSON(modelsPath, edit.KV{Path: "providers." + magpieID, Value: block()})
+		if err := edit.SetJSON(modelsPath, edit.KV{Path: "providers." + magpieID, Value: block()}); err != nil {
+			return err
+		}
+		return extension()
 	}
 	// the user's two files as they were before magpie's first write, put
 	// back byte for byte by Disconnect where it leaves them saying the same
@@ -1367,6 +1395,9 @@ func piLikeKeyed(at place, id, name, dir string, key func() string) *Agent {
 		ListOnly: true,
 		Sync: func() error {
 			if err := syncJSON(modelsPath, "providers."+magpieID, block); err != nil {
+				return err
+			}
+			if err := extension(); err != nil {
 				return err
 			}
 			// an entry on a model magpie no longer gives Pi names nothing
@@ -1395,6 +1426,9 @@ func piLikeKeyed(at place, id, name, dir string, key func() string) *Agent {
 							return err
 						}
 						if err := edit.DelJSON(modelsPath, "providers."+magpieID); err != nil {
+							return err
+						}
+						if err := extension(); err != nil {
 							return err
 						}
 						forget(gone)

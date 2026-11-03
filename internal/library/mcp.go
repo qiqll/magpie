@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"maps"
 	"math"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -21,6 +22,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/yetone/magpie/internal/agent"
+	"github.com/yetone/magpie/internal/claudelock"
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/imagemcp"
@@ -1379,6 +1381,13 @@ func (f *mcpFile) putEntry(s *Server, o ordered) error {
 		}
 		return nil
 	}
+	// Claude Code saves the file under its own lock: read and written
+	// back under it, or a save of its own between the two is lost (#4747)
+	release, err := f.claudeLock()
+	if err != nil {
+		return err
+	}
+	defer release()
 	// Pi's files, or Desktop's, all of them or none
 	return edit.Atomically(func() error {
 		for _, a := range f.also() {
@@ -1423,6 +1432,13 @@ func (f *mcpFile) del(name string) error {
 	case fmtHermes:
 		return edit.DelYAML(f.Path, f.key()+"."+name)
 	}
+	// Claude Code saves the file under its own lock: read and written
+	// back under it, or a save of its own between the two is lost (#4747)
+	release, err := f.claudeLock()
+	if err != nil {
+		return err
+	}
+	defer release()
 	return edit.Atomically(func() error {
 		for _, a := range f.also() {
 			if err := a.del(name); err != nil {
@@ -1447,6 +1463,19 @@ func (f *mcpFile) del(name string) error {
 		}
 		return edit.DelJSON(f.Path, f.key()+"."+name)
 	}, f.files()...)
+}
+
+// claudeLock takes the lock Claude Code saves its .claude.json under,
+// when the file f writes is that one (claudeJSON): held while it is read
+// and written back, or a save of its own between the two is lost
+// (#4747). No other file of the library's has a lock of Claude Code's to
+// take, and a distro's copy isn't this machine's file: the Claude Code
+// there saves under a lock in the distro's own files.
+func (f *mcpFile) claudeLock() (func(), error) {
+	if f.Format != fmtClaude || filepath.Clean(f.Path) != filepath.Clean(claudeJSON()) {
+		return func() {}, nil
+	}
+	return claudelock.Config(f.Path)
 }
 
 // ---- Codex's TOML ---------------------------------------------------------

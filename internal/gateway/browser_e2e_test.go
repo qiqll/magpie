@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"html"
+	"image/jpeg"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,6 +45,97 @@ const browserFixture = `<!doctype html>
   document.addEventListener('mousedown', (e) => { down = e.target.id; });
   document.addEventListener('mouseup', (e) => { if (down === 'src' && e.target.id === 'dst') out.textContent = 'dropped'; down = null; });
 </script>`
+
+// A page with a frame from another site (SRC: 127.0.0.1 and localhost are
+// two sites, so Chrome runs it in a process of its own) below the fold,
+// and buttons that change nothing, and change the page twice a moment
+// apart with no request.
+const framesFixture = `<!doctype html>
+<title>Frames</title>
+<h1>Frames fixture</h1>
+<button>Does nothing</button>
+<button onclick="out.textContent = 'working'; setTimeout(() => out.textContent = 'done', 250)">Works a while</button>
+<div id="out" role="status"></div>
+<div style="height: 1500px"></div>
+<iframe title="Checkout" src="SRC" style="width: 420px; height: 160px; margin-left: 30px"></iframe>
+<script>const out = document.getElementById('out');</script>`
+
+// what the frame from the other site shows
+const innerFixture = `<!doctype html>
+<title>Checkout</title>
+<input aria-label="Card" id="card">
+<button onclick="said.textContent = 'paid ' + card.value">Pay</button>
+<div id="said" role="status"></div>
+<script>const said = document.getElementById('said'), card = document.getElementById('card');</script>`
+
+// Frames from another site and the kinds of failure, in a real Chromium:
+// the frame's elements are in the snapshot with refs, typed into, clicked
+// and measured where they are on the page, below the fold; an action
+// answers once the page has stopped changing, not when its requests end;
+// a click that changes nothing says NO_EFFECT; and each failure starts
+// with its kind.
+func TestBrowserFramesAndFailuresInARealBrowser(t *testing.T) {
+	srv, site := realBrowser(t)
+	call, ok := browserCaller(t, srv, "e2e-frames")
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		io.WriteString(w, innerFixture)
+	}))
+	t.Cleanup(other.Close)
+	inner := strings.Replace(other.URL, "127.0.0.1", "localhost", 1) + "/inner"
+	ref := func(page, role, name string) string {
+		t.Helper()
+		m := regexp.MustCompile(`- ` + role + ` "` + regexp.QuoteMeta(name) + `"(?: \[[a-z=, ]+\])? \[ref=(e\d+)\]`).FindStringSubmatch(page)
+		if m == nil {
+			t.Fatalf("no %s %q with a ref in:\n%s", role, name, page)
+		}
+		return m[1]
+	}
+	failed := func(tool string, args map[string]any, code string) string {
+		t.Helper()
+		m := call(tool, args)
+		out := m.Result.Content[0].Text
+		if !m.Result.IsError || !strings.HasPrefix(out, code+": ") {
+			t.Fatalf("%s %v answered (error %v):\n%s\nwant it to fail %s", tool, args, m.Result.IsError, out, code)
+		}
+		return out
+	}
+
+	page := ok("browser_navigate", map[string]any{"url": site.URL + "/frames?src=" + url.QueryEscape(inner)}, "Frames fixture")
+	// the frame loads after the page: read until it is there
+	for end := time.Now().Add(10 * time.Second); !strings.Contains(page, `button "Pay"`) && time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		page = ok("browser_snapshot", nil)
+	}
+	if strings.Contains(page, "doesn't let Magpie Browser read") {
+		t.Fatalf("the frame from the other site isn't read:\n%s", page)
+	}
+	ok("browser_type", map[string]any{"ref": ref(page, "textbox", "Card"), "text": "4242"}, "Typed into")
+	pay := ref(page, "button", "Pay")
+	ok("browser_click", map[string]any{"ref": pay}, "Clicked", "paid 4242")
+	ok("browser_evaluate", map[string]any{"ref": pay, "script": "(el) => [el.ownerDocument.getElementById('said').textContent, location.host]"}, "paid 4242", strings.TrimPrefix(strings.TrimSuffix(inner, "/inner"), "http://"))
+	png := call("browser_screenshot", map[string]any{"ref": pay, "png": true})
+	if b, _ := base64.StdEncoding.DecodeString(png.Result.Content[0].Data); png.Result.IsError || !bytes.HasPrefix(b, []byte("\x89PNG")) {
+		t.Fatalf("the frame's button has no screenshot: %+v", png.Result.Content[len(png.Result.Content)-1])
+	}
+	ok("browser_snapshot", map[string]any{"ref": pay}, `button "Pay"`)
+
+	// settled when the page stops changing: the second change comes
+	// 250ms after the first, with no request between
+	ok("browser_scroll", map[string]any{"direction": "up", "amount": 5000})
+	page = ok("browser_snapshot", nil)
+	if out := ok("browser_click", map[string]any{"ref": ref(page, "button", "Works a while")}, "done"); strings.Contains(out, "NO_EFFECT") {
+		t.Fatalf("a click that changed the page says NO_EFFECT:\n%s", out)
+	}
+	ok("browser_click", map[string]any{"ref": ref(page, "button", "Does nothing")}, "NO_EFFECT")
+
+	failed("browser_click", map[string]any{"ref": "nope"}, "BAD_ARGS")
+	failed("browser_click", map[string]any{"ref": "e9999"}, "STALE_REF")
+	failed("browser_click", nil, "BAD_ARGS")
+	failed("browser_wait", map[string]any{"text": "never shown", "timeout": 1}, "WAIT_TIMEOUT")
+	failed("browser_evaluate", map[string]any{"script": "(() => { throw new Error('nope') })()"}, "SCRIPT_ERROR")
+	failed("browser_navigate", map[string]any{"url": site.URL + "/refused"}, "SITE_REFUSED")
+	failed("browser_navigate", map[string]any{"url": "http://127.0.0.1:1/"}, "LOAD_FAILED")
+}
 
 // Magpie Browser in a real Chromium: the extension magpie writes, loaded
 // as a user loads it, connects to the gateway, and every tool an agent
@@ -103,6 +197,17 @@ func TestBrowserToolsInARealBrowser(t *testing.T) {
 
 	ok("browser_scroll", map[string]any{"direction": "down", "amount": 600}, "Scrolled down 600px")
 	ok("browser_evaluate", map[string]any{"script": "window.scrollY"}, "600")
+	// An async function is called and awaited however it is spaced, and
+	// an expression that calls one is awaited, not called again.
+	for _, script := range []string{
+		"async()=>{await new Promise(r=>setTimeout(r,50));return 'awaited'}",
+		"async () => { await null; return 'awaited' }",
+		"async function(){ await null; return 'awaited' }",
+		"(async()=>{await new Promise(r=>setTimeout(r,50));return 'awaited'})()",
+		"Promise.resolve('awaited')",
+	} {
+		ok("browser_evaluate", map[string]any{"script": script}, `"awaited"`)
+	}
 	ok("browser_text", nil, "Magpie fixture", "Bottom of the page")
 
 	shot := call("browser_screenshot", nil)
@@ -146,8 +251,16 @@ func realBrowser(t *testing.T) (srv, site *httptest.Server) {
 	t.Cleanup(srv.Close)
 	site = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if r.URL.Path == "/two" {
+		switch r.URL.Path {
+		case "/two":
 			io.WriteString(w, "<!doctype html><title>Two</title><h1>Page two</h1>")
+			return
+		case "/frames":
+			io.WriteString(w, strings.Replace(framesFixture, "SRC", html.EscapeString(r.URL.Query().Get("src")), 1))
+			return
+		case "/refused":
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, "<!doctype html><title>Denied</title><h1>Access denied</h1>")
 			return
 		}
 		io.WriteString(w, browserFixture)
@@ -290,4 +403,33 @@ func TestBrowserSessionsApartInARealBrowser(t *testing.T) {
 	if groupOf(list, "*", "Two") != gb || groupOf(list, "~", "Fixture") != ga {
 		t.Fatalf("b's list doesn't have its tab in %s and a's in %s:\n%s", gb, ga, list)
 	}
+}
+
+// The one browser tool in a real Chromium: actions open, act and go back,
+// and screenshot: true brings a picture of the window no wider than
+// browserShotWidth.
+func TestBrowserToolActionsInARealBrowser(t *testing.T) {
+	srv, site := realBrowser(t)
+	call, ok := browserCaller(t, srv, "e2e-one")
+	ok("browser", map[string]any{"action": "tab_new", "url": site.URL + "/frames?src=about:blank"}, "Opened t", "Frames fixture")
+	m := call("browser", map[string]any{"action": "snapshot", "interactive": true, "screenshot": true})
+	if m.Result.IsError || len(m.Result.Content) != 2 || m.Result.Content[1].Type != "image" {
+		t.Fatalf("snapshot with screenshot: %+v", m.Result.Content)
+	}
+	b, _ := base64.StdEncoding.DecodeString(m.Result.Content[1].Data)
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(b))
+	if err != nil || cfg.Width == 0 || cfg.Width > browserShotWidth {
+		t.Fatalf("the picture: %+v %v", cfg, err)
+	}
+	page := m.Result.Content[0].Text
+	r := regexp.MustCompile(`button "Works a while" \[ref=(e\d+)\]`).FindStringSubmatch(page)
+	if r == nil {
+		t.Fatalf("no button in:\n%s", page)
+	}
+	ok("browser", map[string]any{"action": "click", "ref": r[1]}, "done")
+	ok("browser", map[string]any{"action": "navigate", "url": site.URL + "/two"})
+	if out := ok("browser", map[string]any{"action": "back"}, "Frames fixture"); strings.Contains(out, "browser_") {
+		t.Fatalf("an answer names the eighteen:\n%s", out)
+	}
+	ok("browser", map[string]any{"action": "tab_close"}, "Closed t")
 }
