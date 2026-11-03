@@ -1069,7 +1069,7 @@ func Save(p Provider) error {
 	// a key given a Vertex AI provider is refused here, before normalize
 	// drops it: it would never be sent
 	if p.IsVertex() && (strings.TrimSpace(p.Key) != "" || len(p.Keys) > 0) {
-		return errors.New("Google Vertex AI is asked with your Google credentials, not an API key")
+		return errVertexKey
 	}
 	p = normalize(p)
 	p.IconURL = "" // import-only: never stored
@@ -1216,6 +1216,9 @@ func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err e
 	return true, true, store(f)
 }
 
+// errVertexKey refuses a key for Vertex AI.
+var errVertexKey = errors.New("Google Vertex AI is asked with your Google credentials, not an API key")
+
 // editStored has change make its change to the record providers.json keeps
 // of the provider id (made when there is none, as Save makes one for an
 // account), under providersMu, and writes it when change says it changed
@@ -1237,7 +1240,9 @@ func editRecord(id string, made bool, change func(q *Provider) (bool, error)) er
 	if err != nil {
 		return err
 	}
-	i := slices.IndexFunc(f.Providers, func(q Provider) bool { return q.ID == id })
+	// an id written by hand in another case or with spaces is the one Find
+	// read, normalized
+	i := slices.IndexFunc(f.Providers, func(q Provider) bool { return strings.ToLower(strings.TrimSpace(q.ID)) == id })
 	if i < 0 {
 		if !made {
 			return fmt.Errorf("no provider %q: it was removed meanwhile", id)
@@ -1259,7 +1264,9 @@ func editRecord(id string, made bool, change func(q *Provider) (bool, error)) er
 // user's own is changed as Find reads it (normalized, with each key's
 // proxy kept only while it has that key), as Save writes it; one gone from
 // providers.json meanwhile isn't made again. A signed-in account's record
-// is changed as it is, and made when it has none.
+// is changed as it is, and made when it has none. The record is not
+// normalized again after change, nor checked as Save checks it: a setter
+// checks what it sets itself.
 func editFound(p *Provider, change func(q *Provider) error) error {
 	own := p.Account == nil
 	return editRecord(p.ID, !own, func(q *Provider) (bool, error) {
@@ -1277,6 +1284,10 @@ func editFound(p *Provider, change func(q *Provider) error) error {
 		next = next.clone()
 		if err := change(&next); err != nil {
 			return false, err
+		}
+		if own && next.IsVertex() && (next.Key != "" || len(next.Keys) > 0) {
+			// as Save refuses it: normalize would drop the key unused
+			return false, errVertexKey
 		}
 		if own {
 			next.AccountProxies = keyProxies(next)
@@ -1829,7 +1840,7 @@ func normalize(p Provider) Provider {
 	if (p.Preset == OMLXPreset || p.Preset == MLXServePreset || p.Preset == "ollama" || p.Preset == "ollama-cloud") && p.Decide == "" && p.Chat != "" {
 		p.Decide = p.Chat
 	}
-	if p.Routing != Ordered && p.Routing != Rotate && p.Routing != LeastUsed && p.Routing != Pace && p.Routing != Weighted && p.Routing != FreeFirst && p.Routing != Fastest && p.Routing != Drain && !PluginRouting(p.Routing) {
+	if !KnownRouting(p.Routing) {
 		p.Routing = ""
 	}
 	if !slices.Contains(Affinities, p.Affinity) {

@@ -61,9 +61,22 @@ var pluginRouting = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9][A-Za-z0-9._
 // its listed order.
 func PluginRouting(routing string) bool { return pluginRouting.MatchString(routing) }
 
+// KnownRouting says whether routing is one providers.json keeps: magpie's
+// own, a plugin's, or none ("", the default).
+func KnownRouting(routing string) bool {
+	switch routing {
+	case Ordered, Rotate, LeastUsed, Pace, Weighted, FreeFirst, Fastest, Drain:
+		return true
+	}
+	return PluginRouting(routing)
+}
+
 // SetRouting changes how a provider's requests spread over its keys or
 // accounts.
 func SetRouting(id, routing string) error {
+	if routing != "" && !KnownRouting(routing) {
+		return fmt.Errorf("unknown routing %q", routing)
+	}
 	p, err := Find(id)
 	if err != nil {
 		return err
@@ -231,6 +244,9 @@ func SwitchOnly(agent string) bool {
 // SetAffinity changes how long a provider's conversations stay with the key
 // or account that answered them.
 func SetAffinity(id, affinity string) error {
+	if !slices.Contains(Affinities, affinity) {
+		return fmt.Errorf("unknown affinity %q", affinity)
+	}
 	p, err := Find(id)
 	if err != nil {
 		return err

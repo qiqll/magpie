@@ -3598,12 +3598,15 @@ func DropContext(p Provider, model string) (bool, error) {
 	if _, ok := p.Contexts[model]; !ok {
 		return false, nil
 	}
-	// taken off the windows as they are stored then (T-094)
+	// taken off the windows as they are stored then (T-094): one taken
+	// off meanwhile was not there to take
+	had := false
 	if err := editFound(&p, func(q *Provider) error {
+		_, had = q.Contexts[model]
 		delete(q.Contexts, model)
 		return nil
 	}); err != nil {
 		return false, err
 	}
-	return true, nil
+	return had, nil
 }
