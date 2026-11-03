@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -64,39 +65,58 @@ func (s *Server) scopeQuotas(w http.ResponseWriter, r *http.Request) (*quotaScop
 		}
 		sc = newQuotaScope(who, provider.Catalog())
 	}
-	seats, bound, ok := s.usersSeats(w, r)
+	own, ok := s.usersSeats(w, r)
 	if !ok {
 		return nil, false
 	}
-	if bound {
+	if own != nil {
 		if sc == nil {
 			sc = &quotaScope{who: who, refs: map[string][]provider.AccountRef{}}
 		}
-		sc.bound, sc.seats = true, seats
+		sc.bound, sc.seats = true, own.seats
 	}
 	return sc, true
+}
+
+// usersOwn is what a request bound by user that names its user is told
+// of (usersSeats): its user, the accounts and keys it is on, and the keys
+// its name is one user under, as user-accounts.json was read for them.
+type usersOwn struct {
+	user  string
+	seats []userSeat
+	// sharers and group: userGroup as read with seats, for mine
+	sharers map[string]bool
+	group   string
+}
+
+// mine says a call or request named user, under gateway key key
+// (Record.CallerKeyID), is the request's user's: one name under the keys
+// of its group (userGroup; T-089).
+func (o *usersOwn) mine(user, key string) bool {
+	return user == o.user && groupOf(o.sharers, key) == o.group
 }
 
 // usersSeats is, bound by user, every account and key r's user
 // (UserHeader) is on, of every provider, as its group shares them
 // (sharedOf, userGroup; T-089), as resetNotUsers reads its Codex ones.
-// bound is false for a request that names no user, the key's owner's,
-// and bound by session: told every card, as before. A user header that
+// own is nil for a request that names no user, the key's owner's, and
+// bound by session: told every card, as before. A user header that
 // can't be taken is answered 400; a user-accounts.json that can't be
 // read, or changed and doesn't read now (stale), 503: which seats are the
 // user's is unknown, so it is told none.
-func (s *Server) usersSeats(w http.ResponseWriter, r *http.Request) (seats []userSeat, bound, ok bool) {
+func (s *Server) usersSeats(w http.ResponseWriter, r *http.Request) (own *usersOwn, ok bool) {
 	if !s.bind.byUser() {
-		return nil, false, true
+		return nil, true
 	}
 	user, bad := userOf(r.Header)
 	if bad != "" {
 		writeError(w, provider.Chat, http.StatusBadRequest, bad)
-		return nil, false, false
+		return nil, false
 	}
 	if user == "" {
-		return nil, false, true
+		return nil, true
 	}
+	own = &usersOwn{user: user}
 	key := userKey(r)
 	userBinds.Lock()
 	err := loadUsers()
@@ -114,15 +134,16 @@ func (s *Server) usersSeats(w http.ResponseWriter, r *http.Request) (seats []use
 			}
 			done[pid] = true
 			b, _ := sharedOf(key, pid, user)
-			seats = append(seats, b.seats()...)
+			own.seats = append(own.seats, b.seats()...)
 		}
 	}
+	own.sharers, own.group = maps.Clone(userBinds.sharers), g
 	userBinds.Unlock()
 	if err != nil {
 		writeError(w, provider.Chat, http.StatusServiceUnavailable, fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know which accounts %q is on and tells it nothing of them. Its log says why", UserHeader, user))
-		return nil, false, false
+		return nil, false
 	}
-	return seats, true, true
+	return own, true
 }
 
 func newQuotaScope(who access.Identity, catalog []provider.Entry) *quotaScope {

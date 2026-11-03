@@ -109,13 +109,28 @@ func topSummary(p Period, now time.Time, n int) Summary {
 }
 
 // SummarizeWhere is Summarize of only the records keep keeps: a bound
-// user's own calls on its own accounts (T-093). It is worked out afresh
-// each time and never cached, and its first call and keyed providers are
-// of those records alone, so nothing of the others is in it.
-func SummarizeWhere(p Period, keep func(Record) bool) Summary {
+// user's own calls on its own accounts (T-093). Its first call and keyed
+// providers are of those records alone, so nothing of the others is in
+// it. key names what keep keeps: a summary is kept by it and the period,
+// as Summarize's are, for as long as the log and what prices it are the
+// same (a picked range and a rolling window are worked out each time), so
+// a page polling it doesn't read the whole log each time.
+func SummarizeWhere(p Period, key string, keep func(Record) bool) Summary {
 	p = p.shown()
 	now := Clock()
 	snapshot := readLogSnapshot()
+	cached := !p.IsRange() && p.Last() == 0
+	var meta string
+	k := whereKey{p, key}
+	if cached {
+		meta = usagePriceCacheKey(now)
+		whereSummaries.Lock()
+		old, ok := whereSummaries.m[k]
+		whereSummaries.Unlock()
+		if ok && old.version == snapshot.version && old.meta == meta {
+			return cloneSummary(old.value)
+		}
+	}
 	kept := func(since time.Time) func(func(Record)) {
 		return func(fn func(Record)) {
 			snapshot.visit(since, func(r Record) {
@@ -137,8 +152,32 @@ func SummarizeWhere(p Period, keep func(Record) bool) Summary {
 			keys[r.Provider] = true
 		}
 	})
-	return summarizeFrom(p, now, first, keys, kept(p.Since(now)))
+	value := summarizeFrom(p, now, first, keys, kept(p.Since(now)))
+	if cached {
+		whereSummaries.Lock()
+		if whereSummaries.m == nil || len(whereSummaries.m) >= whereSummariesKept {
+			whereSummaries.m = map[whereKey]summaryEntry{}
+		}
+		whereSummaries.m[k] = summaryEntry{snapshot.version, meta, cloneSummary(value)}
+		whereSummaries.Unlock()
+	}
+	return value
 }
+
+// whereKey is what a SummarizeWhere summary is kept by.
+type whereKey struct {
+	p   Period
+	key string
+}
+
+// whereSummaries are the SummarizeWhere summaries kept, at most
+// whereSummariesKept of them: one more starts them afresh.
+var whereSummaries struct {
+	sync.Mutex
+	m map[whereKey]summaryEntry
+}
+
+const whereSummariesKept = 256
 
 // topOf is s with its top n sessions (all for n < 0).
 func topOf(s Summary, n int) Summary {

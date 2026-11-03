@@ -64,6 +64,14 @@ func TestBoundUserToldItsOwnLanesAndUsage(t *testing.T) {
 	call(keys[0].ID, "alice", "codex", "", "spare@example.com", "alice-off-seat")
 	call(keys[1].ID, "alice", "alpha", provider.KeyID("alpha-two"), "", "other-alice")
 	call(keys[0].ID, "", "codex", "", "me@example.com", "nobody-1")
+	// a request of bob's in flight, its session named
+	in := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	in.Header.Set(UserHeader, "bob")
+	in.Header.Set(SessionHeader, "bob-live")
+	for _, s := range []*Server{srv, sessions} {
+		_, out := s.active.add(in)
+		t.Cleanup(out)
+	}
 
 	secret := secrets[0]
 	do := func(h http.Handler, path, user string) (int, string) {
@@ -78,16 +86,22 @@ func TestBoundUserToldItsOwnLanesAndUsage(t *testing.T) {
 		h.ServeHTTP(w, r)
 		return w.Code, w.Body.String()
 	}
-	lanes := func(h http.Handler, user string) []string {
+	lanes := func(h http.Handler, user string, whole bool) []string {
 		t.Helper()
 		c, b := do(h, "/v1/magpie/concurrency", user)
 		var out struct {
 			Data     map[string]Lane
 			Requests *int
 			Waiting  *int
+			Active   []Active
 		}
 		if c != 200 || json.Unmarshal([]byte(b), &out) != nil || out.Requests == nil || out.Waiting == nil {
 			t.Fatalf("%q concurrency: %d %s", user, c, b)
+		}
+		// bob's request in flight: told the key's owner, and no user,
+		// bob included, as a request counted in knows no key yet
+		if live := slices.ContainsFunc(out.Active, func(a Active) bool { return a.Session == "bob-live" }); live != whole {
+			t.Errorf("%q told bob's request in flight: %v", user, live)
 		}
 		got := []string{}
 		for who := range out.Data {
@@ -123,7 +137,7 @@ func TestBoundUserToldItsOwnLanesAndUsage(t *testing.T) {
 	}
 	for user, w := range want {
 		slices.Sort(w.lanes)
-		if got := lanes(bound, user); !slices.Equal(got, w.lanes) {
+		if got := lanes(bound, user, false); !slices.Equal(got, w.lanes) {
 			t.Errorf("%s told lanes %v, want %v", user, got, w.lanes)
 		}
 		u, b := summary(bound, user)
@@ -146,12 +160,22 @@ func TestBoundUserToldItsOwnLanesAndUsage(t *testing.T) {
 			}
 		}
 	}
+	// a call of alice's on her spare, its account named only in Host (a
+	// record from before ProviderAccount), after her summary was read:
+	// she is told it
+	usage.Append(usage.Record{Time: at, Agent: "codex", Provider: "codex", Model: "m1", Status: 200, Input: 10, Output: 1,
+		CallerKeyID: keys[0].ID, User: "alice", Host: "chatgpt.com as Me@Example.com", Session: "alice-3"})
+	allSessions = append(allSessions, "alice-3")
+	slices.Sort(allSessions)
+	if u, _ := summary(bound, "alice"); !slices.Equal(sessionsOf(u), []string{"alice-1", "alice-2", "alice-3"}) {
+		t.Errorf("alice after her third call told sessions %v", sessionsOf(u))
+	}
 	// no user named, and bound by session: everything
 	for _, c := range []struct {
 		h    http.Handler
 		user string
 	}{{bound, ""}, {bySession, "alice"}} {
-		if got := lanes(c.h, c.user); !slices.Equal(got, all) {
+		if got := lanes(c.h, c.user, true); !slices.Equal(got, all) {
 			t.Errorf("%q told lanes %v, want %v", c.user, got, all)
 		}
 		if u, _ := summary(c.h, c.user); !slices.Equal(sessionsOf(u), allSessions) {
@@ -160,7 +184,7 @@ func TestBoundUserToldItsOwnLanesAndUsage(t *testing.T) {
 	}
 	// Other's alice is its own: Two's lane, and her one call on it
 	secret = secrets[1]
-	if got := lanes(bound, "alice"); !slices.Equal(got, []string{two}) {
+	if got := lanes(bound, "alice", false); !slices.Equal(got, []string{two}) {
 		t.Errorf("Other's alice told lanes %v", got)
 	}
 	if u, _ := summary(bound, "alice"); !slices.Equal(sessionsOf(u), []string{"other-alice"}) {

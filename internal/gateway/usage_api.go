@@ -1,8 +1,8 @@
 package gateway
 
 import (
-	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -53,28 +53,42 @@ func refuseHeld(w http.ResponseWriter, r *http.Request, msg string) bool {
 
 // userCalls is, bound by user, which of the usage log's calls a request
 // naming its user (UserHeader) is told of in the summary (T-093): its own
-// (Record.User, under a key of its group, userGroup) that an account or
-// key it is on now answered (usersSeats). The summary of everyone's names
-// every account, key, user and session; the user is told its own calls on
-// its own accounts alone, as it is told their quotas alone (T-090).
-// bound is false, and keep nil, as usersSeats says: everything, as before.
-func (s *Server) userCalls(w http.ResponseWriter, r *http.Request) (keep func(usage.Record) bool, bound, ok bool) {
-	seats, bound, ok := s.usersSeats(w, r)
-	if !bound || !ok {
-		return nil, bound, ok
+// (Record.User, under a key of its group: usersOwn.mine) that an account
+// or key it is on now answered (usersSeats). The summary of everyone's
+// names every account, key, user and session; the user is told its own
+// calls on its own accounts alone, as it is told their quotas alone
+// (T-090). keep is nil, and own too, as usersSeats says: everything, as
+// before. own also keys the summary's cache (usage.SummarizeWhere).
+func (s *Server) userCalls(w http.ResponseWriter, r *http.Request) (keep func(usage.Record) bool, own *usersOwn, ok bool) {
+	own, ok = s.usersSeats(w, r)
+	if own == nil || !ok {
+		return nil, nil, ok
 	}
-	user, _ := userOf(r.Header)
-	userBinds.Lock()
-	sharers := maps.Clone(userBinds.sharers)
-	userBinds.Unlock()
-	g := groupOf(sharers, userKey(r))
 	return func(rec usage.Record) bool {
-		return rec.User == user && groupOf(sharers, rec.CallerKeyID) == g && seatIn(seats, seatOfCall(rec))
-	}, true, true
+		return own.mine(rec.User, rec.CallerKeyID) && seatIn(own.seats, seatOfCall(rec))
+	}, own, true
+}
+
+// ownKey is what own's summary is kept by: who is told it, of which
+// seats, and under which keys its name is one user.
+func (o *usersOwn) ownKey() string {
+	whos := make([]string, 0, len(o.seats))
+	for _, st := range o.seats {
+		whos = append(whos, strings.ToLower(st.Who))
+	}
+	slices.Sort(whos)
+	var sharers []string
+	for k, on := range o.sharers {
+		if on {
+			sharers = append(sharers, k)
+		}
+	}
+	slices.Sort(sharers)
+	return strings.Join([]string{o.group, o.user, strings.Join(whos, ","), strings.Join(sharers, ",")}, "\x00")
 }
 
 // seatOfCall is the account or key that answered rec, as a seat names it
-// (candidate.who): "" for a call neither answered.
+// (candidate.who): the provider itself for a call neither answered.
 func seatOfCall(rec usage.Record) string {
 	if a := strings.TrimSpace(rec.Account()); a != "" {
 		return rec.Provider + "@" + strings.ToLower(a)
@@ -82,7 +96,7 @@ func seatOfCall(rec usage.Record) string {
 	if rec.ProviderKeyID != "" {
 		return rec.Provider + "#" + rec.ProviderKeyID
 	}
-	return ""
+	return rec.Provider
 }
 
 func (s *Server) usageSummary(w http.ResponseWriter, r *http.Request) {
@@ -93,13 +107,13 @@ func (s *Server) usageSummary(w http.ResponseWriter, r *http.Request) {
 	if refuseHeld(w, r, "this gateway key is held to a budget, models or accounts, so it is told its own calls alone: GET /v1/magpie/usage/requests") {
 		return
 	}
-	keep, bound, ok := s.userCalls(w, r)
+	keep, own, ok := s.userCalls(w, r)
 	if !ok {
 		return
 	}
 	var out usageapi.Usage
-	if bound {
-		out = usageapi.StateWhere(usageapi.PeriodOf(r.URL.Query().Get("period")), keep)
+	if own != nil {
+		out = usageapi.StateWhere(usageapi.PeriodOf(r.URL.Query().Get("period")), own.ownKey(), keep)
 	} else {
 		out = usageapi.State(usageapi.PeriodOf(r.URL.Query().Get("period")))
 	}

@@ -70,10 +70,10 @@ type Usage struct {
 // gateway's GET /v1/magpie/usage answer.
 func State(p usage.Period) Usage { return stateOf(usage.Summarize(p)) }
 
-// StateWhere is State of only the calls keep keeps (usage.SummarizeWhere):
-// what a user bound by user is told (T-093).
-func StateWhere(p usage.Period, keep func(usage.Record) bool) Usage {
-	return stateOf(usage.SummarizeWhere(p, keep))
+// StateWhere is State of only the calls keep keeps, kept by key
+// (usage.SummarizeWhere): what a user bound by user is told (T-093).
+func StateWhere(p usage.Period, key string, keep func(usage.Record) bool) Usage {
+	return stateOf(usage.SummarizeWhere(p, key, keep))
 }
 
 // PageSessions is how many sessions Page lists: the Usage page draws none of

@@ -481,7 +481,8 @@ type Lane struct {
 // idle, never left out.
 // active lists those requests one by one (Active), [] when idle. Bound
 // by user, a request that names its user is told the lanes of its own
-// accounts and keys (usersSeats) and the gateway's counts as before.
+// accounts and keys (usersSeats), the gateway's counts as before, and no
+// active.
 func (s *Server) concurrency(w http.ResponseWriter, r *http.Request) {
 	if !local(r) && !sharedWith(r) {
 		writeError(w, provider.Chat, http.StatusForbidden, "magpie's concurrency is told to another machine only when magpie is shared on the local network and the request carries its API key")
@@ -490,7 +491,7 @@ func (s *Server) concurrency(w http.ResponseWriter, r *http.Request) {
 	if refuseHeld(w, r, heldRefused) {
 		return
 	}
-	seats, bound, ok := s.usersSeats(w, r)
+	own, ok := s.usersSeats(w, r)
 	if !ok {
 		return
 	}
@@ -501,12 +502,19 @@ func (s *Server) concurrency(w http.ResponseWriter, r *http.Request) {
 		// bound by user, a user naming itself is told the lanes of the
 		// accounts and keys it is on alone (T-093): a lane's who names
 		// its account
-		if bound && !seatIn(seats, who) {
+		if own != nil && !seatIn(own.seats, who) {
 			delete(lanes, who)
 		}
 	}
+	active := s.Active()
+	if own != nil {
+		// each names its session, model and provider, and a request in
+		// flight doesn't know its gateway key when it is counted in: a
+		// user is told none of them, its own included
+		active = []Active{}
+	}
 	b := s.Busy()
-	writeJSON(w, 200, map[string]any{"object": "concurrency", "data": lanes, "requests": b.Requests, "waiting": waiting, "tools": b.Tools, "active": s.Active()})
+	writeJSON(w, 200, map[string]any{"object": "concurrency", "data": lanes, "requests": b.Requests, "waiting": waiting, "tools": b.Tools, "active": active})
 }
 
 // Lanes is how each key or account with requests out or waiting stands,
