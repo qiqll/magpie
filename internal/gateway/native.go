@@ -88,6 +88,14 @@ func (s *Server) native(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusForbidden, fmt.Sprintf("The gateway key %q is held to some models, accounts or a spend limit, which magpie can't hold a vendor's own API to: use /v1/images/generations and /v1/videos, which pass on the vendor's own fields too", k.KeyName))
 		return
 	}
+	// bound by user, every request goes on its user's own accounts
+	// (usersOn): a vendor's own API is passed on, on the provider's key,
+	// and its task ids name no user, so another's could be read or
+	// deleted by id
+	if s.bind.byUser() {
+		fail(http.StatusForbidden, "magpie binds requests by user (--bind=user), and a vendor's own API can't be held to a user's accounts: use /v1/images/generations and /v1/videos, which pass on the vendor's own fields too")
+		return
+	}
 	found, err := provider.Find(id)
 	if err != nil || !found.On() || found.DecideOnly() {
 		fail(http.StatusNotFound, fmt.Sprintf("magpie has no provider %q turned on", id))

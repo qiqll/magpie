@@ -827,12 +827,15 @@ loopback, corsGuard, the key's rate), refused to a read-only key
 (`readOnlyRefused`), and refused (403, `nativeHeld`) to a key held to
 models, accounts or a spend limit, or issued by one: magpie can't tell
 which model a poll or a cancel is of, and prices no answer it doesn't
-read, so the OpenAI routes serve such a key. A model the user switched off
-is refused. The body's strings are masked (fails closed) and put back in
+read, so the OpenAI routes serve such a key. Bound by user
+(`--bind=user`) it is refused (403) whichever user asks: it goes on the
+provider's own key, never a user's accounts, and a task id names no user,
+so one user could read or cancel another's by id; the OpenAI routes serve
+such a caller too. A model the user switched off is refused. The body's strings are masked (fails closed) and put back in
 the answer (`restoring`), numbers kept exact (`UseNumber`). It is signed
 with the provider's key and magpie's User-Agent, never the caller's
 headers, and each request is a Requests row and a usage record
-(`Operation: "native"`, no tokens). `TestNativeArkRoute`, `TestNativeArkStreamsAsItComes`.
+(`Operation: "native"`, no tokens). `TestNativeArkRoute`, `TestNativeArkStreamsAsItComes`, `TestNativeArkRefusedBoundByUser`.
 
 A MiniMax API key (no account, a Chat, Anthropic or Responses base on
 api.minimax.io, api.minimaxi.com or api.minimax.cn: `filmsMiniMax`,

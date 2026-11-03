@@ -180,3 +180,49 @@ func TestNativeArkStreamsAsItComes(t *testing.T) {
 	}
 	close(release)
 }
+
+// Bound by user, the native route passes nothing on: it would go on the
+// provider's own key, never the user's accounts, and its task ids name
+// no user, so another's could be read or deleted by id. Through the
+// gateway's handler a request without a user is refused before it, as
+// every route that asks a model is (userNeeded).
+func TestNativeArkRefusedBoundByUser(t *testing.T) {
+	fresh(t)
+	up := newArkNative(t)
+	was := isArk
+	isArk = func(p provider.Provider) bool { return p.ID == "ark" }
+	t.Cleanup(func() { isArk = was })
+	if err := provider.Save(provider.Provider{ID: "ark", Name: "Volcengine Ark", Chat: up.URL + "/api/v3", Key: "key", Models: []string{"doubao-seedream-4-5-251128"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := byUser(New())
+	h := arkNativeMux(s)
+	free := access.Identity{KeyID: "desk", KeyName: "Desk"}
+	for _, c := range []struct{ method, path string }{
+		{"POST", NativePath + "ark/images/generations"},
+		{"POST", NativePath + "ark/contents/generations/tasks"},
+		{"GET", NativePath + "ark/contents/generations/tasks/cgt-1"},
+		{"DELETE", NativePath + "ark/contents/generations/tasks/cgt-1"},
+	} {
+		req := httptest.NewRequest(c.method, c.path, strings.NewReader(`{"model":"doubao-seedream-4-5-251128","prompt":"x"}`))
+		req.Header.Set(UserHeader, "alice")
+		req = req.WithContext(access.WithIdentity(req.Context(), free))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "--bind=user") {
+			t.Errorf("%s %s: %d %s", c.method, c.path, rec.Code, rec.Body)
+		}
+	}
+	// without a user, the handler's route refuses it first
+	req := httptest.NewRequest("POST", NativePath+"ark/images/generations", strings.NewReader(`{"model":"doubao-seedream-4-5-251128","prompt":"x"}`))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("no user: %d %s", rec.Code, rec.Body)
+	}
+	up.mu.Lock()
+	defer up.mu.Unlock()
+	if len(up.seen) != 0 {
+		t.Fatalf("Ark was asked: %q", up.seen)
+	}
+}
