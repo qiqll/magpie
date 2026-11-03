@@ -14,7 +14,8 @@ import (
 // headers or extra body, and an editor opened on it saved none, which
 // cleared what the user had set. A save that leaves one of them out keeps
 // it, a custom provider's and a preset's alike; one that sends "" or {}
-// still clears it.
+// still clears it. Proxies and extra body left out were kept before
+// T-083 already; only the headers check is red on the code before it.
 func TestProviderSaveKeepsWhatItLeavesOut(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

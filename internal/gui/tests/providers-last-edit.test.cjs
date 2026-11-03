@@ -7,8 +7,9 @@
 // wrote that over the proxies the user had set (T-083). The editor now
 // opens only on the fresh list, as a row clicked on the kept one does,
 // and a save asked while only the kept list is in leaves those fields out,
-// for the server to keep. A key provider and a subscription, in every
-// language.
+// for the server to keep; a magpie://import link's Add and Replace, which
+// can be drawn on the kept list, send all of theirs. A key provider and a
+// subscription, in every language.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -44,6 +45,11 @@ const list = (ps) => ({ providers: ps, presets: [], excluded: [], gateway: { run
 const bare = ({ proxy, accountProxies, headers, extraBody, ...p }) => p;
 const fresh = list([relay, codex]);
 const kept = list([bare(relay), bare(codex)]);
+// a magpie://import link replacing Relay, with headers and extra body
+const linked = {
+  replaces: "Relay",
+  provider: { id: "relay", name: "Relay", chat: "https://linked.example.com/v1", key: "sk-linked", models: ["big"], headers: { "X-Link": "l1" }, extraBody: { route: "fast" } },
+};
 
 function serve(lang, reads, posts) {
   const state = { agents: [], profiles: [], settings: { lang, theme: "light" } };
@@ -61,6 +67,7 @@ function serve(lang, reads, posts) {
       return json(fresh);
     }
     if (url.pathname === "/api/groups") return json({ groups: [] });
+    if (url.pathname === "/api/import/link") return json(linked);
     if (url.pathname.startsWith("/api/provider/") && route.request().method() === "POST") {
       posts.push({ action: url.pathname.slice("/api/provider/".length), body: route.request().postDataJSON() });
       return json(fresh);
@@ -116,15 +123,40 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       });
     }
 
+    test(`${engine} ${lang}: a row clicked before the fresh list opens its editor on it`, async (t) => {
+      const { page, errors, reads } = await open(engine, t, lang, "view=providers&edit=relay");
+      await row(page).first().waitFor();
+      assert.equal(reads.done, 0, "the kept list was not drawn first");
+      await page.locator(".row.provider", { hasText: "Relay" }).first().click();
+      await page.locator(".editor .acct-proxy").first().waitFor({ timeout: SLOW + 4000 });
+      assert.equal(await page.locator(".editor .proxy-pick .proxy-url").first().inputValue(), relay.proxy);
+      assert.deepEqual(errors, []);
+    });
+
+    test(`${engine} ${lang}: an import link drawn on the kept list sends its headers and extra body`, async (t) => {
+      const { page, errors, reads, posts } = await open(engine, t, lang, "view=providers&import=link");
+      await page.locator(".editor.import .bar button.primary").waitFor();
+      const n = posts.length;
+      await page.locator(".editor.import .bar button.primary").click();
+      for (let i = 0; i < 50 && posts.length === n; i++) await page.waitForTimeout(50);
+      assert.equal(reads.done, 0, "the fresh list was in already");
+      const { body } = posts.at(-1);
+      assert.deepEqual(body.headers, linked.provider.headers);
+      assert.deepEqual(body.extraBody, linked.provider.extraBody);
+      assert.deepEqual(errors, []);
+    });
+
     test(`${engine} ${lang}: a save asked while only the kept list is in leaves its proxies, headers and extra body out`, async (t) => {
       const { page, errors, reads, posts } = await open(engine, t, lang, "view=providers");
       await row(page).first().waitFor();
       const sent = await page.evaluate(async () => {
         const all = { proxy: "", accountProxies: {}, headers: {}, extraBody: {} };
         const k = providers;
+        editing = "relay";
         await providerAction("save", { id: "relay", ...all });
         // an Add's are its own: sent as they are
         providers = k;
+        editing = { custom: true };
         await providerAction("save", { id: "other", new: true, ...all });
         return k.last;
       });

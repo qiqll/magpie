@@ -5935,7 +5935,6 @@ async function loadProvidersNow() {
   if (kept) {
     providers = kept;
     renderSideGw(providers.gateway);
-    if (typeof editing === "string" && !providers.providers.some((p) => p.id === editing)) editing = null;
     if (providersPage(view)) magpie.call(view, "render", null);
     else renderProviders();
   }
@@ -15330,7 +15329,7 @@ function renderMove(p) {
 
 async function providerAction(action, body, okMsg, base = "provider/") {
   // the kept list has none of these: the saved ones are kept (T-083)
-  if (action === "save" && providers?.last && !body.new) for (const k of ["proxy", "accountProxies", "headers", "extraBody"]) delete body[k];
+  if (action === "save" && providers?.last && typeof editing == "string" && !importing) for (const k of ["proxy", "accountProxies", "headers", "extraBody"]) delete body[k];
   if (action === "delete" && !await confirmRemoval(providers?.providers.find((p) => p.id === body.id)?.name || body.id,
     "Its saved configuration will be removed. Agents using it may switch to another provider or their default model.")) return false;
   try {
