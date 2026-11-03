@@ -2997,6 +2997,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// user-accounts.json unread is unknown (503), and the pool
 			// full keeps its limit headers (429)
 			if cands, pl, userBound, refused = bindUser(userKey(r), user, tier, tierNamed(r.Header), p, cands, pl); refused.status != 0 {
+				refused = sealedRefusal(r, user, model, checkpoint, refused)
 				s.userRefused(w, from, &call, userBound, refused)
 				turnedAway()
 				return
@@ -3084,6 +3085,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		var refused userRefusal
 		if cands, pl, userBound, grew, refused = growUser(userBound, pool, poolPl, cands, pl); refused.status != 0 {
 			call.Provider = p.ID
+			refused = sealedRefusal(r, limitedUser, model, checkpoint, refused)
 			s.userRefused(w, from, &call, userBound, refused)
 			turnedAway()
 			return
