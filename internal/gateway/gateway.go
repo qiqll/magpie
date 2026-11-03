@@ -1297,10 +1297,10 @@ func (s *Server) codexReset(w http.ResponseWriter, r *http.Request) {
 // isn't one of the seats r's user (UserHeader) is bound to (sharedOf):
 // a user spends its own accounts' resets, never another user's (T-088).
 // It is 403 alike for another user's account, one nobody is bound to and
-// one that isn't signed in, so a user learns nothing of the others'. A
-// request that names no user is the key's owner's, as before; bound by
-// session nothing is refused. A user-accounts.json that can't be read is
-// unknown: refused, nothing spent.
+// one that isn't signed in. A request that names no user is the key's
+// owner's, as before; bound by session nothing is refused. A
+// user-accounts.json that can't be read, or changed and doesn't read now
+// (stale), is unknown: refused, nothing spent.
 func (s *Server) resetNotUsers(w http.ResponseWriter, r *http.Request, account string) bool {
 	if !s.bind.byUser() {
 		return false
@@ -1315,6 +1315,9 @@ func (s *Server) resetNotUsers(w http.ResponseWriter, r *http.Request, account s
 	}
 	userBinds.Lock()
 	err := loadUsers()
+	if err == nil && userBinds.stale {
+		err = errUsersChanged
+	}
 	b, _ := sharedOf(userKey(r), "codex", user)
 	userBinds.Unlock()
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +242,29 @@ func TestCodexResetBoundByUserOnlyItsOwn(t *testing.T) {
 		}
 		if _, spent := b.seen(); spent != "acct-1,acct-2" {
 			t.Fatalf("spent %q, want acct-1,acct-2", spent)
+		}
+	})
+	t.Run("user-accounts.json unread", func(t *testing.T) {
+		b, do := setup(t, true)
+		// read once, then written over with what doesn't read (stale)
+		if code, body := do("spare@example.com", "alice"); code != http.StatusForbidden {
+			t.Fatalf("bob's: %d %s", code, body)
+		}
+		if err := os.WriteFile(usersPath(), []byte(`{"users":`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if code, body := do("me@example.com", "alice"); code != http.StatusServiceUnavailable {
+			t.Fatalf("stale: %d %s", code, body)
+		}
+		// never read
+		userBinds.Lock()
+		userBinds.path = ""
+		userBinds.Unlock()
+		if code, body := do("me@example.com", "alice"); code != http.StatusServiceUnavailable {
+			t.Fatalf("never read: %d %s", code, body)
+		}
+		if _, spent := b.seen(); spent != "" {
+			t.Fatalf("unread spent %q", spent)
 		}
 	})
 	t.Run("bound by session", func(t *testing.T) {

@@ -565,7 +565,11 @@ names its user (`UserHeader`) spends only the resets of the Codex
 accounts that user is on (`resetNotUsers`, T-088, read through
 `sharedOf`): any other account is 403, alike for another user's and one
 nobody is on, with nothing spent; a request naming no user is the key's
-owner's, as before. It calls `provider.SpendCodexReset`,
+owner's, as before. The header is the caller's word, so this keeps
+users of one full key apart only as far as the front that sets it
+strips what callers send (T-089); a key held to accounts is refused
+outright. A users file that can't be read, or doesn't read since it
+changed, is 503. It calls `provider.SpendCodexReset`,
 the Usage page's own code, then `RefreshUsage` of that card.
 `TestCodexResetNeedsAFullKey` in
 [`codex_reset_api_test.go`](../../internal/gateway/codex_reset_api_test.go)
