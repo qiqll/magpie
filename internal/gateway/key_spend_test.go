@@ -79,7 +79,9 @@ func TestKeySpendCapPassesTheKeyOver(t *testing.T) {
 	if code, body, got := post(); code != 200 || len(got) != 1 || got[0] != "plan sk-team" {
 		t.Fatalf("Team under its raised cap: %d %s, upstream got %v", code, body, got)
 	}
-	// both at their caps, with no fallback: a 429 says which and why
+	// both at their caps, with no fallback: a 429 says why, each key's
+	// spend and cap, but no key by its name (hideAccounts: no reply names
+	// one of magpie's accounts or keys)
 	if err := provider.SetKeySpendCap("plan", "Team", &provider.SpendCap{USD: 5, Period: provider.SpendTotal}); err != nil {
 		t.Fatal(err)
 	}
@@ -92,8 +94,9 @@ func TestKeySpendCapPassesTheKeyOver(t *testing.T) {
 	}
 	json.Unmarshal([]byte(body), &e)
 	if code != 429 || len(got) != 0 || !strings.Contains(e.Error.Message, "spend cap reached") ||
-		!strings.Contains(e.Error.Message, "Team") || !strings.Contains(e.Error.Message, "$6.00 of the $5.00 spend cap") ||
-		!strings.Contains(e.Error.Message, "Spare") || !strings.Contains(e.Error.Message, "for today") || !strings.Contains(e.Error.Message, "spend-cap") {
+		strings.Contains(e.Error.Message, "Team") || !strings.Contains(e.Error.Message, "$6.00 of the $5.00 spend cap") ||
+		strings.Contains(e.Error.Message, "Spare") || strings.Count(e.Error.Message, keySaid) != 2 ||
+		!strings.Contains(e.Error.Message, "for today") || !strings.Contains(e.Error.Message, "spend-cap") {
 		t.Fatalf("both at their caps: %d %s, upstream got %v", code, body, got)
 	}
 	// with a fallback, it serves
