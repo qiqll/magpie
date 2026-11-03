@@ -125,7 +125,9 @@ func (s *Server) forUser(ctx context.Context, r *http.Request) context.Context {
 // group's classifier, a Claude Code run's web search) carries no caller,
 // and its row went to the users of no key, by_use's and the user's usage
 // counting it in the shared group (T-095). It is never the ask's caller:
-// nothing but a row reads it.
+// nothing but a row reads it. It is apart from askedFor, whose key names
+// the user's binding, since askDecideTries carries the key on to a
+// context that carries no askedFor.
 type askedKeyKey struct{}
 
 type askedKey struct{ id, name, issuer string }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/access"
+	"github.com/yetone/magpie/internal/budget"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/usage"
 )
@@ -105,4 +106,47 @@ func TestDecisionGroupRowsKeptUnderTheTurnsKey(t *testing.T) {
 		routingRowsKeepTheirUser(t, from, "bob")
 		rowsKeptUnder(t, c.what, from, c.id, c.name)
 	}
+}
+
+// A System One ask made for a turn under a key with a limit counts
+// against that limit at once, as the turn's own row does (budget.Append):
+// a window already read is added to, not only read again from
+// usage.jsonl. And a row's caller is the ask's own caller first, the
+// turn's key only when it has none (rowCaller).
+func TestSystemOneCountsForTheTurnsKey(t *testing.T) {
+	fresh(t)
+	budget.Forget()
+	t.Cleanup(budget.Forget)
+	u := newRoutesUp(t)
+	p := provider.Provider{ID: "jev", Name: "Jev", Key: "kA", Decide: u.URL + "/v1", Models: []string{"jev-latest"}}
+	save(t, p)
+	keys, _ := newCaller(t, "Tenant", "Other")
+	l := &access.Limit{Period: "day", Tokens: 12} // one ask's 10 in, 2 out
+	if _, err := access.Update("limit-key", access.Change{Key: keys[0].ID, Limit: l}); err != nil {
+		t.Fatal(err)
+	}
+	who := access.Identity{KeyID: keys[0].ID, KeyName: "Tenant", Limit: l}
+	release, refused := budget.Reserve(who, 0, "", time.Now()) // the window, read
+	if refused != nil {
+		t.Fatalf("refused before the ask: %v", refused)
+	}
+	release()
+	turn := context.WithValue(context.Background(), askedKeyKey{}, askedKey{id: keys[0].ID, name: "Tenant"})
+	s := New()
+	from := usageCount()
+	if _, err := s.systemOne(turn, p, "jev-latest", []byte(`{"model":"jev-latest"}`)); err != nil {
+		t.Fatal(err)
+	}
+	rowsKeptUnder(t, "the turn's ask", from, keys[0].ID, "Tenant")
+	if release, refused := budget.Reserve(who, 0, "", time.Now()); refused == nil {
+		release()
+		t.Fatal("the key's limit didn't count its turn's System One ask")
+	}
+
+	from = usageCount()
+	own := access.WithIdentity(turn, access.Identity{KeyID: keys[1].ID, KeyName: "Other"})
+	if _, err := s.systemOne(own, p, "jev-latest", []byte(`{"model":"jev-latest"}`)); err != nil {
+		t.Fatal(err)
+	}
+	rowsKeptUnder(t, "an ask with a caller of its own", from, keys[1].ID, "Other")
 }

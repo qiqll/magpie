@@ -308,6 +308,10 @@ type levelling struct {
 // or big a request is — rather than topics a message may be none of, and
 // in the same call how much work a request at each is, once for each set
 // of them.
+//
+// The answer is kept for every caller, so its one call's row is the first
+// asker's: counted under that turn's key (rowCaller), the others' asks
+// of the same set costing nothing.
 func (s *Server) jevLevelled(ctx context.Context, p provider.Provider, model string, intents []string) (levelling, error) {
 	key := model + "\x00" + strings.ToLower(strings.Join(intents, "\x00"))
 	levelled.Lock()
