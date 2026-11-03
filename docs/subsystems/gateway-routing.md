@@ -560,14 +560,21 @@ an empty `access.Caller(ctx).KeyID`, and is refused 401 there. A
 read-only key is refused by `readOnlyGuard` (and again in the handler),
 and a held key (`heldKey`) 403 `gateway_key_held` even when it is told
 quotas. The account is named in `?user=`, and `codexResetsAsked` lets one
-ask per account run at a time (409). It calls `provider.SpendCodexReset`,
+ask per account run at a time (409). Bound by user, a request that
+names its user (`UserHeader`) spends only the resets of the Codex
+accounts that user is on (`resetNotUsers`, T-088, read through
+`sharedOf`): any other account is 403, alike for another user's and one
+nobody is on, with nothing spent; a request naming no user is the key's
+owner's, as before. It calls `provider.SpendCodexReset`,
 the Usage page's own code, then `RefreshUsage` of that card.
 `TestCodexResetNeedsAFullKey` in
 [`codex_reset_api_test.go`](../../internal/gateway/codex_reset_api_test.go)
 sends it without a key from loopback, `Origin: null`, an app scheme, a
 `*.localhost` page, a rebound Host and a foreign page, then with a wrong,
 read-only and held key, and expects nothing spent until the full key
-asks.
+asks. `TestCodexResetBoundByUserOnlyItsOwn` there has a user ask another
+user's account, one nobody is on and its own, and expects only its own
+spent.
 
 A remote provider serves the conversation, token-counting, System One,
 embeddings, rerank, speech-to-text, image generation/edit and video

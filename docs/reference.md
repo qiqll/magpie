@@ -2744,7 +2744,11 @@ browser page or app the gateway otherwise lets in there (Origin `null`, an
 app's scheme, a `*.localhost` page) included; a read-only key 403
 `gateway_key_read_only`; a key held to a budget, models or accounts 403
 `gateway_key_held`, whether or not it is told quotas. The account is
-always named (400 without `user`). A second ask for the same account
+always named (400 without `user`). With `--bind=user`, a request that
+names its user in `X-Magpie-User` spends only the resets of the Codex
+accounts that user is bound to: any other account is refused 403 with
+nothing spent. A request without the header is the key owner's, as
+before. A second ask for the same account
 while one is out is answered 409. Another magpie's Codex card uses this,
 and so can an app reading `/v1/magpie/quotas/cards`, such as a DSH
 provider plugin, with a key of full access.

@@ -1234,7 +1234,8 @@ var codexResetsAsked = struct {
 // without a key (Origin null, an app's scheme, a *.localhost page) is
 // refused, as is a request with no key at all. The account is named
 // (?user=), never "whichever is signed in", which a caller elsewhere
-// can't see; ?credit= picks one of its resets.each.
+// can't see; ?credit= picks one of its resets.each. Bound by user, a
+// user named spends only its own accounts' (resetNotUsers).
 func (s *Server) codexReset(w http.ResponseWriter, r *http.Request) {
 	if !local(r) && !sharedWith(r) {
 		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Network and sharing → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
@@ -1255,6 +1256,9 @@ func (s *Server) codexReset(w http.ResponseWriter, r *http.Request) {
 	user, credit := strings.TrimSpace(q.Get("user")), q.Get("credit")
 	if user == "" {
 		writeError(w, provider.Chat, http.StatusBadRequest, "name the Codex account whose reset is used: ?user=<its email>")
+		return
+	}
+	if s.resetNotUsers(w, r, user) {
 		return
 	}
 	key := strings.ToLower(user)
@@ -1287,6 +1291,41 @@ func (s *Server) codexReset(w http.ResponseWriter, r *http.Request) {
 		done()
 	}
 	writeJSON(w, 200, out)
+}
+
+// resetNotUsers refuses, bound by user, a Codex reset of account that
+// isn't one of the seats r's user (UserHeader) is bound to (sharedOf):
+// a user spends its own accounts' resets, never another user's (T-088).
+// It is 403 alike for another user's account, one nobody is bound to and
+// one that isn't signed in, so a user learns nothing of the others'. A
+// request that names no user is the key's owner's, as before; bound by
+// session nothing is refused. A user-accounts.json that can't be read is
+// unknown: refused, nothing spent.
+func (s *Server) resetNotUsers(w http.ResponseWriter, r *http.Request, account string) bool {
+	if !s.bind.byUser() {
+		return false
+	}
+	user, bad := userOf(r.Header)
+	if bad != "" {
+		writeError(w, provider.Chat, http.StatusBadRequest, bad)
+		return true
+	}
+	if user == "" {
+		return false
+	}
+	userBinds.Lock()
+	err := loadUsers()
+	b, _ := sharedOf(userKey(r), "codex", user)
+	userBinds.Unlock()
+	if err != nil {
+		writeError(w, provider.Chat, http.StatusServiceUnavailable, fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know which Codex accounts %q is on; no reset was used. Its log says why", UserHeader, user))
+		return true
+	}
+	if !seatIn(b.seats(), "codex@"+account) {
+		writeError(w, provider.Chat, http.StatusForbidden, fmt.Sprintf("%s: %q uses only the resets of the Codex accounts it is on; no reset was used", UserHeader, user))
+		return true
+	}
+	return false
 }
 
 func modelObject(e provider.Entry) map[string]any {

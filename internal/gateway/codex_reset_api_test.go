@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
@@ -170,4 +171,86 @@ func TestRemoteCodexResetThroughTheGateway(t *testing.T) {
 			t.Fatalf("after the reset: %+v", q.Resets)
 		}
 	}
+}
+
+// Bound by user (T-088), a request naming its user (UserHeader) spends
+// only the resets of the Codex accounts that user is on: another user's
+// account, or one nobody is on, is refused 403 alike with nothing spent,
+// whatever case it is named in. A request naming no user is the full
+// key's owner's, as before, and bound by session the user isn't read.
+func TestCodexResetBoundByUserOnlyItsOwn(t *testing.T) {
+	setup := func(t *testing.T, bySeat bool) (*resetBackend, func(account, user string) (int, string)) {
+		t.Helper()
+		codexSignedIn(t, "spare@example.com") // me: acct-1, spare: acct-2
+		t.Setenv("MAGPIE_ADDR", "")
+		b := newResetBackend(t, "acct-1", "acct-2")
+		_, secrets := newCaller(t, "Full")
+		now := time.Now().UTC()
+		writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+			"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: now, Tier: "free"},
+			"bob":   {Who: "codex@spare@example.com", Account: "spare@example.com", At: now, Tier: "free"},
+		}}})
+		srv := New()
+		if bySeat {
+			srv = byUserUpTo(t, srv, 1)
+		}
+		h := lanGuard(srv.Handler())
+		return b, func(account, user string) (int, string) {
+			t.Helper()
+			r := httptest.NewRequest("POST", provider.RemoteCodexResetPath+"?user="+url.QueryEscape(account), nil)
+			r.RemoteAddr, r.Host = "192.168.1.9:5000", "127.0.0.1:3425"
+			r.Header.Set("Authorization", "Bearer "+secrets[0])
+			if user != "" {
+				r.Header.Set(UserHeader, user)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			return w.Code, w.Body.String()
+		}
+	}
+	t.Run("bound by user", func(t *testing.T) {
+		b, do := setup(t, true)
+		for _, c := range []struct{ account, user string }{
+			{"spare@example.com", "alice"},
+			{"SPARE@example.com", "alice"},
+			{"nobody@example.com", "alice"},
+			{"me@example.com", "carol"}, // bound to nothing
+		} {
+			code, body := do(c.account, c.user)
+			if code != http.StatusForbidden || strings.Contains(body, `"code":"reset"`) || strings.Contains(body, "spare@") || strings.Contains(body, "me@") {
+				t.Errorf("%s asking %s: %d %s", c.user, c.account, code, body)
+			}
+			if _, spent := b.seen(); spent != "" {
+				t.Fatalf("%s asking %s spent a reset of %s", c.user, c.account, spent)
+			}
+		}
+		if code, body := do("me@example.com", "al ice\x00"); code != http.StatusBadRequest {
+			t.Errorf("a user that can't be taken: %d %s", code, body)
+		}
+		// her own: spent, of hers alone
+		var out provider.ResetOutcome
+		if code, body := do("ME@example.com", "alice"); code != 200 || json.Unmarshal([]byte(body), &out) != nil || out.Code != "reset" {
+			t.Fatalf("alice's own: %d %s", code, body)
+		}
+		if _, spent := b.seen(); spent != "acct-1" {
+			t.Fatalf("alice's own spent %q, want acct-1", spent)
+		}
+		// no user named: the key's owner's, any account
+		if code, body := do("spare@example.com", ""); code != 200 || json.Unmarshal([]byte(body), &out) != nil || out.Code != "reset" {
+			t.Fatalf("no user: %d %s", code, body)
+		}
+		if _, spent := b.seen(); spent != "acct-1,acct-2" {
+			t.Fatalf("spent %q, want acct-1,acct-2", spent)
+		}
+	})
+	t.Run("bound by session", func(t *testing.T) {
+		b, do := setup(t, false)
+		var out provider.ResetOutcome
+		if code, body := do("spare@example.com", "alice"); code != 200 || json.Unmarshal([]byte(body), &out) != nil || out.Code != "reset" {
+			t.Fatalf("by session: %d %s", code, body)
+		}
+		if _, spent := b.seen(); spent != "acct-2" {
+			t.Fatalf("spent %q, want acct-2", spent)
+		}
+	})
 }
