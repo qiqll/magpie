@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
-	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/budget"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/usage"
@@ -103,10 +102,10 @@ const maxNativeSearchRows = 20
 // kept, as no search row keeps one, and the row is counted nowhere: its
 // tokens are the request's.
 func logNativeSearches(ctx context.Context, n int, at time.Time, agent, providerID, host, model, user string) {
-	who := access.Caller(ctx)
+	keyID, keyName, issuer := rowCaller(ctx)
 	for range min(n, maxNativeSearchRows) {
 		budget.Append(usage.Record{Time: at, Agent: cmp.Or(agent, "magpie"), Kind: "web_search", Source: usage.SourceSearch,
 			Provider: providerID, Host: host, Requested: model, Model: model, Status: http.StatusOK,
-			CallerKeyID: who.KeyID, CallerKeyName: who.KeyName, CallerIssuerID: who.IssuerID(), User: user})
+			CallerKeyID: keyID, CallerKeyName: keyName, CallerIssuerID: issuer, User: user})
 	}
 }

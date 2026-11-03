@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/budget"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/usage"
 )
@@ -466,8 +467,12 @@ func (s *Server) systemOne(ctx context.Context, p provider.Provider, model strin
 	if p.Account == nil && p.Key != "" {
 		keyID, keyName = provider.KeyID(p.Key), p.KeyName
 	}
-	usage.Append(usage.Record{Time: start, Agent: usage.AgentOf(RouterAgent), Kind: "routing", Provider: p.ID, Host: p.Where(), Model: model, Requested: model, Served: use.Model,
+	// kept under the key of the turn it was asked for (rowCaller), and
+	// counted for that key as the turn's own row is (budget.Append)
+	callerID, callerName, issuer := rowCaller(ctx)
+	budget.Append(usage.Record{Time: start, Agent: usage.AgentOf(RouterAgent), Kind: "routing", Provider: p.ID, Host: p.Where(), Model: model, Requested: model, Served: use.Model,
 		ProviderKeyID: keyID, ProviderKeyName: keyName, ProviderAccount: accountOf(p), User: decideFor(ctx),
+		CallerKeyID: callerID, CallerKeyName: callerName, CallerIssuerID: issuer,
 		Input: use.Usage.Input, Output: use.Usage.Output, Millis: time.Since(start).Milliseconds(), Status: status, Archive: archived})
 	return b, nil
 }

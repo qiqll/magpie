@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -114,7 +115,49 @@ func (s *Server) forUser(ctx context.Context, r *http.Request) context.Context {
 	if user == "" {
 		return ctx
 	}
+	ctx = context.WithValue(ctx, askedKeyKey{}, askedKeyOf(r))
 	return context.WithValue(ctx, askedForKey{}, askedFor{userKey(r), user, strings.TrimSpace(r.Header.Get(UserTierHeader))})
+}
+
+// askedKeyKey holds, beside askedForKey, the gateway key of the turn
+// magpie's own ask is made for, for that ask's usage rows alone
+// (rowCaller): an ask that goes out in a context of its own (a decision
+// group's classifier, a Claude Code run's web search) carries no caller,
+// and its row went to the users of no key, by_use's and the user's usage
+// counting it in the shared group (T-095). It is never the ask's caller:
+// nothing but a row reads it.
+type askedKeyKey struct{}
+
+type askedKey struct{ id, name, issuer string }
+
+// askedKeyOf is the gateway key r came with, or the one r's own ask was
+// made for (userKey).
+func askedKeyOf(r *http.Request) askedKey {
+	if who := access.Caller(r.Context()); who.KeyID != "" {
+		return askedKey{who.KeyID, who.KeyName, who.IssuerID()}
+	}
+	k, _ := r.Context().Value(askedKeyKey{}).(askedKey)
+	return k
+}
+
+// rowCaller is the gateway key a usage row written in ctx is kept under:
+// ctx's caller, else the key of the turn ctx's ask was made for (forUser);
+// "" for neither.
+func rowCaller(ctx context.Context) (id, name, issuer string) {
+	if who := access.Caller(ctx); who.KeyID != "" {
+		return who.KeyID, who.KeyName, who.IssuerID()
+	}
+	k, _ := ctx.Value(askedKeyKey{}).(askedKey)
+	return k.id, k.name, k.issuer
+}
+
+// withAskedKey is ctx carrying the key as's ask was made for, as forUser
+// put it, for the rows of an ask that goes out in ctx in as's place.
+func withAskedKey(ctx, as context.Context) context.Context {
+	if k, ok := as.Value(askedKeyKey{}).(askedKey); ok {
+		return context.WithValue(ctx, askedKeyKey{}, k)
+	}
+	return ctx
 }
 
 // askAsUser names, on h, the headers of magpie's own ask, the user ctx
@@ -135,7 +178,7 @@ func askAsUser(ctx context.Context, h http.Header) {
 // run's web search, asked back through its MCP callback).
 func askedAs(ctx, as context.Context) context.Context {
 	if f, ok := as.Value(askedForKey{}).(askedFor); ok {
-		return context.WithValue(ctx, askedForKey{}, f)
+		return context.WithValue(withAskedKey(ctx, as), askedForKey{}, f)
 	}
 	return ctx
 }

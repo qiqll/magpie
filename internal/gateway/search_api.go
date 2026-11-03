@@ -16,7 +16,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/budget"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/usage"
@@ -193,8 +192,9 @@ func logSearch(ctx context.Context, rec usage.Record, query string, start time.T
 	if f := searchFor(ctx); f != nil && f.Agent != "" {
 		rec.Agent = f.Agent
 	}
-	who := access.Caller(ctx)
-	rec.CallerKeyID, rec.CallerKeyName, rec.CallerIssuerID = who.KeyID, who.KeyName, who.IssuerID()
+	// the key it was made for too (rowCaller): a Claude Code run's search,
+	// asked back through its MCP callback, comes with none of its own
+	rec.CallerKeyID, rec.CallerKeyName, rec.CallerIssuerID = rowCaller(ctx)
 	// the user it was made for (forUser, else the request's own), for
 	// the Usage page's Users (T-020), as appendUsage keeps a request's
 	if f, ok := ctx.Value(askedForKey{}).(askedFor); ok && rec.User == "" {

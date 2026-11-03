@@ -705,8 +705,9 @@ func appendUsage(r *http.Request, rec usage.Record) {
 	if rec.Subagent == "" {
 		rec.Subagent, rec.ParentAgent = subagentOf(r.Header)
 	}
-	who := access.Caller(r.Context())
-	rec.CallerKeyID, rec.CallerKeyName, rec.CallerIssuerID = who.KeyID, who.KeyName, who.IssuerID()
+	// its caller's key, or the key of the turn its ask was made for
+	// (rowCaller): by_use and the user's usage count it in that key's group
+	rec.CallerKeyID, rec.CallerKeyName, rec.CallerIssuerID = rowCaller(r.Context())
 	// the caller's user, for the Usage page's Users (T-020); a value
 	// UserHeader can't take is no user
 	if rec.User == "" {

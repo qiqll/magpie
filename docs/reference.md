@@ -2511,7 +2511,9 @@ over the week its total scaled to a week, over the five hours the 90th
 percentile of what it sent in any five hours. Its use is counted as the
 user is: under every gateway key of its group (the keys that share their
 users and callers without a key, or one key that doesn't), never the
-same name's under a key of another group. A user on several accounts of the provider
+same name's under a key of another group. What magpie asks for a
+user's turn itself (a decision classifier, a Claude Code run's web
+search) counts under the turn's key, as the turn does. A user on several accounts of the provider
 has its use spread evenly over them. A user with under a day of use
 counts as 1/`share` of an account, as many as it takes without
 `by_use`, and one of a tier with no limit (`share` 0) as nothing.
