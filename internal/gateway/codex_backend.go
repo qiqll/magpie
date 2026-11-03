@@ -811,8 +811,8 @@ func compactFirst(r *http.Request, model string, others []provider.Provider) *pr
 // B's account (T-085).
 //
 // A seal one of magpie's accounts wrote is read only when it is one of
-// the user's own (its seats, read only), else refused as a limit
-// (userLimitSaid) with nothing sent; the account is the log's alone.
+// the user's own (its seats, read only), else refused with a 400 naming
+// no account, with nothing sent (T-086); the account is the log's alone.
 // Gone, it is refused after, with nothing sent. Its writer answers it,
 // the sign-in its own seal, once usersOn has had its say (the user's
 // tier). Any other compact goes to one of the user's own (usersOn, bound
@@ -847,8 +847,12 @@ func (s *Server) usersCompactOn(r *http.Request, model string, body []byte, on, 
 		}
 		userBinds.Unlock()
 		if !seatIn(seats, cp.Who) {
-			return nil, &userRefusedError{u: &UserBound{User: user}, pid: p.ID, refused: userRefusal{status: http.StatusTooManyRequests,
-				msg: fmt.Sprintf("%s: the compaction for %s was sealed by %s, which isn't one of %q's accounts; nothing was sent", UserHeader, model, cp.Who, user)}}
+			// a 400, which Codex takes as final (InvalidRequest, no
+			// retry_delay): a 429 it asks again with any Retry-After,
+			// for a seal that will never be the user's
+			return nil, &userRefusedError{u: &UserBound{User: user}, pid: p.ID, refused: userRefusal{status: http.StatusBadRequest,
+				msg:  fmt.Sprintf("%s: the compaction for %s was sealed by %s, which isn't one of %q's accounts; nothing was sent", UserHeader, model, cp.Who, user),
+				said: fmt.Sprintf("%s: the compaction for %s was sealed by an account that isn't one of %q's, so it can't be read; nothing was sent. Start a new conversation", UserHeader, model, user)}}
 		}
 		if gone {
 			return on, nil

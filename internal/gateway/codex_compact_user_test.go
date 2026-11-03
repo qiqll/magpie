@@ -78,7 +78,7 @@ func codexCompactFor(h http.Handler, user, enc string, kv ...string) *httptest.R
 // whoever it was bound to, and signed the compact as it past serve:
 // alice's compact went to bob's. A seal is read only when one of the
 // user's accounts wrote it: one bob's account sealed is refused for alice
-// as a limit, naming no account, and nothing is sent. With the sign-in
+// with a 400 (T-086), naming no account, and nothing is sent. With the sign-in
 // on, a compact relayed on it went there whoever it was bound to. One
 // signing with its own chatgpt-account-id spends its own sign-in, and
 // goes as it came. Bound by session it goes where it went.
@@ -123,7 +123,7 @@ func TestUserCompactOnTheUsersOwnAccount(t *testing.T) {
 		wroteCheckpoint("gAAAAB-sealed-by-alices", sealedBy("third@example.com"))
 		h := byUserUpTo(t, New(), 1).Handler()
 		rec := codexCompactFor(h, "alice", "gAAAAB-sealed-by-bobs")
-		if rec.Code != http.StatusTooManyRequests || !strings.Contains(rec.Body.String(), userLimitSaid) || strings.Contains(rec.Body.String(), "@example.com") {
+		if rec.Code != http.StatusBadRequest || rec.Header().Get("Retry-After") != "" || strings.Contains(rec.Body.String(), "@example.com") {
 			t.Fatalf("alice on bob's seal: %d %s", rec.Code, rec.Body.String())
 		}
 		if got := asked("/responses/compact"); len(got) != 0 {
@@ -213,6 +213,44 @@ func TestUserCompactOnTheUsersOwnAccount(t *testing.T) {
 			t.Fatalf("compact went to %q, want compactOn's acct-2", got)
 		}
 	})
+}
+
+// A seal another user's account wrote is refused with a 400 Codex takes
+// as final, not a 429 it asks again (T-086): openai/codex maps a 400 to
+// InvalidRequest, which has no retry_delay, while a 429 is a RetryLimit
+// retried on its Retry-After, and the seal will never be the user's.
+// Asked again, it is refused the same way: no Retry-After, no limit, no
+// account named, and the user is told to start a new conversation.
+func TestUserCompactOnAnothersSealIsFinal(t *testing.T) {
+	codexSignedIn(t, "spare@example.com", "third@example.com")
+	asked := compactUpstream(t)
+	if err := provider.SetLoginOn("codex", "me@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	nativeOn(t, "codex")
+	now := time.Now().UTC()
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob":   {Who: "codex@spare@example.com", Account: "spare@example.com", At: now, Tier: "free"},
+		"alice": {Who: "codex@third@example.com", Account: "third@example.com", At: now, Tier: "free"},
+	}}})
+	wroteCheckpoint("gAAAAB-sealed-by-bobs", sealedBy("spare@example.com"))
+	h := byUserUpTo(t, New(), 1).Handler()
+	for i := range 2 {
+		rec := codexCompactFor(h, "alice", "gAAAAB-sealed-by-bobs")
+		body := rec.Body.String()
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("try %d: %d %s, want a 400", i, rec.Code, body)
+		}
+		if ra, lim := rec.Header().Get("Retry-After"), rec.Header().Get(UserLimitHeader); ra != "" || lim != "" {
+			t.Fatalf("try %d: Retry-After %q, %s %q: told to ask again", i, ra, UserLimitHeader, lim)
+		}
+		if strings.Contains(body, "@example.com") || strings.Contains(body, userLimitSaid) || !strings.Contains(body, "Start a new conversation") {
+			t.Fatalf("try %d: told %s", i, body)
+		}
+	}
+	if got := asked("/responses/compact"); len(got) != 0 {
+		t.Fatalf("alice on bob's seal asked %q", got)
+	}
 }
 
 // Bound by user, a turn or a web search for one of Codex's own models
