@@ -119,13 +119,15 @@ func TestStickKeyOwner(t *testing.T) {
 	}
 }
 
-// A name is one user under every gateway key (the owner's option A2,
-// 2026-10-30): its conversation is kept under one key whichever key it
-// comes by, so it isn't taken for a new one there, nor counted twice.
+// A name is one user under every gateway key that shares its users (the
+// owner's option A2, 2026-10-30, held to such keys by T-089): its
+// conversation is kept under one key whichever of them it comes by, so it
+// isn't taken for a new one there, nor counted twice.
 func TestUserStickSameUnderEveryKey(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked := cachedUpstream(t)
 	keys, secrets := newCaller(t, "k1", "k2")
+	shareUsers(t, keys[0].ID, keys[1].ID)
 	both := userBinding{Who: "codex@me@example.com", Account: "me@example.com", More: []userSeat{{Who: "codex@spare@example.com", Account: "spare@example.com"}}}
 	writeUsers(t, userFile{Keys: map[string]map[string]map[string]userBinding{
 		keys[0].ID: {"codex": {"alice": both}},
