@@ -34,7 +34,8 @@ import (
 // The quotas, their kept report, their history, the cards another magpie
 // reads and a card's refresh all go through it. The accounts' lanes
 // (/v1/magpie/concurrency) and the usage summary are still refused a
-// held key; a user bound by user is not held to its own there yet.
+// held key; a user bound by user is told its own seats' lanes and its own
+// calls on them there (usersSeats, userCalls; T-093).
 
 // quotaScope is what a held key with Quotas set, or a user bound by user,
 // may be told; nil is everything, for a key held to nothing and this
@@ -118,7 +119,7 @@ func (s *Server) usersSeats(w http.ResponseWriter, r *http.Request) (seats []use
 	}
 	userBinds.Unlock()
 	if err != nil {
-		writeError(w, provider.Chat, http.StatusServiceUnavailable, fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know which accounts %q is on and tells it none of their quotas. Its log says why", UserHeader, user))
+		writeError(w, provider.Chat, http.StatusServiceUnavailable, fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know which accounts %q is on and tells it nothing of them. Its log says why", UserHeader, user))
 		return nil, false, false
 	}
 	return seats, true, true

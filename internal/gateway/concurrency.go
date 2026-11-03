@@ -479,7 +479,9 @@ type Lane struct {
 // of those wait for a slot, and tools the Claude Code turns waiting on
 // their caller's tool results, which are not requests. Each is 0 when
 // idle, never left out.
-// active lists those requests one by one (Active), [] when idle.
+// active lists those requests one by one (Active), [] when idle. Bound
+// by user, a request that names its user is told the lanes of its own
+// accounts and keys (usersSeats) and the gateway's counts as before.
 func (s *Server) concurrency(w http.ResponseWriter, r *http.Request) {
 	if !local(r) && !sharedWith(r) {
 		writeError(w, provider.Chat, http.StatusForbidden, "magpie's concurrency is told to another machine only when magpie is shared on the local network and the request carries its API key")
@@ -488,10 +490,20 @@ func (s *Server) concurrency(w http.ResponseWriter, r *http.Request) {
 	if refuseHeld(w, r, heldRefused) {
 		return
 	}
+	seats, bound, ok := s.usersSeats(w, r)
+	if !ok {
+		return
+	}
 	lanes := s.Lanes()
 	waiting := 0
-	for _, ln := range lanes {
+	for who, ln := range lanes {
 		waiting += ln.Waiting
+		// bound by user, a user naming itself is told the lanes of the
+		// accounts and keys it is on alone (T-093): a lane's who names
+		// its account
+		if bound && !seatIn(seats, who) {
+			delete(lanes, who)
+		}
 	}
 	b := s.Busy()
 	writeJSON(w, 200, map[string]any{"object": "concurrency", "data": lanes, "requests": b.Requests, "waiting": waiting, "tools": b.Tools, "active": s.Active()})

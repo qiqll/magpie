@@ -564,7 +564,16 @@ request naming no user, or bound by session, is told what it was.
 `TestBoundUserToldItsOwnQuotas` in
 [`quotas_users_test.go`](../../internal/gateway/quotas_users_test.go)
 covers the five routes, another key's user of the same name and the
-unread file.
+unread file. `/v1/magpie/concurrency` tells such a request the lanes of
+the user's seats alone (`seatIn` over a lane's who), and
+`/v1/magpie/usage` the summary of its own calls (`Record.User` under a
+key of its group) that one of its seats answered (`Server.userCalls`,
+`seatOfCall` in [`usage_api.go`](../../internal/gateway/usage_api.go),
+`usage.SummarizeWhere`, T-093), both through `usersSeats`;
+`TestBoundUserToldItsOwnLanesAndUsage` in
+[`users_lanes_usage_test.go`](../../internal/gateway/users_lanes_usage_test.go)
+covers them. `/v1/magpie/usage/requests` and the `active` list don't
+narrow to the user yet.
 
 `POST /v1/magpie/quotas/codex-reset` (`Server.codexReset` in
 [`gateway.go`](../../internal/gateway/gateway.go), #3850) spends one of a

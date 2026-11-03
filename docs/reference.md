@@ -2773,8 +2773,12 @@ its own is refused a refresh (403), and a refresh that names none reads
 again only its own. A user on no account is told an empty list. A user
 header that can't be taken is 400, and a `user-accounts.json` that can't
 be read 503, with no card told. A request without the header is the key
-owner's, as before. `/v1/magpie/concurrency` and `/v1/magpie/usage`
-don't narrow to the user yet.
+owner's, as before. `/v1/magpie/concurrency` tells such a request the
+lanes (`data`) of that user's accounts and keys alone, with the
+gateway's counts as before, and `/v1/magpie/usage` the summary of its
+own calls answered by those accounts and keys: another user's calls, the
+same name under a key that doesn't share its users, and its own calls on
+an account it isn't on now are left out. The same 400 and 503 apply.
 
 A Codex account's rate-limit reset can be used through the gateway as
 the Usage page's **Use a reset** does (#3850, the same code):

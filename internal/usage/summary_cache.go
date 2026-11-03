@@ -108,6 +108,38 @@ func topSummary(p Period, now time.Time, n int) Summary {
 	return topOf(value, n)
 }
 
+// SummarizeWhere is Summarize of only the records keep keeps: a bound
+// user's own calls on its own accounts (T-093). It is worked out afresh
+// each time and never cached, and its first call and keyed providers are
+// of those records alone, so nothing of the others is in it.
+func SummarizeWhere(p Period, keep func(Record) bool) Summary {
+	p = p.shown()
+	now := Clock()
+	snapshot := readLogSnapshot()
+	kept := func(since time.Time) func(func(Record)) {
+		return func(fn func(Record)) {
+			snapshot.visit(since, func(r Record) {
+				if keep(r) {
+					fn(r)
+				}
+			})
+		}
+	}
+	// the first call and the providers called by key, as summarize reads
+	// them from its records
+	var first time.Time
+	keys := map[string]bool{}
+	kept(time.Time{})(func(r Record) {
+		if !r.IsRejected() && (first.IsZero() || r.Time.Before(first)) {
+			first = r.Time
+		}
+		if r.ProviderKeyID != "" {
+			keys[r.Provider] = true
+		}
+	})
+	return summarizeFrom(p, now, first, keys, kept(p.Since(now)))
+}
+
 // topOf is s with its top n sessions (all for n < 0).
 func topOf(s Summary, n int) Summary {
 	if n >= 0 && len(s.Sessions) > n {

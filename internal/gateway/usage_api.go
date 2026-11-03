@@ -1,12 +1,14 @@
 package gateway
 
 import (
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/usage"
 	"github.com/yetone/magpie/internal/usageapi"
 )
 
@@ -49,6 +51,40 @@ func refuseHeld(w http.ResponseWriter, r *http.Request, msg string) bool {
 	return true
 }
 
+// userCalls is, bound by user, which of the usage log's calls a request
+// naming its user (UserHeader) is told of in the summary (T-093): its own
+// (Record.User, under a key of its group, userGroup) that an account or
+// key it is on now answered (usersSeats). The summary of everyone's names
+// every account, key, user and session; the user is told its own calls on
+// its own accounts alone, as it is told their quotas alone (T-090).
+// bound is false, and keep nil, as usersSeats says: everything, as before.
+func (s *Server) userCalls(w http.ResponseWriter, r *http.Request) (keep func(usage.Record) bool, bound, ok bool) {
+	seats, bound, ok := s.usersSeats(w, r)
+	if !bound || !ok {
+		return nil, bound, ok
+	}
+	user, _ := userOf(r.Header)
+	userBinds.Lock()
+	sharers := maps.Clone(userBinds.sharers)
+	userBinds.Unlock()
+	g := groupOf(sharers, userKey(r))
+	return func(rec usage.Record) bool {
+		return rec.User == user && groupOf(sharers, rec.CallerKeyID) == g && seatIn(seats, seatOfCall(rec))
+	}, true, true
+}
+
+// seatOfCall is the account or key that answered rec, as a seat names it
+// (candidate.who): "" for a call neither answered.
+func seatOfCall(rec usage.Record) string {
+	if a := strings.TrimSpace(rec.Account()); a != "" {
+		return rec.Provider + "@" + strings.ToLower(a)
+	}
+	if rec.ProviderKeyID != "" {
+		return rec.Provider + "#" + rec.ProviderKeyID
+	}
+	return ""
+}
+
 func (s *Server) usageSummary(w http.ResponseWriter, r *http.Request) {
 	if !local(r) && !sharedWith(r) {
 		writeError(w, provider.Chat, http.StatusForbidden, usageRefused)
@@ -57,7 +93,16 @@ func (s *Server) usageSummary(w http.ResponseWriter, r *http.Request) {
 	if refuseHeld(w, r, "this gateway key is held to a budget, models or accounts, so it is told its own calls alone: GET /v1/magpie/usage/requests") {
 		return
 	}
-	out := usageapi.State(usageapi.PeriodOf(r.URL.Query().Get("period")))
+	keep, bound, ok := s.userCalls(w, r)
+	if !ok {
+		return
+	}
+	var out usageapi.Usage
+	if bound {
+		out = usageapi.StateWhere(usageapi.PeriodOf(r.URL.Query().Get("period")), keep)
+	} else {
+		out = usageapi.State(usageapi.PeriodOf(r.URL.Query().Get("period")))
+	}
 	if !local(r) {
 		out.Path = "" // where the log is on this machine
 	}
