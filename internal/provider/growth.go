@@ -24,9 +24,11 @@ package provider
 import (
 	"log"
 	"maps"
+	"reflect"
 	"slices"
 	"time"
 
+	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -302,7 +304,61 @@ func forgetAdded(agent string, users ...string) {
 	if !changed {
 		return
 	}
+	if len(p.AccountAdded) == 0 {
+		p.AccountAdded = nil
+		if reflect.DeepEqual(*p, Provider{ID: id}) {
+			// a record noteAdded made for the days alone goes with them
+			f.Providers = slices.Delete(f.Providers, i, i+1)
+		}
+	}
 	if err := store(f); err != nil {
 		log.Printf("providers.json: %v; when the removed accounts were added is kept", err)
 	}
+}
+
+// addedBut is every account of the agent's provider with a day (or marked
+// from before) but those of but: the ones a sign-out of all its sign-ins,
+// listed or not, takes.
+func addedBut(agent string, but []string) []string {
+	s, ok := storedPicks(labelProvider(agent))
+	if !ok {
+		return nil
+	}
+	var out []string
+	for u := range s.AccountAdded {
+		if !slices.ContainsFunc(but, func(b string) bool { return accountKey(b) == u }) {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// SignedOutOfPlugin takes the rows of the plugin's sign-ins out of
+// logins.json and drops their days, as `magpie plugin logout` signed every
+// one out: each signed in to again is new. The agent's own (a CLI's
+// sign-in the plugin reads) stays, with its day.
+func SignedOutOfPlugin(pp plugin.Provider) error {
+	if settings.AccountDiscoveryOff() {
+		return nil
+	}
+	agent := pluginAgent(pp)
+	var own []string
+	loginsMu.Lock()
+	ls := readLogins()
+	n := len(ls)
+	ls = slices.DeleteFunc(ls, func(l savedLogin) bool {
+		if l.Agent == agent && l.own() {
+			own = append(own, l.User)
+		}
+		return l.Agent == agent && !l.own()
+	})
+	if len(ls) != n {
+		if err := writeLogins(ls); err != nil {
+			loginsMu.Unlock()
+			return err
+		}
+	}
+	loginsMu.Unlock()
+	forgetAdded(agent, addedBut(agent, own)...)
+	return nil
 }

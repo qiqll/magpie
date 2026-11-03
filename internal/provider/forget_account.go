@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -66,6 +65,7 @@ func forgetPluginAccounts(pp plugin.Provider) error {
 	agent := pluginAgent(pp)
 	var errs []error
 	keys, users := map[string]bool{}, map[string]bool{}
+	userOf := map[string]string{}
 	var owners []string
 	for _, l := range pluginLogins(pp) {
 		if l.Own {
@@ -73,6 +73,7 @@ func forgetPluginAccounts(pp plugin.Provider) error {
 			continue
 		}
 		keys[l.acct.Key], users[strings.ToLower(l.User)] = true, true
+		userOf[l.acct.Key] = l.User
 	}
 	own := len(owners) > 0
 	// the agent's own sign-in first, while the list still has every
@@ -86,15 +87,23 @@ func forgetPluginAccounts(pp plugin.Provider) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// the accounts signed out, whose days go: one signing out failed for
+	// is still signed in, and keeps its day
+	var gone []string
+	all := false
 	if !own {
 		// every sign-in kept under the provider's id, listed or not
 		if err := plugin.SignOut(ctx, pp.ID, ""); err != nil {
 			errs = append(errs, err)
+		} else {
+			all = true
 		}
 	} else {
 		for k := range keys {
 			if err := plugin.SignOut(ctx, pp.ID, k); err != nil {
 				errs = append(errs, err)
+			} else {
+				gone = append(gone, userOf[k])
 			}
 		}
 	}
@@ -110,8 +119,12 @@ func forgetPluginAccounts(pp plugin.Provider) error {
 		}
 	}
 	loginsMu.Unlock()
+	if all {
+		// read once the rows are gone, which marks each from before
+		gone = addedBut(agent, nil)
+	}
 	// signed out by the user: each signed in to again is a new account
-	forgetAdded(agent, slices.Collect(maps.Keys(users))...)
+	forgetAdded(agent, gone...)
 	if PluginServes(pp.ID) {
 		// moving back would bring the accounts forgotten back from the
 		// backup the move set aside

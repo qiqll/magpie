@@ -604,3 +604,119 @@ func TestGrowthPluginInstalledAgainKeepsDays(t *testing.T) {
 		t.Fatalf("signed out by the user, the days kept: %v", s.AccountAdded)
 	}
 }
+
+// growthPlugin installs the fake plugin with an account from before and
+// one added four days ago: its provider's id, the new account and the one
+// from before.
+func growthPlugin(t *testing.T, ctx context.Context) (id, added, before string) {
+	t.Helper()
+	bun := testenv.Bun(t)
+	claudeHome(t)
+	t.Setenv("MAGPIE_BUN", bun)
+	t.Cleanup(plugin.Settle)
+	abs, _ := filepath.Abs("../plugin/testdata/fake/index.js")
+	if _, err := AddPlugin(ctx, abs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Import(ctx, "fakeco", map[string]any{"type": "oauth", "refresh": "r", "access": "a", "expires": 9e15, "accountId": "old-acct"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Providers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id = PluginID("fakeco")
+	pluginAccounts() // from before
+	pp, ok := PluginOf(id)
+	if !ok || len(pp.Accounts) != 1 {
+		t.Fatalf("fakeco's account from before: %+v", pp.Accounts)
+	}
+	before = accountKey(PluginAccountUser(pp.ID, pp.Accounts[0].Key))
+	if _, err := plugin.Import(ctx, "fakeco", map[string]any{"type": "oauth", "refresh": "r2", "access": "a2", "expires": 9e15, "accountId": "new-acct"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Providers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pluginAccounts()
+	s, _ := storedPicks(id)
+	if len(s.AccountAdded) != 1 {
+		t.Fatalf("one new plugin account, stamped: %v", s.AccountAdded)
+	}
+	for u := range s.AccountAdded {
+		added = u
+	}
+	addedAgo(t, id, added, 4*24*time.Hour)
+	return id, added, before
+}
+
+// Removing a plugin's accounts while its sign-ins aren't listed (its host
+// just started) signs out every one, listed or not, and each one's day
+// goes with it, the mark of one from before too.
+func TestGrowthForgetUnlistedPluginAccounts(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	id, _, _ := growthPlugin(t, ctx)
+	pp, ok := PluginOf(id)
+	if !ok {
+		t.Fatal("no fakeco plugin")
+	}
+	none := pp
+	none.Accounts = nil
+	if err := forgetPluginAccounts(none); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := storedPicks(id); len(s.AccountAdded) != 0 {
+		t.Fatalf("signed out by the user while not listed, the days kept: %v", s.AccountAdded)
+	}
+	if f, err := read(); err != nil || slices.ContainsFunc(f.Providers, func(p Provider) bool { return p.ID == id }) {
+		t.Fatalf("the record kept for the days alone outlived them: %v", err)
+	}
+}
+
+// Removing a plugin's listed accounts drops each one's day, and leaves no
+// mark of one from before, which its row leaving would write.
+func TestGrowthForgetListedPluginAccounts(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	id, _, _ := growthPlugin(t, ctx)
+	if err := ForgetAccount(id); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := storedPicks(id); len(s.AccountAdded) != 0 {
+		t.Fatalf("signed out by the user, the days kept: %v", s.AccountAdded)
+	}
+}
+
+// `magpie plugin logout` signs every sign-in of the plugin out: their rows
+// leave logins.json with their days, so one signed in to again is new.
+func TestGrowthSignedOutOfPlugin(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	id, added, _ := growthPlugin(t, ctx)
+	pp, ok := PluginOf(id)
+	if !ok {
+		t.Fatal("no fakeco plugin")
+	}
+	if err := plugin.SignOut(ctx, pp.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := SignedOutOfPlugin(pp); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(sharedLogins(), func(l savedLogin) bool { return l.Agent == pluginAgent(pp) }) {
+		t.Fatal("signed out, the plugin's rows kept")
+	}
+	if s, _ := storedPicks(id); len(s.AccountAdded) != 0 {
+		t.Fatalf("signed out, the days kept: %v", s.AccountAdded)
+	}
+	if _, err := plugin.Import(ctx, "fakeco", map[string]any{"type": "oauth", "refresh": "r3", "access": "a3", "expires": 9e15, "accountId": "new-acct"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Providers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pluginAccounts()
+	if at := accountAdded(id, added); time.Since(at) > time.Minute {
+		t.Fatalf("signed in to again after the sign-out, its day is %v", at)
+	}
+}

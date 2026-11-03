@@ -147,6 +147,10 @@ func pluginCmd(args []string) error {
 		if err := plugin.SignOut(ctx, pp.ID, ""); err != nil {
 			return err
 		}
+		// signed in to again, each is a new account to the growth policy
+		if err := provider.SignedOutOfPlugin(pp); err != nil {
+			return fmt.Errorf("signed out of %s; its accounts are still listed: %w", pp.Name, err)
+		}
 		fmt.Println(green.Render("✓"), "signed out of", pp.Name)
 		return nil
 	case "move", "migrate":
