@@ -4892,8 +4892,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		if !last && hw.failed() {
 			// nor here: a plugin's 401, a refused refresh's 502 on an
-			// account marked lapsed, which failureOf doesn't call failAuth
-			if f := failure(hw.code(), hw.errBody()); other == nil && f != failQuota && f != failCredit && !lapsedTry(c, hw.code(), hw.errBody()) {
+			// account marked lapsed, which failureOf doesn't call failAuth;
+			// nor an account's 401 not marked, a plugin's access token its
+			// refresh renews on the next request (plugins#618): no caller
+			// is told a sign-in (the owner's decision, 2026-10-29)
+			if f := failure(hw.code(), hw.errBody()); other == nil && f != failQuota && f != failCredit && !lapsedTry(c, hw.code(), hw.errBody()) &&
+				(c.p.Account == nil || hw.code() != http.StatusUnauthorized) {
 				other = &Try{Status: call.Status, Error: call.Error}
 			}
 			rest := s.restAfterMarked(c, hw.code(), hw.header, hw.errBody(), hw.sharedPool)
