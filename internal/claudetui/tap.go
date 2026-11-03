@@ -65,6 +65,9 @@ type tap struct {
 	// or never began, of stream limitsOf: told before the turn's end
 	limits   json.RawMessage
 	limitsOf int
+	// toldOf is the latest stream whose allowance was told with it: an
+	// older one's is never told after it
+	toldOf int
 }
 
 type tapStream struct {
@@ -182,10 +185,14 @@ func (t *tap) line(b []byte) {
 			t.started[st.id] = true
 			// as -p tells it, before the reply: the bridge says it on
 			// the reply's headers (limitHeaders)
-			if st.limits != nil {
+			if st.limits != nil && l.S > t.toldOf {
 				t.out.emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": st.limits})
-				st.limits = nil
+				t.toldOf = l.S
+				if t.limitsOf < l.S {
+					t.limits, t.limitsOf = nil, 0
+				}
 			}
+			st.limits = nil
 		}
 		if st == nil || st.id == "" || t.dropped[st.id] {
 			return
@@ -270,13 +277,14 @@ func (t *tap) settle() {
 }
 
 // keepLimits keeps what stream n's reply told of the allowance, not
-// told with its stream, for the turn's end: the latest reply's, as a
-// stream told mid-message would end it in the bridge.
+// told with its stream, for the turn's end, as a stream told mid-message
+// would end it in the bridge: the latest reply's, and only when no later
+// reply's was told already.
 func (t *tap) keepLimits(n int, st *tapStream) {
 	if st == nil || st.limits == nil {
 		return
 	}
-	if n >= t.limitsOf {
+	if n > t.toldOf && n >= t.limitsOf {
 		t.limits, t.limitsOf = st.limits, n
 	}
 	st.limits = nil

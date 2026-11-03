@@ -234,7 +234,8 @@ reset are both said, the reset rounded to a second. A streamed message
 tells it before its `message_start`, so the bridge keeps it
 (`NoteClaudeLimits`) before the reply begins. A reply whose message was
 told whole, or that never started one, tells it at the turn's end
-(`tap.settle`), the latest reply's only. A `<synthetic>` API error's own
+(`tap.settle`), and only when it is the latest: a later reply's told
+with its stream is never followed by an older one's. A `<synthetic>` API error's own
 `rate_limit_info` is told after that, as the newest. Before this, a
 successful turn in the interactive mode told no allowance (T-076).
 

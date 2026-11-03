@@ -362,3 +362,20 @@ func TestShimTellsTapLimits(t *testing.T) {
 		t.Fatalf("told %v after it", out[2])
 	}
 }
+
+// A reply's allowance kept for the turn's end is not told after a later
+// reply's told with its stream: the bridge keeps the last it hears.
+func TestTapKeptLimitsNotAfterNewer(t *testing.T) {
+	l := &lines{}
+	tp, write := testTap(t, l)
+	tr := newTranslator(l)
+	tr.tap = tp
+	older := strings.ReplaceAll(replyLimits, "0.42", "0.3")
+	write(`{"tap":"on"}`, `{"s":1,"open":true,"h":`+older+`}`, `{"s":1,"end":"cut"}`, `{"s":2,"open":true,"h":`+replyLimits+`}`)
+	write(tapReply(2, "msg_2")...)
+	tr.row(whole("msg_2"))
+	tr.row([]byte(`{"type":"system","subtype":"turn_duration"}`))
+	if got := limitsTold(t, l); !slices.Equal(got, []string{wantLimits}) {
+		t.Fatalf("told %v, want %s alone", got, wantLimits)
+	}
+}
