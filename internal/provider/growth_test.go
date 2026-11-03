@@ -239,7 +239,7 @@ func TestGrowthSwitchesCodexOnItsSecondDay(t *testing.T) {
 // its name; one renamed keeps its day; one removed and added again is new.
 func TestAddedIn(t *testing.T) {
 	signIn(t) // a home of its own: a plugin's provider id is read from it
-	a := savedLogin{ID: "a1", Agent: "codex", User: "a@example.com"}
+	a := savedLogin{ID: "a1", Agent: "codex", User: "a@example.com", Auth: json.RawMessage(`{"tokens":{}}`)}
 	b := savedLogin{ID: "b1", Agent: "plugin:acme", User: "B"}
 	added, renamed := addedIn([]savedLogin{a}, []savedLogin{a, b})
 	if len(added) != 1 || added[0] != (loginAccount{labelProvider("plugin:acme"), "b"}) || renamed != nil {
@@ -253,6 +253,14 @@ func TestAddedIn(t *testing.T) {
 	}
 	if added, _ = addedIn([]savedLogin{b}, []savedLogin{a}); len(added) != 1 {
 		t.Fatalf("added again after it was removed: %v", added)
+	} // the agent's own row written over with another account the agent
+	// signed in to (keepSideLogins): that one is new, not a rename
+	own := savedLogin{ID: "c1", Agent: "copilot", User: "octocat"}
+	other := own
+	other.User = "hubot"
+	added, renamed = addedIn([]savedLogin{own}, []savedLogin{other})
+	if len(added) != 1 || added[0] != (loginAccount{"copilot", "hubot"}) || renamed != nil {
+		t.Fatalf("another account on the own row: added %v renamed %v", added, renamed)
 	}
 }
 

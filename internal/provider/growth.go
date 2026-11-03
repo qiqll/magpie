@@ -128,22 +128,23 @@ func loginAccountOf(l savedLogin) loginAccount {
 // addedIn is what writing next over was adds to AccountAdded: each account
 // of next that was had neither by its stable id nor by its provider and
 // name (added), and each was had under another name (renamed, old to new),
-// whose time goes with it.
+// whose time goes with it. The agent's own row whose name changed is
+// another account the agent signed in to (keepSideLogins writes it over),
+// added, unless it is Copilot's host put in the name (copilotRenamed).
 func addedIn(was, next []savedLogin) (added []loginAccount, renamed map[loginAccount]loginAccount) {
-	byID := map[string]loginAccount{}
+	byID := map[string]savedLogin{}
 	had := map[loginAccount]bool{}
 	for _, l := range was {
-		a := loginAccountOf(l)
-		byID[loginID(l)] = a
-		had[a] = true
+		byID[loginID(l)] = l
+		had[loginAccountOf(l)] = true
 	}
 	for _, l := range next {
 		a := loginAccountOf(l)
 		if a.user == "" || had[a] {
 			continue
 		}
-		if old, ok := byID[loginID(l)]; ok {
-			if old != a {
+		if w, ok := byID[loginID(l)]; ok && (!l.own() || l.Agent == "copilot" && copilotRenamed(w.User, l.User)) {
+			if old := loginAccountOf(w); old != a {
 				if renamed == nil {
 					renamed = map[loginAccount]loginAccount{}
 				}

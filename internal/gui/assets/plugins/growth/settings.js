@@ -79,11 +79,11 @@ function renderGrowth(s) {
     d.push({ from: String(last + 1), window: "5h", cap: "90" });
     edit();
     redraw();
-    box.querySelector(".growth-stage:last-of-type .growth-from")?.focus(NO_SCROLL);
+    [...box.querySelectorAll(".growth-stage")].at(-1)?.querySelector(".growth-from")?.focus(NO_SCROLL);
   };
   const put = (stages) => writingPrefs(api("settings/growth", { stages }))
     .then((ns) => { growthDraft = null; growthErr = ""; prefs = state.settings = ns; renderSettings(); status(t("Saved"), "ok", 1500); })
-    .catch((e) => { growthErr = e.message; redraw(); });
+    .catch((e) => { growthErr = t(e.message); redraw(); });
   const save = el("button", "text growth-save", t("Save"));
   save.type = "button";
   save.disabled = !growthDraft;
