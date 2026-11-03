@@ -66,6 +66,7 @@ func fresh(t *testing.T) {
 	provider.ForgetCopilotForTest()
 	provider.ForgetRemoteCardsForTest()
 	provider.ForgetKeptCardsForTest()
+	provider.ForgetCodexClientsForTest()
 	remoteRefreshes.Lock()
 	remoteRefreshes.at = map[string]time.Time{}
 	remoteRefreshes.Unlock()

@@ -13,7 +13,9 @@
 // reading failed is not 0 but unknown: it is left out and counted as that;
 // so is a window an earlier reading (asOf) stands in for whose reset has
 // passed. A window only the vendor's text says has nothing to add up and is
-// left out. Unlimited only where every account read says so, and one
+// left out. A window the account can't spend, held by another used up that
+// starts again after it (heldBy: 0% of 7 days left, 100% of 5 hours), has
+// nothing left to count: it adds its whole as used (#4791). Unlimited only where every account read says so, and one
 // account's window alone is that account's, already below: only what two
 // or more have goes together (a Plus and a Pro account have no 5 hours in
 // common). The windows keep their family and pool, so familyWindows folds
@@ -36,12 +38,14 @@ function mergeQuotas(subs, now = Date.now()) {
       if (!kind) continue;
       const k = JSON.stringify([w.name, w.family || "", w.pool || "", w.unit || "", kind]);
       let m = by.get(k);
-      if (!m) by.set(k, (m = { w, kind, plan: q.plan || "", n: 0, stale: 0, amount: 0, limit: 0, balance: 0, used: 0, soon: null }));
+      if (!m) by.set(k, (m = { w, kind, plan: q.plan || "", n: 0, stale: 0, held: 0, amount: 0, limit: 0, balance: 0, used: 0, soon: null }));
       if (q.asOf && w.resetsAt && Date.parse(w.resetsAt) <= now) { m.stale++; continue; }
       m.n++;
-      if (kind === "c") { m.amount += Math.max(0, w.amount || 0); m.limit += w.limit; }
+      const held = w.heldBy && kind !== "u" && kind !== "b";
+      if (held) m.held++;
+      if (kind === "c") { m.amount += held ? w.limit : Math.max(0, w.amount || 0); m.limit += w.limit; }
       else if (kind === "b") m.balance += w.balance;
-      else if (kind !== "u") m.used += to100(w.used);
+      else if (kind !== "u") m.used += held ? 100 : to100(w.used);
       const at = w.resetsAt && Date.parse(w.resetsAt);
       if (at > now && (m.soon == null || at < m.soon)) m.soon = at;
     }
@@ -51,7 +55,7 @@ function mergeQuotas(subs, now = Date.now()) {
     if (m.n < 2) continue; // one account's is already below
     if (m.kind === "u" && m.n < read.length) continue;
     const { w } = m;
-    const out = { name: w.name, family: w.family, pool: w.pool, unit: w.unit, accounts: m.n, unknown: m.stale, how: m.kind[0] };
+    const out = { name: w.name, family: w.family, pool: w.pool, unit: w.unit, accounts: m.n, unknown: m.stale, held: m.held, how: m.kind[0] };
     if (m.kind === "u") out.unlimited = true;
     else if (m.kind === "c") Object.assign(out, { amount: m.amount, limit: m.limit, used: (100 * m.amount) / m.limit });
     else if (m.kind === "b") out.balance = m.balance;
@@ -89,6 +93,7 @@ function quotaAll(subs, cls = "", max = Infinity) {
       name + " · " + quotaText(w),
       t(w.how === "p" ? "The mean of {n} accounts on one plan" : w.how === "u" ? "Unlimited on each of {n} accounts" : "Added up over {n} accounts", { n: w.accounts }),
       w.unknown && t("{n} more read before it started again: left out", { n: w.unknown }),
+      w.held && t("{n} of them can't spend theirs before a longer window used up starts again: counted as none left", { n: w.held }),
       w.firstReset && t("The first of them starts again {when}", { when: resetClock(new Date(w.firstReset)) }),
       w.tiers && "\n" + tiersText(w));
     box.append(item);

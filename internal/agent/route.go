@@ -336,7 +336,7 @@ func buildModels(agent string) []catalog.Model {
 	shown, _ := provider.CatalogFor(agent)
 	labels := provider.Labels(shown)
 	// a model magpie describes images to takes them (provider.Described)
-	seen := provider.Described != nil && provider.Described()
+	seen := describedNow()
 	st, find := settings.Load(), provider.GroupFinder()
 	priceOf := provider.AgentPricer(st, find)
 	members := func(id string) []provider.Member {
@@ -412,6 +412,19 @@ func buildModels(agent string) []catalog.Model {
 	}
 	return out
 }
+
+// describedNow is provider.Described, asked once for every agent's list
+// while provider.StampNow stays the same, magpieModelsFor at most, as the
+// lists are kept: each list built asked the gateway's Vision pick again,
+// which ranks every provider's models that see, 553 MB of what a live
+// magpie allocated in 37 minutes for the same answer a dozen times over.
+func describedNow() bool {
+	return builtSeen.shared("", func() []bool {
+		return []bool{provider.Described != nil && provider.Described()}
+	})[0]
+}
+
+var builtSeen stampedLists[bool]
 
 // allResponses reports whether a group's members are all served best on
 // Responses, so the gateway relays a Responses request to whichever it

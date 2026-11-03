@@ -323,7 +323,7 @@ func (s *Server) browserMCPCall(r *http.Request, m mcpMessage) (any, map[string]
 	case "ping":
 		return map[string]any{}, nil
 	case "tools/list":
-		return map[string]any{"tools": browserTools()}, nil
+		return map[string]any{"tools": []any{browserOneTool()}}, nil
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -332,8 +332,21 @@ func (s *Server) browserMCPCall(r *http.Request, m mcpMessage) (any, map[string]
 		if err := json.Unmarshal(m.Params, &p); err != nil {
 			return nil, map[string]any{"code": -32602, "message": "invalid params: " + err.Error()}
 		}
-		if !browserToolNamed(p.Name) {
+		one, shot := p.Name == "browser", false
+		if one {
+			tool, args, wants, err := browserUnfold(p.Arguments)
+			if err != nil {
+				return toolResult(err.Error(), true), nil
+			}
+			p.Name, p.Arguments, shot = tool, args, wants
+		} else if !browserToolNamed(p.Name) {
 			return nil, map[string]any{"code": -32602, "message": "unknown tool " + p.Name}
+		}
+		said := func(r map[string]any) map[string]any {
+			if one {
+				browserSays(r)
+			}
+			return r
 		}
 		session := browserSession(r)
 		var tabs struct{ Action, Browser string }
@@ -341,18 +354,18 @@ func (s *Server) browserMCPCall(r *http.Request, m mcpMessage) (any, map[string]
 			json.Unmarshal(p.Arguments, &tabs)
 			switch tabs.Action {
 			case "browsers":
-				return toolResult(s.browser.list(session), false), nil
+				return said(toolResult(s.browser.list(session), false)), nil
 			case "use":
 				c, err := s.browser.choose(session, tabs.Browser)
 				if err != nil {
-					return toolResult(err.Error(), true), nil
+					return said(toolResult(err.Error(), true)), nil
 				}
-				return toolResult("Calls now go to "+c.id+" ("+c.name()+"). browser_tabs lists its tabs.", false), nil
+				return said(toolResult("Calls now go to "+c.id+" ("+c.name()+"). browser_tabs lists its tabs.", false)), nil
 			}
 		}
 		out, err := s.browser.call(r.Context(), session, p.Name, p.Arguments)
 		if err != nil {
-			return toolResult(err.Error(), true), nil
+			return said(toolResult(err.Error(), true)), nil
 		}
 		var result map[string]any
 		if json.Unmarshal(out, &result) != nil || result["content"] == nil {
@@ -368,9 +381,39 @@ func (s *Server) browserMCPCall(r *http.Request, m mcpMessage) (any, map[string]
 				}
 			}
 		}
-		return result, nil
+		if shot && result["isError"] != true {
+			s.browserShot(r, session, result)
+		}
+		return said(result), nil
 	}
 	return nil, map[string]any{"code": -32601, "message": "method not found: " + m.Method}
+}
+
+// browserShot adds a small picture of the window to an action's result.
+// One that can't be taken says so; the action still happened.
+func (s *Server) browserShot(r *http.Request, session string, result map[string]any) {
+	content, _ := result["content"].([]any)
+	out, err := s.browser.call(r.Context(), session, "browser_screenshot", nil)
+	var shot struct {
+		Content []struct{ Type, Data string }
+		IsError bool
+	}
+	if err == nil && json.Unmarshal(out, &shot) == nil && !shot.IsError {
+		for _, c := range shot.Content {
+			if c.Type != "image" {
+				continue
+			}
+			if small, ok := browserSmall(c.Data); ok {
+				result["content"] = append(content, map[string]any{"type": "image", "data": small, "mimeType": "image/jpeg"})
+				return
+			}
+		}
+	}
+	why := "it didn't answer with a picture"
+	if err != nil {
+		why = err.Error()
+	}
+	result["content"] = append(content, map[string]any{"type": "text", "text": "(no screenshot: " + why + ")"})
 }
 
 // list is the connected browsers, the one session's calls go to marked *.

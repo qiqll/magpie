@@ -223,6 +223,9 @@ func (p Provider) Sign(ctx context.Context, req *http.Request, proto Protocol, b
 		return errAccountDiscoveryOff
 	}
 	ctx = p.Via(ctx) // a sign-in refreshed on the way goes through its proxy
+	// the agent's own headers the provider lists (PassHeaders), before an
+	// account's signing, which has the last word on its own
+	passed := p.passClientHeaders(ctx, req.Header)
 	if p.Account != nil && p.Account.sign != nil {
 		return p.Account.sign(ctx, req, body)
 	}
@@ -253,6 +256,9 @@ func (p Provider) Sign(ctx context.Context, req *http.Request, proto Protocol, b
 	// ${sessionId} and ${threadId} in a value are the conversation's
 	// (conversation.go).
 	for k, v := range p.SentHeaders(ctx) {
+		if slices.ContainsFunc(passed, func(n string) bool { return strings.EqualFold(n, k) }) {
+			continue // the agent sent its own, which stands over the user's fixed one
+		}
 		if ListHeader(k) {
 			MergeList(req.Header, k, v)
 			continue
@@ -1797,11 +1803,14 @@ func copilotModels(ctx context.Context, app copilotApp) ([]catalog.Model, error)
 	}
 	copilotSeenMu.Unlock()
 	for _, m := range v.Data {
-		if m.Capabilities.Type != "chat" || copilotInternal.MatchString(m.ID) || m.Vendor == "Experimental" {
+		if m.Capabilities.Type != "chat" || copilotInternal.MatchString(m.ID) {
 			continue
 		}
-		// a model no picker offers is an old snapshot or Copilot's own
-		if !m.Picker && m.Category == "" {
+		// a model no picker offers is an old snapshot or Copilot's own; an
+		// Experimental vendor's is Copilot's own too, unless the picker
+		// offers it (#4343: mai-code-2-flash, an Enterprise account's,
+		// served on /responses)
+		if !m.Picker && (m.Category == "" || m.Vendor == "Experimental") {
 			continue
 		}
 		switch {

@@ -96,6 +96,14 @@ export const FakePlugin = async ({ client }) => ({
       cfg.provider[ID].models["sensenova-u1.5-lite"] = { name: "sensenova-u1.5-lite", limit: { context: 131072, output: 32768 } }
       cfg.provider[ID].models["flux-2"] = { name: "Flux 2", provider: { npm: "@ai-sdk/anthropic" }, limit: { context: 1000, output: 100 } }
     }
+    // $FAKE_LOOMY: iFlytek's Loomy gateway's three image generators as its
+    // /v1/models lists them (#4913), on the provider's openai-compatible;
+    // all three draw on its images API
+    if (process.env.FAKE_LOOMY) {
+      cfg.provider[ID].models["Hy-Image-3.5-preview"] = { name: "Hy-Image-3.5-preview", limit: { context: 131072, output: 32768 } }
+      cfg.provider[ID].models["doubao-seedream-5-lite"] = { name: "doubao-seedream-5-lite", limit: { context: 131072, output: 32768 } }
+      cfg.provider[ID].models["qwen-image-3.0-pro"] = { name: "qwen-image-3.0-pro", limit: { context: 131072, output: 32768 } }
+    }
     // $FAKE_GOOGLE: the provider's models are on Gemini's API, as XYenon's
     // Google AI Studio plugin gives them all (@ai-sdk/google), so it has
     // no OpenAI-compatible model
@@ -253,7 +261,7 @@ export const FakePlugin = async ({ client }) => ({
         // where magpie said the agent works, as the plugin read it; its own
         // headers go on too, as a plugin that sends on what it got sends
         // them, for the host to take off
-        for (const k of ["x-magpie-work-dir", "x-magpie-work-git", "x-magpie-fallback"]) if (h.has(k)) h.set("x-saw-" + k.slice(9), h.get(k))
+        for (const k of ["x-magpie-work-dir", "x-magpie-work-git", "x-magpie-fallback", "x-magpie-session", "x-magpie-subagent"]) if (h.has(k)) h.set("x-saw-" + k.slice(9), h.get(k))
         // $FAKE_QUEUE: that model is queued at the vendor, as Qoder's free
         // models are: waited out (here until magpie gives up) unless magpie
         // said it needn't be, then said at once with the queue's 503
@@ -393,6 +401,11 @@ export const FakePlugin = async ({ client }) => ({
       if (process.env.FAKE_ZEN) {
         p.models["mimo-v2.6-flash-free"] = { ...p.models["fake-1"], id: "mimo-v2.6-flash-free", name: "MiMo V2.6 Flash Free", api: { ...p.models["fake-1"].api, id: "mimo-v2.6-flash-free" }, free: true, variants: {},
           capabilities: {"temperature":true,"reasoning":true,"attachment":true,"toolcall":true,"input":{"text":true,"image":true,"audio":true,"video":true,"pdf":false},"output":{"text":true,"image":false,"audio":false,"video":false,"pdf":false},"interleaved":{"field":"reasoning_content"}} }
+        // a model as Command Code's plugin lists its plan's (#4436): it
+        // says what the model takes (text; audio, video, pdf no) and says
+        // nothing of images (m.images not a boolean there)
+        p.models["cc-plan-1"] = { ...p.models["fake-1"], id: "cc-plan-1", name: "CC Plan 1", api: { ...p.models["fake-1"].api, id: "cc-plan-1" }, free: true,
+          capabilities: {"temperature":true,"reasoning":true,"toolcall":true,"input":{"text":true,"audio":false,"video":false,"pdf":false},"output":{"text":true}} }
       }
       // $FAKE_KINDS: models as XYenon's magpie-google-ai-studio lists them
       // (#3279): the embedding as the report gives it (output text false,

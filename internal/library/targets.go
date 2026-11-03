@@ -52,6 +52,10 @@ type Target struct {
 	// gave it (held): a sync only takes things out of it, as they are
 	// unticked, and gives it nothing.
 	Gone bool
+	// SharedToo is an agent that reads ~/.agents/skills besides its own
+	// folder only from some version on (Pi, omp: sharedSince), with that
+	// version here; the others that always do are in readsShared
+	SharedToo bool
 	// Profile says the instructions file is the user's profile to the
 	// agent, not instructions alone (Alma's USER.md): magpie adds its part
 	// after the user's, but never moves the user's own lines out of it
@@ -201,8 +205,10 @@ func targetOf(a *agent.Agent) *Target {
 		// Pi 0.99 reads MCP servers itself, from its mcp.json; before it,
 		// and while an MCP extension replaces its own (pi-mcp-adapter,
 		// pi-mcp-extension), each extension reads its own file (pimcp.go)
-		t.MCP, t.MCPVia = piMCP(h, d, piVersion(a), piGlobalRoots())
+		v := piVersion(a)
+		t.MCP, t.MCPVia = piMCP(h, d, v, piGlobalRoots())
 		t.Skills = filepath.Join(d, "skills")
+		t.SharedToo = since(v, piSharedSince)
 	case "dsh":
 		// DeepSeek Harness reads $DSH_HOME/AGENTS.md and $DSH_HOME/skills;
 		// its MCP servers are @deepseek-ai/dsh-mcp-client rows its patch
@@ -220,6 +226,7 @@ func targetOf(a *agent.Agent) *Target {
 		// (discovery/builtin.ts), type choosing the transport
 		t.MCP = &mcpFile{Path: filepath.Join(d, "mcp.json"), Format: fmtOmp}
 		t.Skills = filepath.Join(d, "skills")
+		t.SharedToo = since(ompVersion(a), ompSharedSince)
 	case "omo":
 		// OmO's engine (senpi, a fork of Pi) reads its agent folder's
 		// AGENTS.md, skills and mcp.json — mcpServers in the shape Pi 0.99's
@@ -277,7 +284,11 @@ func targetOf(a *agent.Agent) *Target {
 		// its own would hide Claude Code's from it — and ~/.config/agents/
 		// skills, ~/.agents/skills (kimi_cli/skill), wherever KIMI_SHARE_DIR
 		// is; before its 1.x brand/generic split, only the first of all five.
-		// The new Kimi Code (2.x) reads its own and ~/.agents/skills only.
+		// The new Kimi Code (2.x) reads its own folder of skills
+		// ($KIMI_CODE_HOME/skills, else ~/.kimi-code/skills, docs/
+		// customization/skills.md "Skill Locations") and ~/.agents/skills:
+		// its skills go into its own, for one in the shared folder reaches
+		// every reader of it whatever the library ticks (#4379).
 		//
 		// Its MCP servers are the mcp.json in its folder, which the old
 		// kimi-cli (fastmcp's MCPConfig) and the new Kimi Code read alike.
@@ -288,7 +299,7 @@ func targetOf(a *agent.Agent) *Target {
 			// user-wide one (loadAgentsMdForRoots in packages/agent-core-v2/
 			// src/agent/profile/context.ts, MoonshotAI/kimi-code afd95f64)
 			t.Instructions = filepath.Join(a.Dir, "AGENTS.md")
-			t.Skills = sharedSkillsDir()
+			t.Skills = filepath.Join(a.Dir, "skills")
 		} else if d := filepath.Join(h, ".config", "agents", "skills"); isDir(d) {
 			t.Skills = d
 		} else {
@@ -928,8 +939,38 @@ func (l *Library) held(have []*Target) []*Target {
 }
 
 // readsShared are the agents that read ~/.agents/skills as well as their
-// own folder (each one's docs or source).
-var readsShared = []string{"codex", "gemini", "opencode", "deveco", "crush", "dsh", "commandcode", "devin", "droid", "cline", "grok", "grok-app", "fx", "alma"}
+// own folder (each one's docs or source): Kimi Code's own is
+// ~/.kimi-code/skills besides it (#4379). OmO's engine, senpi, a fork of
+// Pi from after Pi 0.54 (its oldest on npm is 0.74.0), reads it as Pi
+// does (core/package-manager.js, userAgentsSkillsDir, @code-yeongyu/senpi
+// 2026.5.13).
+var readsShared = []string{"codex", "gemini", "opencode", "deveco", "crush", "dsh", "commandcode", "devin", "droid", "cline", "grok", "grok-app", "fx", "alma", "kimi", "omo"}
+
+// Pi reads ~/.agents/skills from 0.54.0 (2026-02-19, its CHANGELOG: "Added
+// default skill auto-discovery for .agents/skills locations … global
+// skills from ~/.agents/skills"; userAgentsSkillsDir in
+// dist/core/package-manager.js, @earendil-works/pi-coding-agent 1.5.0),
+// and omp from 11.0.0 (src/discovery/agents.ts, "Load skills from
+// ~/.agents/skills"; 10.6.2 has no such provider). A Pi or omp whose
+// version isn't known is taken for one before, as magpie took every Pi:
+// it is given its own link, which a Pi from 0.68 reads once with the
+// shared folder's (it dedupes skills by their real path).
+const (
+	piSharedSince  = "0.54.0"
+	ompSharedSince = "11.0.0"
+)
+
+// ompVersion is the version of the omp on PATH, "" when not known.
+var ompVersion = func(a *agent.Agent) string { return a.InstalledVersion() }
+
+// since is whether version v, when known, is at or after first.
+func since(v, first string) bool { return v != "" && !agent.Newer(first, v) }
+
+// readsSharedDir is whether the agent reads ~/.agents/skills besides its
+// own folder, so a skill kept there reaches it whatever is ticked.
+func (t *Target) readsSharedDir() bool {
+	return t.SharedToo || slices.Contains(readsShared, t.Agent.ID)
+}
 
 // readsWith adds to each agent's SkillsAlso the agents whose folder it
 // reads skills from too: one that is the very same folder (Kimi Code's,
@@ -949,7 +990,7 @@ func readsWith(ts []*Target) {
 			if i == j || real[i] == "" || real[j] == "" || slices.Contains(t.SkillsAlso, o.Agent.ID) {
 				continue
 			}
-			if real[j] == real[i] || real[j] == shared && slices.Contains(readsShared, t.Agent.ID) {
+			if real[j] == real[i] || real[j] == shared && t.readsSharedDir() {
 				t.SkillsAlso = append(t.SkillsAlso, o.Agent.ID)
 			}
 		}

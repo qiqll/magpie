@@ -1342,7 +1342,15 @@ func codexIn(at place) *Agent {
 			if err := dropBase(); err != nil {
 				return err
 			}
-			if err := edit.DelTOMLTop(path, "model", "model_provider", "model_catalog_json"); err != nil {
+			// Codex as installed: OpenAI, its own catalog, its default
+			// model. A provider of the user's at the top stays (#4347):
+			// a reset takes magpie's keys out, not theirs, and Codex
+			// goes on resuming the threads it saved with theirs
+			keys := []string{"model", "model_catalog_json"}
+			if p := get("model_provider"); p == "" || p == "openai" || p == magpieID {
+				keys = append(keys, "model_provider")
+			}
+			if err := edit.DelTOMLTop(path, keys...); err != nil {
 				return err
 			}
 			dropList()
@@ -1374,8 +1382,18 @@ func codexIn(at place) *Agent {
 			// that. Wired so for that alone, it is marked (codex.out), for
 			// Sync to put it back beside the sign-in once the account has
 			// room again.
+			// Beside the sign-in only from a provider at the top that is
+			// magpie's to take down: its own, none, or CC Switch's mirror
+			// of OpenAI, as Join has it. A provider of the user's (CC
+			// Switch's custom, an older takeover's) is not taken down
+			// silently (#4347): every thread saved with it stopped
+			// resuming (modelProviderMismatch). The takeover names magpie
+			// and keeps the user's spelling in the stash, for Unwire to
+			// put back.
+			p := get("model_provider")
+			ours := asProvider() || p == "" || p == "openai" || isCCSwitchMirror(p)
 			chatgpt := !api() && chatGPT()
-			if chatgpt && !out() {
+			if chatgpt && !out() && ours {
 				forget(at.key("codex.out"))
 				if err := dropProvider(); err != nil {
 					return err
@@ -1401,7 +1419,10 @@ func codexIn(at place) *Agent {
 				}
 				return settle()
 			}
-			if chatgpt {
+			// codex.out is for an account the takeover stands in for: a
+			// provider of the user's taken over is magpie's doing, not
+			// the account's, so Sync never steps Codex out of it
+			if chatgpt && ours {
 				stash(map[string]string{at.key("codex.out"): "1"})
 			} else {
 				forget(at.key("codex.out"))
@@ -1649,8 +1670,13 @@ func codexIn(at place) *Agent {
 			// below: magpie becomes Codex's provider on that model as
 			// magpie serves it, the one picked kept (codex.out_own) to go
 			// back to once the account has room. One magpie serves on no
-			// account of its own is left as it is.
-			if m := get("model"); !isMagpie(m) && !api() && chatGPT() && joined() && out() {
+			// account of its own is left as it is, and so is one magpie
+			// could serve on that same account alone, with no fallback
+			// and no other account (provider.CodexServesWhileOut): every
+			// turn would be refused there too, and the takeover only hid
+			// the account and its reset and restarted the app twice
+			// (xiaoq6285 on Discord, one Plus account)
+			if m := get("model"); !isMagpie(m) && !api() && chatGPT() && joined() && out() && provider.CodexServesWhileOut(m) {
 				if id := codexOwnViaMagpie(m); id != "" {
 					stash(map[string]string{at.key("codex.out_own"): m})
 					return set(id)

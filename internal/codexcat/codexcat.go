@@ -21,6 +21,7 @@ import (
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/edit"
+	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -162,11 +163,40 @@ func TakesEffort(ms []catalog.Model, id string) string {
 		return ""
 	}
 	slug, chatgpt := strings.CutPrefix(id, "codex/")
-	if raw, ok := CacheEntries()[slug]; ok && (chatgpt || slug == id) {
-		d, _ := raw["default_reasoning_level"].(string)
+	if d, ok := cacheLevels()[slug]; ok && (chatgpt || slug == id) {
 		return d
 	}
 	return DefaultEffort(e)
+}
+
+// cacheLevels is the default_reasoning_level of each of CacheEntries'
+// models, read again only when models_cache.json changes: the window's
+// Codex effort field asks TakesEffort per model every 15s poll, and
+// reading and decoding the whole cache each time was 238 MB of what a
+// live magpie allocated in 37 minutes. Shared: read only.
+func cacheLevels() map[string]string {
+	levels, _ := filememo.Read("codex cache levels", catalog.CodexModelsCache(), func(b []byte) (map[string]string, error) {
+		var cache struct {
+			ETag   string `json:"etag"`
+			Models []struct {
+				Slug        string `json:"slug"`
+				Description string `json:"description"`
+				Level       any    `json:"default_reasoning_level"`
+			} `json:"models"`
+		}
+		if err := json.Unmarshal(b, &cache); err != nil {
+			return nil, err
+		}
+		out := map[string]string{}
+		for _, m := range cache.Models {
+			// as CacheEntries keeps them; a level that isn't a string is none
+			if m.Slug != "" && !catalog.MagpieAdded(cache.ETag, m.Slug, m.Description) {
+				out[m.Slug], _ = m.Level.(string)
+			}
+		}
+		return out, nil
+	})
+	return levels
 }
 
 // Catalog renders models as a whole models.json, for the effort this

@@ -483,10 +483,27 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-reader { grid-template-columns: minmax(0, 1fr); }
 .lib-md { margin: 0; max-height: min(60vh, 520px); overflow: auto; font: var(--code-style, normal) var(--code-weight, 400) 12px/1.6 var(--code-font, var(--code)); font-stretch: var(--code-stretch, 100%); color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--card-2); border-radius: 8px; padding: 12px 14px; user-select: text; -webkit-user-select: text; }
 .lib-reader .bar .lib-path { max-width: 70%; }
+/* a skill's files: Markdown as it reads, its front matter as rows, edited in place */
+.lib-skillfile .ehead { min-width: 0; }
+.lib-filepick { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 50%; height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg-2); font: inherit; font-size: 12px; cursor: pointer; }
+.lib-filepick span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-filepick:hover { color: var(--fg); border-color: var(--line-2); }
+.lib-mdview { max-height: min(60vh, 520px); overflow: auto; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); user-select: text; -webkit-user-select: text; }
+.lib-fm { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 0 0 12px; padding: 0 0 10px; border-bottom: 1px solid var(--line-2); font-size: 12px; line-height: 1.5; }
+.lib-fm dt { color: var(--faint); }
+.lib-fm dd { margin: 0; color: var(--fg-2); overflow-wrap: anywhere; }
+.lib-text.lib-skilltext { height: min(60vh, 520px); min-height: 200px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.lib-text.lib-skilltext:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.lib-skillfile .bar .lib-reaches { min-width: 0; flex: 0 1 auto; font-size: 11.5px; }
 .editor .editor-error:empty { display: none; }
 
 @media (max-width: 560px) {
   .lib-list .row { flex-wrap: wrap; }
+  /* a long command ellipsizes beside the row's picture rather than taking
+     the name to a line under it (tao0194) */
+  .lib-list .lib-row > .lib-glyph + .who, .lib-list .lib-row > .lib-logo + .who { max-width: calc(100% - var(--lib-indent)); }
+  .lib-skillfile .bar { flex-wrap: wrap; }
+  .lib-skillfile .bar .lib-reaches { flex-basis: 100%; }
   .lib-agents { max-width: 100%; }
 }
 
@@ -613,7 +630,7 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-health.auth { color: var(--amber); }
 .lib-health.auth::before { background: var(--amber); }
 .lib-health.err { color: var(--red); }
-.lib-health.err::before { background: var(--red); }
+.lib-health.err::before { background: var(--red); -webkit-mask: var(--x-mark) center / contain no-repeat; mask: var(--x-mark) center / contain no-repeat; border-radius: 0; transform: scale(1.5); }
 /* not checked here, nothing known against it: a ring, not a red dot (#2308) */
 .lib-health.unknown::before { background: transparent; box-shadow: inset 0 0 0 1.2px var(--faint); }
 /* a server that listed its tools: its status opens them, a chevron says so */
@@ -696,6 +713,10 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-vl.bare > .row.first { border-top: 0; }
 .lib-vl > .row.lib-skill { height: 51px; min-height: 0; padding: 7px 10px 7px 12px; gap: 11px; }
 .lib-vl > .row.lib-skill.src { height: 67px; }
+/* the "Off on this computer" tag's line (.lib-hereline: 20px and 3px
+   above it) is room the list counts too (library.js, HERE_H) */
+.lib-vl > .row.lib-skill.offhere { height: 74px; }
+.lib-vl > .row.lib-skill.src.offhere { height: 90px; }
 .lib-vl > .lib-skill .sub { display: block; white-space: nowrap; -webkit-line-clamp: none; }
 .lib-vl > .lib-skill .lib-src { margin-top: 2px; }
 /* a part of a group: the folder its skills sit in, or the start of their names */
@@ -778,3 +799,20 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .mk-sheet .mk-browser-folder > svg { grid-row: span 2; color: var(--fg-2); }
 .mk-sheet .mk-browser-folder-name { font-size: 12.5px; font-weight: 500; }
 .mk-sheet .mk-browser-folder-path { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+/* the ask is a line of its own under the row, from the name's left edge
+   to the row's right one (tao0194: in the name's column it was squeezed
+   between the command and the agents' chips); the line above keeps its
+   name, command and chips as every other server's row has them */
+.lib-row.lib-asking { flex-wrap: wrap; row-gap: 6px; }
+/* where a row's name starts: its picture (26px) and the row's gap, 12px in the window */
+.lib-list .lib-row { --lib-indent: 37px; }
+body.window .lib-list .lib-row { --lib-indent: 38px; }
+@media not all and (max-width: 560px) { .lib-row.lib-asking > .who { flex-basis: 0; } }
+.lib-browserask { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; order: 1; flex: 0 0 calc(100% - var(--lib-indent)); margin-left: var(--lib-indent); min-width: 0; font-size: 12px; color: var(--fg-2); cursor: default; }
+.lib-browserask[hidden] { display: none; }
+.lib-browserask-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex: none; }
+.lib-browserask-q { min-width: 0; flex: 1 1 220px; overflow-wrap: anywhere; }
+.lib-browserask-picks { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.lib-browserask-pick { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px 0 6px; font-size: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--fg); }
+.lib-browserask-pick:hover { background: var(--accent-soft); }
+.lib-browserask-pick .ic { width: 14px; height: 14px; }

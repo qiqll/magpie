@@ -10,6 +10,14 @@ const Command = "claude-tui-helper"
 // answer in their own Claude Code, and the run ends, saying so.
 const TrustEnv = "MAGPIE_CLAUDE_TUI_TRUST"
 
+// DeadlineEnv holds, in Unix milliseconds, when a one-off run's caller
+// (a /usage read, a test's "hi") stops waiting for it. The helper ends
+// then on its own, saying on its stderr what Claude Code hadn't done and
+// what it last drew. Killed at the caller's deadline instead, it said
+// nothing, and the reading's error was its exit code alone, "exit status
+// 1" on Windows (#4830).
+const DeadlineEnv = "MAGPIE_CLAUDE_TUI_BY"
+
 // Untrusted begins what the helper says, on its stderr, as it ends over a
 // folder it wasn't told to trust: the bridge then runs the turn in a
 // folder of magpie's.

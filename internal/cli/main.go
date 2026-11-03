@@ -15,6 +15,7 @@ import (
 
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/backup"
 	"github.com/yetone/magpie/internal/browsermcp"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/claudebridge"
@@ -66,10 +67,12 @@ const usage = `magpie — one place to pick every agent's model
   magpie save <name>              snapshot every agent's settings as a profile
   magpie use <name>               apply a profile
   magpie profiles                 list profiles
+  magpie rename <old> <new>       rename a profile
   magpie rm <name>                delete a profile
 
   magpie backup [--no-keys] [--no-library] [file]    providers, keys, settings, profiles, agent models and the library in one file, sealed with a passphrase
   magpie restore [--no-agents] [--no-library] <file> put a backup in on this machine
+                                                     --sign-ins on backup: the subscriptions' and plugins' sign-ins too, sealed (off unless given); --no-sign-ins on restore leaves them out
   magpie uninstall [--yes]                           disconnect every agent, putting back what each had, then remove magpie's service and files
   magpie webdav [on <address>|set k=v…|now|off]      the same, kept the same on every computer through a WebDAV folder (magpie webdav help)
   magpie s3 [on s3://<bucket>[/<prefix>]|set k=v…|now|off]   the same through an S3-compatible bucket: AWS, R2, B2, MinIO… (magpie s3 help)
@@ -374,6 +377,12 @@ func run(args []string) error {
 			}
 		}
 	}
+	// magpie serve beside another magpie serving the gateway (the app, a
+	// service, the copy an update left) waits for the port before it moves
+	// or starts anything, rather than doing it all to fail to bind (#4938)
+	if len(args) > 0 && args[0] == "serve" && plainServe(args[1:]) {
+		awaitGatewayFree(gatewayFreeEvery)
+	}
 	startUp()
 	// a provider added, edited or removed, or a list fetched anew, reaches
 	// the model lists agents keep in files of their own, behind the save
@@ -403,6 +412,8 @@ func run(args []string) error {
 	gateway.CodexDesktopChanged = agent.SyncCatalogSoon
 	// the setup kept the same on every computer, by whichever serves
 	gateway.WhileServing = append(gateway.WhileServing, davsync.Run)
+	// and the setup backed up into a folder here by itself (jwaitq)
+	gateway.WhileServing = append(gateway.WhileServing, backup.RunAuto)
 	// and dsh's patch lists, which dsh reads live: a route left behind by
 	// something else writing the file fails every session there until
 	// magpie writes its own list again
@@ -496,7 +507,7 @@ func run(args []string) error {
 		fmt.Println(green.Render("✓"), "catalog saved to", catalog.CachePath())
 		refreshLive(ctx)
 		return nil
-	case "save", "use", "rm", "profiles":
+	case "save", "use", "rm", "rename", "profiles":
 		return profiles(args)
 	case "import":
 		return importCmd(args[1:])
@@ -947,6 +958,17 @@ func profiles(args []string) error {
 			return err
 		}
 		fmt.Println(green.Render("✓"), "deleted profile", bold.Render(args[1]))
+		return nil
+	case "rename":
+		// a flag is never taken for a name to write (magpie snow --help
+		// wrote "--help" into a profile)
+		if len(args) != 3 || strings.HasPrefix(args[2], "-") {
+			return fmt.Errorf("usage: magpie rename <old> <new>")
+		}
+		if err := profile.Rename(args[1], args[2]); err != nil {
+			return err
+		}
+		fmt.Println(green.Render("✓"), "renamed profile", bold.Render(args[1]), "to", bold.Render(args[2]))
 		return nil
 	}
 	return nil

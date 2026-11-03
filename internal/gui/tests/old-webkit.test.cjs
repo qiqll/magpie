@@ -153,10 +153,15 @@ test("compat.js is the first of the page's own scripts", async () => {
   // open, claudemode.js when a Claude provider's editor opens, ctxtext.js
   // when a context window part is opened, resetask.js when a Codex reset's
   // Use is pressed, quotaall.js when a provider has two accounts,
-  // quitask.js when a Quit asks first, signagain.js when an account is to
-  // sign in again, cliproxy.js on an account's Export; the checks above
+  // quitask.js when a Quit asks first, checkinnow.js when Settings' Check
+  // in now for one account is pressed, autobackup.js when Settings draws
+  // Sync, scrollends.js on the window's first scroll, profilerename.js
+  // when a saved profile's Rename is pressed, keyspend.js when the
+  // provider editor draws a key's row, syncfiles.js when Sync's Export or
+  // Import opens, signagain.js when an account is to sign in again,
+  // cliproxy.js on an account's Export; the checks above
   // still read them
-  for (const f of await scripts()) if (!["webfonts.js", "cfgblocked.js", "signsheets.js", "ruleedit.js", "ratewindows.js", "traywindows.js", "autoresetown.js", "registry.js", "navlamp.js", "whatsnew.js", "claudemode.js", "ctxtext.js", "resetask.js", "quotaall.js", "quitask.js", "signagain.js", "cliproxy.js"].includes(f)) assert(all.includes(f), f + " is not loaded by index.html");
+  for (const f of await scripts()) if (!["webfonts.js", "cfgblocked.js", "signsheets.js", "ruleedit.js", "ratewindows.js", "traywindows.js", "autoresetown.js", "registry.js", "navlamp.js", "whatsnew.js", "claudemode.js", "ctxtext.js", "resetask.js", "quotaall.js", "quitask.js", "checkinnow.js", "autobackup.js", "scrollends.js", "profilerename.js", "settingshints.js", "keyspend.js", "syncfiles.js", "signagain.js", "cliproxy.js"].includes(f)) assert(all.includes(f), f + " is not loaded by index.html");
 });
 
 test("the styles hold up in Safari 15.0", async () => {

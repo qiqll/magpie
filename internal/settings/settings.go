@@ -352,16 +352,23 @@ type Settings struct {
 	// "<provider>|<display name>", which provider.adoptLegacyPluginCheckins
 	// carries over).
 	CheckinOff []string `json:"checkinOff,omitempty"`
-	// MemberModel has a reply's model name the routing group's member
-	// that answered, as magpie's provider/model id (workbuddy/glm-5.3-flash),
-	// for agents that count usage by the reply's model (#822). Off, as by
-	// default, a reply sent under another name than the one asked for (a
-	// group's member, a model's own id, a provider/model id) names the
-	// model the agent asked for (issennknight on Discord: an agent warned
-	// that deepseek-v4.1-flash came back as deepseek-v4.1-flash-1017);
-	// one the vendor named as asked keeps the vendor's name, a dated one
-	// too. Claude Code, Claude Desktop and Codex never get the member's
-	// id: they read the name themselves (gateway's replyNamingOf).
+	// ReplyModel is what a reply's model name says when the request went
+	// out under another name than the one asked for (a group's member, a
+	// model's own id, a provider/model id): "" the model the agent asked
+	// for (issennknight on Discord: an agent warned that
+	// deepseek-v4.1-flash came back as deepseek-v4.1-flash-1017), "member"
+	// magpie's provider/model id of the member that answered
+	// (workbuddy/glm-5.3-flash), for agents that count usage by it (#822),
+	// "vendor" the vendor's own text, as every reply said before the
+	// asked-for name (ZoeCats on Discord). One the vendor named as asked
+	// keeps the vendor's name, a dated one too. Each is for every agent,
+	// Claude Code, Claude Desktop and Codex included (gateway's
+	// replyNamingOf). A request's X-Magpie-Response-Model says it for
+	// that request alone. "asked" is read as "".
+	ReplyModel string `json:"replyModel,omitempty"`
+	// MemberModel is ReplyModel "member" as a magpie before ReplyModel
+	// kept it: read as that when ReplyModel isn't set, and written beside
+	// it for such a magpie (normal).
 	MemberModel bool `json:"memberModel,omitempty"`
 	// NoLoopGuard lets a streamed reply run on when its reasoning or text
 	// is stuck in a loop of the same few lines (#1359). Off, as by
@@ -569,6 +576,12 @@ type Settings struct {
 	// opening was too slow to have by default (the owner, 10-21: "太卡");
 	// one who turned it on keeps it on (LightweightOn).
 	Lightweight *bool `json:"lightweight,omitempty"`
+	// QuitNoAsk lets a Quit the user chooses quit at once while agents go
+	// through magpie, without the question that names them (gui's
+	// quitask.go). Off by default, it asks; the question's "Don't ask
+	// again" sets it, and Settings › General › Ask before quitting turns
+	// it back off (zhujiu on Discord).
+	QuitNoAsk bool `json:"quitNoAsk,omitempty"`
 	// KeepAwake keeps this computer from going to sleep by itself while
 	// agents work through the gateway and for a while after (xiao_wang24004
 	// on X; internal/awake). This computer's own (KeepOwn).
@@ -755,6 +768,11 @@ type Settings struct {
 	AgentOrder   []string `json:"agentOrder,omitempty"`
 	AgentsHidden []string `json:"agentsHidden,omitempty"`
 	AgentsShown  []string `json:"agentsShown,omitempty"`
+	// AgentsHere are the agents, by id, whose picks (model, effort…) stay
+	// on this computer (chenxiang0010 on Discord), as an MCP server can:
+	// sync, a Restore and a backup file neither bring another computer's
+	// picks in for one nor take this computer's up. This computer's own.
+	AgentsHere []string `json:"agentsHere,omitempty"`
 	// UsageOrder is how the Usage page's cards are listed, by provider id,
 	// as they were dragged there; one it doesn't name follows in magpie's
 	// own order. Only the page's: the order providers are tried in is the
@@ -1058,6 +1076,16 @@ const AnyProvider = "*/"
 // at once.
 const UpdateStable = "stable"
 
+// What a reply's model name says (ReplyModel): the model asked for is "".
+const (
+	ReplyAsked  = "asked" // read as ""
+	ReplyMember = "member"
+	ReplyVendor = "vendor"
+)
+
+// ReplyModels are ReplyModel's values besides its default "".
+var ReplyModels = []string{ReplyMember, ReplyVendor}
+
 // anArticle is the article a word takes where a message names it, so that an
 // input price is not "a input price".
 func anArticle(word string) string {
@@ -1342,6 +1370,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.RedactModelOff, s.RedactModelAuto = cur.RedactModelOff, cur.RedactModelAuto
 	s.ClaudeRunsMost = cur.ClaudeRunsMost
 	s.RequestArchiveLocal, s.RequestArchiveLocalMB = cur.RequestArchiveLocal, cur.RequestArchiveLocalMB
+	s.AgentsHere = cur.AgentsHere
 }
 
 // Wires is ModelWires with the provider's own id of each model the user
@@ -1805,6 +1834,19 @@ func SetGatewayConversations(on bool) error {
 	return save(s, true)
 }
 
+// SetQuitNoAsk sets QuitNoAsk alone, from what the file holds now (the
+// Quit question's "Don't ask again"). A settings file that can't be read
+// is left as it is, with the error.
+func SetQuitNoAsk(on bool) error {
+	defer lockFile()()
+	s, err := loadChecked()
+	if err != nil {
+		return err
+	}
+	s.QuitNoAsk = on
+	return save(s, false)
+}
+
 // RouterNoteMost is how many characters RouterNote keeps: a few words,
 // said before every tool's description.
 const RouterNoteMost = 80
@@ -2049,6 +2091,9 @@ func saveOwn(s Settings, recording, reads bool) error {
 	if math.IsNaN(s.BalanceAlert) || math.IsInf(s.BalanceAlert, 0) || s.BalanceAlert < 0 {
 		return fmt.Errorf("a balance alert is at an amount of 0 or more (0 for off), not %v", s.BalanceAlert)
 	}
+	if s.ReplyModel != "" && !slices.Contains(ReplyModels, s.ReplyModel) {
+		return fmt.Errorf("a reply's model names %q (the model asked for), %q or %q, not %q", ReplyAsked, ReplyMember, ReplyVendor, s.ReplyModel)
+	}
 	if s.QuotaReads != "" && s.QuotaReads != "asked" {
 		return fmt.Errorf(`allowances are read "" (whenever magpie needs them) or "asked" (only when asked), not %q`, s.QuotaReads)
 	}
@@ -2140,6 +2185,7 @@ func saveOwn(s Settings, recording, reads bool) error {
 		return err
 	}
 	s.AgentOrder, s.AgentsHidden, s.AgentsShown = ids(s.AgentOrder), ids(s.AgentsHidden), ids(s.AgentsShown)
+	s.AgentsHere = ids(s.AgentsHere)
 	s.UsageOrder = ids(s.UsageOrder)
 	s.PanelUsageHidden = ids(s.PanelUsageHidden)
 	s.UsageAgentsHidden = ids(s.UsageAgentsHidden)
@@ -2295,6 +2341,18 @@ func (s Settings) normal() Settings {
 			*w.at = (*w.ats)[0]
 		}
 	}
+	// a reply's model name: memberModel, as a magpie before replyModel
+	// kept it, when replyModel isn't set, and kept beside it for that
+	// magpie
+	switch s.ReplyModel {
+	case "":
+		if s.MemberModel {
+			s.ReplyModel = ReplyMember
+		}
+	case ReplyAsked:
+		s.ReplyModel = ""
+	}
+	s.MemberModel = s.ReplyModel == ReplyMember
 	// an account's own, by its name in lower case; one with none follows
 	// CodexWarmAt and isn't kept
 	if s.CodexWarmAtOf != nil {

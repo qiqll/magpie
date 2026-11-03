@@ -510,6 +510,10 @@ magpie.plugin("library", (ctx) => {
       take(v);
       if (glanced && tab !== "skills") return;
       if ((quiet === true || glanced) && seen(lib) === was) return;
+      // opening the page (its nav clicked, while on it too) draws it again
+      // only for a change, or for RTK's tab, which is asked again: a page
+      // drawn over again replaced the row under the reader's pointer (#3099)
+      if (quiet === "open" && seen(lib) === was && tab !== "rtk" && page.querySelector(":scope > .lib-body")) return;
       rtk = null; // asked again when its tab is drawn: an agent may have been installed since
       render();
     } catch (e) {
@@ -2039,7 +2043,7 @@ magpie.plugin("library", (ctx) => {
     if (s.signIn?.dead) nm.append(tag(t("Sign-in ran out"), "warn", t("Open it to sign in again")));
     else if (s.signIn?.signedIn) nm.append(tag(t("Signed in"), "lib-signed", t("The agents given it use magpie's sign-in")));
     // kept to this computer: sync carries it nowhere (huhuy72219405 on X)
-    if (s.local) nm.append(tag(t("This computer only"), "lib-local", t("Sync never carries it to your other computers")));
+    if (s.local) nm.append(tag(t("Not synced"), "lib-local", t("Sync never carries it to your other computers")));
     // out of the hub, each agent's own entry (#4382): said only while the hub is on
     if (lib.mcpHub && s.hub === "direct") nm.append(tag(t("Not through the router"), "lib-direct", t("Each agent is given its own entry for it, as with the MCP router off")));
     // its status beside the name, not in it: the name is still the name
@@ -2051,9 +2055,53 @@ magpie.plugin("library", (ctx) => {
     row.append(mark(s.icon, s.transport === "stdio" ? GLYPH.cmd : GLYPH.web), who, ...removeAct(() => confirmRemoveServer(s)),
       agentChips(withGone(all, s.agents), s.agents, chipsChange("servers/agents", s.name, "servers", (x) => serverRow(x, all)), { problems: s.problems, blocked: sseBlocked(s), all: true }));
     if (picking) return pickRow(row, s.name);
+    // a line of its own under the row, not in the name's column (tao0194)
+    if (s.name === "magpie-browser" && !s.agents?.length) row.append(browserAsk(row));
     row.onclick = () => editServer(s);
     row.title = t("Edit {name}", { name: s.name });
     return row;
+  }
+
+  // Magpie Browser connected and given to no agent: it is added opt-in, so
+  // until an agent is ticked the router offers it to none, and an agent
+  // asked to use the browser reached for something else (AppleScript).
+  // Once the extension connects, its row asks which agents may use it,
+  // each a button that clicks that agent's chip in the row; the first one
+  // taken, it says nothing more. Read again every few seconds while the
+  // row is shown, so connecting the extension shows it without a reload.
+  let browserSeen = null; // { at, link } — the last read of the extension's state, shared by redrawn rows
+  function browserLink() {
+    if (browserSeen && Date.now() - browserSeen.at < 2500) return browserSeen.link;
+    const link = api("library/browser").then((b) => !!b?.connected, () => false);
+    browserSeen = { at: Date.now(), link };
+    return link;
+  }
+  function browserAsk(row) {
+    const ask = el("div", "lib-browserask");
+    ask.hidden = true;
+    ask.onclick = (e) => e.stopPropagation();
+    const draw = () => {
+      const chips = [...row.querySelectorAll(":scope > .lib-agents > .lib-ag[data-agent]")].filter((c) => !cannot(c) && !c.classList.contains("gone"));
+      const picks = el("div", "lib-browserask-picks");
+      for (const c of chips) {
+        const b = button("", "lib-browserask-pick", () => { c.click(); ask.remove(); });
+        b.dataset.agent = c.dataset.agent;
+        b.append(agentIcon(agentOf(c.dataset.agent)?.icon), el("span", "", nameOf(c.dataset.agent)));
+        picks.append(b);
+      }
+      ask.replaceChildren(el("span", "lib-browserask-dot"), el("span", "lib-browserask-q", t("Connected to your browser. Which agents may use it? They act in your tabs, signed in as you are.")), picks);
+    };
+    const look = async () => {
+      if (!ask.isConnected && ask.dataset.drawn) return;
+      ask.dataset.drawn = "1";
+      const on = await browserLink();
+      if (on && ask.hidden) draw();
+      ask.hidden = !on;
+      row.classList.toggle("lib-asking", on);
+      setTimeout(look, 3000);
+    };
+    requestAnimationFrame(look);
+    return ask;
   }
 
   // A server's or a hook's own Remove on its row, as a skill's has (#2364,
@@ -2714,9 +2762,12 @@ magpie.plugin("library", (ctx) => {
     // kept to this computer: a sync neither carries it to the others nor
     // takes it away here (huhuy72219405 on X)
     const hereBox = el("div", "lib-localbox");
-    const drawHere = () => hereBox.replaceChildren(toggle(d.local, t("This computer only"), (on) => { d.local = on; drawHere(); }));
+    // said as sync, on while it syncs: "This computer only" read as a
+    // sharing switch (bin.90 on Discord). local keeps its meaning: on is
+    // kept here, so the switch shows and saves its opposite.
+    const drawHere = () => hereBox.replaceChildren(toggle(!d.local, t("Sync to your other computers"), (on) => { d.local = !on; drawHere(); }));
     drawHere();
-    ed.append(...field(t("This computer only"), hereBox, t("Sync never carries it to your other computers, and a sync from them neither removes it nor puts theirs in its place")));
+    ed.append(...field(t("Sync to your other computers"), hereBox, t("Off keeps it on this computer: sync never carries it to your other computers, and a sync from them neither removes it nor puts theirs in its place")));
     // with the hub on, a server can stay each agent's own entry (#4382,
     // cuipengcx90): one that reads its project from the folder it starts
     // in, or keeps a session's state. Shown only while the hub is on
@@ -3360,7 +3411,7 @@ magpie.plugin("library", (ctx) => {
       drawSkills(box, all);
       body.append(box);
       // under the list, so the skills stay where they were above it
-      if (all.length) body.append(skillHowBar());
+      if (all.length) body.append(skillHowBar(), skillWhereBar());
       if (picking) body.append(pickBar(all));
     }
     if (lib.newSkills?.length) renderNewSkills(body);
@@ -3509,6 +3560,10 @@ magpie.plugin("library", (ctx) => {
   // Heights the rows are held to (library.css): a list's room is known
   // without drawing it.
   const ROW_H = 51, ROW_SRC_H = 67, SUB_H = 36;
+  // and a skill off on this computer has its tag on a line of its own
+  // under the name (Tao on Discord: its description and path were cut off)
+  const HERE_H = 23;
+  const skillH = (s) => (s.source ? ROW_SRC_H : ROW_H) + (s.offHere ? HERE_H : 0);
 
   // By source (the groups, as they always were) or one flat list of every
   // skill by name, A→Z or Z→A (#481)
@@ -3743,7 +3798,7 @@ magpie.plugin("library", (ctx) => {
 
   // A group's list: its skills, or its parts, each a heading over its own.
   function groupItems(g, hits, all, filtering, redraw) {
-    const row = (s) => ({ key: "s\n" + s.name, h: s.source ? ROW_SRC_H : ROW_H, make: () => skillRow(skillNamed(s.name) || s, all) });
+    const row = (s) => ({ key: "s\n" + s.name, h: skillH(skillNamed(s.name) || s), make: () => skillRow(skillNamed(s.name) || s, all) });
     if (!g.parts) return hits.map(row);
     const hit = hits.length === g.skills.length ? null : new Set(hits);
     const items = [];
@@ -4694,6 +4749,23 @@ magpie.plugin("library", (ctx) => {
     return bar;
   }
 
+  // Where the skills go (usrname1833): to the agents each is ticked for,
+  // in their own folders, or also into ~/.agents/skills, which many agents
+  // and tools read, so each of them has every skill. The files stay in the
+  // library's folder either way; ~/.agents/skills gets links to them.
+  function skillWhereBar() {
+    const bar = el("div", "lib-skillhow lib-skillwhere");
+    bar.id = "lib-skillwhere";
+    const where = lib.sharedSkills ? "shared" : "agents";
+    bar.append(el("span", "label", t("Put skills in")), segs([["agents", t("Each agent's own folder")], ["shared", "~/.agents/skills"]], where, (w) => {
+      if (w !== where) change("skills/where", { how: w }, w === "shared" ? t("Every skill is in ~/.agents/skills now") : t("Skills go to the agents they're ticked for now"));
+    }));
+    bar.append(el("span", "note", where === "shared"
+      ? t("Every skill on here is linked into ~/.agents/skills too: each agent that reads that folder has every skill, whatever is ticked. The files stay in the library.")
+      : t("Each agent gets the skills ticked for it, in its own folder.")));
+    return bar;
+  }
+
   function openSkillHow() {
     const ed = el("div", "editor lib-editor lib-byagent-sheet lib-howsheet");
     const head = el("div", "ehead");
@@ -5488,24 +5560,101 @@ magpie.plugin("library", (ctx) => {
     openLib(ed);
   }
 
-  async function viewSkill(s) {
-    const ed = el("div", "editor lib-editor lib-reader");
+  // A skill's files, read and edited here (refeccd on Discord: skills
+  // handed over from ~/.agents/skills had no other place to be edited).
+  // Markdown is shown as it reads, its front matter as rows; Save writes
+  // the library's folder, so every agent given the skill gets it.
+  async function viewSkill(s, file = "") {
+    const ed = el("div", "editor lib-editor lib-reader lib-skillfile");
     const head = el("div", "ehead");
-    head.append(mark(s.icon, GLYPH.skill), el("b", "", s.name), el("span", "grow"));
-    const pre = el("pre", "lib-md", "…");
-    ed.append(head, pre);
+    const pick = el("button", "lib-filepick");
+    pick.type = "button";
+    pick.hidden = true;
+    head.append(mark(s.icon, GLYPH.skill), el("b", "", s.name), pick, el("span", "grow"));
+    const body = el("div", "lib-skillbody");
     const bar = el("div", "bar");
-    const where = el("span", "note");
-    bar.append(where, el("span", "grow"), button(t("Close"), "", closeLibModal));
-    ed.append(bar);
-    modal = {};
+    ed.append(head, body, bar);
+    let cur = null, ta = null;
+    const lf = (x) => x.replace(/\r\n?/g, "\n");
+    modal = { dirty: () => !!(ta && cur && ta.value !== lf(cur.text)) };
+    const read = async (f) => {
+      body.replaceChildren(el("pre", "lib-md", "…"));
+      try {
+        cur = await api("library/skill?name=" + encodeURIComponent(s.name) + (f ? "&file=" + encodeURIComponent(f) : ""));
+        show();
+      } catch (e) {
+        body.replaceChildren(el("pre", "lib-md", e.message));
+        bar.replaceChildren(el("span", "grow"), button(t("Close"), "", closeLibModal));
+      }
+    };
+    const swap = async (f) => {
+      if (f === cur?.file || modal.dirty() && !(await confirmDiscard())) return;
+      ta = null;
+      read(f);
+    };
+    pick.onclick = (e) => {
+      e.stopPropagation();
+      openProtoMenu(pick, cur.files.map((f) => ({ v: f, name: f, literalName: true, note: "" })), cur.file, swap, "Files");
+    };
+    const show = () => {
+      ta = null;
+      pick.hidden = !(cur.files?.length > 1);
+      pick.replaceChildren(el("span", "", cur.file), svg(CHEV, 10, 1.7));
+      body.replaceChildren(rendered(cur));
+      const where = el("span", "note");
+      where.append(pathLink(cur.path));
+      bar.replaceChildren(where, el("span", "grow"), button(t("Edit"), "", edit), button(t("Close"), "", closeLibModal));
+    };
+    const edit = () => {
+      ta = el("textarea", "lib-text lib-skilltext");
+      ta.spellcheck = false;
+      ta.value = lf(cur.text);
+      ta.onkeydown = (e) => {
+        if (e.isComposing || e.keyCode === 229) return;
+        if (e.key === "Escape") return;
+        e.stopPropagation();
+        if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); save(); }
+      };
+      body.replaceChildren(ta);
+      const note = el("span", "note lib-reaches", t("Saved in the library: every agent given {name} gets it", { name: s.name }) + " · " + (/^Mac/.test(navigator.platform) ? "⌘S" : "Ctrl+S"));
+      bar.replaceChildren(note, el("span", "grow"), button(t("Cancel"), "", async () => { if (!modal.dirty() || await confirmDiscard()) show(); }), button(t("Save"), "primary", save));
+      ta.focus({ preventScroll: true });
+      ta.setSelectionRange(0, 0);
+    };
+    const save = async () => {
+      if (!ta) return;
+      if (!modal.dirty()) return show();
+      const f = cur.file;
+      if (await change("skills/save", { name: s.name, file: f, text: ta.value, was: cur.text }, t("{name} saved", { name: f }))) {
+        ta = null;
+        read(f);
+      }
+    };
     openLib(ed);
-    try {
-      const r = await api("library/skill?name=" + encodeURIComponent(s.name));
-      pre.textContent = r.text;
-      where.replaceChildren(pathLink(r.path));
-    } catch (e) { pre.textContent = e.message; }
+    read(file);
   }
+  // a skill's file as it reads: Markdown drawn, front matter as rows
+  // (name, description), anything else as its text
+  function rendered(f) {
+    if (!/\.(md|markdown)$/i.test(f.file) || !window.mdRender) return el("pre", "lib-md", f.text);
+    const text = f.text.replace(/\r\n?/g, "\n");
+    const box = el("div", "lib-mdview");
+    const m = text.match(/^---\n([\s\S]*?)\n---[ \t]*(?:\n|$)/);
+    if (m) {
+      const meta = [];
+      for (const line of m[1].split("\n")) {
+        const kv = line.match(/^([\w.-]+):\s*(.*)$/);
+        if (kv) meta.push([kv[1], kv[2]]);
+        else if (meta.length && line.trim()) meta[meta.length - 1][1] += " " + line.trim();
+      }
+      const dl = el("dl", "lib-fm");
+      for (const [k, v] of meta) dl.append(el("dt", "", k), el("dd", "", v.replace(/^[>|][-+]?\s*/, "").trim().replace(/^(["'])(.*)\1$/, "$2")));
+      if (meta.length) box.append(dl);
+    }
+    box.append(window.mdRender(m ? text.slice(m[0].length) : text));
+    return box;
+  }
+
 
   function foundSkillRow(f) {
     const row = el("div", "row lib-row lib-found");
@@ -6197,7 +6346,7 @@ magpie.plugin("library", (ctx) => {
       document.addEventListener("visibilitychange", () => { if (!document.hidden) quietLoad(); });
       window.addEventListener("focus", quietLoad);
     },
-    open: () => (loading = load()),
+    open: () => (loading = load("open")),
     relang: () => load(),
     // one of the market's servers up close, from another page (Settings ›
     // Images' Magpie Image, #2091, Magpie Image Recognition, and Settings ›

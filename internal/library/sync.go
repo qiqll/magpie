@@ -119,6 +119,8 @@ func syncSteps(all, gone []*Target, b *backups, res *Result) []func(*Library) {
 	// ~/.agents/skills first: an agent that reads it too gets no second
 	// link to what is there already
 	shared := realDir(sharedSkillsDir())
+	steps = append(steps, func(l *Library) { l.sweepShared(append(slices.Clone(all), gone...), res) })
+	steps = append(steps, func(l *Library) { l.syncShared(all, res) })
 	for _, first := range []bool{true, false} {
 		for _, t := range all {
 			switch {
@@ -497,6 +499,10 @@ type View struct {
 	Backups      string            `json:"backups"`
 	SkillGroups  []SkillGroup      `json:"skillGroups"`
 	CopySkills   bool              `json:"copySkills"` // the library gives skills as copies (#896)
+	// SharedSkills: every skill on here is in ~/.agents/skills too
+	// (skills_shared.go), at SharedDir
+	SharedSkills bool   `json:"sharedSkills"`
+	SharedDir    string `json:"sharedDir"`
 	// MCPHub: the agents are given magpie's one MCP server in place of
 	// the library's (#2679), at HubPath<agent> on the gateway
 	MCPHub  bool   `json:"mcpHub"`
@@ -568,7 +574,7 @@ func readView(problems []Problem, glance bool) (*View, error) {
 	// the agents are found once for the whole read: finding them looks
 	// through every agent's folders, in WSL too (#1624)
 	targets, asleep := targetsAsleep(false)
-	v := &View{Agents: []AgentView{}, Servers: []ServerView{}, Skills: []SkillView{}, FoundSkills: []FoundSkill{}, Instructions: l.instructionsView(targets, asleep), Dir: Dir(), Backups: BackupDir(), CopySkills: l.CopySkills, MCPHub: l.MCPHub, HubPath: gateway.HubMCPPath, HubNote: settings.Shared().RouterNote, HubName: gateway.HostName(), Partial: glance}
+	v := &View{Agents: []AgentView{}, Servers: []ServerView{}, Skills: []SkillView{}, FoundSkills: []FoundSkill{}, Instructions: l.instructionsView(targets, asleep), Dir: Dir(), Backups: BackupDir(), CopySkills: l.CopySkills, SharedSkills: l.SharedSkills, SharedDir: sharedSkillsDir(), MCPHub: l.MCPHub, HubPath: gateway.HubMCPPath, HubNote: settings.Shared().RouterNote, HubName: gateway.HostName(), Partial: glance}
 	for _, t := range targets {
 		av := AgentView{ID: t.Agent.ID, Name: t.Agent.Name, Icon: t.Agent.Icon, Instructions: t.Instructions, Skills: t.Skills,
 			SkillsAlso: t.SkillsAlso, Note: t.Note, MCPVia: t.MCPVia, ProjectSkills: ProjectSkillsDir(t.Agent.ID), ProjectMCP: ProjectMCPFile(t.Agent.ID),
@@ -674,16 +680,25 @@ func readView(problems []Problem, glance bool) (*View, error) {
 		} else if _, err := os.Lstat(p); err == nil && sv.Kind == "folder" {
 			sv.Kind, sv.Source = "", ""
 		}
-		if sv.Shared = sharedEntry(s.Name); sv.Shared != "" {
+		// kept in ~/.agents/skills by the user, or put there by the
+		// setting: every agent reading that folder has it
+		sv.Shared = sharedEntry(s.Name)
+		if sv.Shared != "" {
 			sv.SharedElsewhere = !within(realDir(skillDir(s.Name)), realDir(sharedSkillsDir()))
+		}
+		if sv.Shared != "" || l.inSharedHere(s) {
 			for _, t := range targets {
-				if t.Skills != "" && (slices.Contains(readsShared, t.Agent.ID) || realDir(t.Skills) == realDir(sharedSkillsDir())) {
+				if t.Skills != "" && (t.readsSharedDir() || realDir(t.Skills) == realDir(sharedSkillsDir())) {
 					sv.Always = append(sv.Always, t.Agent.ID)
 				}
 			}
 		}
 		if o, ok := ccSwitchOrigin(s); ok {
 			o.Path = ""
+			sv.Origin = o.String()
+		} else if o, ok := lockOrigin(s); ok {
+			// one the skills CLI installed: the row says where its lock
+			// says it came from (#4645)
 			sv.Origin = o.String()
 		}
 		if m, ok := readMeta(skillDir(s.Name)); ok {

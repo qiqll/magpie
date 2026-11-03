@@ -1,15 +1,18 @@
 package gateway
 
-// The browser MCP server's tools, carried out by the extension
-// (internal/browserext/ext/background.js), whose argument names these
-// schemas give.
+// The extension's tools (internal/browserext/ext/background.js), whose
+// argument names these schemas give. The server lists one tool, browser
+// (browser_one.go), whose actions are these; their names are still taken
+// from a client that listed them before.
 
-const browserInstructions = `These tools use the user's own browser (Chrome, Edge or another Chromium browser with Magpie Browser installed): its real tabs, signed in to the sites the user is signed in to. Use it when a task needs the user's sessions or a real browser.
+const browserInstructions = `The browser tool uses the user's own browser (Chrome, Edge or another Chromium browser with Magpie Browser installed): its real tabs, signed in to the sites the user is signed in to. Use it when a task needs the user's sessions or a real browser.
 How to work:
-- Start with browser_tabs or browser_snapshot. Calls go to the tab the user is looking at until you open or select another (to a new tab of your own when another agent works in that one); tabs you open go in your own tab group ("Magpie", or "Magpie 2" and on beside other agents). Leave the tabs browser_tabs marks ~ to the agents working in them.
-- With two browsers connected (Chrome and Edge, or two profiles), calls go to the last to connect: browser_tabs with action browsers lists them, and action use picks one.
-- browser_snapshot shows the page as an accessibility tree. Elements you can act on carry a ref (e12); pass it to browser_click, browser_type and the rest. Refs stay the element's while the page keeps it. Every action answers with the page after it, so you rarely need another snapshot.
-- Prefer refs to browser_evaluate. Use browser_screenshot when the layout or an image matters.
+- Start with action tabs or snapshot. Calls go to the tab the user is looking at until you open or select another (to a new tab of your own when another agent works in that one); tabs you open go in your own tab group ("Magpie", or "Magpie 2" and on beside other agents). Leave the tabs that tabs marks ~ to the agents working in them.
+- With two browsers connected (Chrome and Edge, or two profiles), calls go to the last to connect: action browsers lists them, and use_browser picks one.
+- snapshot shows the page as an accessibility tree. Elements you can act on carry a ref (e12); pass it to click, type and the rest. Refs stay the element's while the page keeps it. Every action answers with the page after it, so you rarely need another snapshot.
+- Frames from other sites (a payment form, a sign-in box, an embedded editor) are read and acted on like the rest of the page.
+- A failure starts with its kind and says whether trying again can help: STALE_REF and AMBIGUOUS (take a snapshot, use a ref from it), UNACTIONABLE (the page must change first), BAD_ARGS, WAIT_TIMEOUT, SITE_REFUSED (the site turned the browser away: tell the user), LOAD_FAILED, PAGE_BLOCKED, USER_STOPPED, DIALOG_OPEN, SCRIPT_ERROR, and OUTCOME_UNKNOWN (the page changed mid-action: snapshot before doing it again). A click answered NO_EFFECT changed nothing on the page: check before clicking again.
+- Prefer refs to evaluate. When the layout or an image matters, add screenshot: true to an action (a small picture of the window comes with its answer), or take a screenshot.
 - This is the user's browser: don't close tabs you didn't open, don't change their settings, and ask before sending, buying, posting or deleting anything on their behalf. When a site wants a sign-in, a captcha or a 2FA code, ask the user to do it in the tab, then go on.`
 
 func browserTabArg() map[string]any {

@@ -564,6 +564,11 @@ func (l *Library) syncSkills(t *Target, res *Result, all []*Target) {
 		if s == nil {
 			return false
 		}
+		// the folder is ~/.agents/skills itself: what the setting puts
+		// there (skills_shared.go) stays
+		if l.keepsShared(s) && realDir(t.Skills) == realDir(sharedSkillsDir()) {
+			return true
+		}
 		return s.gives(id) || slices.ContainsFunc(sharers, s.gives)
 	}
 	// an agent that reads ~/.agents/skills as well as its own folder finds
@@ -572,12 +577,12 @@ func (l *Library) syncSkills(t *Target, res *Result, all []*Target) {
 	shared := realDir(sharedSkillsDir())
 	isShared := realDir(t.Skills) == shared
 	inShared := func(s *Skill) bool {
-		if s == nil || !slices.Contains(readsShared, id) || realDir(t.Skills) == shared {
+		if s == nil || !t.readsSharedDir() || realDir(t.Skills) == shared {
 			return false
 		}
 		// the library's skill is kept in the shared folder itself (brought
 		// in from there): every agent reading it has it, ticked or not (#595)
-		if sharedHas(s.Name) {
+		if sharedHas(s.Name) || l.inSharedHere(s) {
 			return true
 		}
 		p := filepath.Join(sharedSkillsDir(), s.Name)
@@ -711,6 +716,44 @@ func (l *Library) syncSkills(t *Target, res *Result, all []*Target) {
 		res.changed(id)
 	}
 	a.Skills = mine
+}
+
+// sweepShared takes magpie's own entries out of ~/.agents/skills once no
+// agent whose folder it is, or that still reads it for the skill, has it
+// any more: an entry put there for an agent that reads its own folder now
+// (Kimi Code, #4379) would go on reaching every reader of the folder,
+// whatever the library ticks.
+func (l *Library) sweepShared(all []*Target, res *Result) {
+	es, err := os.ReadDir(sharedSkillsDir())
+	if err != nil {
+		return
+	}
+	shared := realDir(sharedSkillsDir())
+	var holders []*Target
+	for _, o := range all {
+		if o.Skills != "" && realDir(o.Skills) == shared {
+			holders = append(holders, o)
+		}
+	}
+	for _, e := range es {
+		name := e.Name()
+		p := filepath.Join(sharedSkillsDir(), name)
+		// the user's own entries stay, and so does a copy takeEdits
+		// couldn't scan, held in place for its edits
+		if !ours(p, name) || l.blockedSkills[realDir(p)] {
+			continue
+		}
+		s := l.skill(name)
+		// one the setting keeps there stays (skills_shared.go)
+		if l.keepsShared(s) || slices.ContainsFunc(holders, func(o *Target) bool { return s.gives(o.Agent.ID) }) {
+			continue
+		}
+		if err := unlink(p); err != nil {
+			res.fail("agents", "skill:"+name, err)
+			continue
+		}
+		dropOld(p, name)
+	}
 }
 
 // ---- finding skills to install --------------------------------------------
@@ -1588,12 +1631,16 @@ func updateSkills(names []string) (*Result, error) {
 }
 
 // updatable is whether a skill can be fetched again: one from GitHub or
-// another git repository, or one CC Switch installed from GitHub.
+// another git repository, or one CC Switch or the skills CLI installed
+// from GitHub.
 func updatable(s *Skill) bool {
 	if s.Source.remote() {
 		return true
 	}
-	_, ok := ccSwitchOrigin(s)
+	if _, ok := ccSwitchOrigin(s); ok {
+		return true
+	}
+	_, ok := lockOrigin(s)
 	return ok
 }
 
@@ -1671,6 +1718,11 @@ func (f *fetcher) prepare(s *Skill) (*skillUpdate, error) {
 		// one CC Switch installed from GitHub becomes the library's own,
 		// fetched from there, leaving CC Switch's folder as it is
 		o, ok := ccSwitchOrigin(s)
+		if !ok {
+			// one the skills CLI installed does too, fetched from where
+			// its lock says it came (#4645)
+			o, ok = lockOrigin(s)
+		}
 		if !ok {
 			return nil, fmt.Errorf("%s isn't from GitHub or a git repository; it's kept as it is", name)
 		}
@@ -2613,18 +2665,6 @@ func sameFile(a, b string) (same, sure bool) {
 			return end(ea) && end(eb), true
 		}
 	}
-}
-
-// SkillText is a library skill's SKILL.md, for the page to show.
-func SkillText(name string) (string, error) {
-	if err := checkName("skill", name); err != nil {
-		return "", err
-	}
-	b, err := os.ReadFile(filepath.Join(skillDir(name), "SKILL.md"))
-	if err != nil {
-		return "", fmt.Errorf("%s has no SKILL.md in the library", name)
-	}
-	return string(b), nil
 }
 
 // SkillPath is where a library skill's folder is.

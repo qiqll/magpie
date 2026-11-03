@@ -75,6 +75,18 @@ run was offered it. `subscriptionRun.names` (`bridgeNames`) maps it back
 to the declared name in `toolStart`, for streamed and whole messages, and
 in `mcpCall` (#2649).
 
+A client's MCP tool that it announced but hasn't loaded (Claude Code's
+tool search names deferred tools in a reminder and leaves them out of
+`tools` until `ToolSearch` loads them) is no tool of the run's, but the
+run's model reads its name in the conversation and calls it,
+`mcp__magpie__<server>__<tool>`. `toolStart` hands that call over under
+the full name, which is the client's own, when the cut name maps to
+nothing and isn't in `subscriptionRun.tools`: handed over cut, as
+`<server>__<tool>`, the client answered "No such tool available" and the
+model had to load it and call again (packinggoods, 11-02,
+`TestClaudeBridgeHandsOverAnUnloadedMagpieTool`). A deferred tool of
+another client MCP server (`mcp__linear__…`) is still not handed over.
+
 A turn with `tool_choice` none is offered every tool the client sent, as
 any other turn is (bbfatx on X). Anthropic caches a prompt as tools, then
 system, then messages, so a turn offered fewer tools (a title or summary
@@ -265,7 +277,9 @@ next reply. A call in that message that wasn't made yet becomes its own
 reply when it is made (`written`). A reply told this way has no words or
 thinking: the model's text before its call is lost to the client.
 
-The user's own `~/.claude.json` and `~/.claude` are never written. Claude
+The user's own `~/.claude.json` and `~/.claude` are never written by
+magpie (Claude Code writes them, as when it records its onboarding done,
+below). Claude
 Code asks whether to trust a folder it has not run in; the helper answers
 yes only when the bridge sets `MAGPIE_CLAUDE_TUI_TRUST=1`, which it does
 for magpie's own working folder or a saved account's config directory,
@@ -348,8 +362,22 @@ Safeguards are taken: interactive Claude Code reads
 `CLAUDE_CODE_EXTRA_BODY` only as it starts (2.1.316: a later
 `apply_flag_settings` or a rewritten `--settings` file changes nothing it
 sends), so `startRun` puts them in its environment, and a turn whose
-safeguards changed starts a new run told the whole conversation
-(`setSafeguards`). Client cache marks are taken too, but not kept: the
+safeguards changed in what the user allows starts a new run told the
+whole conversation (`setSafeguards`). Claude Code's classifier context
+also carries parts that change on nearly every request, the ones it
+names as variable and sheds over its 256KB budget: `prior_turn_context`,
+`system_reminders`, `artifacts`, `text_provenance`, `shed`, Chrome's
+tabs, and git's status, remotes and error. `safeguardsKept` leaves those
+out of the comparison (git keeps cwd, root, branch and default branch),
+and a run whose turn differs only there goes on with the context it
+started with. Restarting for them began a new run for every turn and
+tool round, each writing the whole conversation to the cache again, and
+one message drained a Pro account's 5-hour window (xybio;
+`TestClaudeTUISafeguardsVaryingPartsKeepTheRun`). The cost: the server
+classifier sees those parts as they were when the run started, not
+current. A rules, permission-mode, auto-mode, folder or branch change
+still restarts. The `-p` run takes every change in place
+(`apply_flag_settings`). Client cache marks are taken too, but not kept: the
 helper pastes the words without their marks, so the run keeps Claude
 Code's own prompt caching (no `DISABLE_PROMPT_CACHING`, no client tail)
 and the reply reports every client mark as dropped
@@ -364,7 +392,13 @@ closed at the first result. Reading the plan's allowance (`/usage`,
 `claudeUsageTUI`) types `/usage` in the interactive mode too: the helper
 is told `{"type":"command","command":"/usage"}`, types it, waits for the
 panel's windows ("NN% used", `commandSettle` still) and closes it with
-Esc. Its result (`local_command: "usage"`) says each window as -p's lines
+Esc. A panel with no window (its words saying why) is taken as drawn only
+once its Settings tabs show and nothing is loading (`usageDrawn`), still
+for three `commandSettle`s: Claude Code draws its banner and folder again
+first, which stays still while a slow /usage loads, and taken as the
+panel it was read as an allowance's error (ikunbots on X, v0.1.2738).
+With no panel by `commandWait`, the result is an error saying what was
+last drawn (`TestShimWaitsPastTheBanner`, `TestUsageDrawn`). Its result (`local_command: "usage"`) says each window as -p's lines
 do, "Current session: 99% used · resets 7pm (Asia/Shanghai)" (`usageText`,
 tested on the bytes Claude Code 2.1.316 drew, `testdata/usage-2.1.316.bin`),
 for `provider.parseClaudeUsage`. Claude Code 2.1.316's `-p /usage`
@@ -377,6 +411,70 @@ writes after the summary), and tells a result with `local_command:
 "compact"`; "Error during compaction" or "Not enough messages to compact"
 drawn, or `CompactWait` (5 minutes) passed, is an error result. Any other command is refused, not typed. `DISABLE_AUTO_COMPACT`
 stays set: the run never compacts by itself.
+
+The helper reads the screen as a terminal shows it (`grid`,
+[`screen.go`](../../internal/claudetui/screen.go), 200 by 50, the size
+the pseudo-terminal and Windows' pseudo console are made, from one
+`screenCols`/`screenRows`; an 80 by 24 grid of the 200 by 50 Unix
+terminal drew the panel's rows over one another, #4988), beside the stream:
+Windows' pseudo console sends only the cells that changed, skipping one
+that holds the same letter ("Settin\x1b[1Cs"), and a window drawn only
+for a moment is kept as it looked (`panel`). The panel is drawn before
+its figures, "Loading usage data…" while Claude Code asks for them: the
+helper waits that out (to `commandWait`), presses "r" once on "Error:
+Failed to load usage data", and a panel that still has no figure is an
+error result, "/usage couldn't load the plan's usage: …". Before, 3s
+still on "Loading usage data…" was taken as drawn, and the panel's frame
+was told as the figures, which the card read as an account with no
+allowance (Seagull fries, Windows 11; `TestShimWaitsForUsageFigures`, on
+the bytes the pseudo console passed on for a real 2.1.316,
+`testdata/usage-loading-win-2.1.316.bin`, `usage-failed-win-2.1.316.bin`).
+The provider keeps the account's last reading on that error
+(`claudeUsageUnknown`, as for Claude Code's own "temporarily
+unavailable"), and a panel with no figure otherwise is "Claude Code's
+/usage showed no usage figures: …", never "told no allowance", which is
+kept for an account Claude Code refuses (`claudeUsageDenied`).
+
+These one-off interactive runs (`askClaudeTUI`, `claudeUsageTUI`) work in
+magpie's shared work folder (`oneOffDir`: `claudeWorkDir`, a fresh temp
+folder only when it can't be made), where the helper may answer the trust
+question, so a config directory holds one trusted entry for it instead of
+a new `magpie-claude-<n>` entry each read (#4830, mydosu): 67 had piled up
+in one `~/.claude.json`. Entries left by older magpies stay; magpie
+doesn't write that file. In a saved account's config directory, magpie
+writes the folder's entry itself before each run there (`trustWork`,
+`provider.ClaudeTrustFolder`), and so before a bridge run of that
+account in magpie's folder: on mydosu's Windows (#4830) the helper's
+answer was never recorded there, and every read of the account waited
+out its time on the question. The entry is keyed as Claude Code 2.1.316
+looks a folder up (`claudeTrustKeys`): the path in NFC, with forward
+slashes on Windows (`C:/Users/<me>/AppData/Local/Temp/magpie-claude-work`),
+also with its links resolved (`/private/var/…` on a Mac), and the WSL
+mount path for a Claude Code in WSL. Only a direct child of
+`claude-accounts` is written, never `~/.claude.json`; every other key
+is kept, a file that can't be parsed is left alone, and a run's own
+fallback folder isn't recorded. The run's own session file in that folder is
+removed by the `session_id` the helper's init line names (`dropOneOff`),
+so the folder's project doesn't fill with "hi"s. The helper is told when
+its caller stops waiting (`claudetui.DeadlineEnv`, the context's deadline
+less `oneOffMargin`, at most a quarter of what is left) and ends then on
+its own, saying what Claude Code hadn't done and its last screen ("Claude
+Code hadn't drawn /usage's panel in the 16.9s its caller waits for it:
+…"). Killed at the deadline instead, it said nothing, and on Windows the
+reading's error was "exit status 1" alone. A run that still says nothing
+is "Claude Code's interactive mode said nothing before magpie stopped
+waiting for it" (`oneOffErr`), and the card says the reason
+(`quotaError`'s "Allowance unavailable: {why}"), its full text kept for the
+tooltip. A question about trust left unanswered at the deadline is named
+with its folder ("Claude Code asked whether to trust <folder>, not answered
+in the 16.8s …"), where it said "showed no prompt" before (#4830). A failed
+run also goes to app.log (`logOneOff`: "claude: a /usage read of saved
+account <dir> failed: …"), with the helper's whole reason, which the card
+clips to 300 bytes, on one line: the home folder and any
+`/Users/<name>` or `C:\Users\<name>` become `~`, secrets go through
+`redact.Scrub`, and past 800 bytes it keeps the first 300 and the last 500,
+so the end of the last screen stays. The `-p` asks keep a temp folder
+each, which they remove: `-p` asks nothing about trust.
 
 The Claude Code provider editor's "Claude Code runs as" row
 (`claudeModeRow` in app.js, drawn by claudemode.js, which it loads with
@@ -401,11 +499,28 @@ anew: a turn that takes earlier turns back, an effort change. A run given up on
 (`letGo`) is not taken back, since the interactive mode can't answer a
 control request to stop a turn.
 
+A config folder whose onboarding isn't done (one only `-p` ran in, or
+the account Claude Code is signed in to where `claude` was never run,
+#4817, steven_4422 on Discord) shows its first-run screens before the
+prompt. The helper goes through them as a person would (`ready`,
+`onboard`): Enter on the text style (the default kept), Enter on the
+security notes (`firstRun`), and Esc on whether to set up the terminal
+(`terminalSetup`, shown for a TERM_PROGRAM it knows, such as
+Apple_Terminal or vscode), so that nothing of the user's terminal is set
+up. Each key goes once its screen has stayed drawn 300ms (`trustSettle`).
+Claude Code then records the onboarding done itself (2.1.316:
+`hasCompletedOnboarding`, `lastOnboardingVersion`; magpie writes neither
+in the user's folder),
+and later runs show none of it. Until this change the notes ended the
+run, so with the interactive mode On every request and the `/usage` read
+failed until the user ran Claude Code once by hand. A screen still shown
+after three answers (`onboardTries`) ends the run, saying to run Claude
+Code once in a terminal. `TestShimGoesThroughOnboarding` holds it.
+
 If the interactive Claude Code doesn't start or show its prompt within 45
-seconds (`claudetui.ReadyWait`), or asks how to sign in (`signIn`: a
+seconds (`claudetui.ReadyWait`), asks how to sign in (`signIn`: a
 Claude Code signed in for `-p` only, as in a container given
-`CLAUDE_CODE_OAUTH_TOKEN`), shows its first-run notes (`firstRun`:
-"Security notes", a config folder whose onboarding isn't done) or asks
+`CLAUDE_CODE_OAUTH_TOKEN`), stays on its first-run screens, or asks
 about a folder the user hasn't trusted, the helper ends, saying why on
 its stderr and in its exit (`fail` in `Run`). It never becomes `claude
 -p`. Until 11-01 it did, and wrote `<cache>/magpie/claude-tui-broken`,
@@ -520,8 +635,9 @@ fails the request or delays an ordinary request's keepalives.
 ## The caller's instructions as the system prompt (`claudeLeanPrompt`)
 
 Every run is the real Claude Code. By default it keeps Claude Code's own
-system prompt, and the caller's instructions go in the run's first user
-message inside `<external_system_instructions>`. Settings › Models ›
+system prompt, and the caller's instructions go after it in the
+interactive mode (below), and in the run's first user message inside
+`<external_system_instructions>` in `-p` or with client cache marks. Settings › Models ›
 Replies › Short Claude system prompt (`claudeLeanPrompt`, off by default)
 starts a run with `--system-prompt-file` instead. The file is `system.md`
 in the run's temp folder, under the distro's mount in WSL (`claudeCLI.file`).
@@ -530,6 +646,33 @@ Code's billing line, plus the tool-choice line. The first message then holds
 the conversation alone. Claude Code still sends its billing block and its
 identity line, so requests come from the real binary. They no longer carry
 Claude Code's prompt, and that is the ban risk the setting names.
+
+Every run in the interactive mode (not lean, no client marks:
+`appendsPrompt`) gets its caller's instructions by
+`--append-system-prompt-file` instead (`append.md`, the same `leanSystem`
+text), after Claude Code's own prompt, and its first message holds the
+conversation alone. The helper pastes a first message as one text without
+marks, so instructions pasted there lost the mark `renderClaudePrompt` puts
+on their block, and every run started anew wrote them to the cache again:
+Claude Code's auto mode classifier read 1,197 tokens and wrote 80k on every
+check of one conversation (#2432), and a conversation whose first request
+was a one-off ask (no tools, no reply; its run let go after the reply,
+`ended`) had its next request's run read 1,273 of 8,565 tokens and write
+the rest, the instructions in its replayed transcript where the first run
+had them after Claude Code's prompt (m4rs0n on Discord, 11-03). Appended,
+they end the system block Claude Code marks itself, which is the same for
+every run under the same instructions (only the unmarked billing line
+differs; recorded from Claude Code 2.1.316 on 2026-11-03). A session keeps
+no system prompt, so a run that resumes one (shelved, branched, or a
+replayed transcript, `replaySession`, which then leaves them out of its
+user line) is given the file again when the session's run had it
+(`savedSession.appended`). The system prompt is part of every run key, so
+the file is the one the session's run had. `-p` keeps the instructions in
+the first message, where its mark holds. Tested by
+`TestClaudeTUIOneOffAskAppendsInstructions`,
+`TestClaudeAppendInTheInteractiveMode`,
+`TestClaudeTUIConversationKeepsItsInstructionsWhereTheFirstAskHadThem` and
+`TestClaudeTUIResumedSessionIsGivenItsInstructions`.
 
 A request with client cache marks (#1717) is never lean: its system marks
 are placed in the first message. The mode is part of the run's identity
@@ -612,6 +755,29 @@ A Claude Code that ends before it answers a control request
 exit status and the end of its stderr (`endedBefore`), as one that ends
 before it reads its input is (`whyEnded`). The tool-results path and
 `resume` already start a new run when the one they found has ended.
+
+A Claude Code whose output ends after its reply began (a `KStart` on the
+segment) and before the reply ended (its stop, a refusal, a result or an
+error) exited mid-reply: only the `message_start`, or part of the text,
+was heard. `readOutput` ends the segment with an error, "Claude Code
+exited before it ended its reply" and the end of its stderr
+(`replyUnended`, #4822), in `-p` and the interactive mode alike. Before
+it, the closed segment was a 200 with nothing or the words so far, as a
+reply that ended. Now `relay` answers a stream with nothing sent yet, and
+any reply not streamed, a 502, so the spare account may answer (the cut
+try keeps its usage row as handed on). A stream already sent ends in the
+protocol's error event: Anthropic's `error`, chat's `error` chunk with no
+`[DONE]`, Responses' `response.failed`. A reply not streamed whose words
+came before any failure is a failure too, as a translated reply cut short
+is (`errEndedShort`). `TestClaudeSubscriptionRunExitedMidReplyFails`
+holds it on all three protocols, streamed and not, `-p` and interactive.
+
+A streamed reply whose run is quiet past `bridgeHeardAfter` begins
+without it and is sent the protocol's pings until the run speaks
+(`keepBridgeHeard`, #5043): the replay of a long conversation can take
+minutes before its first word, and Claude Code hung up at 599s and
+started again from the replay, writing it to the cache once more (#3808).
+See [gateway routing](gateway-routing.md) for the keepalive rules.
 
 magpie ends a run (`abort`) by asking Claude Code to end with SIGTERM
 (`proc.Tree.Stop`) and kills its tree only once it has exited or
@@ -703,9 +869,26 @@ after the last reply, with nothing in the log).
 A turn that finds no run under its own key takes one whose `behindKey` is
 its key, rewinds it to `behindTurn` (as `letGo` does) and tells it only
 the turn's messages ("taken back from the side question it answered
-since"). The run is marked `rewound`, so it isn't shelved. A run that
-can't be rewound is let go and the turn told whole to a new run, as
-before. Tried with the real 2.1.290 client in `-p --prompt-suggestions`
+since"). The run is marked `rewound`, so it isn't shelved until it has
+answered a whole turn since (`replied`, set as a turn ends with `stop`,
+cleared at each take-back): the session's lines after the rewind chain
+from the line before the side question, which is what `--resume` goes
+on from. A run that can't be rewound is let go and the turn told whole
+to a new run, as before.
+
+A run let go past `idleMost` while it waits at a side question's reply
+is shelved with its `behindKey` too (#4914, ggbdpq: with suggestions on,
+the next turn after a let-go read 19,844 from the cache and wrote 29,345;
+with them off, 49,560 read and 50 written). A turn that finds no session
+under its own key takes the newest one whose `behindKey` is its key, and
+the run that takes it resumes a copy cut before the side question
+(`cutBehind`): before the `-p` run's message `behindTurn`
+(`cutSessionBefore`), or after an interactive run's `behindLine`
+(`cutSession`). The shelved file is removed. Resumed whole, Claude Code
+would go on with the suggestion's exchange as the conversation's, which
+the client never had. A session that can't be cut is let go and the turn
+told whole, as before. `TestClaudeLetGoConversationAfterSuggestionResumesItsSession`
+holds it, with a stand-in for Claude Code; not tried with the real one. Tried with the real 2.1.290 client in `-p --prompt-suggestions`
 and the real 2.1.290 as the run, against a local mock of Anthropic: one
 run for the whole session, and the turn after each suggestion went on
 from the reply before it. Other side requests that go on from the
@@ -1075,7 +1258,12 @@ of its first message, so the last is the caller's. Not measured: whether
 a real model on a Windows gateway then stops writing PowerShell.
 
 Nothing else of the folder reaches the run. `--setting-sources ""` loads
-no CLAUDE.md, settings or skills from it. Auto memory is off, and
+no CLAUDE.md, settings or skills from it. That also kept the user's own
+`disableDeepLinkRegistration` from every run, its warm-up and its usage
+helper, and each registered the `claude-cli://` URL handler again (#4928):
+they are given `--settings {"disableDeepLinkRegistration":"disable"}`,
+flag settings, which `--setting-sources` doesn't control
+(`disableDeepLinkSettings`). Auto memory is off, and
 `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1` keeps the repository's status out
 of the prompt, which would change it, and Anthropic's cache with it,
 whenever a file changes. The system prompt magpie sends is unchanged; only
