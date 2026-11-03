@@ -586,10 +586,25 @@ func stickKey(scope, owner string, in http.Header, body []byte) string {
 
 // stickOwner is a bound user's part of stickKey: its name alone, escaped
 // so it can't spell the key's separator. A name is one user under every
-// gateway key (the owner's option A2, 2026-10-30, seatUsesOf), so its
-// conversation is the same one whichever key it comes by.
+// gateway key that shares its users, and without a key (the owner's
+// option A2, 2026-10-30, seatUsesOf), so its conversation is the same one
+// whichever of them it comes by.
 func stickOwner(user string) string {
 	return url.QueryEscape(user)
+}
+
+// stickOwnerOf is stickOwner of user of the gateway key keyID: a key that
+// doesn't share its users (userGroup, T-089) puts its id before the name,
+// so its user's conversations and rules are kept apart from those of
+// another's user of the same name, as its seats are.
+func stickOwnerOf(keyID, user string) string {
+	if user == "" {
+		return ""
+	}
+	if g := groupOf(userSharers(), keyID); g != sharedUsers {
+		return url.QueryEscape(g) + "/" + stickOwner(user)
+	}
+	return stickOwner(user)
 }
 
 // affine puts first whoever answered the conversation last, while its

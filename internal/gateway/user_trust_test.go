@@ -1,11 +1,13 @@
 package gateway
 
 import (
+	"context"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -230,5 +232,83 @@ func TestUserGroupFollowsTheKeyStore(t *testing.T) {
 	}
 	if !slices.Equal([]string{groupOf(map[string]bool{"x": true}, "x"), groupOf(nil, "x")}, []string{sharedUsers, "x"}) {
 		t.Fatal("groupOf")
+	}
+}
+
+// A Claude Code run's web search, asked back through its MCP callback,
+// which carries no key, is of the turn's key's user (userKey, askedAs):
+// a turn under a key that doesn't share its users, naming the id of a
+// user bound without a key, searches on an account bound to its own
+// user, and the keyless one's binding is left as it is, its use too.
+func TestClaudeRunSearchesAsItsKeysUser(t *testing.T) {
+	keys, _ := dsKeyed(t, provider.Responses)
+	callers, _ := newCaller(t, "Tenant")
+	p, err := provider.Find("ds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seats := seatCandidates(*p)
+	if len(seats) != 2 {
+		t.Fatalf("%d seats", len(seats))
+	}
+	used := ago(3 * time.Hour)
+	keyless := userBinding{Who: seats[0].who(), Account: shownAs(seats[0]), At: used, Used: used}
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"ds": {"bob": keyless}}})
+	s := byUserUpTo(t, New(), 1)
+	turn := httptest.NewRequest("POST", "/v1/messages", nil)
+	turn.Header.Set(UserHeader, "bob")
+	turn = turn.WithContext(access.WithIdentity(turn.Context(), access.Identity{KeyID: callers[0].ID, KeyName: "Tenant"}))
+	if _, _, err := s.runSearch(turn)(context.Background(), "weather in Hangzhou"); err != nil {
+		t.Fatal(err)
+	}
+	if got := keys("deepseek-flash"); len(got) != 1 {
+		t.Fatalf("searched with %q", got)
+	}
+	f := usersFile(t)
+	if b := f.Users["ds"]["bob"]; b.Who != keyless.Who || !b.Used.Equal(used) {
+		t.Fatalf("the keyless bob's binding changed: %+v", b)
+	}
+	if b, ok := f.Keys[callers[0].ID]["ds"]["bob"]; !ok || strings.EqualFold(b.Who, keyless.Who) {
+		t.Fatalf("Tenant's bob: %+v %v", b, ok)
+	}
+}
+
+// A user of a key that doesn't share asking keeps only itself from being
+// swept: the keyless user of its name, idle past userIdle, is let go of.
+func TestUserIdleOfTheNameInAnotherGroupSwept(t *testing.T) {
+	codexSignedIn(t, "b@example.com")
+	usersUpstream(t, nil)
+	keys, secrets := newCaller(t, "Tenant")
+	s := byUser(New())
+	writeUsers(t, userFile{
+		Users: map[string]map[string]userBinding{"codex": {"carol": bound("me@example.com", "", ago(days(4))), "erin": bound("b@example.com", "", ago(time.Hour))}},
+		Keys:  map[string]map[string]map[string]userBinding{keys[0].ID: {"codex": {"carol": bound("b@example.com", "", ago(time.Hour))}}},
+	})
+	forgetSeen()
+	if rec := userPostWith(s, secrets[0], "carol", "tenant's carol"); rec.Code != 200 {
+		t.Fatalf("carol: %d %s", rec.Code, rec.Body.String())
+	}
+	f := usersFile(t)
+	if _, kept := f.Users["codex"]["carol"]; kept {
+		t.Fatalf("the keyless carol, idle four days, kept for Tenant's asking: %+v", f.Users)
+	}
+	if _, kept := f.Keys[keys[0].ID]["codex"]["carol"]; !kept {
+		t.Fatalf("Tenant's carol let go: %+v", f.Keys)
+	}
+}
+
+// A conversation's stick is its user's within its group of keys: the same
+// id under a key that doesn't share is another owner, under keys that do
+// and without a key one.
+func TestStickOwnerByGroup(t *testing.T) {
+	sharing(t, "front")
+	if stickOwnerOf("", "bob") != stickOwnerOf("front", "bob") || stickOwnerOf("front", "bob") != stickOwner("bob") {
+		t.Fatal("the shared group's bob isn't one owner")
+	}
+	if stickOwnerOf("tenant", "bob") == stickOwnerOf("", "bob") || stickOwnerOf("tenant", "bob") == stickOwnerOf("other", "bob") {
+		t.Fatal("a key of its own shares its bob's sticks")
+	}
+	if stickOwnerOf("tenant", "") != "" {
+		t.Fatal("no user, an owner")
 	}
 }

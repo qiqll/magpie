@@ -2,6 +2,7 @@
 package access
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -250,39 +251,49 @@ func List() ([]Key, error) {
 	return keys, nil
 }
 
-// sharers is UserSharers' last read of the store, by its time and size.
+// sharers is UserSharers' last read of the store: its bytes and the keys
+// they share.
 var sharers struct {
 	sync.Mutex
 	path string
-	mod  time.Time
-	size int64
+	raw  []byte
 	ids  map[string]bool
+	said string // the last read failure logged
 }
 
 // UserSharers is the ids of the keys whose users are one with every other
 // such key's (Key.SharesUsers), issued keys never among them, as the
-// store is now: read again when it changed, without mu, as it is written
-// whole to a file renamed over it (save). A store that can't be read is
-// as it was last read, and none before it was read once: each key's users
-// then are its own. Not to be changed by the caller.
+// store is now: parsed again when its bytes changed, read without mu, as
+// it is written whole to a file renamed over it (save). A store that
+// can't be read is unknown, and a trust grant unknown is none: every
+// key's users are its own then (logged once a failure). Not to be changed
+// by the caller.
 func UserSharers() map[string]bool {
 	sharers.Lock()
 	defer sharers.Unlock()
 	path := Path()
 	if path != sharers.path {
-		sharers.path, sharers.mod, sharers.size, sharers.ids = path, time.Time{}, 0, nil
+		sharers.path, sharers.raw, sharers.ids = path, nil, nil
 	}
-	fi, err := os.Stat(path)
+	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		sharers.mod, sharers.size, sharers.ids = time.Time{}, 0, map[string]bool{}
+		sharers.raw, sharers.ids, sharers.said = nil, map[string]bool{}, ""
 		return sharers.ids
 	}
-	if err != nil || sharers.ids != nil && fi.ModTime().Equal(sharers.mod) && fi.Size() == sharers.size {
-		return orNone(sharers.ids)
+	if err == nil && sharers.ids != nil && bytes.Equal(b, sharers.raw) {
+		return sharers.ids
 	}
-	keys, err := load()
+	var keys []Key
+	if err == nil {
+		err = json.Unmarshal(b, &keys)
+	}
 	if err != nil {
-		return orNone(sharers.ids)
+		if why := err.Error(); why != sharers.said {
+			sharers.said = why
+			log.Printf("gateway keys: %s can't be read (%v): no key shares its users until it can", path, err)
+		}
+		sharers.raw, sharers.ids = nil, nil
+		return map[string]bool{}
 	}
 	ids := map[string]bool{}
 	for _, k := range keys {
@@ -290,15 +301,7 @@ func UserSharers() map[string]bool {
 			ids[k.ID] = true
 		}
 	}
-	sharers.mod, sharers.size, sharers.ids = fi.ModTime(), fi.Size(), ids
-	return ids
-}
-
-// orNone is ids, or none for nil.
-func orNone(ids map[string]bool) map[string]bool {
-	if ids == nil {
-		return map[string]bool{}
-	}
+	sharers.raw, sharers.ids, sharers.said = b, ids, ""
 	return ids
 }
 

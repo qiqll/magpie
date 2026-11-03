@@ -11,7 +11,7 @@ import (
 // No key shares its users until it is set to (T-089: a key that was there
 // before is its own too); "users-key" sets it and takes it off, an issued
 // key can't be set, and UserSharers says the keys as the store has them,
-// read again when it changes, as last read when it can't be read.
+// read again when its bytes change, none when it can't be read.
 func TestUserSharers(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	clockAt(t, time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC))
@@ -60,15 +60,19 @@ func TestUserSharers(t *testing.T) {
 	if got := UserSharers(); len(got) != 1 || !got[a] {
 		t.Fatalf("an issued key among the sharers: %v", got)
 	}
-	// a store that can't be read: as last read
+	// a store that can't be read: unknown, no key shares; read again once
+	// it can
 	if err := os.WriteFile(Path(), []byte(`[{"id":`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := UserSharers(); len(got) != 1 || !got[a] {
+	if got := UserSharers(); len(got) != 0 {
 		t.Fatalf("unreadable: %v", got)
 	}
 	if err := os.WriteFile(Path(), raw, 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if got := UserSharers(); len(got) != 1 || !got[a] {
+		t.Fatalf("readable again: %v", got)
 	}
 	if _, err := Update("users-key", Change{Key: a}); err != nil {
 		t.Fatal(err)

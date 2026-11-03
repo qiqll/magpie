@@ -2419,7 +2419,20 @@ for a key held by a front end of your own that sets `X-Magpie-User`
 itself, from who it knows the caller to be, and removes one its own
 caller sent: magpie takes the header as it comes, so anyone holding a
 sharing key can name any user of every sharing key and be served on that
-user's accounts. A key handed to someone else keeps its users its own.
+user's accounts. Callers without a key are in that same set: any program
+on this computer, a WSL distro, and every client behind a proxy trusted
+with `MAGPIE_TRUST_PROXY=1`. A key handed to someone else keeps its users
+apart from every other key's, but not from each other: any caller of one
+key can name any user of that key, so tenants that must not reach each
+other's users need a key each. The sharing key magpie gives its own
+agents (a WSL distro's under NAT) is its own until you set it, so its
+users are apart from this computer's keyless ones. A conversation's
+affinity and a routing group's rules are kept by user within the same
+set. If a key reached another key's user while every key shared (this
+branch before T-089), that user's accounts were copied under the key and
+stay there after the upgrade: Unbind them on the Gateway page, or delete
+the key's entry in `user-accounts.json`. If a key goes from sharing to
+its own, its users keep the accounts they had too.
 Bindings are kept for good, by
 your user's id as sent, in `user-accounts.json` beside `providers.json`
 (`users` for callers without a key, `keys` by key id): a user's first

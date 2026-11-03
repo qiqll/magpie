@@ -2697,7 +2697,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			owner := ""
 			if s.bind.byUser() {
 				user, _ := userOf(r.Header)
-				owner = stickOwner(user)
+				owner = stickOwnerOf(userKey(r), user)
 			}
 			ruleReq, ruleAt, words = req, ruleKey(g, owner, r.Header, req), firstWords(req)
 		}
@@ -3055,7 +3055,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// (#1797)
 	// a bound user's conversations are kept apart from another's, the
 	// same first words or not (T-043); unbound, as they were
-	owner := stickOwner(limitedUser)
+	owner := stickOwnerOf(userKey(r), limitedUser)
 	cands, pl, strictHeld := strictKeep(scope, owner, mode, r.Header, body, cands, pl)
 	if userBound != nil && strictHeld == nil && pin == "" {
 		// its account resting, left out of the user's: refused there, as

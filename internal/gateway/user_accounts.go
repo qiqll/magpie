@@ -2018,9 +2018,19 @@ func (u *UserBound) restsOn(why string) bool {
 }
 
 // userKey is the gateway key a request's users are of: "" for a caller
-// without one.
+// without one. magpie's own ask for a user (forUser), made from a request
+// that carries no key of its own (a Claude Code run's web search, asked
+// back through its MCP callback: askedAs), is of the key the user was
+// asked for by, so its user is that key's (userGroup, T-089), never the
+// one of that name without a key.
 func userKey(r *http.Request) string {
-	return access.Caller(r.Context()).KeyID
+	if id := access.Caller(r.Context()).KeyID; id != "" {
+		return id
+	}
+	if f, ok := r.Context().Value(askedForKey{}).(askedFor); ok {
+		return f.key
+	}
+	return ""
 }
 
 // UserRow is one user's binding, as user-accounts.json has it.
