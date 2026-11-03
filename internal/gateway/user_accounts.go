@@ -314,6 +314,9 @@ func putShared(pid, user string, seats []userSeat, used time.Time, keys ...strin
 		}
 		if len(seats) == 0 {
 			delete(ps[pid], user)
+			if len(ps[pid]) == 0 {
+				delete(ps, pid)
+			}
 			continue
 		}
 		b := bindingOf(seats)
@@ -441,18 +444,29 @@ func sweepIdle(pid, user string, now time.Time) (changed bool) {
 		}
 		log.Printf("user accounts: no user sent %s a request for %s: that time doesn't count toward any user's %s idle", pid, gap.Round(time.Minute), userIdle)
 	}
-	// each user's last use, the latest under any key: one with no Used
-	// yet under a key is stamped now there, and so in use now
+	// one with no Used yet under a key is written as it is read, under
+	// every key (putShared), with the latest Used it has under another,
+	// or now with none, and so in use now: its first stays the first of
+	// the one used last (sharedOf), not the one stamped
+	unstamped := map[string]bool{}
+	for _, ps := range userBinds.m {
+		for u, b := range ps[pid] {
+			if u != user && b.Used.IsZero() {
+				unstamped[u] = true
+			}
+		}
+	}
+	for u := range unstamped {
+		b, _ := sharedOf("", pid, u)
+		putShared(pid, u, b.seats(), cmp.Or(b.Used, now))
+		changed = true
+	}
+	// each user's last use, the latest under any key
 	latest := map[string]time.Time{}
 	for _, ps := range userBinds.m {
 		for u, b := range ps[pid] {
 			if u == user {
 				continue
-			}
-			if b.Used.IsZero() {
-				b.Used = now
-				ps[pid][u] = b
-				changed = true
 			}
 			if t := last(u, b); t.After(latest[u]) {
 				latest[u] = t

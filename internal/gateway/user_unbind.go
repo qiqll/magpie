@@ -46,11 +46,7 @@ func Unbind(pid, user, who string) (found bool, err error) {
 		}
 		putShared(pid, user, slices.DeleteFunc(b.seats(), func(s userSeat) bool { return strings.EqualFold(s.Who, who) }), b.Used)
 		for k := range was {
-			ps := userBinds.m[k]
-			if len(ps[pid]) == 0 {
-				delete(ps, pid)
-			}
-			if len(ps) == 0 {
+			if len(userBinds.m[k]) == 0 {
 				delete(userBinds.m, k)
 			}
 		}

@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"errors"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -138,5 +140,65 @@ func TestUserUnboundUnderEveryKey(t *testing.T) {
 		if got := keySeats(t, k, "alice"); !slices.Equal(got, []string{"spare@example.com"}) {
 			t.Fatalf("under %q: %v", k, got)
 		}
+	}
+}
+
+// A file that can't be written leaves the user bound under every key as
+// it was, in memory too, its only account kept under each: the next
+// Unbind, once it can be written, finds it and lets go under both.
+func TestUserUnbindUnderEveryKeyWriteFails(t *testing.T) {
+	codexSignedIn(t)
+	one := func() userBinding {
+		return userBinding{Who: "codex@me@example.com", Account: "me@example.com", At: ago(time.Hour), Used: ago(time.Hour)}
+	}
+	writeUsers(t, userFile{
+		Users: map[string]map[string]userBinding{"codex": {"alice": one()}},
+		Keys:  map[string]map[string]map[string]userBinding{"k1": {"codex": {"alice": one()}}},
+	})
+	was := writeUsersFile
+	t.Cleanup(func() { writeUsersFile = was })
+	writeUsersFile = func(string, []byte, os.FileMode) error { return errors.New("disk full") }
+	if found, err := Unbind("codex", "alice", "codex@me@example.com"); found || err == nil {
+		t.Fatalf("unwritable: %v %v", found, err)
+	}
+	userBinds.Lock()
+	for _, k := range []string{"", "k1"} {
+		if b, ok := userBinds.m[k]["codex"]["alice"]; !ok || b.Who != "codex@me@example.com" {
+			userBinds.Unlock()
+			t.Fatalf("under %q after a failed write: %+v %v", k, b, ok)
+		}
+	}
+	userBinds.Unlock()
+	writeUsersFile = was
+	if found, err := Unbind("codex", "alice", "codex@me@example.com"); !found || err != nil {
+		t.Fatalf("written once it can: %v %v", found, err)
+	}
+	f := usersFile(t)
+	if len(f.Users) != 0 || len(f.Keys) != 0 {
+		t.Fatalf("left under a key, or an empty provider kept: %+v", f)
+	}
+}
+
+// A binding a magpie before wrote with no Used, beside one used an hour
+// ago under another key: another user's request (sweepIdle) stamps it
+// with the user's latest use, not now, so its first stays the one used
+// last and the conversation doesn't move.
+func TestUserUnstampedBindingKeepsTheFirst(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	usersUpstream(t, nil)
+	keys, secrets := newCaller(t, "affd", "6acb")
+	writeUsers(t, userFile{Keys: map[string]map[string]map[string]userBinding{
+		keys[0].ID: {"codex": {"kai": {Who: "codex@me@example.com", Account: "me@example.com", At: ago(days(2))}}},
+		keys[1].ID: {"codex": {"kai": {Who: "codex@spare@example.com", Account: "spare@example.com", At: ago(days(1)), Used: ago(time.Hour)}}},
+	}})
+	s := byUser(New())
+	if rec := userPostWith(s, secrets[0], "dave", "dave's"); rec.Code != 200 {
+		t.Fatalf("dave: %d %s", rec.Code, rec.Body.String())
+	}
+	userBinds.Lock()
+	b, _ := sharedOf(keys[0].ID, "codex", "kai")
+	userBinds.Unlock()
+	if b.Account != "spare@example.com" {
+		t.Fatalf("kai's first after the sweep: %+v", b)
 	}
 }
