@@ -836,11 +836,11 @@ func sealRefusal(r *http.Request, user, model string, cp checkpointWriter) userR
 	return userRefusal{}
 }
 
-// sealedRefusal is what a turn bound by user is told for refused, which
-// bindUser or growUser gave it once checkpointReaders left only the
-// seal's writer (cp, nil for none): sealRefusal's when the seal isn't
-// the user's (T-096), where refused said only "paused, or sealed by
-// another account"; refused as it is otherwise.
+// sealedRefusal is what a turn bound by user carrying the seal cp (nil
+// for none) is told in place of refused, once checkpointReaders left only
+// its writer: sealRefusal's when the seal isn't the user's (T-096), before
+// bindUser binds it, and over growUser's "paused, or sealed by another
+// account"; refused as it is otherwise (zero before bindUser).
 func sealedRefusal(r *http.Request, user, model string, cp *checkpointWriter, refused userRefusal) userRefusal {
 	if cp == nil || strings.Contains(cp.Who, "#") {
 		return refused

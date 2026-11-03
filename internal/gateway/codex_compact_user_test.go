@@ -413,3 +413,39 @@ func TestUserTurnOnAnothersSealIsFinal(t *testing.T) {
 		t.Fatalf("users stale asked %q on bob's seal", got)
 	}
 }
+
+// Bound by user, a /responses turn from a user bound to nothing yet,
+// carrying a seal another user's account wrote, is refused before it is
+// bound (T-096): checkpointReaders left only the seal's writer, and
+// bindUser bound carol to bob's account and served her turn on it (shared
+// by default), or told her a limit when the tier shares none, where her
+// compact is a 400. Nothing is sent and no binding is written.
+func TestUserTurnUnboundOnAnothersSeal(t *testing.T) {
+	for _, tiers := range []string{"", `{"default":"free","tiers":{"free":{"credits":1000,"max_accounts":1,"share":1}}}`} {
+		codexSignedIn(t, "spare@example.com", "third@example.com")
+		asked := compactUpstream(t)
+		if err := provider.SetLoginOn("codex", "me@example.com", false); err != nil {
+			t.Fatal(err)
+		}
+		nativeOn(t, "codex")
+		if tiers != "" {
+			writeTiers(t, tiers)
+		}
+		writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+			"bob": {Who: "codex@spare@example.com", Account: "spare@example.com", At: time.Now().UTC(), Tier: "free"},
+		}}})
+		wroteCheckpoint("gAAAAB-sealed-by-bobs", sealedBy("spare@example.com"))
+		h := byUserUpTo(t, New(), 1).Handler()
+		rec := codexTurnFor(h, "carol", "gAAAAB-sealed-by-bobs")
+		body := rec.Body.String()
+		if rec.Code != http.StatusBadRequest || rec.Header().Get("Retry-After") != "" || strings.Contains(body, "@example.com") || !strings.Contains(body, "Start a new conversation") {
+			t.Fatalf("tiers %q: carol on bob's seal: %d %s", tiers, rec.Code, body)
+		}
+		if got := asked("/responses"); len(got) != 0 {
+			t.Fatalf("tiers %q: carol on bob's seal asked %q", tiers, got)
+		}
+		if b, err := os.ReadFile(usersPath()); err != nil || strings.Contains(string(b), "carol") {
+			t.Fatalf("tiers %q: carol bound on bob's seal: %s %v", tiers, b, err)
+		}
+	}
+}

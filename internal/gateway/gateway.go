@@ -2992,12 +2992,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				turnedAway()
 				return
 			}
+			// a seal none of the user's accounts wrote is refused before
+			// it is bound: checkpointReaders left only its writer, which
+			// bindUser would bind an unbound user to and serve (T-096),
+			// where its compact is refused (sealRefusal)
+			if refused := sealedRefusal(r, user, model, checkpoint, userRefusal{}); refused.status != 0 {
+				s.userRefused(w, from, &call, &UserBound{User: user}, refused)
+				turnedAway()
+				return
+			}
 			var refused userRefusal
 			// its refusal goes as it is, a pin to a lapsed account or not:
 			// user-accounts.json unread is unknown (503), and the pool
 			// full keeps its limit headers (429)
 			if cands, pl, userBound, refused = bindUser(userKey(r), user, tier, tierNamed(r.Header), p, cands, pl); refused.status != 0 {
-				refused = sealedRefusal(r, user, model, checkpoint, refused)
 				s.userRefused(w, from, &call, userBound, refused)
 				turnedAway()
 				return
