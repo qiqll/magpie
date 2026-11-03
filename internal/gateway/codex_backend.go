@@ -796,22 +796,30 @@ func compactFirst(r *http.Request, model string, others []provider.Provider) *pr
 
 // usersCompactOn is, bound by user, where a native compaction of one of
 // Codex's own models goes for r's user in place of on (compactOn's, or
-// the seal's writer that answers it, sealedCompact's): nil relays it on
-// Codex's sign-in. compactOn picks among every account on, and the relay
-// is the sign-in whoever it is bound to, both past serve, so A's compact
-// spent B's account (T-085). A seal one of magpie's accounts wrote is
-// read only when it is one of the user's own (its seats, read only), else
-// refused as a limit (userLimitSaid), naming no account: its writer
-// answers it, the sign-in its own. Gone (refused after, with nothing
-// sent), on is left as it is. Any other compact goes to one of the user's
-// own (usersOn, bound now when it is on none, as a turn binds it; the
-// one AccountHeader names when it is one of them), relayed when that is
-// the sign-in; with none of them to ask, the refusal is usersOn's. A
-// request magpie has no Codex account for, or Codex on its API key,
+// the seal's writer that answers it, sealedCompact's); nil relays it as
+// it came. compactOn picks among every account on, and the relay is the
+// sign-in whoever it is bound to, both past serve, so A's compact spent
+// B's account (T-085).
+//
+// A seal one of magpie's accounts wrote is read only when it is one of
+// the user's own (its seats, read only), else refused as a limit
+// (userLimitSaid) with nothing sent; the account is the log's alone.
+// Gone, it is refused after, with nothing sent. Its writer answers it,
+// the sign-in its own seal, once usersOn has had its say (the user's
+// tier). Any other compact goes to one of the user's own (usersOn, bound
+// now when it is on none, as a turn binds it; the one AccountHeader
+// names when it is one of them), relayed when that is the sign-in; with
+// none of them to ask, the refusal is usersOn's. A request signing with
+// its own chatgpt-account-id (a Codex on WSL or another CODEX_HOME)
+// spends its own sign-in, and goes as it came, as sealedCompact leaves
+// it; Codex on its API key, or a model magpie has no Codex account for,
 // keeps on.
 func (s *Server) usersCompactOn(r *http.Request, model string, body []byte, on, writer *provider.Provider, gone bool) (*provider.Provider, error) {
 	if !s.bind.byUser() || model == "" || strings.Contains(model, "/") || apiKey(r.Header) {
 		return on, nil
+	}
+	if acct := r.Header.Get("chatgpt-account-id"); acct != "" && acct != provider.CodexSignedInAccount() {
+		return nil, nil
 	}
 	p, _, ok := provider.Resolve("codex/" + model)
 	if !ok || p.Account == nil || p.Account.Agent != "codex" {
@@ -819,6 +827,7 @@ func (s *Server) usersCompactOn(r *http.Request, model string, body []byte, on, 
 	}
 	user, _ := userOf(r.Header)
 	signIn := candidate{p: p, model: model, rest: p.ID}.who()
+	ownSeal := false
 	if cp, sealed := checkpointOf(body); sealed && !strings.Contains(cp.Who, "#") {
 		var seats []userSeat
 		userBinds.Lock()
@@ -832,19 +841,20 @@ func (s *Server) usersCompactOn(r *http.Request, model string, body []byte, on, 
 			return nil, &userRefusedError{u: &UserBound{User: user}, pid: p.ID, refused: userRefusal{status: http.StatusTooManyRequests,
 				msg: fmt.Sprintf("%s: the compaction for %s was sealed by %s, which isn't one of %q's accounts; nothing was sent", UserHeader, model, cp.Who, user)}}
 		}
-		switch {
-		case gone:
+		if gone {
 			return on, nil
-		case writer != nil:
-			return writer, nil
-		case strings.EqualFold(cp.Who, signIn) && !p.OwnPaused():
-			return nil, nil // the sign-in's own seal, the user's: relayed
 		}
+		ownSeal = strings.EqualFold(cp.Who, signIn) && !p.OwnPaused()
 	}
 	cs, pl := s.plan(p, model, provider.Responses)
 	own, _, _, err := s.usersOn(r, p, cs, pl)
-	if err != nil {
+	switch {
+	case err != nil:
 		return nil, err
+	case writer != nil:
+		return writer, nil
+	case ownSeal:
+		return nil, nil // the sign-in's own seal, the user's: relayed
 	}
 	ons := make([]provider.Provider, 0, len(own))
 	for _, c := range own {
@@ -872,10 +882,15 @@ func (s *Server) usersCompactOn(r *http.Request, model string, body []byte, on, 
 // a web search for one of Codex's own models is served as where
 // codexAccounts would relay it as it came: on Codex's sign-in, past
 // serve, whoever it is bound to (T-085). Served, it goes to the user's
-// own accounts (bindUser, usersSearchers). Codex on its API key, or a
-// model magpie has no Codex account for, still goes as it came.
+// own accounts (bindUser, usersSearchers). Codex on its API key, a
+// request signing with its own chatgpt-account-id (its own sign-in, as
+// codexAccounts leaves it), or a model magpie has no Codex account for,
+// still goes as it came.
 func (s *Server) codexBound(r *http.Request, model string) (string, bool) {
 	if !s.bind.byUser() || model == "" || strings.Contains(model, "/") || apiKey(r.Header) {
+		return "", false
+	}
+	if acct := r.Header.Get("chatgpt-account-id"); acct != "" && acct != provider.CodexSignedInAccount() {
 		return "", false
 	}
 	id := "codex/" + model

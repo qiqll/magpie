@@ -54,8 +54,9 @@ func compactUpstream(t *testing.T) (asked func(path string) []string) {
 }
 
 // codexCompactFor sends Codex's legacy /responses/compact for user,
-// carrying the seal enc when it isn't empty, on Codex's ChatGPT token.
-func codexCompactFor(h http.Handler, user, enc string) *httptest.ResponseRecorder {
+// carrying the seal enc when it isn't empty, on Codex's ChatGPT token,
+// with the headers kv (name, value, ...).
+func codexCompactFor(h http.Handler, user, enc string, kv ...string) *httptest.ResponseRecorder {
 	input := `{"type":"message","role":"user","content":[{"type":"input_text","text":"go on"}]}`
 	if enc != "" {
 		input = `{"type":"compaction","encrypted_content":"` + enc + `"},` + input
@@ -63,6 +64,9 @@ func codexCompactFor(h http.Handler, user, enc string) *httptest.ResponseRecorde
 	r := httptest.NewRequest("POST", CodexPath+"/responses/compact", strings.NewReader(`{"model":"gpt-5.5","stream":true,"input":[`+input+`]}`))
 	r.Header.Set("Authorization", "Bearer chatgpt-token")
 	r.Header.Set(UserHeader, user)
+	for i := 0; i+1 < len(kv); i += 2 {
+		r.Header.Set(kv[i], kv[i+1])
+	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
@@ -75,8 +79,9 @@ func codexCompactFor(h http.Handler, user, enc string) *httptest.ResponseRecorde
 // alice's compact went to bob's. A seal is read only when one of the
 // user's accounts wrote it: one bob's account sealed is refused for alice
 // as a limit, naming no account, and nothing is sent. With the sign-in
-// on, a compact relayed on it went there whoever it was bound to. Bound
-// by session it goes where it went.
+// on, a compact relayed on it went there whoever it was bound to. One
+// signing with its own chatgpt-account-id spends its own sign-in, and
+// goes as it came. Bound by session it goes where it went.
 func TestUserCompactOnTheUsersOwnAccount(t *testing.T) {
 	bindTwo := func(t *testing.T, bob, alice string) {
 		t.Helper()
@@ -155,6 +160,19 @@ func TestUserCompactOnTheUsersOwnAccount(t *testing.T) {
 			t.Fatalf("bob's compact went to %q, want the sign-in as it came", got)
 		}
 	})
+	t.Run("its own sign-in goes as it came", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com", "third@example.com")
+		asked := compactUpstream(t)
+		pauseSignIn(t)
+		bindTwo(t, "spare@example.com", "third@example.com")
+		h := byUserUpTo(t, New(), 1).Handler()
+		if rec := codexCompactFor(h, "alice", "", "chatgpt-account-id", "acct-9"); rec.Code != 200 {
+			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		}
+		if got := asked("/responses/compact"); len(got) != 1 || got[0] != "acct-9" {
+			t.Fatalf("compact went to %q, want acct-9 as it came", got)
+		}
+	})
 	t.Run("bound by session as before", func(t *testing.T) {
 		codexSignedIn(t, "spare@example.com", "third@example.com")
 		asked := compactUpstream(t)
@@ -203,11 +221,15 @@ func TestUserCodexRelayOnTheUsersOwnAccount(t *testing.T) {
 	if got := asked("/responses"); len(got) != 1 {
 		t.Fatalf("bob's turn asked %q", got)
 	}
-	codexSearchFor(h, CodexPath+"/alpha/search", codexSearchBody("gpt-5.5"), "alice")
+	if rec := codexSearchFor(h, CodexPath+"/alpha/search", codexSearchBody("gpt-5.5"), "alice"); rec.Code != 200 || strings.Contains(rec.Body.String(), "@example.com") {
+		t.Fatalf("alice's search: %d %s", rec.Code, rec.Body.String())
+	}
 	if got := asked("/alpha/search"); len(got) != 0 {
 		t.Fatalf("alice's search asked %q", got)
 	}
-	codexSearchFor(h, CodexPath+"/alpha/search", codexSearchBody("gpt-5.5"), "bob")
+	if rec := codexSearchFor(h, CodexPath+"/alpha/search", codexSearchBody("gpt-5.5"), "bob"); rec.Code != 200 || !strings.Contains(rec.Body.String(), "searched") {
+		t.Fatalf("bob's search: %d %s", rec.Code, rec.Body.String())
+	}
 	if got := asked("/alpha/search"); len(got) != 1 {
 		t.Fatalf("bob's search asked %q", got)
 	}
