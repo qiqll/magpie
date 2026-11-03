@@ -840,16 +840,25 @@ func (s *Server) usersCompactOn(r *http.Request, model string, body []byte, on, 
 	if cp, sealed := checkpointOf(body); sealed && !strings.Contains(cp.Who, "#") {
 		var seats []userSeat
 		userBinds.Lock()
-		// never read, the seats are unknown: none is the user's
-		if loadUsers() == nil {
+		err := loadUsers()
+		stale := userBinds.stale
+		if err == nil {
 			b, _ := sharedOf(userKey(r), cp.Provider, user)
 			seats = b.seats()
 		}
 		userBinds.Unlock()
+		if err != nil || stale && !seatIn(seats, cp.Who) {
+			// never read, or not read since it changed, the seats are
+			// unknown: not told final, as the seal may well be the
+			// user's (usersOn's 503); one the last read gives the user is
+			// still read
+			return nil, &userRefusedError{u: &UserBound{User: user}, pid: p.ID, refused: userRefusal{status: http.StatusServiceUnavailable, unknown: true,
+				msg: fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know whether %q's accounts sealed the compaction for %s; nothing was sent. Its log says why", UserHeader, user, model)}}
+		}
 		if !seatIn(seats, cp.Who) {
 			// a 400, which Codex takes as final (InvalidRequest, no
 			// retry_delay): a 429 it asks again with any Retry-After,
-			// for a seal that will never be the user's
+			// for a seal that isn't the user's now
 			return nil, &userRefusedError{u: &UserBound{User: user}, pid: p.ID, refused: userRefusal{status: http.StatusBadRequest,
 				msg:  fmt.Sprintf("%s: the compaction for %s was sealed by %s, which isn't one of %q's accounts; nothing was sent", UserHeader, model, cp.Who, user),
 				said: fmt.Sprintf("%s: the compaction for %s was sealed by an account that isn't one of %q's, so it can't be read; nothing was sent. Start a new conversation", UserHeader, model, user)}}

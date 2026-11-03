@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -250,6 +251,45 @@ func TestUserCompactOnAnothersSealIsFinal(t *testing.T) {
 	}
 	if got := asked("/responses/compact"); len(got) != 0 {
 		t.Fatalf("alice on bob's seal asked %q", got)
+	}
+	// user-accounts.json broken after a read, whose seal bob's is is
+	// unknown now: a 503, never the final 400; her own, as last read, goes
+	wroteCheckpoint("gAAAAB-sealed-by-alices", sealedBy("third@example.com"))
+	if err := os.WriteFile(usersPath(), []byte(`{"users": `), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if rec := codexCompactFor(h, "alice", "gAAAAB-sealed-by-bobs"); rec.Code != http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "Start a new conversation") {
+		t.Fatalf("bob's seal, users stale: %d %s, want a 503", rec.Code, rec.Body.String())
+	}
+	if got := asked("/responses/compact"); len(got) != 0 {
+		t.Fatalf("users stale asked %q on bob's seal", got)
+	}
+	if rec := codexCompactFor(h, "alice", "gAAAAB-sealed-by-alices"); rec.Code != 200 {
+		t.Fatalf("her own seal, users stale: %d %s", rec.Code, rec.Body.String())
+	}
+	asked("/responses/compact")
+}
+
+// Bound by user, a compact carrying a seal while user-accounts.json has
+// never read is told neither a final 400 nor sent (T-086): whose seal it
+// is is unknown, and the user's own may be.
+func TestUserCompactOnASealUsersUnread(t *testing.T) {
+	codexSignedIn(t, "spare@example.com", "third@example.com")
+	asked := compactUpstream(t)
+	if err := provider.SetLoginOn("codex", "me@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	nativeOn(t, "codex")
+	wroteCheckpoint("gAAAAB-sealed-by-alices", sealedBy("third@example.com"))
+	if err := os.WriteFile(usersPath(), []byte(`{"users": `), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := byUserUpTo(t, New(), 1).Handler()
+	if rec := codexCompactFor(h, "alice", "gAAAAB-sealed-by-alices"); rec.Code != http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "Start a new conversation") || strings.Contains(rec.Body.String(), "@example.com") {
+		t.Fatalf("users unread: %d %s, want a 503", rec.Code, rec.Body.String())
+	}
+	if got := asked("/responses/compact"); len(got) != 0 {
+		t.Fatalf("users unread asked %q", got)
 	}
 }
 
