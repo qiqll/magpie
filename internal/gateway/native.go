@@ -193,7 +193,11 @@ func (s *Server) native(w http.ResponseWriter, r *http.Request) {
 	for {
 		n, err := res.Body.Read(buf)
 		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
+			chunk := buf[:n]
+			if res.StatusCode >= 400 {
+				chunk = hideAccountsBody(chunk) // the vendor's error, without the account
+			}
+			if _, werr := w.Write(chunk); werr != nil {
 				return
 			}
 			rc.Flush()

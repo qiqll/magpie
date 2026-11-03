@@ -226,3 +226,26 @@ func TestNativeArkRefusedBoundByUser(t *testing.T) {
 		t.Fatalf("Ark was asked: %q", up.seen)
 	}
 }
+
+// Ark's error passed on through the native route names none of magpie's
+// accounts, as every reply's error doesn't (hideAccounts); its status and
+// the rest of its words go as they came.
+func TestNativeArkErrorNamesNoAccount(t *testing.T) {
+	fresh(t)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		io.WriteString(w, `{"error":{"code":"AccountOverdueError","message":"the account owner@example.com is overdue"}}`)
+	}))
+	t.Cleanup(up.Close)
+	was := isArk
+	isArk = func(p provider.Provider) bool { return p.ID == "ark" }
+	t.Cleanup(func() { isArk = was })
+	if err := provider.Save(provider.Provider{ID: "ark", Name: "Volcengine Ark", Chat: up.URL + "/api/v3", Key: "key", Models: []string{"doubao-seedream-4-5-251128"}}); err != nil {
+		t.Fatal(err)
+	}
+	rec := arkNativeAsk(t, arkNativeMux(New()), access.Identity{KeyID: "desk", KeyName: "Desk"}, "GET", NativePath+"ark/contents/generations/tasks", "")
+	if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "owner@example.com") || !strings.Contains(rec.Body.String(), "AccountOverdueError") {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}

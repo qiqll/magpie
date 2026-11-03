@@ -419,7 +419,8 @@ func (s *Server) serveDecideUsers(w http.ResponseWriter, r *http.Request, body [
 				}
 				tried(status, errMsg, failAuth, rest, used)
 				if refused != nil && last {
-					s.answerUserRefused(w, r, provider.Chat, &Call{Model: asked}, refused)
+					// the call is the route's, recorded as it ends
+					s.answerUserRefused(w, r, provider.Chat, &call, refused)
 					return
 				}
 				continue // the next of its own, its spare, or another provider's
@@ -435,6 +436,7 @@ func (s *Server) serveDecideUsers(w http.ResponseWriter, r *http.Request, body [
 				}
 				code, err := lapsedAs(c, status, errors.New(string(b)))
 				tried(code, errMsg, fail, rest, used) // the route ends as the caller is told
+				call.Status, call.Error = code, err.Error()
 				writeError(w, provider.Chat, code, saidOf(w.Header(), err, nil))
 				return
 			}

@@ -3491,17 +3491,19 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// handed the request on, written once the next try begins
 	var failedRow func()
 	for i := 0; i < len(cands); i++ {
-		// the try before's row first: a group's tries running out of its
-		// user's own below still had that try billed
+		// a group's member is narrowed to its user's own as the tries
+		// reach its provider, another user's left out (groupTurn). Run
+		// out, the try before was the last: the request's own row is
+		// that try's, as a last try's is, so its handed-on row isn't
+		// written too
+		if cands = gt.reach(cands, i, seen); i >= len(cands) {
+			ranOut, ranOutFirst = true, i == 0
+			failedRow = nil
+			break
+		}
 		if failedRow != nil {
 			failedRow()
 			failedRow = nil
-		}
-		// a group's member is narrowed to its user's own as the tries
-		// reach its provider, another user's left out (groupTurn)
-		if cands = gt.reach(cands, i, seen); i >= len(cands) {
-			ranOut, ranOutFirst = true, i == 0
-			break
 		}
 		c := cands[i]
 		if handed.release != nil && handed.who != c.who() {

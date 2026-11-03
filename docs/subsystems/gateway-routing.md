@@ -835,7 +835,8 @@ such a caller too. A model the user switched off is refused. The body's strings 
 the answer (`restoring`), numbers kept exact (`UseNumber`). It is signed
 with the provider's key and magpie's User-Agent, never the caller's
 headers, and each request is a Requests row and a usage record
-(`Operation: "native"`, no tokens). `TestNativeArkRoute`, `TestNativeArkStreamsAsItComes`, `TestNativeArkRefusedBoundByUser`.
+(`Operation: "native"`, no tokens). An error the vendor answers is passed
+on without the accounts it names (`hideAccountsBody`). `TestNativeArkRoute`, `TestNativeArkStreamsAsItComes`, `TestNativeArkRefusedBoundByUser`, `TestNativeArkErrorNamesNoAccount`.
 
 A MiniMax API key (no account, a Chat, Anthropic or Responses base on
 api.minimax.io, api.minimaxi.com or api.minimax.cn: `filmsMiniMax`,
