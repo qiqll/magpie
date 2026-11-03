@@ -163,7 +163,8 @@ func (s *Server) usersSearchKey(ctx context.Context, p provider.Provider, model 
 		// and changed since into what can't be read (stale), they are the
 		// last read, as bindUser keeps them
 		if loadUsers() == nil {
-			seats = userBinds.m[f.key][p.ID][f.user].seats()
+			b, _ := sharedOf(f.key, p.ID, f.user)
+			seats = b.seats()
 		}
 		userBinds.Unlock()
 		if seatIn(seats, who) {

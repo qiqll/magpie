@@ -59,12 +59,14 @@ type userSpareJSON struct {
 
 // userJSON is one user's binding of a provider, every gateway key's
 // it is bound under as one: the gateway counts a name sent with any key
-// as one user (the owner's option A2, 2026-10-30), and the page shows it
-// so. Its accounts are every key's, each once: the first key's first,
-// then the rest in the order the keys were bound. Whether each is out is
-// its account's, in accounts, by Seat. Keys is each key's binding as
-// user-accounts.json keeps it, for one of its accounts to be let go of
-// under a key; the page reads each key's name and tier there, Key,
+// as one user (the owner's option A2, 2026-10-30) and binds it to one
+// set of accounts (option A, 2026-11-03, T-075), and the page shows it
+// so. Its accounts are every key's, each once, as the gateway reads them
+// (gateway's sharedOf): the first key's first, the key used last (the
+// earliest bound when alike), then the rest in that order. Whether each
+// is out is its account's, in accounts, by Seat. Keys is each key's
+// binding as user-accounts.json keeps it, alike under each once the
+// gateway wrote it; the page reads each key's name and tier there, Key,
 // KeyName, KeyGone and Tier being its first key's alone.
 type userJSON struct {
 	User         string          `json:"user"`
@@ -100,8 +102,9 @@ type userKeyJSON struct {
 	Used    time.Time `json:"used,omitzero"`
 }
 
-// userMerged is a user's bindings of a provider, one a key, the earliest
-// bound first (a time left out of a file edited by hand last).
+// userMerged is a user's bindings of a provider, one a key, the one used
+// last first, of those alike the earliest bound (a time left out of a
+// file edited by hand last), as the gateway reads them.
 type userMerged []gateway.UserRow
 
 // mergedUsers is rows by user and provider, in the order each first comes.
@@ -119,6 +122,9 @@ func mergedUsers(rows []gateway.UserRow) []userMerged {
 	}
 	for _, m := range out {
 		slices.SortStableFunc(m, func(a, b gateway.UserRow) int {
+			if c := b.Used.Compare(a.Used); c != 0 {
+				return c
+			}
 			if a.At.IsZero() != b.At.IsZero() {
 				if a.At.IsZero() {
 					return 1
@@ -270,14 +276,15 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 		writeJSON(w, out)
 	})
 	// one of a user's accounts let go of, as the page names it: its
-	// gateway key, provider, user and seat; only while the gateway binds
-	// by user, as the page offers it: bound by session the bindings are
-	// kept as they are. unbound is false when the user was let go of it
-	// meanwhile; a file that doesn't read, or can't be written, is said
-	// why, for the page to say it in the reader's language
+	// provider, user and seat, under every gateway key the user is bound
+	// under (a key an older page sends is no matter: it is one user);
+	// only while the gateway binds by user, as the page offers it: bound
+	// by session the bindings are kept as they are. unbound is false when
+	// the user was let go of it meanwhile; a file that doesn't read, or
+	// can't be written, is said why, for the page to say it in the
+	// reader's language
 	mux.HandleFunc("POST /api/gateway/users/unbind", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Key      string `json:"key"`
 			Provider string `json:"provider"`
 			User     string `json:"user"`
 			Seat     string `json:"seat"`
@@ -290,7 +297,7 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			http.Error(w, "the gateway doesn't bind by user now (start option --bind=user), so nothing is unbound", http.StatusConflict)
 			return
 		}
-		found, err := gateway.Unbind(in.Key, in.Provider, in.User, in.Seat)
+		found, err := gateway.Unbind(in.Provider, in.User, in.Seat)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)

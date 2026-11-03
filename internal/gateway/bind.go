@@ -387,7 +387,8 @@ func (s *Server) usersSeated(r *http.Request, p provider.Provider, cs []candidat
 	lapsedWho := lapsedOf(p.ID, cs, pl)
 	userBinds.Lock()
 	loadUsers()
-	seats := userBinds.m[userKey(r)][p.ID][user].seats()
+	b, _ := sharedOf(userKey(r), p.ID, user)
+	seats := b.seats()
 	userBinds.Unlock()
 	return slices.DeleteFunc(slices.Clone(cs), func(c candidate) bool {
 		return c.p.ID != p.ID || !seatIn(seats, c.who()) || lapsedWho[strings.ToLower(c.who())] != ""

@@ -465,3 +465,26 @@ func TestGatewayUsersMergedAcrossKeys(t *testing.T) {
 		t.Errorf("q=tenant a 3: %+v", out)
 	}
 }
+
+// A user bound apart under two gateway keys by a magpie before (T-075)
+// is shown as the gateway reads it: the first is the first of the key
+// it used last, though the other key bound it earlier.
+func TestGatewayUsersFirstOfTheKeyUsedLast(t *testing.T) {
+	sandboxHome(t)
+	noGateway(t)
+	early, late := time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC), time.Date(2026, 10, 30, 1, 0, 0, 0, time.UTC)
+	used := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	f := func(v time.Time) string { return v.Format(time.RFC3339) }
+	writeUsers(t, fmt.Sprintf(`{"keys": {
+  "ka": {"antigravity": {"5": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q, "used": %q}}},
+  "kb": {"antigravity": {"5": {"who": "antigravity@b@x.com", "account": "b@x.com", "at": %q, "used": %q}}}
+}}`, f(early), f(used.Add(-2*time.Hour)), f(late), f(used)))
+	_, out := gatewayUsers(t, "")
+	if len(out.Users) != 1 {
+		t.Fatalf("users: %+v", out.Users)
+	}
+	u := out.Users[0]
+	if u.Account != "b@x.com" || u.Key != "kb" || len(u.Spares) != 1 || u.Spares[0].Account != "a@x.com" || !u.Used.Equal(used) {
+		t.Fatalf("not the first of the key used last: %+v", u)
+	}
+}

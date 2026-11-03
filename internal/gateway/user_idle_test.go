@@ -5,8 +5,6 @@ import (
 	"os"
 	"testing"
 	"time"
-
-	"github.com/yetone/magpie/internal/access"
 )
 
 // usedIn is the Used user-accounts.json keeps for user of pid.
@@ -292,48 +290,46 @@ func TestUserWaitingOutARestIsNotIdle(t *testing.T) {
 	}
 }
 
-// Of two gateway keys the same user id is two users: one key's carol
-// sending a request lets the other key's idle carol go, and keeps its own.
+// Of two gateway keys the same user id is one user (T-075): carol, idle
+// under one key for four days and in use under the other an hour ago,
+// keeps her accounts under both when another user's request sweeps; idle
+// under both, she lets go of them under both at once.
 func TestUserIdleOfAnotherKey(t *testing.T) {
 	codexSignedIn(t, "b@example.com")
 	usersUpstream(t, nil)
-	a, err := access.Update("add-key", access.Change{Name: "Tenant A"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := access.Update("add-key", access.Change{Name: "Tenant B"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	keys, secrets := newCaller(t, "Tenant A", "Tenant B")
 	s := byUser(New())
-	if rec := userPostWith(s, a, "carol", "a's"); rec.Code != 200 {
-		t.Fatalf("a's carol: %d %s", rec.Code, rec.Body.String())
+	write := func(aUsed, bUsed time.Time) {
+		// erin in use an hour ago: the gateway wasn't down meanwhile
+		writeUsers(t, userFile{Keys: map[string]map[string]map[string]userBinding{
+			keys[0].ID: {"codex": {"carol": bound("me@example.com", "", aUsed), "erin": bound("b@example.com", "", ago(time.Hour))}},
+			keys[1].ID: {"codex": {"carol": bound("me@example.com", "", bUsed)}},
+		}})
+		forgetSeen()
 	}
-	var aKey string
-	for k := range usersFile(t).Keys {
-		aKey = k
-	}
-	if rec := userPostWith(s, b, "carol", "b's"); rec.Code != 200 {
-		t.Fatalf("b's carol: %d %s", rec.Code, rec.Body.String())
+	write(ago(days(4)), ago(time.Hour))
+	if rec := userPostWith(s, secrets[0], "dave", "dave's"); rec.Code != 200 {
+		t.Fatalf("dave: %d %s", rec.Code, rec.Body.String())
 	}
 	f := usersFile(t)
-	if len(f.Keys) != 2 || aKey == "" {
-		t.Fatalf("keys %v", f.Keys)
+	for _, k := range keys {
+		if _, kept := f.Keys[k.ID]["codex"]["carol"]; !kept {
+			t.Fatalf("carol, in use under %s an hour ago, let go: %+v", k.Name, f.Keys)
+		}
 	}
-	c := f.Keys[aKey]["codex"]["carol"]
-	c.Used = ago(days(4))
-	f.Keys[aKey]["codex"]["carol"] = c
-	writeUsers(t, f)
-	forgetSeen()
-	if rec := userPostWith(s, b, "carol", "b's again"); rec.Code != 200 {
-		t.Fatalf("b's carol again: %d %s", rec.Code, rec.Body.String())
+
+	write(ago(days(4)), ago(days(3)))
+	if rec := userPostWith(s, secrets[0], "dave", "dave's again"); rec.Code != 200 {
+		t.Fatalf("dave again: %d %s", rec.Code, rec.Body.String())
 	}
 	f = usersFile(t)
-	if _, kept := f.Keys[aKey]["codex"]["carol"]; kept {
-		t.Fatalf("a's idle carol kept: %+v", f.Keys)
+	for _, k := range keys {
+		if _, kept := f.Keys[k.ID]["codex"]["carol"]; kept {
+			t.Fatalf("carol, idle under both, kept under %s: %+v", k.Name, f.Keys)
+		}
 	}
-	if len(f.Keys) != 1 {
-		t.Fatalf("b's carol let go: %+v", f.Keys)
+	if _, kept := f.Keys[keys[0].ID]["codex"]["dave"]; !kept {
+		t.Fatalf("dave let go: %+v", f.Keys)
 	}
 }
 

@@ -8,10 +8,10 @@
 // bound only while the gateway binds by user (--bind=user); bound by
 // session, the bindings are shown as they are and nothing is bound by
 // them. Bound by user, each of a user's accounts has an Unbind, confirmed
-// first, that lets go of it (/api/gateway/users/unbind) under one key, an
-// Unbind for each key it is bound under: its spare is its
-// first then, and a user left with none is bound afresh on its next
-// request; bound by session nothing is changed here. A user is moved in
+// first, that lets go of it (/api/gateway/users/unbind) under every key
+// the user is bound under, as the gateway binds it one user (T-075): its
+// spare is its first then, and a user left with none is bound afresh on
+// its next request; bound by session nothing is changed here. A user is moved in
 // the file, which the gateway reads again when it changes. Bound by user
 // the section shows
 // even with nobody bound yet, saying so; bound by session it stays hidden
@@ -80,46 +80,43 @@ function userSeatState(a) {
 // the account of a provider a user's seat names, as the accounts list has it
 const userAccountOf = (p, seat) => userAccounts.find((a) => a.provider === p && a.seat === seat);
 
-// one of a user's accounts: its name, first (under any of its keys) or
-// spare, and its state; bound by user, with an Unbind beside it for each
-// key it is bound to it under, the key named when the user has several:
-// each lets go of it under that key alone, nothing under every key at once
+// one of a user's accounts: its name, first or spare, as the gateway
+// reads them (u.seat its first), and its state; bound by user, with an
+// Unbind beside it that lets go of it under every key the user is bound
+// under
 function userSeatChip(u, account, seat) {
   const a = userAccountOf(u.provider, seat);
-  const first = u.keys.some((k) => k.seats[0] === seat);
+  const first = seat === u.seat;
   const chip = el("span", "user-seat " + (first ? "first" : "spare") + (!a?.outKnown || a.out || a.gone ? " out" : ""));
   chip.append(el("span", "name", account), el("span", "", ` (${t(first ? "first" : "spare")} · ${userSeatState(a)})`));
   if (userBindMode?.mode !== "user") return chip;
   const held = el("span", "user-seat-held");
   held.append(chip);
-  for (const k of u.keys.filter((k) => k.seats.includes(seat))) {
-    const go = el("button", "text user-unbind", u.keys.length > 1 ? `${t("Unbind")} · ${userKeyLabel(k)}` : t("Unbind"));
-    go.type = "button";
-    go.title = t("Lets go of this account for this user");
-    go.onclick = () => unbindUserSeat(u, k, account, seat, go);
-    held.append(go);
-  }
+  const go = el("button", "text user-unbind", t("Unbind"));
+  go.type = "button";
+  go.title = t("Lets go of this account for this user");
+  go.onclick = () => unbindUserSeat(u, account, seat, go);
+  held.append(go);
   return held;
 }
 
-// what letting go of one of u's accounts under key k leaves it there: a
-// spare, its first as it is; its first, the next its first; its only
-// one, bound afresh
-function unbindSays(u, k, seat) {
-  if (seat !== k.seats[0]) return t("Its first account stays its first, and its other spares stay.");
-  if (k.seats.length > 1) return t("Its other accounts stay, the next one its first, and take its requests.");
+// what letting go of one of u's accounts leaves it: a spare, its first
+// as it is; its first, the next its first; its only one, bound afresh
+function unbindSays(u, seat) {
+  if (seat !== u.seat) return t("Its first account stays its first, and its other spares stay.");
+  if (u.spares?.length) return t("Its other accounts stay, the next one its first, and take its requests.");
   return t("It is the user's only account of {provider}: its next request binds it afresh.", { provider: u.providerName });
 }
 
-// one of u's accounts let go of under key k, once confirmed, the key
-// named when u has several; the list read again after
-async function unbindUserSeat(u, k, account, seat, go) {
-  const says = unbindSays(u, k, seat);
-  if (!await confirmAction(t("Unbind {account} from {user}?", { account, user: u.user }), u.keys.length > 1 ? `${userKeyLabel(k)}: ${says}` : says, t("Unbind"))) return;
+// one of u's accounts let go of, once confirmed, under every key u is
+// bound under, said so when it has several; the list read again after
+async function unbindUserSeat(u, account, seat, go) {
+  const says = unbindSays(u, seat);
+  if (!await confirmAction(t("Unbind {account} from {user}?", { account, user: u.user }), u.keys.length > 1 ? t("Under each of its gateway keys: {says}", { says }) : says, t("Unbind"))) return;
   go.classList.add("busy");
   let out;
   try {
-    out = await api("gateway/users/unbind", { key: k.key || "", provider: u.provider, user: u.user, seat });
+    out = await api("gateway/users/unbind", { provider: u.provider, user: u.user, seat });
   } catch (e) {
     status(e.why ? t("user-accounts.json can't be changed: {why}", { why: e.why }) : e.message, "err");
     return;

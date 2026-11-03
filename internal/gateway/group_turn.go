@@ -170,7 +170,8 @@ func (g *groupTurn) pinned(pin string, cs []candidate, pl planned) (_ []candidat
 		if _, member := g.members[pid]; !member || !g.bound(pid) {
 			return userSeat{}, false
 		}
-		for _, s := range userBinds.m[key][pid][user].seats() {
+		b, _ := sharedOf(key, pid, user)
+		for _, s := range b.seats() {
 			if strings.EqualFold(pin, s.Account) || strings.EqualFold(pin, s.Who) {
 				return s, true
 			}
@@ -211,11 +212,11 @@ func (g *groupTurn) pinned(pin string, cs []candidate, pl planned) (_ []candidat
 	}
 	// its use kept as any bound user's, so it isn't let go as idle
 	now := time.Now().UTC()
-	noteSeen(key, pid, user, now)
-	if !userBinds.stale && touchUsed(key, pid, user, now) {
+	noteSeen(pid, user, now)
+	if !userBinds.stale && touchUsed(pid, user, now) {
 		saveUsersLogged()
 	}
-	b := userBinds.m[key][pid][user]
+	b, _ := sharedOf(key, pid, user)
 	g.done[pid], g.own[pid] = true, map[string]bool{strings.ToLower(seat.Who): true}
 	g.ub = &UserBound{User: user, Tier: b.Tier, Why: "kept"}
 	if tier, _, err := tierOf(g.r.Header); err == nil && tierNamed(g.r.Header) {

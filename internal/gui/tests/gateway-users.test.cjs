@@ -17,10 +17,9 @@
 // account the page names is let go of and the list read again; a file
 // that can't be changed said why; bound by session, none. A user bound
 // under two gateway keys is one row, each key named with its tier, its
-// accounts each once, and an Unbind for each key it is bound to one under,
-// the key named and said in the confirmation, letting go of it under that
-// key alone. In every language, wide and narrow, in Chromium
-// and WebKit.
+// accounts each once, each with one Unbind that lets go of it under every
+// key (T-075: one user, one set of accounts), said in the confirmation.
+// In every language, wide and narrow, in Chromium and WebKit.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -86,18 +85,18 @@ function serve(lang, users) {
       const body = route.request().postDataJSON();
       users.unbinds.push(body);
       if (users.unbindError) return json({ error: "user-accounts.json can't be changed: it doesn't read, and is left as it is", why: "it doesn't read, and is left as it is" }, 400);
-      // the seat let go of: the spare its first, one left with none gone
+      // the seat let go of, under every key: the spare its first, one
+      // left with none gone
       users.all = users.all.flatMap((u) => {
-        // one of several keys: let go of under that key alone
         if (u.keys && u.user === body.user && u.provider === body.provider) {
-          const keys = u.keys.map((k) => k.key === body.key ? { ...k, seats: k.seats.filter((x) => x !== body.seat) } : k).filter((k) => k.seats.length);
+          const keys = u.keys.map((k) => ({ ...k, seats: k.seats.filter((x) => x !== body.seat) })).filter((k) => k.seats.length);
           // the row again from the keys left: its accounts each once
           const named = Object.fromEntries([{ account: u.account, seat: u.seat }, ...(u.spares || [])].map((x) => [x.seat, x.account]));
           const seats = [...new Set(keys.flatMap((k) => k.seats))];
           if (!seats.length) return [];
           return [{ ...u, keys, account: named[seats[0]], seat: seats[0], spares: seats.slice(1).map((x) => ({ account: named[x], seat: x, at: u.at })) }];
         }
-        if (u.user !== body.user || (u.key || "") !== body.key || u.provider !== body.provider) return [u];
+        if (u.user !== body.user || u.provider !== body.provider) return [u];
         const seats = [{ account: u.account, seat: u.seat, at: u.at }, ...(u.spares || [])].filter((x) => x.seat !== body.seat);
         return seats.length ? [{ ...u, account: seats[0].account, seat: seats[0].seat, spares: seats.slice(1) }] : [];
       });
@@ -123,31 +122,31 @@ function serve(lang, users) {
 
 const words = {
   en: {
-    unbindSpare: "Its first account stays its first, and its other spares stay.", unbind: "Unbind", unbindTitle: "Unbind a@x.com from 1?", unbindOthers: "Its other accounts stay, the next one its first, and take its requests.", unbindOnly: "It is the user's only account of ChatGPT: its next request binds it afresh.", unbound: "1 let go of a@x.com", unbindCant: "user-accounts.json can't be changed: it doesn't read",
+    underEach: "Under each of its gateway keys: ", unbindSpare: "Its first account stays its first, and its other spares stay.", unbind: "Unbind", unbindTitle: "Unbind a@x.com from 1?", unbindOthers: "Its other accounts stay, the next one its first, and take its requests.", unbindOnly: "It is the user's only account of ChatGPT: its next request binds it afresh.", unbound: "1 let go of a@x.com", unbindCant: "user-accounts.json can't be changed: it doesn't read",
     head: "User bindings", two: "2 users", gone: "no longer on its provider", provGone: "no longer in magpie", none: "without a gateway key", removed: "a removed gateway key", keyID: "gateway key 01234567", bound: "bound", match: "No users match “nobody”", more: "Showing 6 of 300", unread: "user-accounts.json can't be read: unexpected end",
     out: "out · quota used up · back in 3h", can: "can answer", unknown: "status unknown", model: "out · rate limited for m-1", spareNote: "2 users, 1 as a spare", first: "first", spare: "spare",
     byUser: "Bound by user: accounts of each provider each user may have, by its tier: free (1) up to 2, each shared by up to 2 (default) · pro (4, P) up to 4, each its own alone · team up to 6, shared by any number. A user that sends a provider nothing for 60 hours lets go of its accounts there.", byUserNoIdle: "Bound by user: accounts of each provider each user may have, by its tier: free (1) up to 2, each shared by up to 2 (default) · pro (4, P) up to 4, each its own alone · team up to 6, shared by any number.", empty: "No user is bound yet", lastUsed: "last used 2 hours ago", tierPro: "tier pro", tierFree: "tier free", tiersUnknown: "Bound by user; the tiers in user-tiers.json are unknown.", off: "Binding by user is off (start option --bind=user)",
   },
   zh: {
-    unbindSpare: "它的主账号仍是主账号，其他备用账号也保留。", unbind: "解绑", unbindTitle: "为 1 解绑 a@x.com？", unbindOthers: "它的其他账号保留，下一个成为主账号，承接它的请求。", unbindOnly: "这是该用户在 ChatGPT 下唯一的账号：它的下一次请求会重新绑定。", unbound: "1 已解绑 a@x.com", unbindCant: "无法修改 user-accounts.json：it doesn't read",
+    underEach: "该用户的每个网关密钥下都解绑：", unbindSpare: "它的主账号仍是主账号，其他备用账号也保留。", unbind: "解绑", unbindTitle: "为 1 解绑 a@x.com？", unbindOthers: "它的其他账号保留，下一个成为主账号，承接它的请求。", unbindOnly: "这是该用户在 ChatGPT 下唯一的账号：它的下一次请求会重新绑定。", unbound: "1 已解绑 a@x.com", unbindCant: "无法修改 user-accounts.json：it doesn't read",
     head: "用户绑定", two: "2 个用户", gone: "已不在该供应商下", provGone: "已不在 magpie 中", none: "未使用网关密钥", removed: "已删除的网关密钥", keyID: "网关密钥 01234567", bound: "绑定", match: "没有和“nobody”匹配的用户", more: "显示 300 个中的 6 个", unread: "无法读取 user-accounts.json：unexpected end",
     out: "暂不可用 · 额度用尽 · 3 小时后恢复", can: "可用", unknown: "状态未知", model: "暂不可用 · m-1 限流", spareNote: "2 个用户，其中 1 个作为备用", first: "主账号", spare: "备用",
     byUser: "按用户绑定：每个用户在每个供应商下的账号上限按等级：free (1) 最多 2 个，每个号最多 2 人共用（默认） · pro (4, P) 最多 4 个，每个号独占 · team 最多 6 个，共用人数不限。 用户 60 小时没有向某个供应商发请求，会让出在那里的账号。", byUserNoIdle: "按用户绑定：每个用户在每个供应商下的账号上限按等级：free (1) 最多 2 个，每个号最多 2 人共用（默认） · pro (4, P) 最多 4 个，每个号独占 · team 最多 6 个，共用人数不限。", empty: "还没有用户被绑定", lastUsed: "最后使用 2小时前", tierPro: "等级 pro", tierFree: "等级 free", tiersUnknown: "按用户绑定；user-tiers.json 中的等级未知。", off: "按用户绑定未开启（启动参数 --bind=user）",
   },
   "zh-TW": {
-    unbindSpare: "它的主帳號仍是主帳號，其他備用帳號也保留。", unbind: "解綁", unbindTitle: "為 1 解除綁定 a@x.com？", unbindOthers: "它的其他帳號保留，下一個成為主帳號，承接它的請求。", unbindOnly: "這是該使用者在 ChatGPT 下唯一的帳號：它的下一次請求會重新綁定。", unbound: "1 已解除綁定 a@x.com", unbindCant: "無法修改 user-accounts.json：it doesn't read",
+    underEach: "該使用者的每個閘道金鑰下都解除綁定：", unbindSpare: "它的主帳號仍是主帳號，其他備用帳號也保留。", unbind: "解綁", unbindTitle: "為 1 解除綁定 a@x.com？", unbindOthers: "它的其他帳號保留，下一個成為主帳號，承接它的請求。", unbindOnly: "這是該使用者在 ChatGPT 下唯一的帳號：它的下一次請求會重新綁定。", unbound: "1 已解除綁定 a@x.com", unbindCant: "無法修改 user-accounts.json：it doesn't read",
     head: "使用者綁定", two: "2 位使用者", gone: "已不在該供應商下", provGone: "已不在 magpie 中", none: "未使用閘道金鑰", removed: "已刪除的閘道金鑰", keyID: "閘道金鑰 01234567", bound: "綁定", match: "沒有和「nobody」匹配的使用者", more: "顯示 300 位中的 6 位", unread: "無法讀取 user-accounts.json：unexpected end",
     out: "暫不可用 · 額度用盡 · 3 小時後恢復", can: "可用", unknown: "狀態未知", model: "暫不可用 · m-1 限流", spareNote: "2 位使用者，其中 1 位作為備用", first: "主帳號", spare: "備用",
     byUser: "依使用者綁定：每位使用者在每個供應商下的帳號上限依等級：free (1) 最多 2 個，每個帳號最多 2 人共用（預設） · pro (4, P) 最多 4 個，每個帳號獨占 · team 最多 6 個，共用人數不限。 使用者 60 小時沒有向某個供應商發送請求，會讓出在那裡的帳號。", byUserNoIdle: "依使用者綁定：每位使用者在每個供應商下的帳號上限依等級：free (1) 最多 2 個，每個帳號最多 2 人共用（預設） · pro (4, P) 最多 4 個，每個帳號獨占 · team 最多 6 個，共用人數不限。", empty: "還沒有使用者被綁定", lastUsed: "最後使用 2小時前", tierPro: "等級 pro", tierFree: "等級 free", tiersUnknown: "依使用者綁定；user-tiers.json 中的等級未知。", off: "依使用者綁定未開啟（啟動參數 --bind=user）",
   },
   ja: {
-    unbindSpare: "最初のアカウントはそのまま最初のアカウントで、ほかの予備も残ります。", unbind: "解除", unbindTitle: "1 から a@x.com の割り当てを解除しますか？", unbindOthers: "ほかのアカウントは残り、次のものが最初のアカウントになってリクエストを受けます。", unbindOnly: "このユーザーの ChatGPT での唯一のアカウントです：次のリクエストで改めて割り当てられます。", unbound: "1 から a@x.com の割り当てを解除しました", unbindCant: "user-accounts.json を変更できません：it doesn't read",
+    underEach: "このユーザーのすべてのゲートウェイキーで解除します：", unbindSpare: "最初のアカウントはそのまま最初のアカウントで、ほかの予備も残ります。", unbind: "解除", unbindTitle: "1 から a@x.com の割り当てを解除しますか？", unbindOthers: "ほかのアカウントは残り、次のものが最初のアカウントになってリクエストを受けます。", unbindOnly: "このユーザーの ChatGPT での唯一のアカウントです：次のリクエストで改めて割り当てられます。", unbound: "1 から a@x.com の割り当てを解除しました", unbindCant: "user-accounts.json を変更できません：it doesn't read",
     head: "ユーザーの割り当て", two: "2 ユーザー", gone: "プロバイダにもうありません", provGone: "magpie にもうありません", none: "ゲートウェイキーなし", removed: "削除されたゲートウェイキー", keyID: "ゲートウェイキー 01234567", bound: "割り当て", match: "「nobody」に一致するユーザーはいません", more: "300 件中 6 件を表示中", unread: "user-accounts.json を読み込めません：unexpected end",
     out: "利用不可 · クォータ切れ · 3 時間後に復帰", can: "利用可能", unknown: "状態は不明", model: "利用不可 · m-1 でレート制限", spareNote: "2 ユーザー（うち 1 は予備）", first: "最初", spare: "予備",
     byUser: "ユーザーごとに割り当て：各ユーザーのプロバイダごとのアカウント上限はティアで決まります：free (1) 最大 2、各アカウントを最大 2 人で共有（デフォルト） · pro (4, P) 最大 4、各アカウントを専有 · team 最大 6、共有人数は無制限。 60 時間プロバイダにリクエストを送らなかったユーザーは、そのアカウントを手放します。", byUserNoIdle: "ユーザーごとに割り当て：各ユーザーのプロバイダごとのアカウント上限はティアで決まります：free (1) 最大 2、各アカウントを最大 2 人で共有（デフォルト） · pro (4, P) 最大 4、各アカウントを専有 · team 最大 6、共有人数は無制限。", empty: "まだ割り当てられたユーザーはいません", lastUsed: "最終利用 2 時間前", tierPro: "ティア pro", tierFree: "ティア free", tiersUnknown: "ユーザーごとに割り当て。user-tiers.json のティアは不明です。", off: "ユーザーごとの割り当てはオフです（起動オプション --bind=user）",
   },
   de: {
-    unbindSpare: "Sein erstes Konto bleibt sein erstes, und seine anderen Ersatzkonten bleiben.", unbind: "Lösen", unbindTitle: "a@x.com von 1 lösen?", unbindOthers: "Seine anderen Konten bleiben; das nächste wird sein erstes und übernimmt seine Anfragen.", unbindOnly: "Es ist das einzige Konto des Nutzers bei ChatGPT: seine nächste Anfrage bindet ihn neu.", unbound: "a@x.com von 1 gelöst", unbindCant: "user-accounts.json kann nicht geändert werden: it doesn't read",
+    underEach: "Unter jedem seiner Zugangsschlüssel: ", unbindSpare: "Sein erstes Konto bleibt sein erstes, und seine anderen Ersatzkonten bleiben.", unbind: "Lösen", unbindTitle: "a@x.com von 1 lösen?", unbindOthers: "Seine anderen Konten bleiben; das nächste wird sein erstes und übernimmt seine Anfragen.", unbindOnly: "Es ist das einzige Konto des Nutzers bei ChatGPT: seine nächste Anfrage bindet ihn neu.", unbound: "a@x.com von 1 gelöst", unbindCant: "user-accounts.json kann nicht geändert werden: it doesn't read",
     head: "Nutzerbindungen", two: "2 Nutzer", gone: "nicht mehr beim Anbieter", provGone: "nicht mehr in magpie", none: "ohne Zugangsschlüssel", removed: "ein entfernter Zugangsschlüssel", keyID: "Zugangsschlüssel 01234567", bound: "gebunden", match: "Keine Nutzer passen zu „nobody“", more: "6 von 300 angezeigt", unread: "user-accounts.json kann nicht gelesen werden: unexpected end",
     out: "nicht verfügbar · Kontingent aufgebraucht · zurück in 3 Std.", can: "verfügbar", unknown: "Status unbekannt", model: "nicht verfügbar · Rate-Limit für m-1", spareNote: "2 Nutzer, 1 als Ersatz", first: "erstes", spare: "Ersatz",
     byUser: "Nach Nutzer gebunden: Konten je Anbieter für jeden Nutzer nach seiner Stufe: free (1) bis zu 2, jedes von bis zu 2 Nutzern geteilt (Standard) · pro (4, P) bis zu 4, jedes Konto nur für einen Nutzer · team bis zu 6, von beliebig vielen Nutzern geteilt. Ein Nutzer, der einem Anbieter 60 Stunden lang nichts sendet, gibt seine Konten dort frei.", byUserNoIdle: "Nach Nutzer gebunden: Konten je Anbieter für jeden Nutzer nach seiner Stufe: free (1) bis zu 2, jedes von bis zu 2 Nutzern geteilt (Standard) · pro (4, P) bis zu 4, jedes Konto nur für einen Nutzer · team bis zu 6, von beliebig vielen Nutzern geteilt.", empty: "Noch kein Nutzer gebunden", lastUsed: "zuletzt genutzt vor 2 Stunden", tierPro: "Stufe pro", tierFree: "Stufe free", tiersUnknown: "Nach Nutzer gebunden; die Stufen in user-tiers.json sind unbekannt.", off: "Bindung nach Nutzer ist aus (Startoption --bind=user)",
@@ -311,7 +310,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await userRows.nth(0).locator(".user-unbind").first().click();
         await dialog.locator(".bar button").last().click();
         await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-bind")[0]?.querySelectorAll(".user-seat").length === 1);
-        assert.deepEqual(users.unbinds, [{ key: "k1", provider: "antigravity", user: "1", seat: "antigravity@a@x.com" }]);
+        assert.deepEqual(users.unbinds, [{ provider: "antigravity", user: "1", seat: "antigravity@a@x.com" }], "no key: under every one");
         assert((await text(userRows.nth(0).locator(".user-seat"))).startsWith(`b@x.com (${w.first}`), "the spare is its first");
         assert.equal(await text(page.locator("#status")), w.unbound);
         // a file that can't be changed: said why, in the reader's language
@@ -331,37 +330,36 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert((await text(userRows.nth(0).locator(".sub").last())).startsWith(`ChatGPT · Tenant B (${w.tierFree}), Tenant A (${w.tierPro})`), "each key, with its tier");
         const mchips = userRows.nth(0).locator(".user-seat");
         assert.deepEqual(await mchips.evaluateAll((cs) => cs.map((c) => c.querySelector(".name").textContent + " " + [...c.classList].filter((k) => k !== "user-seat" && k !== "out").join(" "))), ["a@x.com first", "b@x.com spare"]);
-        // an Unbind for each key it is bound to the account under, named
+        // one Unbind an account, naming no key: it is let go of under
+        // every key, as the confirmation says
         const held = userRows.nth(0).locator(".user-seat-held");
-        assert.deepEqual(await held.nth(0).locator(".user-unbind").allTextContents(), [`${w.unbind} · Tenant B`, `${w.unbind} · Tenant A`]);
-        assert.deepEqual(await held.nth(1).locator(".user-unbind").allTextContents(), [`${w.unbind} · Tenant B`]);
-        // the confirmation names the key and what is left under it
-        await held.nth(0).locator(".user-unbind").nth(0).click();
-        await dialog.waitFor();
-        assert.equal(await text(dialog.locator("p")), `Tenant B: ${w.unbindOthers}`);
-        await dialog.locator(".bar button").first().click();
-        await dialog.waitFor({ state: "detached" });
-        await held.nth(0).locator(".user-unbind").nth(1).click();
-        await dialog.waitFor();
-        assert.equal(await text(dialog.locator("p")), `Tenant A: ${w.unbindOnly}`);
-        await dialog.locator(".bar button").last().click();
-        // under that key alone: the other key's left, its Unbind no
-        // longer naming a key
-        await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-unbind").length === 2);
-        assert.deepEqual(users.unbinds, [{ key: "k1", provider: "codex", user: "7", seat: "codex@a@x.com" }]);
         assert.deepEqual(await held.nth(0).locator(".user-unbind").allTextContents(), [w.unbind]);
-        assert((await text(userRows.nth(0).locator(".sub").last())).startsWith(`ChatGPT · Tenant B · ${w.tierFree}`), "one key left, its tier once");
-        // an account under its only key let go of: its chip gone
+        assert.deepEqual(await held.nth(1).locator(".user-unbind").allTextContents(), [w.unbind]);
         await held.nth(1).locator(".user-unbind").click();
         await dialog.waitFor();
-        assert.equal(await text(dialog.locator("p")), w.unbindSpare, "one key left, none named");
+        assert.equal(await text(dialog.locator("p")), `${w.underEach}${w.unbindSpare}`);
+        await dialog.locator(".bar button").first().click();
+        await dialog.waitFor({ state: "detached" });
+        await held.nth(0).locator(".user-unbind").click();
+        await dialog.waitFor();
+        assert.equal(await text(dialog.locator("p")), `${w.underEach}${w.unbindOthers}`);
         await dialog.locator(".bar button").last().click();
-        await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-seat").length === 1);
-        assert.deepEqual(users.unbinds.at(-1), { key: "k2", provider: "codex", user: "7", seat: "codex@b@x.com" });
-        assert.equal(await text(mchips.nth(0).locator(".name")), "a@x.com");
+        // let go of under both keys: Tenant A, left with none, is gone,
+        // and the spare is the first under Tenant B
+        await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-unbind").length === 1);
+        assert.deepEqual(users.unbinds, [{ provider: "codex", user: "7", seat: "codex@a@x.com" }]);
+        assert.equal(await text(mchips.nth(0).locator(".name")), "b@x.com");
+        assert((await text(mchips.nth(0))).startsWith(`b@x.com (${w.first}`), "the spare is its first");
+        assert((await text(userRows.nth(0).locator(".sub").last())).startsWith(`ChatGPT · Tenant B · ${w.tierFree}`), "one key left, its tier once");
+        // its last account, one key left: no key said
+        await held.nth(0).locator(".user-unbind").click();
+        await dialog.waitFor();
+        assert.equal(await text(dialog.locator("p")), w.unbindOnly);
+        await dialog.locator(".bar button").first().click();
+        await dialog.waitFor({ state: "detached" });
         users.all = [merged];
         await page.reload();
-        await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-unbind").length === 3);
+        await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-unbind").length === 2);
         const mover = await page.locator("#view-gateway").evaluate((v) => {
           const r = v.getBoundingClientRect();
           return [...v.querySelectorAll("#userBindsBlock *")].filter((e) => e.getBoundingClientRect().right > r.right + 1).map((e) => e.className || e.tagName);

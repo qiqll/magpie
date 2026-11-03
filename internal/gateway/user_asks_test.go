@@ -595,9 +595,9 @@ func TestKimiTurnSearchesOnItsUsersKey(t *testing.T) {
 	}
 }
 
-// A user is its gateway key's own: the same id sent with two keys is two
-// users, each looked for on the account it is on, and one key's alice is
-// never given the other's description.
+// The same id sent with two gateway keys is one user, on one account
+// (T-075), but one key's alice is never given the other's description:
+// it is looked for once under each key, on that account.
 func TestVisionMCPUsersOfEachKeyApart(t *testing.T) {
 	s, keys, _ := probesKeyed(t)
 	a, err := access.Update("add-key", access.Change{Name: "Tenant A"})
@@ -617,8 +617,8 @@ func TestVisionMCPUsersOfEachKeyApart(t *testing.T) {
 		}
 	}
 	got := keys("eye")
-	if len(got) != 2 || got[0] == got[1] {
-		t.Fatalf("a's alice and b's alice looked with %q: want once each, on two accounts", got)
+	if len(got) != 2 || got[0] != got[1] {
+		t.Fatalf("a's alice and b's alice looked with %q: want once each, on her one account", got)
 	}
 }
 

@@ -507,10 +507,12 @@ func userPostWith(s *Server, secret, user, input string) *httptest.ResponseRecor
 	return rec
 }
 
-// Each gateway key's users are its own: the same id sent with another key
-// is another user, bound by itself, and a key's users are counted with
-// every other's when the fewest bound is picked.
-func TestUsersOfEachKeyApart(t *testing.T) {
+// One id sent with two gateway keys is one user, bound to one account
+// (the owner's option A for T-075, 2026-11-03): alice under Tenant B is
+// on the account she was bound to under Tenant A, not on the other one
+// fewest users are on. Its binding is kept by key in the file, alike
+// under each key it came with.
+func TestUsersOfEachKeyOne(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked, _ := usersUpstream(t, nil)
 	a, err := access.Update("add-key", access.Change{Name: "Tenant A"})
@@ -529,14 +531,24 @@ func TestUsersOfEachKeyApart(t *testing.T) {
 		t.Fatalf("b: %d %s", rec.Code, rec.Body.String())
 	}
 	got := asked(true)
-	if len(got) != 2 || got[0] == got[1] {
-		t.Fatalf("one key's alice took the other's place, or wasn't counted: %v", got)
+	if len(got) != 2 || got[0] != got[1] {
+		t.Fatalf("alice moved to another account with another key: %v", got)
+	}
+	if r := lastRoute(s); r.User == nil || r.User.Why != "kept" {
+		t.Fatalf("route %+v", r.User)
 	}
 	raw, _ := os.ReadFile(usersPath())
 	var f userFile
 	json.Unmarshal(raw, &f)
 	if len(f.Users) != 0 || len(f.Keys) != 2 {
 		t.Fatalf("not kept by key: %s", raw)
+	}
+	var seats [][]string
+	for _, ps := range f.Keys {
+		seats = append(seats, accountsOf(ps["codex"]["alice"].seats()))
+	}
+	if len(seats[0]) != 1 || !slices.Equal(seats[0], seats[1]) {
+		t.Fatalf("kept apart by key: %s", raw)
 	}
 }
 
