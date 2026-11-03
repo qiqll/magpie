@@ -170,28 +170,32 @@ func SetWindowCaps(id, ref string, windows []string, cap int) error {
 		return fmt.Errorf("%s has no account %q", p.Name, ref)
 	}
 	k := accountKey(r)
-	if !slices.ContainsFunc(ws, func(w string) bool { return p.AccountWindowCaps[k][w] != cap }) {
-		return nil
-	}
-	all := map[string]map[string]int{}
-	for u, m := range p.AccountWindowCaps {
-		all[u] = maps.Clone(m)
-	}
-	if all[k] == nil {
-		all[k] = map[string]int{}
-	}
-	for _, w := range ws {
-		if cap == 0 {
-			delete(all[k], w)
-		} else {
-			all[k][w] = cap
+	// the windows' caps as they are stored when the cap is set, not as
+	// they were read: another set meanwhile stays (T-079)
+	return editStored(p.ID, func(q *Provider) bool {
+		if !slices.ContainsFunc(ws, func(w string) bool { return q.AccountWindowCaps[k][w] != cap }) {
+			return false
 		}
-	}
-	if len(all[k]) == 0 {
-		delete(all, k)
-	}
-	p.AccountWindowCaps = all
-	return Save(*p)
+		all := map[string]map[string]int{}
+		for u, m := range q.AccountWindowCaps {
+			all[u] = maps.Clone(m)
+		}
+		if all[k] == nil {
+			all[k] = map[string]int{}
+		}
+		for _, w := range ws {
+			if cap == 0 {
+				delete(all[k], w)
+			} else {
+				all[k][w] = cap
+			}
+		}
+		if len(all[k]) == 0 {
+			delete(all, k)
+		}
+		q.AccountWindowCaps = normalWindowCaps(all)
+		return true
+	})
 }
 
 // SetAccountCap caps the account ref of the subscription id at cap percent
@@ -211,20 +215,25 @@ func SetAccountCap(id, ref string, cap int) error {
 	if !ok {
 		return fmt.Errorf("%s has no account %q", p.Name, ref)
 	}
-	if cap == 0 && p.AccountCaps[accountKey(r)] == 0 {
-		return nil
-	}
-	caps := map[string]int{}
-	for k, v := range p.AccountCaps {
-		caps[k] = v
-	}
-	if cap == 0 {
-		delete(caps, accountKey(r))
-	} else {
-		caps[accountKey(r)] = cap
-	}
-	p.AccountCaps = caps
-	return Save(*p)
+	k := accountKey(r)
+	// the caps as they are stored when the cap is set, not as they were
+	// read: another set meanwhile stays (T-079)
+	return editStored(p.ID, func(q *Provider) bool {
+		if q.AccountCaps[k] == cap {
+			return false
+		}
+		caps := maps.Clone(q.AccountCaps)
+		if caps == nil {
+			caps = map[string]int{}
+		}
+		if cap == 0 {
+			delete(caps, k)
+		} else {
+			caps[k] = cap
+		}
+		q.AccountCaps = normalAccountCaps(caps)
+		return true
+	})
 }
 
 // ParseCap reads a cap as the CLI takes it: "70", "70%", or off (none, 0,

@@ -1105,7 +1105,8 @@ func Save(p Provider) error {
 	if p.Name == "" {
 		p.Name = p.ID
 	}
-	if _, ok := find(Accounts(), p.ID); ok || p.ID == "kiro" && (p.Key != "" || stored(p.ID)) {
+	_, account := find(Accounts(), p.ID)
+	if account || p.ID == "kiro" && (p.Key != "" || stored(p.ID)) {
 		// an account keeps only the user's model picks; the rest is the
 		// agent's own sign-in. One the user removed stays removed: only
 		// ShowAccount brings it back. Kiro's alone also keeps a key, which
@@ -1146,7 +1147,7 @@ func Save(p Provider) error {
 	// found new (listedWith)
 	var now *listing
 	for {
-		wrote, asked, err := saveRead(&p, now)
+		wrote, asked, err := saveRead(&p, account, now)
 		if err != nil {
 			return err
 		}
@@ -1169,9 +1170,10 @@ func Save(p Provider) error {
 
 // saveRead is Save's change to providers.json, under providersMu: p as it
 // is saved with what it keeps of the provider there (*p is changed so),
-// written unless it is there alike. asked is false, and nothing written,
-// when the models the provider lists now are needed and now hasn't them.
-func saveRead(p *Provider, now *listing) (wrote, asked bool, err error) {
+// written unless it is there alike. account is whether p is a signed-in
+// account's. asked is false, and nothing written, when the models the
+// provider lists now are needed and now hasn't them.
+func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err error) {
 	providersMu.Lock()
 	defer providersMu.Unlock()
 	f, err := read()
@@ -1183,7 +1185,7 @@ func saveRead(p *Provider, now *listing) (wrote, asked bool, err error) {
 	if i >= 0 {
 		was = &f.Providers[i]
 	}
-	if p.PickedFrom, asked = listedWith(*p, was, now); !asked {
+	if p.PickedFrom, asked = listedWith(*p, was, account, now); !asked {
 		return false, false, nil
 	}
 	p.Delisted = delistedWith(*p, was)
@@ -1212,6 +1214,31 @@ func saveRead(p *Provider, now *listing) (wrote, asked bool, err error) {
 		f.Providers = append(f.Providers, *p)
 	}
 	return true, true, store(f)
+}
+
+// editStored has change make its change to the record providers.json keeps
+// of the provider id (made when there is none, as Save makes one for an
+// account), under providersMu, and writes it when change says it changed
+// it: for a setter of one setting, so that what changed in the record
+// since the setter read the provider (another setting set, an account's
+// day noted, its settings moved to its new name) is kept, as Save of the
+// provider read would write it over.
+func editStored(id string, change func(q *Provider) bool) error {
+	providersMu.Lock()
+	defer providersMu.Unlock()
+	f, err := read()
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(f.Providers, func(q Provider) bool { return q.ID == id })
+	if i < 0 {
+		f.Providers = append(f.Providers, Provider{ID: id})
+		i = len(f.Providers) - 1
+	}
+	if !change(&f.Providers[i]) {
+		return nil
+	}
+	return store(f)
 }
 
 // sameStored is whether a and b are written to providers.json alike.
@@ -1269,9 +1296,10 @@ func delistedAtWith(p Provider, was *Provider) time.Time {
 // Save, the same picks too, as withNewlyListed serves those picks as they
 // are until it has one (TestLegacyPicksOfEveryModelGetPickedFromAtSave).
 //
-// The models listed now are now, asked by listedNow; asked is false when
-// they are needed and now is nil.
-func listedWith(p Provider, was *Provider, now *listing) (picked []string, asked bool) {
+// account is whether p is a signed-in account's. The models listed now
+// are now, asked by listedNow; asked is false when they are needed and now
+// is nil.
+func listedWith(p Provider, was *Provider, account bool, now *listing) (picked []string, asked bool) {
 	if len(p.Models) == 0 {
 		return nil, true
 	}
@@ -1279,11 +1307,14 @@ func listedWith(p Provider, was *Provider, now *listing) (picked []string, asked
 	if same && was.PickedFrom != nil {
 		return was.PickedFrom, true
 	}
+	if same && (account || p.Account != nil) {
+		return was.PickedFrom, true // a subscription keeps the date rule
+	}
 	if now == nil {
 		return nil, false
 	}
-	if same && (now.account || p.Account != nil) {
-		return was.PickedFrom, true // a subscription keeps the date rule
+	if same && now.account {
+		return was.PickedFrom, true
 	}
 	ids := slices.Clone(now.ids)
 	if was != nil && len(ids) > 0 && len(delistedWith(p, was)) > 0 {
