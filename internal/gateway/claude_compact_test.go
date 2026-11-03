@@ -199,6 +199,7 @@ exit 0`)
 		// a transcript of the whole conversation, typed the turn
 		_, sid, _ := strings.Cut(l, "--resume ")
 		sid, _, _ = strings.Cut(sid, "\n")
+		sid, _, _ = strings.Cut(sid, " ") // the flags after it (--append-system-prompt-file)
 		seen, _ := filepath.Glob(filepath.Join(h.config, "projects", "*", strings.TrimSpace(sid)+".jsonl.seen"))
 		if len(seen) != 1 {
 			t.Fatalf("the next run: %s", l)
