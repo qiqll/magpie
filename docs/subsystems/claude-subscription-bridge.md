@@ -371,10 +371,11 @@ for `provider.parseClaudeUsage`. Claude Code 2.1.316's `-p /usage`
 printed only the session's cost there, no window, in a real run.
 `/compact` is the one other command it types (`compact`, T-077): it waits
 for the transcript to have a `compact_boundary` row and then the summary
-(`isCompactSummary`, the translator's `compacted`), and tells a result
-with `local_command: "compact"`; "Error during compaction" or "Not enough
-messages to compact" drawn, or `compactWait` (5 minutes) passed, is an
-error result. Any other command is refused, not typed. `DISABLE_AUTO_COMPACT`
+(`isCompactSummary`, the translator's `compacted`), then for the file to
+stay the same size for a second (`settleTranscript`, the rows Claude Code
+writes after the summary), and tells a result with `local_command:
+"compact"`; "Error during compaction" or "Not enough messages to compact"
+drawn, or `CompactWait` (5 minutes) passed, is an error result. Any other command is refused, not typed. `DISABLE_AUTO_COMPACT`
 stays set: the run never compacts by itself.
 
 The Claude Code provider editor's "Claude Code runs as" row
@@ -637,7 +638,10 @@ provider under another owner waiting at exactly this turn
 (`nextTurn(req, <its owner>)` is its idle key), when all of these hold:
 
 - the run is the interactive mode's, with a session on disk, no client
-  cache marks (and the request has none), the same system-prompt mode;
+  cache marks (and the request has none), the same system-prompt mode,
+  and its project folder is the one the new account's run will work in
+  (`callerWork`, as `startRun` picks it): otherwise the copy would be
+  discarded, the compaction paid for nothing;
 - the prompt its last reply was asked with (`promptTokens`: input, cache
   read and written, as the reply's usage said them, under `r.mu`) is at
   least `compactFrom` (100K, a constant; the owner's choice, 2026-11-03);
@@ -649,9 +653,12 @@ provider under another owner waiting at exactly this turn
 The run is told `{"type":"command","command":"/compact"}`: Claude Code's
 own `/compact`, with no instructions and no words of magpie's, on the old
 account, whose cache of the conversation is warm. That one request is the
-only one an account at its cap is asked. `start` waits for the result
-(`compacted`, `compactLongest`), copies the session file into the new
-account's project folders (`movedSessions`, `copySession`: a new id, each
+only one an account at its cap is asked. Whether the account is at its
+cap is read with `b.mu` let go, and the run taken only if it still waits.
+`start` waits for the result (`compacted`, `compactLongest`), a streaming
+client kept alive meanwhile (`keepQueued`: the stream's 200, then SSE
+comments), copies the session file into the new account's project
+folders (`movedSessions`, `copySession`: a new id, whole lines only, each
 line's `sessionId` the copy's), ends the old run, and starts the new
 account's Claude Code with `--resume` on the copy, typed the turn alone.
 A failed or cut-short `/compact`, a run that ends meanwhile, or a copy

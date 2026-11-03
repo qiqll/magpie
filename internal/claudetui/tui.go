@@ -581,10 +581,11 @@ func (s *shim) typeCommand(name string) error {
 	return err
 }
 
-// compactWait is how long Claude Code's /compact may take: it asks the
+// CompactWait is how long Claude Code's /compact may take: it asks the
 // model for a summary of the whole conversation, which took 56s to 282s
-// for 170K to 190K tokens in real sessions (2.1.233).
-var compactWait = 5 * time.Minute
+// for 170K to 190K tokens in real sessions (2.1.233). The bridge waits a
+// moment longer for its result.
+const CompactWait = 5 * time.Minute
 
 // compactFailed is what Claude Code shows when /compact didn't compact.
 var compactFailed = regexp.MustCompile(`Error during compaction[^\n]*|Not enough messages to compact[^\n]*`)
@@ -593,10 +594,10 @@ var compactFailed = regexp.MustCompile(`Error during compaction[^\n]*|Not enough
 // compact_boundary row and then the summary (isCompactSummary) to the
 // transcript (compacted), and the result says so, its local_command
 // named; the bridge goes on from the session as it now is. One that
-// fails, takes past compactWait, or ends Claude Code is an error result,
+// fails, takes past CompactWait, or ends Claude Code is an error result,
 // the session then as it was or unknown.
 func (s *shim) compact() error {
-	by := time.After(compactWait)
+	by := time.After(CompactWait)
 	fail := func(why string) error {
 		s.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "session_id": s.sid,
 			"local_command": "compact", "result": why})
@@ -605,8 +606,9 @@ func (s *shim) compact() error {
 	for {
 		select {
 		case <-s.compacts:
-			// the rows Claude Code writes with the summary
-			time.Sleep(commandSettle)
+			// the rows Claude Code writes after the summary: the
+			// session is copied once it is still
+			s.settleTranscript()
 			s.emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": s.sid,
 				"local_command": "compact"})
 			return nil
@@ -614,14 +616,34 @@ func (s *shim) compact() error {
 			if m := compactFailed.FindString(s.plain()); m != "" {
 				return fail("Claude Code's /compact: " + strings.Join(strings.Fields(m), " "))
 			}
-		case <-time.After(100 * time.Millisecond):
 		case <-by:
-			return fail(fmt.Sprintf("Claude Code's /compact didn't end in %s: %s", compactWait, s.lastScreen()))
+			return fail(fmt.Sprintf("Claude Code's /compact didn't end in %s: %s", CompactWait, s.lastScreen()))
 		case <-s.exited:
 			return fmt.Errorf("Claude Code ended (%v): %s", s.exit, s.lastScreen())
 		}
 	}
 }
+
+// settleTranscript waits, at most transcriptSettleMost, for the
+// transcript to stay the same size for commandSettle.
+func (s *shim) settleTranscript() {
+	size := int64(-1)
+	quiet := time.Now()
+	for by := time.Now().Add(transcriptSettleMost); time.Now().Before(by); time.Sleep(100 * time.Millisecond) {
+		var n int64
+		if fi, err := os.Stat(s.transcript()); err == nil {
+			n = fi.Size()
+		}
+		if n != size {
+			size, quiet = n, time.Now()
+		} else if time.Since(quiet) >= commandSettle {
+			return
+		}
+	}
+}
+
+// transcriptSettleMost is the longest settleTranscript waits.
+var transcriptSettleMost = 10 * time.Second
 
 // compacted is told by the transcript's reader that a /compact ended: its
 // summary is in the session.

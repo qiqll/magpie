@@ -230,12 +230,21 @@ func fakeClaude(args []string) {
 				fmt.Print("\r\n  ⎿  Error during compaction: Error: Conversation too long.\r\n❯ ")
 				continue
 			}
-			// its rows, as Claude Code 2.1.233 writes a compaction's
+			// its rows, as Claude Code 2.1.233 writes a compaction's: the
+			// boundary, the summary once the model has written it, then
+			// what it attaches
 			f, _ := os.OpenFile(filepath.Join(dir, sid+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-			for _, row := range []any{
+			for i, row := range []any{
 				map[string]any{"type": "system", "subtype": "compact_boundary", "parentUuid": nil, "compactMetadata": map[string]any{"trigger": "manual", "preTokens": 150000}},
 				map[string]any{"type": "user", "isCompactSummary": true, "message": map[string]any{"role": "user", "content": "This session is being continued from a previous conversation."}},
+				map[string]any{"type": "attachment", "attachment": map[string]any{"type": "todo"}},
 			} {
+				switch i {
+				case 1: // longer than the transcript is still for
+					time.Sleep(commandSettle + 500*time.Millisecond)
+				case 2:
+					time.Sleep(300 * time.Millisecond)
+				}
 				b, _ := json.Marshal(row)
 				_, _ = f.Write(append(b, '\n'))
 			}
@@ -697,13 +706,13 @@ func TestShimCompacts(t *testing.T) {
 		t.Fatalf("no transcript for %v", r["session_id"])
 	}
 	b, _ := os.ReadFile(files[0])
-	if !strings.Contains(string(b), `"isCompactSummary":true`) {
-		t.Fatalf("told compacted before the summary was written:\n%s", b)
+	if !strings.Contains(string(b), `"isCompactSummary":true`) || !strings.Contains(string(b), `"attachment"`) {
+		t.Fatalf("told compacted before the summary and the rows after it were written:\n%s", b)
 	}
 }
 
 // A /compact Claude Code says failed is an error result at once, not after
-// compactWait.
+// CompactWait.
 func TestShimCompactFails(t *testing.T) {
 	began := time.Now()
 	out := runShim(t, []string{"FAKE_COMPACT_FAIL=1"}, append([]string{fakePath(t)}, pArgs...), []string{`raw:{"type":"command","command":"/compact"}`}, 2)

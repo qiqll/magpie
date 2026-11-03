@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/provider"
 )
@@ -55,17 +56,33 @@ func TestClaudeCompactsBeforeTheCapMovesIt(t *testing.T) {
 		name    string
 		prompt  string
 		used    float64
+		rests   bool
 		compact bool
 	}{
-		{"at the cap", "150000", 75, true},
-		{"small", "60000", 75, false},
-		{"used up", "150000", 100, false},
-		{"under the cap", "150000", 40, false},
+		{"at the cap", "150000", 75, false, true},
+		{"small", "60000", 75, false, false},
+		{"used up", "150000", 100, false, false},
+		{"under the cap", "150000", 40, false, false},
+		{"resting", "150000", 75, true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := compactHarness(t)
 			t.Setenv("FAKE_PROMPT", c.prompt)
 			capUsage(t, map[string]float64{"a@example.com": 10})
+			if c.rests {
+				// refused by Anthropic (a 429): it rests
+				restingUntil.Lock()
+				if restingUntil.m == nil {
+					restingUntil.m = map[string]time.Time{}
+				}
+				restingUntil.m["claude@a@example.com"] = time.Now().Add(time.Hour)
+				restingUntil.Unlock()
+				t.Cleanup(func() {
+					restingUntil.Lock()
+					delete(restingUntil.m, "claude@a@example.com")
+					restingUntil.Unlock()
+				})
+			}
 			a := h.p
 			h.ask("rules", "a1", "a2")
 			first := h.runs()
@@ -122,9 +139,22 @@ func TestClaudeCompactsBeforeTheCapMovesIt(t *testing.T) {
 	}
 }
 
-// A /compact that fails leaves the turn to go on as before: the next
-// account is told the conversation whole, and the old account's run ends.
+// A /compact that fails, or never ends, leaves the turn to go on as
+// before: the next account is told the conversation whole, and the old
+// account's run ends.
 func TestClaudeCompactFailedTellsItWhole(t *testing.T) {
+	for _, answer := range []string{"failed", "never"} {
+		t.Run(answer, func(t *testing.T) { compactGoesWrong(t, answer) })
+	}
+}
+
+func compactGoesWrong(t *testing.T, answer string) {
+	if answer == "never" {
+		old := compactLongest
+		compactLongest = 300 * time.Millisecond
+		t.Cleanup(func() { compactLongest = old })
+	}
+	t.Setenv("FAKE_ANSWER", answer)
 	h := tuiScriptHarness(t, `[ -f "$file" ] && cp "$file" "$file.seen"
 echo '{"type":"system","subtype":"init","session_id":"'$sid'"}'
 while read -r line; do
@@ -135,7 +165,7 @@ while read -r line; do
     continue ;;
   *'"command":"/compact"'*)
     echo "told $line" >> $log
-    echo '{"type":"result","subtype":"error_during_execution","is_error":true,"local_command":"compact","result":"Error during compaction"}'
+    [ "$FAKE_ANSWER" = failed ] && echo '{"type":"result","subtype":"error_during_execution","is_error":true,"local_command":"compact","result":"Error during compaction"}'
     continue ;;
   esac
   echo "told $line" >> $log

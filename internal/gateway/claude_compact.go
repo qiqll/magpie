@@ -8,9 +8,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/yetone/magpie/internal/claudetui"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -22,9 +24,9 @@ import (
 const compactFrom = 100_000
 
 // compactLongest is how long a turn waits for its conversation's /compact
-// on the old account: the helper's own wait (claudetui's compactWait),
-// and a moment for its result to come back.
-var compactLongest = 5*time.Minute + 30*time.Second
+// on the old account: the helper's own wait, and a moment for its result
+// to come back.
+var compactLongest = claudetui.CompactWait + 30*time.Second
 
 // compactAway is, for a turn routing moved off the account its
 // conversation's run is on because that account reached the usage cap the
@@ -36,11 +38,14 @@ var compactLongest = 5*time.Minute + 30*time.Second
 // ~19.6M tokens written so, 15% of every cache write). The old account is
 // asked this one request past its cap, with its cache warm; never when
 // Anthropic itself said it is used up or refused it (it rests then).
+// kept keeps a streaming client alive while it waits, and returns what
+// ends that.
 //
 // nil when there is no such run, its last prompt was under compactFrom,
-// or the /compact failed: the turn then goes on as before. It runs only
+// the new run would work in another folder (and not find the copy), or
+// the /compact failed: the turn then goes on as before. It runs only
 // Claude Code's own /compact, with no words of magpie's.
-func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owner string, p provider.Provider, model, configDir string) *savedSession {
+func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owner string, p provider.Provider, model, configDir string, kept func() func()) *savedSession {
 	if req.clientCache != nil || p.Account == nil || !claudeTUIOn() {
 		return nil
 	}
@@ -48,7 +53,22 @@ func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owne
 	if since == nil {
 		return nil
 	}
-	var run *subscriptionRun
+	work := b.callerWork(req, configDir)
+	if work == "" {
+		var err error
+		if work, err = claudeWorkDir(); err != nil {
+			return nil
+		}
+	}
+	to := claudeSessions(configDir, work)
+	// the runs waiting at this turn on another account of the provider,
+	// whose last prompt was large; whether their account is at its cap is
+	// read after, b.mu let go
+	type waiting struct {
+		key string
+		run *subscriptionRun
+	}
+	var found []waiting
 	b.mu.Lock()
 	for key, r := range b.idle {
 		o := r.owned()
@@ -59,16 +79,30 @@ func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owne
 			continue
 		}
 		r.mu.Lock()
-		ok := r.tui && !r.closed && !r.clientMarks && r.lean == req.leanPrompt && r.sessionID != "" && len(r.sessions) > 0 && r.promptTokens >= compactFrom
+		ok := r.tui && !r.closed && !r.clientMarks && r.lean == req.leanPrompt && r.sessionID != "" && r.promptTokens >= compactFrom &&
+			slices.Equal(movedSessions(r.sessions, configDir), to)
 		r.mu.Unlock()
-		if ok && atCap(p, o, model) {
-			run = r
-			delete(b.idle, key)
-			r.idleKey = ""
-			break
+		if ok {
+			found = append(found, waiting{key, r})
 		}
 	}
 	b.mu.Unlock()
+	var run *subscriptionRun
+	for _, f := range found {
+		if !atCap(p, f.run.owned(), model) {
+			continue
+		}
+		b.mu.Lock()
+		if b.idle[f.key] == f.run {
+			delete(b.idle, f.key)
+			f.run.idleKey = ""
+			run = f.run
+		}
+		b.mu.Unlock()
+		if run != nil {
+			break
+		}
+	}
 	if run == nil {
 		return nil
 	}
@@ -78,7 +112,10 @@ func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owne
 	run.mu.Unlock()
 	log.Printf("claude: a conversation of %d tokens leaves %s at its usage cap: compacted there before it goes on, on another account", tokens, user)
 	began := time.Now()
-	if err := run.compact(ctx); err != nil {
+	alive := kept()
+	err := run.compact(ctx)
+	alive()
+	if err != nil {
 		log.Printf("claude: the conversation's /compact on %s failed (%v); the next account is told it whole", user, err)
 		run.abortFor("its /compact failed: " + err.Error())
 		return nil
@@ -86,7 +123,6 @@ func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owne
 	run.mu.Lock()
 	sid, from := run.sessionID, run.sessions
 	run.mu.Unlock()
-	to := movedSessions(from, configDir)
 	id, err := copySession(from, sid, to[len(to)-1])
 	run.abortFor("its conversation was compacted and went on on another account")
 	if err != nil {
@@ -160,8 +196,8 @@ func movedSessions(dirs []string, configDir string) []string {
 }
 
 // copySession copies session sid, from whichever of dirs has it, to a
-// session of a new id in dir, and says the id: each line as written, its
-// sessionId the copy's.
+// session of a new id in dir, and says the id: each whole line as
+// written, its sessionId the copy's.
 func copySession(dirs []string, sid, dir string) (string, error) {
 	if sid == "" || strings.ContainsAny(sid, `/\`) || strings.Contains(sid, "..") {
 		return "", errors.New("no session to copy")
@@ -174,6 +210,8 @@ func copySession(dirs []string, sid, dir string) (string, error) {
 		id := newUUID()
 		old, _ := json.Marshal(sid)
 		now, _ := json.Marshal(id)
+		// whole lines only: Claude Code may be writing the next
+		b = b[:bytes.LastIndexByte(b, '\n')+1]
 		lines := bytes.ReplaceAll(b, []byte(`"sessionId":`+string(old)), []byte(`"sessionId":`+string(now)))
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", err

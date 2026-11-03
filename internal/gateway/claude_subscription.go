@@ -358,9 +358,9 @@ type subscriptionRun struct {
 	backLine string
 
 	// promptTokens is the prompt its last reply was asked with (input,
-	// cache read and written), what a /compact shrinks (compactAt); and
-	// compacted, while its /compact runs, is told how it ended
-	// (compactFor). Under mu.
+	// cache read and written), what a /compact shrinks (compactFrom); and
+	// compacted, while its /compact runs, is told how it ended (compact).
+	// Under mu.
 	promptTokens int
 	compacted    chan error
 }
@@ -825,6 +825,17 @@ func (b *subscriptionBridge) startTrusted(ctx context.Context, req *Request, mod
 	return b.startRun(ctx, req, model, configDir, owner, nil)
 }
 
+// callerWork is the caller's own folder a run in configDir works in
+// (clientWorkDir), "" when it names none here or its user hasn't trusted
+// it (passedOver): the run then works in magpie's (claudeWorkDir).
+func (b *subscriptionBridge) callerWork(req *Request, configDir string) string {
+	work := clientWorkDir(req)
+	if work != "" && b.passedOver(configDir, work) {
+		return ""
+	}
+	return work
+}
+
 // startRun is start's Claude Code, from the saved session from when set.
 func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, configDir, owner string, from *savedSession) (*subscriptionRun, <-chan Event, error) {
 	binary, err := claudeBinary()
@@ -899,10 +910,7 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	// the caller's files there, through tools that run in the caller's
 	work := ""
 	if binary.wsl == nil {
-		work = clientWorkDir(req)
-		if work != "" && b.passedOver(configDir, work) {
-			work = ""
-		}
+		work = b.callerWork(req, configDir)
 	}
 	client := work != ""
 	if !client {
@@ -5554,8 +5562,13 @@ func (s *Server) serveClaudeSubscription(w http.ResponseWriter, r *http.Request,
 		if from == nil {
 			// moved here off an account at its usage cap: compacted
 			// there first, a large conversation is not written whole to
-			// this one's cache (compactAway)
-			from = s.subscription.compactAway(ctx, req, owner, p, model, dir)
+			// this one's cache (compactAway); a streaming client is kept
+			// alive while it waits
+			kept := func() func() { return func() {} }
+			if hw, ok := w.(*holdWriter); ok {
+				kept = hw.keepQueued
+			}
+			from = s.subscription.compactAway(ctx, req, owner, p, model, dir, kept)
 		}
 		// Claude Code is asked for the model by Anthropic's id, not one
 		// the user lists it by (SetModelID): no wire name reaches its run
