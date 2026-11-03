@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -136,6 +137,13 @@ func (s *Server) searchBy(ctx context.Context, p provider.Provider, model, query
 		return s.kimiSearch(ctx, p, query)
 	}
 	if model == codexSearchModel && codexSearches(p) {
+		// the backend's search is signed by the account straight too:
+		// bound by user, the user's own ChatGPT account, planned by the
+		// model it searches with
+		p, err := s.usersSearchKey(ctx, p, cmp.Or(searcherModel(p), "gpt-5"), provider.Responses)
+		if err != nil {
+			return "", nil, err
+		}
 		return s.codexSearchBy(ctx, p, query)
 	}
 	return s.searchWith(ctx, p, model, query, effort)
