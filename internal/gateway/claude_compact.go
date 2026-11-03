@@ -39,7 +39,9 @@ var compactLongest = claudetui.CompactWait + 30*time.Second
 // asked this one request past its cap, with its cache warm; never when
 // Anthropic itself said it is used up or refused it (it rests then).
 // kept keeps a streaming client alive while it waits, and returns what
-// ends that.
+// ends that. A client that leaves before the /compact ends leaves it to
+// run on: its session is shelved for the turn's next ask, and an ask
+// while it runs waits for it.
 //
 // nil when there is no such run, its last prompt was under compactFrom,
 // the new run would work in another folder (and not find the copy), or
@@ -49,9 +51,27 @@ func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owne
 	if req.clientCache != nil || p.Account == nil || !claudeTUIOn() {
 		return nil
 	}
-	_, since := nextTurn(req, owner)
+	key, since := nextTurn(req, owner)
 	if since == nil {
 		return nil
+	}
+	b.mu.Lock()
+	going := b.compacting[key]
+	b.mu.Unlock()
+	if going != nil {
+		// a retry of a turn whose client left while its conversation's
+		// /compact ran: it waits for that, and goes on from its session
+		log.Printf("claude: this turn's conversation is still being compacted on the account it left; the turn waits for it")
+		alive := kept()
+		select {
+		case <-going:
+		case <-ctx.Done():
+		}
+		alive()
+		if ctx.Err() != nil {
+			return nil
+		}
+		return b.unshelve(req, owner)
 	}
 	work := b.callerWork(req, configDir)
 	if work == "" {
@@ -111,10 +131,60 @@ func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owne
 	tokens := run.promptTokens
 	run.mu.Unlock()
 	log.Printf("claude: a conversation of %d tokens leaves %s at its usage cap: compacted there before it goes on, on another account", tokens, user)
-	began := time.Now()
+	// the /compact runs to its end (compactLongest) whether or not the
+	// client waits: one that leaves (it, or a proxy, timed out) finds
+	// the session on the shelf when it asks again, and doesn't pay for
+	// the /compact and for writing the conversation whole (T-082)
+	done := make(chan struct{})
+	b.mu.Lock()
+	b.compacting[key] = done
+	b.mu.Unlock()
+	var left bool
+	got := make(chan *savedSession, 1)
+	go func() {
+		s := run.compactTo(context.WithoutCancel(ctx), user, to, owner, since)
+		b.mu.Lock()
+		if b.compacting[key] == done {
+			delete(b.compacting, key)
+		}
+		if !left {
+			got <- s
+		} else if s != nil {
+			s.key = key
+			b.onShelf(key, s)
+			log.Printf("claude: the client left while its conversation was compacted; the session waits for its next ask")
+		}
+		b.mu.Unlock()
+		close(done)
+	}()
 	alive := kept()
+	defer alive()
+	select {
+	case s := <-got:
+		return s
+	case <-ctx.Done():
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		select {
+		case s := <-got:
+			if s != nil {
+				s.key = key
+				b.onShelf(key, s)
+			}
+		default:
+			left = true
+		}
+		return nil
+	}
+}
+
+// compactTo has the run compact its session (it is the caller's: off
+// b.idle) and copies the result into to, for owner's account to go on
+// from, since being the turn's messages; nil when it fails. The run ends
+// either way.
+func (run *subscriptionRun) compactTo(ctx context.Context, user string, to []string, owner string, since []Message) *savedSession {
+	began := time.Now()
 	err := run.compact(ctx)
-	alive()
 	if err != nil {
 		log.Printf("claude: the conversation's /compact on %s failed (%v); the next account is told it whole", user, err)
 		run.abortFor("its /compact failed: " + err.Error())

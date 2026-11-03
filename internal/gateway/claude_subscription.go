@@ -72,14 +72,18 @@ import (
 )
 
 type subscriptionBridge struct {
-	mu      sync.Mutex
-	runs    map[string]*subscriptionRun // callback token → run
-	calls   map[string]*subscriptionRun // tool_use id → run
-	idle    map[string]*subscriptionRun // conversation so far (turnKey) → run
-	shelf   map[string]*savedSession    // conversation so far (turnKey) → its saved session
-	baseURL string
-	sweep   sync.Once
-	swept   sync.Map // Claude Code's project folders sweepSessions went through
+	mu    sync.Mutex
+	runs  map[string]*subscriptionRun // callback token → run
+	calls map[string]*subscriptionRun // tool_use id → run
+	idle  map[string]*subscriptionRun // conversation so far (turnKey) → run
+	shelf map[string]*savedSession    // conversation so far (turnKey) → its saved session
+	// compacting is, by the turnKey it moved to, each conversation whose
+	// /compact on the account it left runs still (compactAway), closed
+	// once it ended and its session, if any, is on the shelf
+	compacting map[string]chan struct{}
+	baseURL    string
+	sweep      sync.Once
+	swept      sync.Map // Claude Code's project folders sweepSessions went through
 	// lost is why each run that had a conversation ended, by that
 	// conversation (convKey), and lostCalls by the tool calls it waited
 	// on or was last handed results for, for the log of a request that
@@ -624,7 +628,7 @@ func evalSymlinks(path string) string {
 }
 
 func newSubscriptionBridge() *subscriptionBridge {
-	b := &subscriptionBridge{runs: map[string]*subscriptionRun{}, calls: map[string]*subscriptionRun{}, idle: map[string]*subscriptionRun{}, shelf: map[string]*savedSession{}}
+	b := &subscriptionBridge{runs: map[string]*subscriptionRun{}, calls: map[string]*subscriptionRun{}, idle: map[string]*subscriptionRun{}, shelf: map[string]*savedSession{}, compacting: map[string]chan struct{}{}}
 	bridges.Store(b, true)
 	return b
 }
@@ -2300,13 +2304,19 @@ func (b *subscriptionBridge) shelve(run *subscriptionRun) {
 	} else {
 		s.behindTurn = run.behindTurn
 	}
+	b.onShelf(key, s)
+	run.mu.Lock()
+	run.shelved = true
+	run.mu.Unlock()
+}
+
+// onShelf puts s on the shelf at key until idleLongest past s.at (b.mu
+// held).
+func (b *subscriptionBridge) onShelf(key string, s *savedSession) {
 	if old := b.shelf[key]; old != nil {
 		go old.discard()
 	}
 	b.shelf[key] = s
-	run.mu.Lock()
-	run.shelved = true
-	run.mu.Unlock()
 	s.timer = time.AfterFunc(idleLongest-time.Since(s.at), func() {
 		b.mu.Lock()
 		if b.shelf[key] == s {
@@ -5911,6 +5921,11 @@ func (s *Server) serveClaudeSubscription(w http.ResponseWriter, r *http.Request,
 				kept = hw.keepQueued
 			}
 			from = s.subscription.compactAway(ctx, req, owner, p, model, dir, kept)
+			if err := ctx.Err(); from == nil && err != nil {
+				// gone while it waited: the /compact goes on, and its
+				// session waits on the shelf for the client's retry
+				return nil, nil, err
+			}
 		}
 		// Claude Code is asked for the model by Anthropic's id, not one
 		// the user lists it by (SetModelID): no wire name reaches its run

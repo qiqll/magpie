@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"context"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +15,8 @@ import (
 // compactHarness is a harness whose interactive Claude Code reports a
 // prompt of FAKE_PROMPT tokens read from the cache with each reply, and
 // answers /compact as Claude Code 2.1.233 writes one to its transcript: a
-// compact_boundary row, then the summary.
+// compact_boundary row, then the summary; once FAKE_GATE is there, when
+// it is set.
 func compactHarness(t *testing.T) *resumeHarness {
 	t.Helper()
 	h := tuiScriptHarness(t, `[ -f "$file" ] && cp "$file" "$file.seen"
@@ -26,6 +29,7 @@ while read -r line; do
     continue ;;
   *'"command":"/compact"'*)
     echo "told $line" >> $log
+    if [ -n "$FAKE_GATE" ]; then while [ ! -f "$FAKE_GATE" ]; do sleep 0.05; done; fi
     echo '{"type":"system","subtype":"compact_boundary","sessionId":"'$sid'"}' >> "$file"
     echo '{"type":"user","isCompactSummary":true,"sessionId":"'$sid'","message":{"role":"user","content":"compacted summary"}}' >> "$file"
     echo '{"type":"result","subtype":"success","is_error":false,"local_command":"compact","session_id":"'$sid'"}'
@@ -219,6 +223,106 @@ exit 0`)
 		}
 		return true
 	})
+}
+
+// A client that leaves while its conversation is compacted on the
+// account it left (it timed out, or a proxy did) leaves the /compact to
+// end: the compacted session waits on the shelf, and the client's next
+// ask goes on from it on the new account, typed the turn alone, not told
+// the whole conversation (T-082). An ask that comes while the /compact
+// still runs waits for it.
+func TestClaudeCompactOutlivesItsClient(t *testing.T) {
+	for _, early := range []bool{false, true} {
+		name := "asked again after"
+		if early {
+			name = "asked again while it runs"
+		}
+		t.Run(name, func(t *testing.T) {
+			logs := catchLog(t)
+			h := compactHarness(t)
+			t.Setenv("FAKE_PROMPT", "150000")
+			gate := filepath.Join(t.TempDir(), "gate")
+			t.Setenv("FAKE_GATE", gate)
+			open := func() { _ = os.WriteFile(gate, nil, 0o600) }
+			t.Cleanup(open) // the fake's /compact ends with the test
+			capUsage(t, map[string]float64{"a@example.com": 10})
+			a := h.p
+			h.ask("rules", "a1", "a2")
+			first := h.runs()
+			capUsage(t, map[string]float64{"a@example.com": 75})
+			h.p = provider.Provider{ID: "claude", Account: &provider.Account{Agent: "claude", User: "b@example.com"}, AccountCaps: a.AccountCaps}
+
+			body := `{"model":"claude-sonnet-5","max_tokens":100,"system":"rules","tools":[{"name":"read","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"a1"},{"role":"assistant","content":"ok"},{"role":"user","content":"a2"},{"role":"assistant","content":"ok"},{"role":"user","content":"a3"}]}`
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			served := make(chan struct{})
+			go func() {
+				defer close(served)
+				var u Usage
+				h.s.serveClaudeSubscription(httptest.NewRecorder(), httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body)).WithContext(ctx), provider.Anthropic, h.p, "claude-sonnet-5", []byte(body), &u)
+			}()
+			eventually(t, "no /compact was asked", func() bool {
+				for pid, l := range h.runs() {
+					if _, ok := first[pid]; ok && strings.Contains(l, `"command":"/compact"`) {
+						return true
+					}
+				}
+				return false
+			})
+			cancel()
+			<-served
+			if early {
+				asked := make(chan struct{})
+				go func() {
+					defer close(asked)
+					h.ask("rules", "a1", "a2", "a3")
+				}()
+				waitLogged(t, logs, "still being compacted on the account it left")
+				open()
+				<-asked
+			} else {
+				open()
+				eventually(t, "the compacted session isn't on the shelf", func() bool {
+					h.s.subscription.mu.Lock()
+					defer h.s.subscription.mu.Unlock()
+					for _, s := range h.s.subscription.shelf {
+						if u, _ := ownerAccount(s.owner); u == "b@example.com" {
+							return true
+						}
+					}
+					return false
+				})
+				h.ask("rules", "a1", "a2", "a3")
+			}
+			runs := h.runs()
+			if len(runs) != 2 {
+				t.Fatalf("%d runs, want the old account's and one on the next", len(runs))
+			}
+			for pid, l := range runs {
+				if _, ok := first[pid]; ok {
+					continue
+				}
+				args, _, _ := strings.Cut(l, "\n")
+				_, sid, ok := strings.Cut(args, "--resume ")
+				if !ok {
+					t.Fatalf("the next account's run resumed nothing: %s", args)
+				}
+				sid, _, _ = strings.Cut(sid, " ")
+				seen, _ := filepath.Glob(filepath.Join(h.config, "projects", "*", sid+".jsonl.seen"))
+				if len(seen) != 1 {
+					t.Fatalf("no session %s as the run started", sid)
+				}
+				b, _ := os.ReadFile(seen[0])
+				if !strings.Contains(string(b), `"isCompactSummary":true`) {
+					t.Fatalf("the next account didn't go on from the compacted session:\n%s", b)
+				}
+				told := l[strings.Index(l, "\ntold "):]
+				if !strings.Contains(told, "a3") || strings.Contains(told, "a2") {
+					t.Fatalf("the next account was typed more than the turn:\n%s", told)
+				}
+			}
+		})
+	}
 }
 
 func TestMovedSessions(t *testing.T) {
