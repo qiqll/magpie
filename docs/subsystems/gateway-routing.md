@@ -550,6 +550,22 @@ route the router has is in neither `readOnlyRoutes` nor its refused list,
 and sends each refused pattern, by each method it takes, from loopback and
 from the network.
 
+Bound by user, the quotas, their kept report, their history, the cards
+and a card's refresh tell a request that names its user (`UserHeader`)
+only the cards of the accounts and keys that user is on
+(`Server.scopeQuotas`, `usersSeats` in
+[`quotas_scope.go`](../../internal/gateway/quotas_scope.go), T-090): the
+user's seats of every provider, read through `sharedOf` as
+`resetNotUsers` reads its Codex ones, matched to a card as a held key's
+account list is (`quotaScope.onSeat`). A card that isn't the user's is
+refused a refresh 403; a user header that can't be taken is 400, and a
+users file that can't be read, or doesn't read since it changed, 503. A
+request naming no user, or bound by session, is told what it was.
+`TestBoundUserToldItsOwnQuotas` in
+[`quotas_users_test.go`](../../internal/gateway/quotas_users_test.go)
+covers the five routes, another key's user of the same name and the
+unread file.
+
 `POST /v1/magpie/quotas/codex-reset` (`Server.codexReset` in
 [`gateway.go`](../../internal/gateway/gateway.go), #3850) spends one of a
 Codex account's resets, which can't be undone, so its admission is

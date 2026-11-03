@@ -2765,6 +2765,16 @@ told none of the cards is answered `/v1/magpie/quotas/cards` 403
 that nothing was read. `/v1/magpie/concurrency` and `/v1/magpie/usage`
 still refuse it.
 
+With `--bind=user`, a request that names its user in `X-Magpie-User` is
+told, by the same four routes, only the cards of the accounts and keys
+that user is on, as its key's users are shared or not (above), and a
+window's whole is left out as it is for a held key. A card that isn't
+its own is refused a refresh (403), and a refresh that names none reads
+again only its own. A user on no account is told an empty list. A user
+header that can't be taken is 400, and a `user-accounts.json` that can't
+be read 503, with no card told. A request without the header is the key
+owner's, as before.
+
 A Codex account's rate-limit reset can be used through the gateway as
 the Usage page's **Use a reset** does (#3850, the same code):
 `POST /v1/magpie/quotas/codex-reset?user=<email>` spends one of that

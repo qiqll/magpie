@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,30 +26,101 @@ import (
 //     name; a card no account of the provider is known by is told to no
 //     such key.
 //
+// Bound by user, a request that names its user (UserHeader) is told, of
+// those, only the cards of the accounts and keys the user is on (T-090),
+// as it spends only their Codex resets (resetNotUsers): another user's
+// card names its account and what is left of it.
+//
 // The quotas, their kept report, their history, the cards another magpie
 // reads and a card's refresh all go through it. The accounts' lanes
 // (/v1/magpie/concurrency) and the usage summary are still refused.
 
-// quotaScope is what a held key with Quotas set may be told; nil is
-// everything, for a key held to nothing and this machine's owner.
+// quotaScope is what a held key with Quotas set, or a user bound by user,
+// may be told; nil is everything, for a key held to nothing and this
+// machine's owner.
 type quotaScope struct {
 	who   access.Identity
-	every map[string]bool // provider id → the key may use every model of it
+	every map[string]bool // provider id → the key may use every model of it; nil for a key held to nothing
 	refs  map[string][]provider.AccountRef
+	// bound, the request's user is told only the cards of seats, the
+	// accounts and keys it is on (usersSeats)
+	bound bool
+	seats []userSeat
 }
 
 // scopeQuotas is the request's quota scope. It answers a held key that
-// may not be told quotas 403 (refuseHeld) and says so with ok false.
-func scopeQuotas(w http.ResponseWriter, r *http.Request) (*quotaScope, bool) {
+// may not be told quotas 403 (refuseHeld), a user header that can't be
+// taken 400 and a user whose seats can't be read 503 (usersSeats), and
+// says so with ok false.
+func (s *Server) scopeQuotas(w http.ResponseWriter, r *http.Request) (*quotaScope, bool) {
 	who := access.Caller(r.Context())
-	if !heldKey(who) {
-		return nil, true
+	var sc *quotaScope
+	if heldKey(who) {
+		if !who.Quotas {
+			refuseHeld(w, r, heldRefused)
+			return nil, false
+		}
+		sc = newQuotaScope(who, provider.Catalog())
 	}
-	if !who.Quotas {
-		refuseHeld(w, r, heldRefused)
+	seats, bound, ok := s.usersSeats(w, r)
+	if !ok {
 		return nil, false
 	}
-	return newQuotaScope(who, provider.Catalog()), true
+	if bound {
+		if sc == nil {
+			sc = &quotaScope{who: who, refs: map[string][]provider.AccountRef{}}
+		}
+		sc.bound, sc.seats = true, seats
+	}
+	return sc, true
+}
+
+// usersSeats is, bound by user, every account and key r's user
+// (UserHeader) is on, of every provider, as its group shares them
+// (sharedOf, userGroup; T-089), as resetNotUsers reads its Codex ones.
+// bound is false for a request that names no user, the key's owner's,
+// and bound by session: told every card, as before. A user header that
+// can't be taken is answered 400; a user-accounts.json that can't be
+// read, or changed and doesn't read now (stale), 503: which seats are the
+// user's is unknown, so it is told none.
+func (s *Server) usersSeats(w http.ResponseWriter, r *http.Request) (seats []userSeat, bound, ok bool) {
+	if !s.bind.byUser() {
+		return nil, false, true
+	}
+	user, bad := userOf(r.Header)
+	if bad != "" {
+		writeError(w, provider.Chat, http.StatusBadRequest, bad)
+		return nil, false, false
+	}
+	if user == "" {
+		return nil, false, true
+	}
+	key := userKey(r)
+	userBinds.Lock()
+	err := loadUsers()
+	if err == nil && userBinds.stale {
+		err = errUsersChanged
+	}
+	g, done := userGroup(key), map[string]bool{}
+	for k, ps := range userBinds.m {
+		if userGroup(k) != g {
+			continue
+		}
+		for pid, us := range ps {
+			if _, has := us[user]; !has || done[pid] {
+				continue
+			}
+			done[pid] = true
+			b, _ := sharedOf(key, pid, user)
+			seats = append(seats, b.seats()...)
+		}
+	}
+	userBinds.Unlock()
+	if err != nil {
+		writeError(w, provider.Chat, http.StatusServiceUnavailable, fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know which accounts %q is on and tells it none of their quotas. Its log says why", UserHeader, user))
+		return nil, false, false
+	}
+	return seats, true, true
 }
 
 func newQuotaScope(who access.Identity, catalog []provider.Entry) *quotaScope {
@@ -71,7 +144,31 @@ func (s *quotaScope) provider(id string) bool {
 	if s == nil {
 		return true
 	}
-	return s.every[id]
+	if s.bound && !slices.ContainsFunc(s.seats, func(st userSeat) bool { return seatOf(st, id) }) {
+		return false
+	}
+	return s.every == nil || s.every[id]
+}
+
+// seatOf says st is an account or key of provider id (candidate.who).
+func seatOf(st userSeat, id string) bool {
+	who := strings.ToLower(st.Who)
+	id = strings.ToLower(id)
+	return strings.HasPrefix(who, id+"@") || strings.HasPrefix(who, id+"#")
+}
+
+// refsOf is provider id's accounts and keys (AccountIDs), read once.
+func (s *quotaScope) refsOf(id string) ([]provider.AccountRef, bool) {
+	if refs, ok := s.refs[id]; ok {
+		return refs, true
+	}
+	p, err := provider.Find(id)
+	if err != nil {
+		return nil, false
+	}
+	refs := p.AccountIDs()
+	s.refs[id] = refs
+	return refs, true
 }
 
 // card says the key may be told the card of provider id's account user.
@@ -82,17 +179,15 @@ func (s *quotaScope) card(id, user string) bool {
 	if !s.provider(id) {
 		return false
 	}
-	if len(s.who.Accounts) == 0 {
+	if s.bound && !s.onSeat(id, user) {
+		return false
+	}
+	if s.every == nil || len(s.who.Accounts) == 0 {
 		return true
 	}
-	refs, ok := s.refs[id]
+	refs, ok := s.refsOf(id)
 	if !ok {
-		p, err := provider.Find(id)
-		if err != nil {
-			return false
-		}
-		refs = p.AccountIDs()
-		s.refs[id] = refs
+		return false
 	}
 	// a provider's only key has a card named by no one (cardKeys)
 	if strings.TrimSpace(user) == "" && len(refs) == 1 {
@@ -118,6 +213,38 @@ func (s *quotaScope) card(id, user string) bool {
 	return s.who.AllowsAccount(id, "")
 }
 
+// onSeat says the card of provider id's account user is of an account or
+// key the user is on (seats), matched to them as card matches a key's
+// account list: by who is signed in or the key's name, every account or
+// key shown by that name the user's, or the card is not. A card no
+// account or key here is known by is the user's only when a seat names
+// its account.
+func (s *quotaScope) onSeat(id, user string) bool {
+	user = strings.TrimSpace(user)
+	refs, _ := s.refsOf(id)
+	who := func(a provider.AccountRef) string {
+		if a.Key {
+			return id + "#" + a.ID
+		}
+		return id + "@" + strings.ToLower(strings.TrimSpace(a.User))
+	}
+	// a provider's only key has a card named by no one (cardKeys)
+	if user == "" && len(refs) == 1 {
+		return seatIn(s.seats, who(refs[0]))
+	}
+	matched := false
+	for _, a := range refs {
+		if !strings.EqualFold(strings.TrimSpace(a.User), user) {
+			continue
+		}
+		if !seatIn(s.seats, who(a)) {
+			return false
+		}
+		matched = true
+	}
+	return matched || user != "" && seatIn(s.seats, id+"@"+strings.ToLower(user))
+}
+
 // cards is cs as the key may be told them.
 func (s *quotaScope) cards(cs []provider.SubscriptionQuota) []provider.SubscriptionQuota {
 	if s == nil {
@@ -132,15 +259,14 @@ func (s *quotaScope) cards(cs []provider.SubscriptionQuota) []provider.Subscript
 	return out
 }
 
-// writeCards answers another magpie the cards the key may be told. A key
-// told none of the cards here is answered as held: the other magpie then
-// shows the key's own limit, not that nothing was read here, which a
-// refresh wouldn't change.
+// writeCards answers another magpie the cards the key may be told. A held
+// key told none of the cards here is answered as held: the other magpie
+// then shows the key's own limit, not that nothing was read here, which a
+// refresh wouldn't change. A user told none is told an empty list.
 func writeCards(w http.ResponseWriter, r *http.Request, s *quotaScope) {
 	all := provider.CachedCards(time.Now())
 	cs := s.cards(all)
-	if len(cs) == 0 && len(all) > 0 {
-		refuseHeld(w, r, heldRefused)
+	if len(cs) == 0 && len(all) > 0 && refuseHeld(w, r, heldRefused) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"object": "list", "data": cs})
@@ -148,7 +274,8 @@ func writeCards(w http.ResponseWriter, r *http.Request, s *quotaScope) {
 
 // quotas is qs as the key may be told them. A window's whole (Holds,
 // #2333) is left out: it is reckoned from every call routed through the
-// account, other keys' and the owner's too, which a held key is not told.
+// account, other keys', users' and the owner's too, which a held key or a
+// user is not told.
 func (s *quotaScope) quotas(qs []provider.Quota) []provider.Quota {
 	if s == nil {
 		return qs

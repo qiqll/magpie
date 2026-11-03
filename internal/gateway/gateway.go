@@ -1105,12 +1105,14 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 // to use and is told none of it (refuseHeld), as are quotasHistory,
 // quotaCards, quotaCardsRefresh and concurrency; one its owner lets be
 // told its quotas is told those of what it may use (scopeQuotas, #2216).
+// Bound by user, a user named (UserHeader) is told those of the accounts
+// it is on (T-090).
 func (s *Server) quotas(w http.ResponseWriter, r *http.Request) {
 	if !local(r) && !sharedWith(r) {
 		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Network and sharing → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
 		return
 	}
-	scope, ok := scopeQuotas(w, r)
+	scope, ok := s.scopeQuotas(w, r)
 	if !ok {
 		return
 	}
@@ -1134,7 +1136,7 @@ func (s *Server) quotasHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Network and sharing → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
 		return
 	}
-	scope, ok := scopeQuotas(w, r)
+	scope, ok := s.scopeQuotas(w, r)
 	if !ok {
 		return
 	}
@@ -1150,7 +1152,7 @@ func (s *Server) quotaCards(w http.ResponseWriter, r *http.Request) {
 		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Network and sharing → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
 		return
 	}
-	scope, ok := scopeQuotas(w, r)
+	scope, ok := s.scopeQuotas(w, r)
 	if !ok {
 		return
 	}
@@ -1176,7 +1178,7 @@ func (s *Server) quotaCardsRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Network and sharing → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
 		return
 	}
-	scope, ok := scopeQuotas(w, r)
+	scope, ok := s.scopeQuotas(w, r)
 	if !ok {
 		return
 	}
@@ -1185,11 +1187,14 @@ func (s *Server) quotaCardsRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, provider.Chat, http.StatusBadRequest, "this magpie reads only its own cards again")
 		return
 	}
-	// a key told only some cards (#2216) has only those read again: a
-	// card it isn't told is refused, as if held, and with none named
-	// each card it is told is read, not every account here
+	// a key told only some cards (#2216), or a user bound by user only
+	// its own (T-090), has only those read again: a card it isn't told is
+	// refused, as if held, and with none named each card it is told is
+	// read, not every account here
 	if scope != nil && id != "" && !scope.card(id, user) {
-		refuseHeld(w, r, heldRefused)
+		if !refuseHeld(w, r, heldRefused) {
+			writeError(w, provider.Chat, http.StatusForbidden, fmt.Sprintf("%s: a user has only the cards of the accounts it is on read again", UserHeader))
+		}
 		return
 	}
 	key := id + "|" + strings.ToLower(user)
