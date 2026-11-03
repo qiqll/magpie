@@ -101,6 +101,10 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(model, "/") {
 			id, ok := codexAccounts(r, model)
 			if !ok {
+				// bound by user, searched on the user's own (T-085)
+				id, ok = s.codexBound(r, model)
+			}
+			if !ok {
 				break
 			}
 			body = withModel(body, id)
@@ -228,6 +232,16 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 			if writer != nil {
 				on = writer
 			}
+			// bound by user, the compact goes to one of the user's own
+			// accounts, and a seal is read only when one of them wrote
+			// it: never another user's (T-085)
+			if s.bind.byUser() {
+				var refused error
+				if on, refused = s.usersCompactOn(r, model, body, on, writer, gone != ""); refused != nil {
+					s.answerUserRefused(w, r, provider.Responses, &Call{Model: model}, refused)
+					return
+				}
+			}
 			// the key's accounts are asked of the account the compact
 			// goes to: the writer when it answers it, not the sign-in
 			if who, held := compactSigninHeld(r, model, on); held {
@@ -259,6 +273,10 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 		id, ok := codexAccounts(r, model)
 		if !ok {
 			id, ok = codexSealedFor(r, model, body)
+		}
+		if !ok {
+			// bound by user, served on the user's own (T-085)
+			id, ok = s.codexBound(r, model)
 		}
 		if ok {
 			// through magpie's accounts, Codex's compaction is the codex
@@ -742,12 +760,16 @@ func compactOn(r *http.Request, model string) *provider.Provider {
 	if !ok || p.Account == nil || p.Account.Agent != "codex" || !p.OwnPaused() {
 		return nil
 	}
-	others := p.AlsoOn()
-	// one whose sign-in has to be made again, its vendor having revoked
-	// it (#1793) or its refresh refused, is the last asked; and those the
-	// calling key may use go before those it may not (compactSigninHeld
-	// refuses those), so a lapsed one it may use isn't passed over for one
-	// it may not
+	return compactFirst(r, model, p.AlsoOn())
+}
+
+// compactFirst is the one of others a compaction of model goes to: one
+// whose sign-in has to be made again, its vendor having revoked it
+// (#1793) or its refresh refused, is the last asked; and those the
+// calling key may use go before those it may not (compactSigninHeld
+// refuses those), so a lapsed one it may use isn't passed over for one it
+// may not. The first not resting is taken, else the first; nil for none.
+func compactFirst(r *http.Request, model string, others []provider.Provider) *provider.Provider {
 	who, _ := accountHolds(r)
 	allowed := func(o provider.Provider) bool { return accountAllowed(who, candidate{p: o, model: model, rest: o.ID}) }
 	revoked := func(o provider.Provider) bool { return provider.SignInLapsed(o.Account) != "" }
@@ -770,6 +792,97 @@ func compactOn(r *http.Request, model string) *provider.Provider {
 		return &others[0]
 	}
 	return nil
+}
+
+// usersCompactOn is, bound by user, where a native compaction of one of
+// Codex's own models goes for r's user in place of on (compactOn's, or
+// the seal's writer that answers it, sealedCompact's): nil relays it on
+// Codex's sign-in. compactOn picks among every account on, and the relay
+// is the sign-in whoever it is bound to, both past serve, so A's compact
+// spent B's account (T-085). A seal one of magpie's accounts wrote is
+// read only when it is one of the user's own (its seats, read only), else
+// refused as a limit (userLimitSaid), naming no account: its writer
+// answers it, the sign-in its own. Gone (refused after, with nothing
+// sent), on is left as it is. Any other compact goes to one of the user's
+// own (usersOn, bound now when it is on none, as a turn binds it; the
+// one AccountHeader names when it is one of them), relayed when that is
+// the sign-in; with none of them to ask, the refusal is usersOn's. A
+// request magpie has no Codex account for, or Codex on its API key,
+// keeps on.
+func (s *Server) usersCompactOn(r *http.Request, model string, body []byte, on, writer *provider.Provider, gone bool) (*provider.Provider, error) {
+	if !s.bind.byUser() || model == "" || strings.Contains(model, "/") || apiKey(r.Header) {
+		return on, nil
+	}
+	p, _, ok := provider.Resolve("codex/" + model)
+	if !ok || p.Account == nil || p.Account.Agent != "codex" {
+		return on, nil
+	}
+	user, _ := userOf(r.Header)
+	signIn := candidate{p: p, model: model, rest: p.ID}.who()
+	if cp, sealed := checkpointOf(body); sealed && !strings.Contains(cp.Who, "#") {
+		var seats []userSeat
+		userBinds.Lock()
+		// never read, the seats are unknown: none is the user's
+		if loadUsers() == nil {
+			b, _ := sharedOf(userKey(r), cp.Provider, user)
+			seats = b.seats()
+		}
+		userBinds.Unlock()
+		if !seatIn(seats, cp.Who) {
+			return nil, &userRefusedError{u: &UserBound{User: user}, pid: p.ID, refused: userRefusal{status: http.StatusTooManyRequests,
+				msg: fmt.Sprintf("%s: the compaction for %s was sealed by %s, which isn't one of %q's accounts; nothing was sent", UserHeader, model, cp.Who, user)}}
+		}
+		switch {
+		case gone:
+			return on, nil
+		case writer != nil:
+			return writer, nil
+		case strings.EqualFold(cp.Who, signIn) && !p.OwnPaused():
+			return nil, nil // the sign-in's own seal, the user's: relayed
+		}
+	}
+	cs, pl := s.plan(p, model, provider.Responses)
+	own, _, _, err := s.usersOn(r, p, cs, pl)
+	if err != nil {
+		return nil, err
+	}
+	ons := make([]provider.Provider, 0, len(own))
+	for _, c := range own {
+		if c.p.Account != nil && c.p.Account.Agent == "codex" {
+			ons = append(ons, c.p)
+		}
+	}
+	if pin := r.Header.Get(AccountHeader); pin != "" {
+		if i := slices.IndexFunc(ons, func(o provider.Provider) bool { return strings.EqualFold(o.Account.User, pin) }); i >= 0 {
+			ons = ons[i : i+1]
+		}
+	}
+	to := compactFirst(r, model, ons)
+	if to == nil {
+		return nil, &userRefusedError{u: &UserBound{User: user}, pid: p.ID, refused: userRefusal{status: http.StatusServiceUnavailable, none: true,
+			msg: fmt.Sprintf("%s: none of %s's accounts %q is on can compact now; no other is asked in its place", UserHeader, p.Name, user)}}
+	}
+	if strings.EqualFold(candidate{p: *to, model: model, rest: to.ID}.who(), signIn) {
+		return nil, nil // the sign-in, the user's own: relayed as it came
+	}
+	return to, nil
+}
+
+// codexBound is, bound by user, the codex subscription's model a turn or
+// a web search for one of Codex's own models is served as where
+// codexAccounts would relay it as it came: on Codex's sign-in, past
+// serve, whoever it is bound to (T-085). Served, it goes to the user's
+// own accounts (bindUser, usersSearchers). Codex on its API key, or a
+// model magpie has no Codex account for, still goes as it came.
+func (s *Server) codexBound(r *http.Request, model string) (string, bool) {
+	if !s.bind.byUser() || model == "" || strings.Contains(model, "/") || apiKey(r.Header) {
+		return "", false
+	}
+	id := "codex/" + model
+	if p, _, ok := provider.Resolve(id); !ok || p.Account == nil || p.Account.Agent != "codex" {
+		return "", false
+	}
+	return id, true
 }
 
 // codexAccounts is what a request for one of Codex's own models is served

@@ -1,0 +1,214 @@
+package gateway
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/yetone/magpie/internal/provider"
+)
+
+// compactUpstream is a fake ChatGPT backend that answers every compact,
+// turn and search; asked is the chatgpt-account-id of each request to
+// path's end since the last reset ("" for one relayed on the sign-in as it
+// came).
+func compactUpstream(t *testing.T) (asked func(path string) []string) {
+	t.Helper()
+	var mu sync.Mutex
+	seen := map[string][]string{}
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.ReadAll(r.Body)
+		mu.Lock()
+		for _, p := range []string{"/responses/compact", "/responses", "/alpha/search"} {
+			if strings.HasSuffix(r.URL.Path, p) {
+				seen[p] = append(seen[p], r.Header.Get("chatgpt-account-id"))
+				break
+			}
+		}
+		mu.Unlock()
+		if strings.HasSuffix(r.URL.Path, "/alpha/search") {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"output":"searched"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(
+			`data: {"type":"response.created","response":{"id":"r1","model":"gpt-5.5"}}`,
+			`data: {"type":"response.completed","response":{"id":"r1","model":"gpt-5.5","usage":{"input_tokens":9,"output_tokens":2}}}`))
+	}))
+	t.Cleanup(up.Close)
+	was := provider.CodexBase
+	provider.CodexBase = up.URL + "/backend-api/codex"
+	t.Cleanup(func() { provider.CodexBase = was })
+	return func(path string) []string {
+		mu.Lock()
+		defer mu.Unlock()
+		got := seen[path]
+		delete(seen, path)
+		return got
+	}
+}
+
+// codexCompactFor sends Codex's legacy /responses/compact for user,
+// carrying the seal enc when it isn't empty, on Codex's ChatGPT token.
+func codexCompactFor(h http.Handler, user, enc string) *httptest.ResponseRecorder {
+	input := `{"type":"message","role":"user","content":[{"type":"input_text","text":"go on"}]}`
+	if enc != "" {
+		input = `{"type":"compaction","encrypted_content":"` + enc + `"},` + input
+	}
+	r := httptest.NewRequest("POST", CodexPath+"/responses/compact", strings.NewReader(`{"model":"gpt-5.5","stream":true,"input":[`+input+`]}`))
+	r.Header.Set("Authorization", "Bearer chatgpt-token")
+	r.Header.Set(UserHeader, user)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+// Bound by user, Codex's legacy compact of one of its own models goes to
+// one of its user's own accounts, never another user's (T-085). With
+// Codex's sign-in paused, compactOn took the first other account on
+// whoever it was bound to, and signed the compact as it past serve:
+// alice's compact went to bob's. A seal is read only when one of the
+// user's accounts wrote it: one bob's account sealed is refused for alice
+// as a limit, naming no account, and nothing is sent. With the sign-in
+// on, a compact relayed on it went there whoever it was bound to. Bound
+// by session it goes where it went.
+func TestUserCompactOnTheUsersOwnAccount(t *testing.T) {
+	bindTwo := func(t *testing.T, bob, alice string) {
+		t.Helper()
+		now := time.Now().UTC()
+		writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+			"bob":   {Who: "codex@" + bob, Account: bob, At: now, Tier: "free"},
+			"alice": {Who: "codex@" + alice, Account: alice, At: now, Tier: "free"},
+		}}})
+	}
+	pauseSignIn := func(t *testing.T) {
+		t.Helper()
+		if err := provider.SetLoginOn("codex", "me@example.com", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("the sign-in paused: each on its own", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com", "third@example.com") // acct-2, acct-3
+		asked := compactUpstream(t)
+		pauseSignIn(t)
+		bindTwo(t, "spare@example.com", "third@example.com")
+		h := byUserUpTo(t, New(), 1).Handler()
+		for _, c := range []struct{ user, acct string }{{"alice", "acct-3"}, {"bob", "acct-2"}, {"alice", "acct-3"}} {
+			if rec := codexCompactFor(h, c.user, ""); rec.Code != 200 {
+				t.Fatalf("%s: %d %s", c.user, rec.Code, rec.Body.String())
+			}
+			if got := asked("/responses/compact"); len(got) != 1 || got[0] != c.acct {
+				t.Fatalf("%s's compact went to %q, want %s", c.user, got, c.acct)
+			}
+		}
+	})
+	t.Run("a seal another user's account wrote is refused", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com", "third@example.com")
+		asked := compactUpstream(t)
+		pauseSignIn(t)
+		nativeOn(t, "codex")
+		bindTwo(t, "spare@example.com", "third@example.com")
+		wroteCheckpoint("gAAAAB-sealed-by-bobs", sealedBy("spare@example.com"))
+		wroteCheckpoint("gAAAAB-sealed-by-alices", sealedBy("third@example.com"))
+		h := byUserUpTo(t, New(), 1).Handler()
+		rec := codexCompactFor(h, "alice", "gAAAAB-sealed-by-bobs")
+		if rec.Code != http.StatusTooManyRequests || !strings.Contains(rec.Body.String(), userLimitSaid) || strings.Contains(rec.Body.String(), "@example.com") {
+			t.Fatalf("alice on bob's seal: %d %s", rec.Code, rec.Body.String())
+		}
+		if got := asked("/responses/compact"); len(got) != 0 {
+			t.Fatalf("alice on bob's seal asked %q", got)
+		}
+		if rec := codexCompactFor(h, "alice", "gAAAAB-sealed-by-alices"); rec.Code != 200 {
+			t.Fatalf("alice on her own seal: %d %s", rec.Code, rec.Body.String())
+		}
+		if got := asked("/responses/compact"); len(got) != 1 || got[0] != "acct-3" {
+			t.Fatalf("alice's own seal went to %q", got)
+		}
+		if rec := codexCompactFor(h, "bob", "gAAAAB-sealed-by-bobs"); rec.Code != 200 {
+			t.Fatalf("bob on his own seal: %d %s", rec.Code, rec.Body.String())
+		}
+		if got := asked("/responses/compact"); len(got) != 1 || got[0] != "acct-2" {
+			t.Fatalf("bob's own seal went to %q", got)
+		}
+	})
+	t.Run("the sign-in on: relayed on it only for its own user", func(t *testing.T) {
+		codexSignedIn(t, "third@example.com") // the sign-in me@example.com is acct-1
+		asked := compactUpstream(t)
+		bindTwo(t, "me@example.com", "third@example.com")
+		h := byUserUpTo(t, New(), 1).Handler()
+		if rec := codexCompactFor(h, "alice", ""); rec.Code != 200 {
+			t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
+		}
+		if got := asked("/responses/compact"); len(got) != 1 || got[0] != "acct-2" {
+			t.Fatalf("alice's compact went to %q, want her acct-2", got)
+		}
+		if rec := codexCompactFor(h, "bob", ""); rec.Code != 200 {
+			t.Fatalf("bob: %d %s", rec.Code, rec.Body.String())
+		}
+		if got := asked("/responses/compact"); len(got) != 1 || got[0] != "" {
+			t.Fatalf("bob's compact went to %q, want the sign-in as it came", got)
+		}
+	})
+	t.Run("bound by session as before", func(t *testing.T) {
+		codexSignedIn(t, "spare@example.com", "third@example.com")
+		asked := compactUpstream(t)
+		pauseSignIn(t)
+		h := New().Handler()
+		if rec := codexCompactFor(h, "alice", ""); rec.Code != 200 {
+			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		}
+		if got := asked("/responses/compact"); len(got) != 1 || got[0] != "acct-2" {
+			t.Fatalf("compact went to %q, want compactOn's acct-2", got)
+		}
+	})
+}
+
+// Bound by user, a turn or a web search for one of Codex's own models
+// that codexAccounts would relay as it came (the sign-in the one account
+// on) is served on the user's own instead (T-085): relayed, it reached the
+// sign-in whoever it was bound to, past the user's tier. With the sign-in
+// bob's, and each account shared by one user, alice's is refused and
+// nothing reaches the backend; bob's is served.
+func TestUserCodexRelayOnTheUsersOwnAccount(t *testing.T) {
+	codexSignedIn(t)
+	asked := compactUpstream(t)
+	writeTiers(t, `{"default":"free","tiers":{"free":{"credits":1000,"max_accounts":1,"share":1}}}`)
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob": {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC(), Tier: "free"},
+	}}})
+	h := byUser(New()).Handler()
+	turn := func(user string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", CodexPath+"/responses", strings.NewReader(`{"model":"gpt-5.5","stream":true,"input":"hi"}`))
+		r.Header.Set("Authorization", "Bearer chatgpt-token")
+		r.Header.Set(UserHeader, user)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	if rec := turn("alice"); rec.Code == 200 {
+		t.Fatalf("alice's turn on bob's sign-in: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := asked("/responses"); len(got) != 0 {
+		t.Fatalf("alice's turn asked %q", got)
+	}
+	if rec := turn("bob"); rec.Code != 200 {
+		t.Fatalf("bob: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := asked("/responses"); len(got) != 1 {
+		t.Fatalf("bob's turn asked %q", got)
+	}
+	codexSearchFor(h, CodexPath+"/alpha/search", codexSearchBody("gpt-5.5"), "alice")
+	if got := asked("/alpha/search"); len(got) != 0 {
+		t.Fatalf("alice's search asked %q", got)
+	}
+	codexSearchFor(h, CodexPath+"/alpha/search", codexSearchBody("gpt-5.5"), "bob")
+	if got := asked("/alpha/search"); len(got) != 1 {
+		t.Fatalf("bob's search asked %q", got)
+	}
+}
