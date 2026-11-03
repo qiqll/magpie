@@ -406,6 +406,12 @@ type Provider struct {
 	// and then the window's WindowCapID: 1–99, or 100 for none on it. A
 	// window not in it takes the account's AccountCaps.
 	AccountWindowCaps map[string]map[string]int `json:"accountWindowCaps,omitempty"`
+	// AccountAdded is, for a subscription, when each account was first
+	// seen in magpie (logins.json written with it, growth.go), by its name
+	// in lower case: the growth policy holds it by the days since. One
+	// added before magpie kept this has none, and is not held. magpie's
+	// own: the editor's Save keeps what the file has.
+	AccountAdded map[string]time.Time `json:"accountAdded,omitempty"`
 	// CapStop, for a subscription whose accounts are capped, ends there
 	// (plugins#349): while every account is held at its cap, a request is
 	// answered 429, as the vendor would, rather than sent on to Fallback.
@@ -764,6 +770,7 @@ func (p Provider) clone() Provider {
 	p.ReplyHeaders = slices.Clone(p.ReplyHeaders)
 	p.AccountProxies = maps.Clone(p.AccountProxies)
 	p.AccountCaps = maps.Clone(p.AccountCaps)
+	p.AccountAdded = maps.Clone(p.AccountAdded)
 	p.AccountNames = maps.Clone(p.AccountNames)
 	if p.AccountWindowCaps != nil {
 		m := make(map[string]map[string]int, len(p.AccountWindowCaps))
@@ -1072,6 +1079,8 @@ func Save(p Provider) error {
 	p.PickedFrom = listedWith(p, was)
 	p.Delisted = delistedWith(p, was)
 	if was != nil {
+		// when its accounts were added is magpie's, never the editor's
+		p.AccountAdded = was.AccountAdded
 		if p.Was == nil {
 			p.Was = was.Was
 		}
@@ -1485,6 +1494,7 @@ func normalize(p Provider) Provider {
 	p.AccountModels = normalAccountModels(p.AccountModels)
 	p.AccountCaps = normalAccountCaps(p.AccountCaps)
 	p.AccountWindowCaps = normalWindowCaps(p.AccountWindowCaps)
+	p.AccountAdded = normalAccountAdded(p.AccountAdded)
 	p.AccountNames = normalAccountNames(p.AccountNames)
 	if len(p.Models) > 0 {
 		p.NoModels = false // a pick is no longer Select none

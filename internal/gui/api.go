@@ -380,6 +380,9 @@ type settingsJSON struct {
 	Version string `json:"version"`
 	Dir     string `json:"dir"`     // where magpie keeps its files, as shown
 	Gateway string `json:"gateway"` // the local endpoint
+	// GrowthStages is the growth policy in effect: Growth, or the default
+	// one while the user set none (Growth nil)
+	GrowthStages []settings.GrowthStage `json:"growthStages"`
 	// Builtins are the built-in plugins: each one's switch, whether it
 	// runs and what of it is in use (builtins.go)
 	Builtins []builtinJSON `json:"builtins"`
@@ -719,6 +722,7 @@ func codexWindowUnder(st settings.Settings, model string) *codexRunWindow {
 
 func settingsState() settingsJSON {
 	s := settingsJSON{Settings: settings.Load(), Version: Version, Dir: tilde(settings.Dir()), Portable: settings.Portable() != "", Gateway: gateway.URL()}
+	s.GrowthStages = s.GrowthOf()
 	s.AddrEnv = os.Getenv("MAGPIE_ADDR")
 	s.Log = tilde(applog.Current())
 	s.Builtins = builtinsState()
@@ -1560,6 +1564,34 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 				fail(rw, err)
 				return
 			}
+		}
+		writeJSON(rw, settingsState())
+	})
+	// the growth policy (T-078): how far a subscription account added
+	// lately is used, by its days; a null list is the default policy again
+	mux.HandleFunc("POST /api/settings/growth", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Stages *[]settings.GrowthStage `json:"stages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if in.Stages != nil {
+			if err := settings.CheckGrowth(*in.Stages); err != nil {
+				fail(rw, err)
+				return
+			}
+		}
+		s, err := settings.LoadChecked()
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		s.Growth = in.Stages
+		if err := settings.Save(s); err != nil {
+			fail(rw, err)
+			return
 		}
 		writeJSON(rw, settingsState())
 	})

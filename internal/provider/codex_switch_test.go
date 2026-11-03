@@ -16,6 +16,7 @@ import (
 // next account that is on and has room; while none has, it stays.
 func TestCodexSwitchedWhenUsedUp(t *testing.T) {
 	home := signIn(t) // me@example.com, acct-1
+	noGrowth(t)
 	rememberLogins(true)
 	codexSignIn(t, home, "spare@example.com", "r-spare")
 	rememberLogins(true)
@@ -106,6 +107,7 @@ func TestCodexSwitchedWhenUsedUp(t *testing.T) {
 // endpoint isn't read for it.
 func TestClaudeSwitchedWhenSpent(t *testing.T) {
 	home := claudeHome(t)
+	noGrowth(t)
 	cred := claudeSignIn(t, home, time.Now().Add(time.Hour)) // sk-ant-oat01-old
 	profile := filepath.Join(home, ".claude.json")
 	writeFile(t, profile, map[string]any{"oauthAccount": map[string]any{"emailAddress": "a@example.com", "accountUuid": "u-a"}})

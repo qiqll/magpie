@@ -22,6 +22,7 @@ import (
 func claudeOutSoon(t *testing.T, first string) (spare string, set func(string), age func(d time.Duration)) {
 	t.Helper()
 	claudeThree(t) // pro@x.com signed in; team and max saved
+	noGrowth(t)
 	var out atomic.Value
 	out.Store("")
 	fakeClaudeUsage(t, &out, nil)

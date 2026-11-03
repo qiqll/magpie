@@ -490,6 +490,10 @@ type Settings struct {
 	// vendor that queues, 0 for off. A model with no
 	// load reported, or one older than plugin.LoadFresh, keeps its place.
 	BusyLoad int `json:"busyLoad,omitempty"`
+	// Growth is the growth policy: how far a subscription account added
+	// lately is used, by how many days ago it was added (growth.go). nil
+	// is DefaultGrowth; an empty list, saved on purpose, is none.
+	Growth *[]GrowthStage `json:"growth,omitempty"`
 	// Searcher is the provider that searches the web for a model that
 	// can't: "<provider>" with the small model magpie picks of it,
 	// "<provider>/<model>", or empty for the one magpie picks
@@ -2027,6 +2031,11 @@ func saveOwn(s Settings, recording, reads bool) error {
 	}
 	if s.BusyLoad < 0 || s.BusyLoad >= BusyLoadMost {
 		return fmt.Errorf("busy models go last over a load from 1 to %d%%, or 0 for off, not %d", BusyLoadMost-1, s.BusyLoad)
+	}
+	if s.Growth != nil {
+		if err := CheckGrowth(*s.Growth); err != nil {
+			return err
+		}
 	}
 	if s.UsageAlert < 0 || s.UsageAlert > 100 {
 		return fmt.Errorf("a usage alert is at a percentage from 1 to 100, or 0 for off, not %d", s.UsageAlert)

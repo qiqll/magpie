@@ -284,6 +284,7 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.PlainNames, in.PlainOwnNames = cur.PlainNames, cur.PlainOwnNames
 	in.BareModelIDs = cur.BareModelIDs // set on its own (bare-ids)
 	in.BusyLoad = cur.BusyLoad         // and so is this (busy-load)
+	in.Growth = cur.Growth             // and the growth policy (growth)
 	in.CodexAgentsV1 = cur.CodexAgentsV1
 	in.FullContext = cur.FullContext // set on its own (full-context)
 	in.CompactAt = cur.CompactAt     // and so is the threshold

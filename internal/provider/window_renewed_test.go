@@ -87,12 +87,14 @@ func TestNextLoginTakesAPassedResetAsRenewed(t *testing.T) {
 			var on, spare string
 			if agent == "codex" {
 				home := signIn(t) // me@example.com
+				noGrowth(t)
 				rememberLogins(true)
 				codexSignIn(t, home, "work@example.com", "r-work")
 				rememberLogins(true)
 				on, spare = "work@example.com", "me@example.com"
 			} else {
 				home := claudeHome(t)
+				noGrowth(t)
 				claudeSignIn(t, home, time.Now().Add(time.Hour))
 				writeFile(t, home+"/.claude.json", map[string]any{"oauthAccount": map[string]any{"emailAddress": "a@example.com", "accountUuid": "u-a"}})
 				rememberLogins(true)

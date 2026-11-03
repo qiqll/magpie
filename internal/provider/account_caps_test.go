@@ -256,6 +256,7 @@ func TestCapNeverSpendsACodexReset(t *testing.T) {
 // below where the switch list goes back (90%): lifted, it goes back.
 func TestCodexSwitchedAtCap(t *testing.T) {
 	home := signIn(t) // me@example.com, acct-1
+	noGrowth(t)
 	rememberLogins(true)
 	codexSignIn(t, home, "new@example.com", "r-new") // signed in to now
 	rememberLogins(true)

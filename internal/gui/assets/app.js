@@ -19490,7 +19490,7 @@ function tabKeys(tabs, sel) {
 // tab. A click on a tab, like every click, leaves the page where it is: the
 // tabs at the top stay where they were and the part comes in under them.
 // Picked in the sidebar, a part opens at its top (navSubs).
-const SET_TABS = ["general", "usage", "network", "models", "privacy", "otel", "sync", "plugins", "about"];
+const SET_TABS = ["general", "usage", "growth", "network", "models", "privacy", "otel", "sync", "plugins", "about"];
 let setTab = "general";
 try { const k = localStorage.getItem("magpie.settingsTab"); if (SET_TABS.includes(k)) setTab = k; } catch {}
 let setShown = setTab; // the part shown: the one picked, or the first there
@@ -19767,7 +19767,7 @@ function renderSettings() {
   $("#birdSegs").replaceChildren(segs([["off", t("Off")], ["on", t("On")]], s.noBird ? "off" : "on", (v) => savePrefs({ ...keep, noBird: v === "off" })));
   renderLangPick(s, keep);
   renderGatewayMode(s);
-  // a browser tab has its own zoom, and magpie leaves it to it
+  // a browser tab zooms itself
   $("#textSizeRow").hidden = web;
   // the keys that do it too, kept in the choices' tooltip, the row saying no more than its name
   $("#textSizeSegs").title = t("Everything in magpie's windows, larger; {keys} too", { keys: textSizeKeys() });
@@ -19854,6 +19854,7 @@ function renderSettings() {
   renderGitHubToken(s);
   renderImages(s, keep);
   renderSearch(s, keep);
+  renderGrowth(s);
   renderReplies(s, keep);
   renderDisabledModels(s);
   renderRedact(s, keep);

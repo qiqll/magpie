@@ -1,7 +1,7 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
 // The Settings page in parts (#471: one long scroll of nine sections and
 // some 45 rows, the rarely used ones screens away): a tab list at the top —
-// General, Allowances, Network and sharing, Models, Privacy, Observability, Sync
+// General, Allowances, Growth policy, Network and sharing, Models, Privacy, Observability, Sync
 // and backup, About — each tab showing its part's rows alone, so any section
 // is one click away once Settings is open. The part picked is kept in the
 // address (?view=settings&tab=…), so a reload lands on it, and remembered,
@@ -63,15 +63,15 @@ function server(lang, posts, { web = false, size = 100 } = {}) {
   };
 }
 
-const TABS = ["general", "usage", "network", "models", "privacy", "otel", "sync", "about"];
+const TABS = ["general", "usage", "growth", "network", "models", "privacy", "otel", "sync", "about"];
 const L = {
-  en: ["General", "Allowances", "Network and sharing", "Models", "Privacy", "Observability", "Sync and backup", "About"],
-  zh: ["常规", "额度", "网络与共享", "模型", "隐私", "可观测性", "同步与备份", "关于"],
+  en: ["General", "Allowances", "Growth policy", "Network and sharing", "Models", "Privacy", "Observability", "Sync and backup", "About"],
+  zh: ["常规", "额度", "成长策略", "网络与共享", "模型", "隐私", "可观测性", "同步与备份", "关于"],
 };
 const LABEL = { en: "Settings", zh: "设置" };
 // what each part shows: an element of its own rows, drawn by the page
 const MARK = {
-  general: "#themeSegs .opt", usage: "#currencySegs .opt", network: "#proxySegs", models: "#imagesList .row",
+  general: "#themeSegs .opt", usage: "#currencySegs .opt", growth: "#growthList .row", network: "#proxySegs", models: "#imagesList .row",
   privacy: "#redactList .row", otel: "#otelList .row", sync: "#syncList .row", about: "#about .row",
 };
 

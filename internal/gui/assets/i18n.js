@@ -4435,6 +4435,7 @@ const I18N = {
     "Where": "位置",
     "Copy Report": "复制报告",
     "This report is no longer kept: magpie keeps the last 5.": "这份报告已经不在了：magpie 只保留最近 5 份。",
+    "Growth policy": "成长策略",
   },
   "zh-TW": {
     "Claude Code runs as": "Claude Code 執行方式",
@@ -8853,6 +8854,7 @@ const I18N = {
     "Where": "位置",
     "Copy Report": "複製報告",
     "This report is no longer kept: magpie keeps the last 5.": "這份報告已經不在了：magpie 只保留最近 5 份。",
+    "Growth policy": "成長策略",
   },
   ja: {
     "Claude Code runs as": "Claude Code の実行方式",
@@ -13273,6 +13275,7 @@ const I18N = {
     "Where": "場所",
     "Copy Report": "レポートをコピー",
     "This report is no longer kept: magpie keeps the last 5.": "このレポートはもう残っていません。magpie は最新の 5 件だけを保存します。",
+    "Growth policy": "成長ポリシー",
   },
   de: {
     "Claude Code runs as": "Claude Code läuft als",
@@ -17693,6 +17696,7 @@ const I18N = {
     "Where": "Wo",
     "Copy Report": "Bericht kopieren",
     "This report is no longer kept: magpie keeps the last 5.": "Dieser Bericht ist nicht mehr da: magpie behält nur die letzten 5.",
+    "Growth policy": "Wachstumsregel",
   },
 };
 

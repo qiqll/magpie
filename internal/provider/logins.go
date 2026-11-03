@@ -350,6 +350,16 @@ func writeLogins(ls []savedLogin) error {
 		return err
 	}
 	defer Changed() // an account added, switched or gone: All builds anew
+	// the accounts it adds, against those on disk now: none when those
+	// can't be told (a failed read is unknown, not no accounts), and none
+	// on the first write, whose accounts are the user's from before
+	was := sharedLogins()
+	lastLoginsMu.Lock()
+	known := loginsKnown
+	lastLoginsMu.Unlock()
+	if _, err := os.Stat(loginsPath()); err != nil {
+		known = false
+	}
 	beforeLoginsWrite()
 	// the file there now is kept first: as its last good generation, or
 	// copied aside when it doesn't read, never written over unkept
@@ -362,6 +372,10 @@ func writeLogins(ls []savedLogin) error {
 	lastLoginsMu.Lock()
 	lastLogins, loginsKnown = slices.Clone(ls), true
 	lastLoginsMu.Unlock()
+	if known {
+		// when each account first appeared, for the growth policy
+		noteAdded(addedIn(was, disk))
+	}
 	return nil
 }
 

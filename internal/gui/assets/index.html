@@ -156,6 +156,7 @@
   <div class="row-head set-head"><div class="warm-tabs set-tabs" id="setTabs" role="tablist" aria-label="Settings">
     <button type="button" role="tab" id="setTab-general" data-set="general" aria-controls="setPage-general" data-t>General</button>
     <button type="button" role="tab" id="setTab-usage" data-set="usage" aria-controls="setPage-usage" data-t>Allowances</button>
+    <button type="button" role="tab" id="setTab-growth" data-set="growth" aria-controls="setPage-growth" data-t>Growth policy</button>
     <button type="button" role="tab" id="setTab-network" data-set="network" aria-controls="setPage-network" data-t>Network and sharing</button>
     <button type="button" role="tab" id="setTab-models" data-set="models" aria-controls="setPage-models" data-t>Models</button>
     <button type="button" role="tab" id="setTab-privacy" data-set="privacy" aria-controls="setPage-privacy" data-t>Privacy</button>
@@ -394,6 +395,10 @@
     <div class="list prefs" id="pluginCheckinList" role="tabpanel" aria-labelledby="warmTab-plugins"></div>
     </div>
   </section>
+  <!-- how far a subscription account added lately is used, by its days (plugins/growth/settings.js) -->
+  <section class="set-page" id="setPage-growth" role="tabpanel" aria-labelledby="setTab-growth">
+    <div class="list prefs" id="growthList"></div>
+  </section>
   <section class="set-page" id="setPage-network" role="tabpanel" aria-labelledby="setTab-network">
     <div class="list prefs">
       <div class="row pref">
@@ -550,6 +555,7 @@
 <script src="plugins/redact/i18n.js"></script>
 <script src="plugins/redact/client.js"></script>
 <script src="plugins/otel/i18n.js"></script>
+<script src="plugins/growth/i18n.js"></script>
 <script src="purposes.js"></script>
 <script src="app.js"></script>
 <script src="plugins.js"></script>
@@ -563,6 +569,7 @@
 <script src="plugins/search/settings.js"></script>
 <script src="plugins/sessions/settings.js"></script>
 <script src="plugins/redact/settings.js"></script>
+<script src="plugins/growth/settings.js"></script>
 <script src="start.js"></script>
 </body>
 </html>

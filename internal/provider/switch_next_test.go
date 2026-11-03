@@ -38,6 +38,7 @@ func pickUpThree(t *testing.T, agent string) []string {
 	} else {
 		claudeThree(t)
 	}
+	noGrowth(t)
 	ls := Logins(agent)
 	at := slices.IndexFunc(ls, func(l Login) bool { return l.Active })
 	if len(ls) != 3 || at < 0 {
