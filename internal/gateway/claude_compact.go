@@ -108,6 +108,7 @@ func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owne
 	}
 	b.mu.Unlock()
 	var run *subscriptionRun
+	done := make(chan struct{})
 	for _, f := range found {
 		if !atCap(p, f.run.owned(), model) {
 			continue
@@ -117,6 +118,8 @@ func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owne
 			delete(b.idle, f.key)
 			f.run.idleKey = ""
 			run = f.run
+			// a retry from here on waits for its /compact
+			b.compacting[key] = done
 		}
 		b.mu.Unlock()
 		if run != nil {
@@ -135,10 +138,6 @@ func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owne
 	// client waits: one that leaves (it, or a proxy, timed out) finds
 	// the session on the shelf when it asks again, and doesn't pay for
 	// the /compact and for writing the conversation whole (T-082)
-	done := make(chan struct{})
-	b.mu.Lock()
-	b.compacting[key] = done
-	b.mu.Unlock()
 	var left bool
 	got := make(chan *savedSession, 1)
 	go func() {
@@ -161,7 +160,15 @@ func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owne
 	defer alive()
 	select {
 	case s := <-got:
-		return s
+		if s == nil || ctx.Err() == nil {
+			return s
+		}
+		// it ended as the client left: kept for the retry all the same
+		b.mu.Lock()
+		s.key = key
+		b.onShelf(key, s)
+		b.mu.Unlock()
+		return nil
 	case <-ctx.Done():
 		b.mu.Lock()
 		defer b.mu.Unlock()
