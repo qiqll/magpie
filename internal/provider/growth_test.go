@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // noGrowth saves a growth policy of no stages in the test's home, for a
@@ -283,5 +286,57 @@ func TestGrowthCaps(t *testing.T) {
 	}
 	if g := growthCaps([]settings.GrowthStage{{From: 2, Window: "5h", Cap: 50}}, now.Add(-time.Hour), now); g != nil {
 		t.Errorf("before the first stage: %v", g)
+	}
+}
+
+// A plugin's account (the subscriptions moved onto plugins among them) is
+// stamped as it first appears: pluginLogins writes logins.json with its
+// row, and the account is held by the policy like a built-in's. One the
+// plugin had when magpie first wrote logins.json is from before, and isn't.
+func TestGrowthStampsAPluginAccount(t *testing.T) {
+	bun := testenv.Bun(t)
+	claudeHome(t)
+	t.Setenv("MAGPIE_BUN", bun)
+	t.Cleanup(plugin.Settle)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	abs, _ := filepath.Abs("../plugin/testdata/fake/index.js")
+	if _, err := plugin.Add(ctx, abs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Import(ctx, "fakeco", map[string]any{"type": "oauth", "refresh": "r", "access": "a", "expires": 9e15, "accountId": "old-acct"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Providers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id := PluginID("fakeco")
+	pluginAccounts() // logins.json written for the first time: from before
+	added := func() map[string]time.Time {
+		t.Helper()
+		s, _ := storedPicks(id)
+		return s.AccountAdded
+	}
+	if a := added(); len(a) != 0 {
+		t.Fatalf("the account from before stamped: %v", a)
+	}
+	if _, err := plugin.Import(ctx, "fakeco", map[string]any{"type": "oauth", "refresh": "r2", "access": "a2", "expires": 9e15, "accountId": "new-acct"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Providers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pluginAccounts() // the new one's row written
+	a := added()
+	if len(a) != 1 {
+		t.Fatalf("one new plugin account, stamped: %v", a)
+	}
+	for user, at := range a {
+		if time.Since(at) > time.Minute {
+			t.Fatalf("%s stamped at %v", user, at)
+		}
+		if s, _ := AccountCapsOf(id, user).Of("5 hours"); s != 50 {
+			t.Fatalf("the new plugin account's five hours at %d%% on its first day", s)
+		}
 	}
 }
