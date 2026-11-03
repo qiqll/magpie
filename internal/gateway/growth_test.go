@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // growthUsage stands in for the accounts' windows as last read, named as
@@ -23,6 +24,17 @@ func growthUsage(t *testing.T, five, week map[string]float64) {
 			}
 		}
 		return out
+	}
+}
+
+// growthDefault puts magpie's default growth policy back, which
+// codexSignedIn turns off.
+func growthDefault(t *testing.T) {
+	t.Helper()
+	s := settings.Load()
+	s.Growth = nil
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -56,6 +68,7 @@ func addedAgo(t *testing.T, id, user string, ago time.Duration) {
 // takes the request again.
 func TestGrowthMovesOnFromANewAccount(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
+	growthDefault(t)
 	b := newResetBackend(t)
 	if err := provider.SetRouting("codex", provider.Ordered); err != nil {
 		t.Fatal(err)
@@ -83,6 +96,7 @@ func TestGrowthMovesOnFromANewAccount(t *testing.T) {
 // the spare, at 70% of its five hours, takes the request first.
 func TestGrowthLeavesAnOldAccount(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
+	growthDefault(t)
 	b := newResetBackend(t)
 	if err := provider.SetRouting("codex", provider.Ordered); err != nil {
 		t.Fatal(err)

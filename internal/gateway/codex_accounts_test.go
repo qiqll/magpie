@@ -15,6 +15,7 @@ import (
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // codexSignedIn signs a test's Codex in to ChatGPT (acct-1), with the
@@ -50,6 +51,21 @@ func codexSignedIn(t *testing.T, spares ...string) {
 	// home within 30s would otherwise keep Codex's sign-in off the list
 	provider.ForgetAccounts()
 	t.Cleanup(provider.ForgetAccounts)
+	// Codex's own account is read after logins.json was written, so it is
+	// new to magpie: the default growth policy would hold it at 50% of its
+	// five hours, where these tests are about the vendor's own limits
+	// (growth_test.go puts the default back)
+	growthOff(t)
+}
+
+// growthOff saves a growth policy of no stages.
+func growthOff(t *testing.T) {
+	t.Helper()
+	s := settings.Load()
+	s.Growth = &[]settings.GrowthStage{}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // usedUp stands in for the ChatGPT backend with acct-1 out of its
