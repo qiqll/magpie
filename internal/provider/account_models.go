@@ -11,6 +11,7 @@ package provider
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -205,20 +206,22 @@ func SetAccountModels(id, ref string, models []string) error {
 		return fmt.Errorf("%s has no account %q", p.Name, ref)
 	}
 	ms := normalModels(models)
-	if len(ms) == 0 && p.AccountModels[accountKey(r)] == nil {
+	k := accountKey(r)
+	// the models as they are stored when these are set: another account's
+	// set meanwhile stays (T-094)
+	return editFound(p, func(q *Provider) error {
+		am := maps.Clone(q.AccountModels)
+		if am == nil {
+			am = map[string][]string{}
+		}
+		if len(ms) == 0 {
+			delete(am, k)
+		} else {
+			am[k] = ms
+		}
+		q.AccountModels = normalAccountModels(am)
 		return nil
-	}
-	am := map[string][]string{}
-	for k, v := range p.AccountModels {
-		am[k] = v
-	}
-	if len(ms) == 0 {
-		delete(am, accountKey(r))
-	} else {
-		am[accountKey(r)] = ms
-	}
-	p.AccountModels = am
-	return Save(*p)
+	})
 }
 
 // AccountModelsOf is the models the account or key ref of the provider id

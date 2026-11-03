@@ -1224,6 +1224,13 @@ func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err e
 // day noted, its settings moved to its new name) is kept, as Save of the
 // provider read would write it over.
 func editStored(id string, change func(q *Provider) bool) error {
+	return editRecord(id, true, func(q *Provider) (bool, error) { return change(q), nil })
+}
+
+// editRecord is editStored with change able to refuse the change (its
+// error, nothing written); a record there is none of is made only when
+// made is true, else the provider is told gone.
+func editRecord(id string, made bool, change func(q *Provider) (bool, error)) error {
 	providersMu.Lock()
 	defer providersMu.Unlock()
 	f, err := read()
@@ -1232,13 +1239,58 @@ func editStored(id string, change func(q *Provider) bool) error {
 	}
 	i := slices.IndexFunc(f.Providers, func(q Provider) bool { return q.ID == id })
 	if i < 0 {
+		if !made {
+			return fmt.Errorf("no provider %q: it was removed meanwhile", id)
+		}
 		f.Providers = append(f.Providers, Provider{ID: id})
 		i = len(f.Providers) - 1
 	}
-	if !change(&f.Providers[i]) {
-		return nil
+	changed, err := change(&f.Providers[i])
+	if err != nil || !changed {
+		return err
 	}
 	return store(f)
+}
+
+// editFound is editStored for a setter of the provider p, found before
+// (T-094): change makes its change to the record as it is under the lock,
+// so what another change wrote since p was read stays, and it is written
+// when change changed it. A provider of the
+// user's own is changed as Find reads it (normalized, with each key's
+// proxy kept only while it has that key), as Save writes it; one gone from
+// providers.json meanwhile isn't made again. A signed-in account's record
+// is changed as it is, and made when it has none.
+func editFound(p *Provider, change func(q *Provider) error) error {
+	own := p.Account == nil
+	return editRecord(p.ID, !own, func(q *Provider) (bool, error) {
+		next := *q
+		if own {
+			next = normalize(next)
+			next.AccountProxies = keyProxies(next)
+		}
+		// a change that changes nothing writes nothing, a record not
+		// written normalized included
+		was, err := json.Marshal(next)
+		if err != nil {
+			return false, err
+		}
+		next = next.clone()
+		if err := change(&next); err != nil {
+			return false, err
+		}
+		if own {
+			next.AccountProxies = keyProxies(next)
+		}
+		now, err := json.Marshal(next)
+		if err != nil {
+			return false, err
+		}
+		if bytes.Equal(was, now) {
+			return false, nil
+		}
+		*q = next
+		return true, nil
+	})
 }
 
 // sameStored is whether a and b are written to providers.json alike.
@@ -2389,8 +2441,10 @@ func SetOff(id string, off bool) error {
 	if err != nil {
 		return err
 	}
-	p.Off = off
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.Off = off
+		return nil
+	})
 }
 
 // SwitchedOff is the provider switched off in magpie that a model id

@@ -132,14 +132,17 @@ func SetRefreshEvery(id, every string) error {
 	if !p.ownList() {
 		return errNotOwnList(*p)
 	}
-	p.RefreshEvery = ""
+	refresh := ""
 	if d > 0 {
-		p.RefreshEvery = strings.ToLower(strings.TrimSpace(every))
+		refresh = strings.ToLower(strings.TrimSpace(every))
 	} else if p.IsRemoteMagpie() {
 		// kept as said: none set is RemoteMagpieEvery for a Remote magpie
-		p.RefreshEvery = "off"
+		refresh = "off"
 	}
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.RefreshEvery = refresh
+		return nil
+	})
 }
 
 // CleanAutoInclude are AutoInclude's patterns as they are kept: trimmed,
@@ -179,8 +182,10 @@ func SetAutoInclude(id string, rules []string) ([]string, error) {
 	if !p.ownList() {
 		return nil, errNotOwnList(*p)
 	}
-	p.AutoInclude = rules
-	if err := Save(*p); err != nil {
+	if err := editFound(p, func(q *Provider) error {
+		q.AutoInclude = rules
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	if len(rules) == 0 {
