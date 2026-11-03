@@ -33,7 +33,8 @@ import (
 //
 // The quotas, their kept report, their history, the cards another magpie
 // reads and a card's refresh all go through it. The accounts' lanes
-// (/v1/magpie/concurrency) and the usage summary are still refused.
+// (/v1/magpie/concurrency) and the usage summary are still refused a
+// held key; a user bound by user is not held to its own there yet.
 
 // quotaScope is what a held key with Quotas set, or a user bound by user,
 // may be told; nil is everything, for a key held to nothing and this
@@ -189,9 +190,8 @@ func (s *quotaScope) card(id, user string) bool {
 	if !ok {
 		return false
 	}
-	// a provider's only key has a card named by no one (cardKeys)
-	if strings.TrimSpace(user) == "" && len(refs) == 1 {
-		return s.who.AllowsAccount(id, refs[0].ID)
+	if ref, ok := namelessCard(refs, user); ok {
+		return s.who.AllowsAccount(id, ref.ID)
 	}
 	matched := false
 	for _, a := range refs {
@@ -213,6 +213,18 @@ func (s *quotaScope) card(id, user string) bool {
 	return s.who.AllowsAccount(id, "")
 }
 
+// namelessCard is the account or key of refs (AccountIDs) a card named by
+// no one (user "") is of: a provider's only account, or its first key,
+// whose card cardKeys names "" while no other key is on. AccountIDs lists
+// the first key first, and a key that is off, or the first key listed
+// again (#1772), beside it, so one key on is not one ref.
+func namelessCard(refs []provider.AccountRef, user string) (provider.AccountRef, bool) {
+	if strings.TrimSpace(user) != "" || len(refs) == 0 || len(refs) > 1 && !refs[0].Key {
+		return provider.AccountRef{}, false
+	}
+	return refs[0], true
+}
+
 // onSeat says the card of provider id's account user is of an account or
 // key the user is on (seats), matched to them as card matches a key's
 // account list: by who is signed in or the key's name, every account or
@@ -228,9 +240,8 @@ func (s *quotaScope) onSeat(id, user string) bool {
 		}
 		return id + "@" + strings.ToLower(strings.TrimSpace(a.User))
 	}
-	// a provider's only key has a card named by no one (cardKeys)
-	if user == "" && len(refs) == 1 {
-		return seatIn(s.seats, who(refs[0]))
+	if ref, ok := namelessCard(refs, user); ok {
+		return seatIn(s.seats, who(ref))
 	}
 	matched := false
 	for _, a := range refs {

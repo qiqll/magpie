@@ -26,6 +26,16 @@ func TestBoundUserToldItsOwnQuotas(t *testing.T) {
 	fresh(t)
 	t.Setenv("MAGPIE_ADDR", "")
 	seedKeptBalances(t) // alpha's keys One and Two, beta's one key
+	// and a key of beta's that is off: beta's card is still named by no
+	// one (cardKeys), and of its first key
+	b, err := provider.Find("beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Keys = []provider.KeyAccount{{Name: "Old", Key: "beta-old", Off: true}}
+	if err := provider.Save(*b); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().UTC().Truncate(time.Second)
 	at := now.Add(-time.Hour).Format(time.RFC3339)
 	seed := fmt.Sprintf(`{"alpha|One":{"Daily":[{"at":%[1]q,"left":90}]},"alpha|Two":{"Daily":[{"at":%[1]q,"left":80}]},
@@ -40,18 +50,21 @@ func TestBoundUserToldItsOwnQuotas(t *testing.T) {
 		keys[0].ID: {
 			"alpha": {"alice": {Who: one, Account: "One", At: now}, "bob": {Who: two, Account: "Two", At: now}},
 			"beta":  {"alice": {Who: beta, Account: provider.Mask("beta-key"), At: now}},
-			"codex": {"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: now}},
+			// me@ her spare, beside an account that is gone
+			"codex": {"alice": {Who: "codex@gone@example.com", Account: "gone@example.com", At: now,
+				More: []userSeat{{Who: "codex@me@example.com", Account: "me@example.com", At: now}}}},
 		},
 		// another key's alice, apart from Full's: its users aren't shared
 		keys[1].ID: {"alpha": {"alice": {Who: two, Account: "Two", At: now}}},
 	}})
 	bound := lanGuard(byUserUpTo(t, New(), 1).Handler())
 	bySession := lanGuard(New().Handler())
+	secret := secrets[0]
 	do := func(h http.Handler, method, path, user string) (int, string) {
 		t.Helper()
 		r := httptest.NewRequest(method, path, nil)
 		r.RemoteAddr = "192.168.1.9:5000"
-		r.Header.Set("Authorization", "Bearer "+secrets[0])
+		r.Header.Set("Authorization", "Bearer "+secret)
 		if user != "" {
 			r.Header.Set(UserHeader, user)
 		}
@@ -128,6 +141,12 @@ func TestBoundUserToldItsOwnQuotas(t *testing.T) {
 			}
 		}
 	}
+	// Other's alice is its own: told Two's history alone
+	secret = secrets[1]
+	if c, b := do(bound, "GET", "/v1/magpie/quotas/history", "alice"); c != 200 || !slices.Equal(told("history", b), []string{"alpha:two"}) {
+		t.Errorf("Other's alice: %d %s", c, b)
+	}
+	secret = secrets[0]
 	// a card of another user's isn't read again for alice, nor one of
 	// another key's alice
 	for _, card := range []string{"provider=alpha&user=Two", "provider=codex&user=spare@example.com", "provider=nobody"} {
