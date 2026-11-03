@@ -595,8 +595,9 @@ func TestKimiTurnSearchesOnItsUsersKey(t *testing.T) {
 	}
 }
 
-// The same id sent with two gateway keys is one user, on one account
-// (T-075), but one key's alice is never given the other's description:
+// The same id sent with two gateway keys that share their users is one
+// user, on one account (T-075, T-089), but one key's alice is never given
+// the other's description:
 // it is looked for once under each key, on that account.
 func TestVisionMCPUsersOfEachKeyApart(t *testing.T) {
 	s, keys, _ := probesKeyed(t)
@@ -607,6 +608,15 @@ func TestVisionMCPUsersOfEachKeyApart(t *testing.T) {
 	b, err := access.Update("add-key", access.Change{Name: "Tenant B"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	listed, err := access.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range listed {
+		if k.Name == "Tenant A" || k.Name == "Tenant B" {
+			shareUsers(t, k.ID)
+		}
 	}
 	h := lanGuard(s.Handler())
 	call := analyzeCall("data:image/png;base64,aGVsbG8=", "")
