@@ -5895,11 +5895,8 @@ function loadProviders() {
 }
 
 async function loadProvidersNow() {
-  // The page's first opening (#1519, fatkun): a list is drawn at once, as
-  // the Agents page draws the last state, and the fresh one replaces it
-  // when it is in — the one read in the background after the start, else
-  // the one kept from the last read (this run's or the run before's). The
-  // read in the background still on its way is waited for, not asked again.
+  // The first opening (#1519, fatkun): the list read in the background, or
+  // else the one kept, drawn at once; the fresh one replaces it when in.
   let fresh = null, kept = null;
   if (!providers) {
     const early = providersEarly;
@@ -5910,9 +5907,7 @@ async function loadProvidersNow() {
       if (view === "providers") {
         kept = await Promise.race([fresh.then(() => null, () => null), api("providers?last=1").catch(() => null)]);
         if (!kept?.providers?.length || providers) kept = null;
-        // a kept list, whatever it says of itself: a row clicked on it
-        // waits for the fresh one, never opened to be drawn again under
-        // the reader's hands when that comes in
+        // a kept list, whatever it says: no editor opens on it (T-083)
         else kept.last = true;
       }
     }
@@ -5921,7 +5916,6 @@ async function loadProvidersNow() {
   if (kept) {
     providers = kept;
     renderSideGw(providers.gateway);
-    if (typeof editing === "string" && !providers.providers.some((p) => p.id === editing)) editing = null;
     if (providersPage(view)) magpie.call(view, "render", null);
     else renderProviders();
   }
@@ -6167,16 +6161,16 @@ function renderProviders(quiet) {
     if (!p.off) row.oncontextmenu = (ev) => { ev.preventDefault(); openProviderMenu(row.querySelector(".pv-handle"), p); };
     row.onclick = async () => {
       if (providerDirty() && !(await confirmDiscard())) return;
-      // a list drawn before the fresh one is in (#1519) leaves out what the
-      // editor shows (headers, proxies): the row opens on the fresh one
-      if (providers.last) {
+      // the kept list (#1519) lacks proxies and headers: opens on the fresh
+      const last = providers.last;
+      if (last) {
         try { await loadProviders(); } catch (e) { statusErr(e); return; }
         if (!providers.providers.some((x) => x.id === p.id)) return;
       }
-      editing = open ? null : p.id; draft = null; renderProviders();
+      editing = open && !last ? null : p.id; draft = null; renderProviders();
     }; // the preset sheet stays as it is under the dialog
     list.append(row);
-    if (open) dialog = renderEditor(p);
+    if (open && !providers.last) dialog = renderEditor(p);
   }
   findProviders();
   renderExcluded();
@@ -10601,7 +10595,7 @@ function renderImport(im) {
     const n = (im.name ?? p.name).trim();
     if (!n) { name.focus(); return status(t("Give it a name"), "warn"); }
     saving(addBtn, t(im.replaces ? "Replacing…" : "Adding…"));
-    providerAction("save", { ...p, name: n, key: (im.key ?? p.key ?? "").trim() }, t("{name} added", { name: n }));
+    providerAction("save", { headers: {}, ...p, name: n, key: (im.key ?? p.key ?? "").trim() }, t("{name} added", { name: n }));
   };
   addBtn.onclick = add;
   bar.append(addBtn);
@@ -15261,6 +15255,8 @@ function renderMove(p) {
 }
 
 async function providerAction(action, body, okMsg, base = "provider/") {
+  // the kept list has none of these: the saved ones are kept (T-083)
+  if (action === "save" && providers?.last && typeof editing == "string" && !importing) for (const k of ["proxy", "accountProxies", "headers", "extraBody"]) delete body[k];
   if (action === "delete" && !await confirmRemoval(providers?.providers.find((p) => p.id === body.id)?.name || body.id,
     "Its saved configuration will be removed. Agents using it may switch to another provider or their default model.")) return false;
   try {
