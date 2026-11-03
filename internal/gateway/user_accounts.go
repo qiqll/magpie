@@ -589,16 +589,26 @@ func (u *UserBound) shown(seats []userSeat) {
 }
 
 // owns is the seat of u that pin, an account AccountHeader names (its
-// user, or its id in the routing trace), is, one to be signed in again
-// among them; ok is false when it is none of u's.
+// user, or its id in the routing trace, as written or decoded:
+// pinnedName), is, one to be signed in again among them; ok is false when
+// it is none of u's.
 func (u *UserBound) owns(pin string) (_ userSeat, ok bool) {
-	i := slices.IndexFunc(u.seats, func(s userSeat) bool {
-		return strings.EqualFold(pin, s.Account) || strings.EqualFold(pin, s.Who)
-	})
+	i := slices.IndexFunc(u.seats, func(s userSeat) bool { return pinsSeat(pin, s) })
 	if i < 0 {
 		return userSeat{}, false
 	}
 	return u.seats[i], true
+}
+
+// pinsSeat says pin, AccountHeader as sent, names seat: by its account
+// or its trace id, as written or decoded (pinnedName).
+func pinsSeat(pin string, seat userSeat) bool {
+	for _, n := range []string{pin, pinnedName(pin)} {
+		if strings.EqualFold(n, seat.Account) || strings.EqualFold(n, seat.Who) {
+			return true
+		}
+	}
+	return false
 }
 
 // pinnedOwn is pool narrowed to seat, of provider pid alone, resting or

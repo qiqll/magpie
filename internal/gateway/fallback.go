@@ -4464,7 +4464,7 @@ func pinnedLapsed(pin string, cands []candidate, pl planned) (why, pid, who stri
 	if pin == "" {
 		return "", "", ""
 	}
-	match := func(w Weighed) bool { return strings.EqualFold(pin, w.Who) || pin == w.ID }
+	match := pinMatches(pin)
 	for _, w := range pl.left {
 		if match(w) && w.Held {
 			return "", "", ""

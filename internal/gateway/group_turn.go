@@ -172,7 +172,7 @@ func (g *groupTurn) pinned(pin string, cs []candidate, pl planned) (_ []candidat
 		}
 		b, _ := sharedOf(key, pid, user)
 		for _, s := range b.seats() {
-			if strings.EqualFold(pin, s.Account) || strings.EqualFold(pin, s.Who) {
+			if pinsSeat(pin, s) {
 				return s, true
 			}
 		}

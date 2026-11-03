@@ -3,6 +3,7 @@ package gateway
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -165,6 +166,28 @@ func TestUserPinnedToItsOwnKeyNotOnToAFallbacksOfTheSameName(t *testing.T) {
 		t.Fatalf("%d %s: fb asked %d times, fb2 %d", rec.Code, rec.Body.String(), busy.n, other.n)
 	}
 	if r := lastRoute(s); r.Pinned != "main" || r.User == nil || r.User.User != "alice" {
+		t.Fatalf("route pinned %q user %+v", r.Pinned, r.User)
+	}
+}
+
+// Bound by user, a pin to one of the user's own accounts named in other
+// letters is sent percent-encoded (plugins#615, pinnedName), and holds as
+// the name written would: that account alone is asked, the trace naming
+// it decoded. Before, the user's binding compared the encoded value with
+// its seats, found none, and served the request as if unpinned.
+func TestUserPinnedToItsOwnAccountPercentEncoded(t *testing.T) {
+	codexSignedIn(t, "北冥")
+	asked, _ := usersUpstream(t, nil)
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: time.Now().UTC(),
+			More: []userSeat{{Who: "codex@北冥", Account: "北冥", At: time.Now().UTC()}}},
+	}}})
+	s := byUserUpTo(t, New(), 3)
+	rec := postAt(s, "/v1/responses", `{"model":"codex/gpt-5.5","stream":true,"input":"hi"}`, map[string]string{UserHeader: "alice", AccountHeader: url.PathEscape("北冥")})
+	if got := asked(true); rec.Code != 200 || !slices.Equal(got, []string{"acct-2"}) {
+		t.Fatalf("%d %s, asked %v", rec.Code, rec.Body.String(), got)
+	}
+	if r := lastRoute(s); r.Pinned != "北冥" || r.User == nil || r.User.User != "alice" {
 		t.Fatalf("route pinned %q user %+v", r.Pinned, r.User)
 	}
 }

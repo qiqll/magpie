@@ -2891,7 +2891,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// that names no sign-in (the owner's decision, 2026-10-29); why is the
 	// call's error, and the log says it
 	lapsedRefused := func(more string) {
-		call.Status, call.Error = http.StatusTooManyRequests, "account pinned: "+strings.TrimSpace(r.Header.Get(AccountHeader))+": "+pinLapsed+"; "+more
+		call.Status, call.Error = http.StatusTooManyRequests, "account pinned: "+pinnedName(strings.TrimSpace(r.Header.Get(AccountHeader)))+": "+pinLapsed+"; "+more
 		noteLapseRefused(pinWho, pinLapsed)
 		lapsedRetryAfter(w.Header())
 		writeError(w, from, http.StatusTooManyRequests, userLimitSaid)
