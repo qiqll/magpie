@@ -2508,7 +2508,10 @@ percent of each shorter one, besides `share`. A user's use is the
 tokens (`unit`, the only one, is `tokens`) it sent the provider over the
 last `lookback_days` (1 to 30), from the usage log's user (`X-Magpie-User`):
 over the week its total scaled to a week, over the five hours the 90th
-percentile of what it sent in any five hours. A user on several accounts of the provider
+percentile of what it sent in any five hours. Its use is counted as the
+user is: under every gateway key of its group (the keys that share their
+users and callers without a key, or one key that doesn't), never the
+same name's under a key of another group. A user on several accounts of the provider
 has its use spread evenly over them. A user with under a day of use
 counts as 1/`share` of an account, as many as it takes without
 `by_use`, and one of a tier with no limit (`share` 0) as nothing.

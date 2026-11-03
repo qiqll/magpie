@@ -22,6 +22,7 @@ import (
 	"cmp"
 	"fmt"
 	"log"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -138,12 +139,17 @@ func (t *useTally) since(at time.Time) int64 {
 const useAccountSpan = 7 * 24 * time.Hour
 
 // useSnapshot is the usage log as by_use read it: each user's tokens by
-// provider (provider id + "\x00" + user), from since to at, and each
+// provider (provider id + "\x00" + user), by the gateway key it called
+// with (its CallerKeyID, "" for none), from since to at, and each
 // account's (its who lower-cased, "<provider>@<account>"), from
-// accSince (useAccountSpan back, or since when that is earlier).
+// accSince (useAccountSpan back, or since when that is earlier). A
+// user's keys are told apart so that its use is counted by its group
+// (groupOf) as the keys share their users when it is read, not as the
+// log was (T-092): a name under a key that doesn't share its users is
+// another user from the same name under another key.
 type useSnapshot struct {
 	at, since, accSince time.Time
-	users               map[string]*useTally
+	users               map[string]map[string]*useTally
 	accounts            map[string]*useTally
 }
 
@@ -160,7 +166,7 @@ func accountsSince(now, since time.Time) time.Time {
 // users' from since.
 func buildUseSnapshot(now, since time.Time, visit func(func(usage.Record))) *useSnapshot {
 	accSince := accountsSince(now, since)
-	s := &useSnapshot{at: now, since: since, accSince: accSince, users: map[string]*useTally{}, accounts: map[string]*useTally{}}
+	s := &useSnapshot{at: now, since: since, accSince: accSince, users: map[string]map[string]*useTally{}, accounts: map[string]*useTally{}}
 	tally := func(m map[string]*useTally, k string, unit int64) *useTally {
 		t := m[k]
 		if t == nil {
@@ -175,7 +181,11 @@ func buildUseSnapshot(now, since time.Time, visit func(func(usage.Record))) *use
 		}
 		n := int64(r.Input + r.Output)
 		if r.User != "" && !r.Time.Before(since) {
-			tally(s.users, r.Provider+"\x00"+r.User, 3600).add(r.Time, n)
+			k := r.Provider + "\x00" + r.User
+			if s.users[k] == nil {
+				s.users[k] = map[string]*useTally{}
+			}
+			tally(s.users[k], r.CallerKeyID, 3600).add(r.Time, n)
 		}
 		if a := r.Account(); a != "" {
 			tally(s.accounts, strings.ToLower(r.Provider+"@"+a), 60).add(r.Time, n)
@@ -184,10 +194,38 @@ func buildUseSnapshot(now, since time.Time, visit func(func(usage.Record))) *use
 	return s
 }
 
-// demand is what user sends provider pid over a window of span; ok is
-// false when it has under useHistory of use, or none.
-func (s *useSnapshot) demand(pid, user string, span time.Duration) (_ float64, ok bool) {
-	t := s.users[pid+"\x00"+user]
+// tallyOf is user's tokens to provider pid under every gateway key of
+// its group, as sharers (access.UserSharers) groups them: nil for none.
+func (s *useSnapshot) tallyOf(pid string, user userName, sharers map[string]bool) *useTally {
+	var t *useTally
+	merged := false
+	for key, kt := range s.users[pid+"\x00"+user.name] {
+		if groupOf(sharers, key) != user.group {
+			continue
+		}
+		if t == nil {
+			t = kt
+			continue
+		}
+		if !merged {
+			t = &useTally{first: t.first, unit: t.unit, buckets: maps.Clone(t.buckets)}
+			merged = true
+		}
+		if kt.first.Before(t.first) {
+			t.first = kt.first
+		}
+		for h, v := range kt.buckets {
+			t.buckets[h] += v
+		}
+	}
+	return t
+}
+
+// demand is what user sends provider pid over a window of span, under
+// every gateway key of its group as sharers groups them; ok is false
+// when it has under useHistory of use, or none.
+func (s *useSnapshot) demand(pid string, user userName, sharers map[string]bool, span time.Duration) (_ float64, ok bool) {
+	t := s.tallyOf(pid, user, sharers)
 	if t == nil {
 		return 0, false
 	}
@@ -264,7 +302,9 @@ type useCap struct {
 }
 
 // useBudget is what by_use binds a request's user by: each account's
-// windows (caps, by who lower-cased).
+// windows (caps, by who lower-cased). Its users are grouped as
+// user-accounts.json was last read (userGroup): load and over are called
+// with userBinds held.
 type useBudget struct {
 	pid  string
 	snap *useSnapshot
@@ -365,8 +405,8 @@ type seatLoad struct{ share, seats int }
 // load is how much of a window c holds user, on l, is reckoned to use:
 // its use over the accounts it is on; with under a day of use, 1/share,
 // and nothing for a tier of no limit (share 0), which no share holds.
-func (b *useBudget) load(user string, l seatLoad, c useCap) float64 {
-	if d, ok := b.snap.demand(b.pid, user, c.span); ok {
+func (b *useBudget) load(user userName, l seatLoad, c useCap) float64 {
+	if d, ok := b.snap.demand(b.pid, user, userBinds.sharers, c.span); ok {
 		return d / float64(max(l.seats, 1)) / c.holds
 	}
 	if l.share <= 0 {
@@ -378,11 +418,11 @@ func (b *useBudget) load(user string, l seatLoad, c useCap) float64 {
 // over is why the account who, with others on it, has no room by use for
 // user, on mine: the first window its users with user would be reckoned
 // past its target in; "" when it has room or its windows aren't known.
-func (b *useBudget) over(who string, others map[userName]seatLoad, user string, mine seatLoad) string {
+func (b *useBudget) over(who string, others map[userName]seatLoad, user userName, mine seatLoad) string {
 	for _, c := range b.caps[who] {
 		sum := b.load(user, mine, c)
 		for u, l := range others {
-			sum += b.load(u.name, l, c)
+			sum += b.load(u, l, c)
 		}
 		if sum > c.target {
 			return fmt.Sprintf("its %s window would be %.0f%% used by its users' use, past its %.0f%%", spanSaid(c.span), sum*100, c.target*100)
@@ -405,8 +445,8 @@ var overSaid sync.Map
 
 // noteOver logs that the account who of pid has no room by use for user,
 // why, once a change; why "" forgets it.
-func noteOver(who, user, why string) {
-	k := who + "\x00" + user
+func noteOver(who string, user userName, why string) {
+	k := who + "\x00" + user.group + "\x00" + user.name
 	if why == "" {
 		overSaid.Delete(k)
 		return
@@ -414,5 +454,5 @@ func noteOver(who, user, why string) {
 	if was, loaded := overSaid.Swap(k, why); loaded && was == why {
 		return
 	}
-	log.Printf("user accounts: by use, %s has no room for %q: %s", who, user, why)
+	log.Printf("user accounts: by use, %s has no room for %q: %s", who, user.name, why)
 }

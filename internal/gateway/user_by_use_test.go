@@ -225,18 +225,18 @@ func TestUseDemand(t *testing.T) {
 			fn(r)
 		}
 	})
-	five, ok := s.demand("codex", "bob", 5*time.Hour)
+	five, ok := s.demand("codex", userName{sharedUsers, "bob"}, nil, 5*time.Hour)
 	if !ok || five != 50_000 {
 		t.Fatalf("five hours %v %v", five, ok)
 	}
-	week, ok := s.demand("codex", "bob", 7*24*time.Hour)
+	week, ok := s.demand("codex", userName{sharedUsers, "bob"}, nil, 7*24*time.Hour)
 	if history := 3*24*time.Hour + 2*time.Hour; !ok || int(week) != int(200_000*float64(7*24*time.Hour)/float64(history)) {
 		t.Fatalf("week %v %v", week, ok)
 	}
-	if _, ok := s.demand("codex", "new", 5*time.Hour); ok {
+	if _, ok := s.demand("codex", userName{sharedUsers, "new"}, nil, 5*time.Hour); ok {
 		t.Fatal("under a day of use reckoned")
 	}
-	if _, ok := s.demand("claude", "bob", 5*time.Hour); ok {
+	if _, ok := s.demand("claude", userName{sharedUsers, "bob"}, nil, 5*time.Hour); ok {
 		t.Fatal("another provider's use reckoned")
 	}
 }
@@ -377,5 +377,84 @@ func TestByUseKeepsASpareOff(t *testing.T) {
 	}
 	if n := len(seatsIn(t, "codex")["alice"]); n != 1 {
 		t.Fatalf("alice on %d accounts", n)
+	}
+}
+
+// A user's use is counted by its group of gateway keys (T-092): bob of
+// a key that doesn't share its users is another user, and his heavy use
+// isn't the light bob's on me@, so alice shares me@ beside him. When the
+// key shares its users, the two are one bob, his use is both (~124%
+// with alice's), and alice is kept off me@.
+func TestByUseCountsAUsersUseByItsGroup(t *testing.T) {
+	for _, shares := range []bool{false, true} {
+		name := "key apart"
+		if shares {
+			name = "key shares"
+		}
+		t.Run(name, func(t *testing.T) {
+			codexSignedIn(t, "b@example.com")
+			asked, _ := usersUpstream(t, nil)
+			byUseTiers(t, `{"on": true}`)
+			if shares {
+				sharing(t, "k1")
+			}
+			// me@'s week, 15% used, holds 2M: the light bob's ~0.32M a
+			// week is ~16% of it, alice's ~0.86M ~43%
+			weekUsed(t, map[string]float64{"me@example.com": 15, "b@example.com": 10})
+			writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+				"bob": bound("me@example.com", "free", ago(time.Minute))}}})
+			heavy := spread("bob", "z@example.com", 1_200_000, 6.5)
+			for i := range heavy {
+				heavy[i].CallerKeyID = "k1"
+			}
+			usedLately(t, spread("bob", "me@example.com", 300_000, 6.5), heavy, spread("alice", "z@example.com", 800_000, 6.5))
+			s := byUser(New())
+			if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
+				t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
+			}
+			asked(true)
+			want := "me@example.com"
+			if shares {
+				want = "b@example.com"
+			}
+			if a := seatsIn(t, "codex")["alice"]; len(a) != 1 || a[0] != want {
+				t.Fatalf("alice on %v, want %s", a, want)
+			}
+		})
+	}
+}
+
+// A user's demand takes in its calls under every key of its group, and
+// none under a key of another.
+func TestUseDemandByGroup(t *testing.T) {
+	now := time.Now().Truncate(time.Hour).Add(30 * time.Minute)
+	var recs []usage.Record
+	for d := range 4 {
+		at := now.Add(-time.Duration(d)*24*time.Hour - 2*time.Hour)
+		recs = append(recs,
+			usage.Record{Time: at, Provider: "codex", User: "bob", Input: 10_000, Status: 200},
+			usage.Record{Time: at, Provider: "codex", User: "bob", CallerKeyID: "k1", Input: 20_000, Status: 200},
+			usage.Record{Time: at, Provider: "codex", User: "bob", CallerKeyID: "k2", Input: 40_000, Status: 200})
+	}
+	s := buildUseSnapshot(now, now.Add(-7*24*time.Hour), func(fn func(usage.Record)) {
+		for _, r := range recs {
+			fn(r)
+		}
+	})
+	sharers := map[string]bool{"k1": true}
+	for _, c := range []struct {
+		group string
+		want  float64
+	}{{sharedUsers, 30_000}, {"k2", 40_000}, {"k3", 0}} {
+		got, ok := s.demand("codex", userName{c.group, "bob"}, sharers, 5*time.Hour)
+		if c.want == 0 {
+			if ok {
+				t.Fatalf("%q: reckoned %v with no calls", c.group, got)
+			}
+			continue
+		}
+		if !ok || got != c.want {
+			t.Fatalf("%q: five hours %v %v, want %v", c.group, got, ok, c.want)
+		}
 	}
 }

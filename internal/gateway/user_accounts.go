@@ -1231,8 +1231,8 @@ func seatUsesBy(keyID, pid string, tiers Tiers, user string, budget *useBudget, 
 		for name, sh := range names {
 			others[name] = seatLoad{sh, len(seatsOf[name])}
 		}
-		u.over = budget.over(who, others, user, mine)
-		noteOver(who, user, u.over)
+		u.over = budget.over(who, others, asking, mine)
+		noteOver(who, asking, u.over)
 		uses[who] = u
 	}
 	return uses
