@@ -356,6 +356,13 @@ type subscriptionRun struct {
 	// conversation at backKey ends there. Under mu.
 	lastLine string
 	backLine string
+
+	// promptTokens is the prompt its last reply was asked with (input,
+	// cache read and written), what a /compact shrinks (compactAt); and
+	// compacted, while its /compact runs, is told how it ended
+	// (compactFor). Under mu.
+	promptTokens int
+	compacted    chan error
 }
 
 // callLine is the session line of an assistant message block calling a
@@ -2987,6 +2994,11 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 	var reqID, errKind string // the last request's id, and how it failed
 	usage := func(u cliUsage) Usage {
 		v := u.gateway()
+		if n := v.Input + v.CacheRead + v.CacheWrite; n > 0 {
+			r.mu.Lock()
+			r.promptTokens = n
+			r.mu.Unlock()
+		}
 		this.add(v)
 		return v.carryUpdate(this, before)
 	}
@@ -3211,6 +3223,8 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			// Claude Code's session, on its init message
 			SessionID string `json:"session_id"`
 			Result    string `json:"result"`
+			// the command the interactive mode's result is of (/compact)
+			LocalCommand string `json:"local_command"`
 			// the answer fitting the schema, with --json-schema, and what
 			// went wrong in a turn that ended without one
 			StructuredOutput json.RawMessage `json:"structured_output"`
@@ -3327,6 +3341,20 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			// owner's, what it says is another's (nil_1024)
 			if user, own := ownerAccount(r.owned()); user != "" && !(own && provider.ClaudeCodeMovedOff(user)) {
 				provider.NoteClaudeLimits(user, claudeLimits(envelope.RateLimitInfo))
+			}
+			return
+		}
+		if envelope.Type == "result" && envelope.LocalCommand == "compact" {
+			r.mu.Lock()
+			done := r.compacted
+			r.compacted = nil
+			r.mu.Unlock()
+			if done != nil {
+				var err error
+				if envelope.IsError {
+					err = errors.New(envelope.Result)
+				}
+				done <- err
 			}
 			return
 		}
@@ -5522,6 +5550,12 @@ func (s *Server) serveClaudeSubscription(w http.ResponseWriter, r *http.Request,
 				from.discard()
 			}
 			return nil, nil, err
+		}
+		if from == nil {
+			// moved here off an account at its usage cap: compacted
+			// there first, a large conversation is not written whole to
+			// this one's cache (compactAway)
+			from = s.subscription.compactAway(ctx, req, owner, p, model, dir)
 		}
 		// Claude Code is asked for the model by Anthropic's id, not one
 		// the user lists it by (SetModelID): no wire name reaches its run

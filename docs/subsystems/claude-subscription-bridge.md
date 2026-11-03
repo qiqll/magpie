@@ -369,6 +369,13 @@ do, "Current session: 99% used · resets 7pm (Asia/Shanghai)" (`usageText`,
 tested on the bytes Claude Code 2.1.316 drew, `testdata/usage-2.1.316.bin`),
 for `provider.parseClaudeUsage`. Claude Code 2.1.316's `-p /usage`
 printed only the session's cost there, no window, in a real run.
+`/compact` is the one other command it types (`compact`, T-077): it waits
+for the transcript to have a `compact_boundary` row and then the summary
+(`isCompactSummary`, the translator's `compacted`), and tells a result
+with `local_command: "compact"`; "Error during compaction" or "Not enough
+messages to compact" drawn, or `compactWait` (5 minutes) passed, is an
+error result. Any other command is refused, not typed. `DISABLE_AUTO_COMPACT`
+stays set: the run never compacts by itself.
 
 The Claude Code provider editor's "Claude Code runs as" row
 (`claudeModeRow` in app.js, drawn by claudemode.js, which it loads with
@@ -613,6 +620,64 @@ exits within half a second), and the SIGKILL magpie sent before left the
 lock for the next requests to fail on (#2195). The run counts as ended at
 once; the gateway stopping (`abortAll`) waits for every tree. Covered by
 `TestClaudeAbortAllowsLockCleanup` and `TestTreeStop*`.
+
+## A conversation moved off an account at its cap (`compactAway`, T-077)
+
+When routing moves a conversation's turn to another Claude account because
+the account its run is on reached the usage cap the user set on it in
+magpie, the new account has no run and no saved session of it, and was
+told it whole (`replaySession`): the whole conversation written to its
+cache on the turn's first request (T-075: about 19.6M tokens so, 15% of
+all cache writes, mostly from three long sessions).
+
+`serveClaudeSubscription`'s `start`, with no run, shelf or branch for the
+turn, asks `compactAway` (`claude_compact.go`) once it has the new
+account's config directory. It takes, from `b.idle`, a run of the same
+provider under another owner waiting at exactly this turn
+(`nextTurn(req, <its owner>)` is its idle key), when all of these hold:
+
+- the run is the interactive mode's, with a session on disk, no client
+  cache marks (and the request has none), the same system-prompt mode;
+- the prompt its last reply was asked with (`promptTokens`: input, cache
+  read and written, as the reply's usage said them, under `r.mu`) is at
+  least `compactFrom` (100K, a constant; the owner's choice, 2026-11-03);
+- its account is held at the cap the user set (`atCap`: `capHeld`, not
+  for credits, not a careful provider's "can't be told"), not used up as
+  Anthropic said it (100% in a window counting the model), and not
+  resting for a refusal or a 429.
+
+The run is told `{"type":"command","command":"/compact"}`: Claude Code's
+own `/compact`, with no instructions and no words of magpie's, on the old
+account, whose cache of the conversation is warm. That one request is the
+only one an account at its cap is asked. `start` waits for the result
+(`compacted`, `compactLongest`), copies the session file into the new
+account's project folders (`movedSessions`, `copySession`: a new id, each
+line's `sessionId` the copy's), ends the old run, and starts the new
+account's Claude Code with `--resume` on the copy, typed the turn alone.
+A failed or cut-short `/compact`, a run that ends meanwhile, or a copy
+that can't be made ends the old run and goes on as before, told whole.
+The client going away ends it too.
+
+Only once: the compacted session is the new run's, and the turns after it
+go on in that run or its shelved session as any other's do (`idleLongest`,
+an hour). Past that, or after a restart, the next run is told the
+conversation whole again (`replaySession`): nothing more is kept. The
+client still sends its whole history each turn; the run's Claude Code
+holds the summary, so the client and Anthropic see different
+conversations from there on, as with any Claude Code session compacted.
+The usage told the client is what Anthropic said of each request, not an
+estimate of the client's history; the `/compact` itself goes to no
+client and is in no call's usage, its allowance seen in the old
+account's `rate_limit_event`. A conversation too long for Claude Code's
+own check, told whole, is answered 400 "Prompt is too long" with
+`bridgeFailed`'s note (#2162), for the client to compact it.
+
+Only a Claude subscription in the interactive mode compacts; API keys,
+`-p` runs, a move for any other reason (another key, the vendor's own
+limit, a refusal) and a conversation under 100K go on as before.
+`TestClaudeCompactsBeforeTheCapMovesIt`, `TestClaudeCompactFailedTellsItWhole`,
+and in `internal/claudetui` `TestShimCompacts` and `TestShimCompactFails`
+hold it. Not tried with a real Claude Code or real accounts.
 
 ## A side question after a reply (#1638)
 
@@ -1290,6 +1355,8 @@ go test -tags nogui ./internal/gateway/ -run '^TestClaudeRunsNamesEachProcess$' 
 go test -tags nogui ./internal/settings/ -run '^TestClaudeRunsMostIsMachineLocal$' -count=1
 go test -tags nogui ./internal/gateway/ -run 'ClaudeSubscriptionRunsTheDownloaded|ClaudeSubscriptionWithoutClaudeCode|ClaudeRewritten|LostMedia|ImagesTakenOut|RunLetGoWhenTheClientRewrote|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn|ClaudePromptMarksEarlierTurns|ClaudeHistoryCachedAcrossNewRuns|ClaudeUnloadableSession|ClaudeEndedRunSaysWhy|ClaudeIdle|ClaudeSideQuestion|ClaudeInteractiveSideQuestion|ClaudeCutSession|ClaudeForkBranches|ClaudeToolChoiceNone|ClaudeAside|ClaudeNoRunSaysWhy|ClaudeToolResultsNoRunSaysWhy|ClaudePromptToldUserText|ClaudePromptKeepsInstructions|ClaudeToolResultsGoOnWithTheUsersWords|ClaudeToolResultsKeepInstructions|ToolResultKeepsUserTextSentMidTurn|ClaudeTextToolCalls|ClaudeTextCallsHoldsOnlyTheLine|ClaudePromptSaysPastCallsAreARecord' -count=1
 go test -tags nogui ./internal/gateway/ -run 'TestClaudeTaskNotification|TestWithTaskNotices|TestClaudeTurnToldTheTaskNotification' -count=1
+go test -race -tags nogui ./internal/gateway/ -run 'TestClaudeCompact|TestMovedSessions' -count=1
+go test ./internal/claudetui/ -run 'TestShimCompact' -count=1
 ```
 
 `claude_rewritten_test.go` has a case for each relaxation and one for each

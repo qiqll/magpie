@@ -225,6 +225,24 @@ func fakeClaude(args []string) {
 			_, _ = os.Stdout.Write(b)
 			continue
 		}
+		if line == "/compact" {
+			if os.Getenv("FAKE_COMPACT_FAIL") == "1" {
+				fmt.Print("\r\n  ⎿  Error during compaction: Error: Conversation too long.\r\n❯ ")
+				continue
+			}
+			// its rows, as Claude Code 2.1.233 writes a compaction's
+			f, _ := os.OpenFile(filepath.Join(dir, sid+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+			for _, row := range []any{
+				map[string]any{"type": "system", "subtype": "compact_boundary", "parentUuid": nil, "compactMetadata": map[string]any{"trigger": "manual", "preTokens": 150000}},
+				map[string]any{"type": "user", "isCompactSummary": true, "message": map[string]any{"role": "user", "content": "This session is being continued from a previous conversation."}},
+			} {
+				b, _ := json.Marshal(row)
+				_, _ = f.Write(append(b, '\n'))
+			}
+			f.Close()
+			fmt.Print("\r\n❯ ")
+			continue
+		}
 		f, _ := os.OpenFile(filepath.Join(dir, sid+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		rows := []any{
 			map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": line}},
@@ -662,6 +680,38 @@ func TestShimRunsNoOtherCommand(t *testing.T) {
 	out := runShim(t, nil, append([]string{fakePath(t)}, pArgs...), []string{`raw:{"type":"command","command":"/login"}`}, 2)
 	if r := out[1]; r["type"] != "result" || r["is_error"] != true || !strings.Contains(r["result"].(string), "/login") {
 		t.Fatalf("told %v", r)
+	}
+}
+
+// /compact is typed, and its result is told once Claude Code has written
+// the compaction's boundary and summary to the transcript, its local
+// command named: the bridge goes on from the session as it is then.
+func TestShimCompacts(t *testing.T) {
+	out := runShim(t, nil, append([]string{fakePath(t)}, pArgs...), []string{"hello", `raw:{"type":"command","command":"/compact"}`}, 4)
+	r := out[3]
+	if r["type"] != "result" || r["is_error"] != false || r["local_command"] != "compact" {
+		t.Fatalf("told %v", out)
+	}
+	files, _ := filepath.Glob(filepath.Join(os.Getenv("MAGPIE_TUI_TEST_CFG"), "projects", "*", r["session_id"].(string)+".jsonl"))
+	if len(files) != 1 {
+		t.Fatalf("no transcript for %v", r["session_id"])
+	}
+	b, _ := os.ReadFile(files[0])
+	if !strings.Contains(string(b), `"isCompactSummary":true`) {
+		t.Fatalf("told compacted before the summary was written:\n%s", b)
+	}
+}
+
+// A /compact Claude Code says failed is an error result at once, not after
+// compactWait.
+func TestShimCompactFails(t *testing.T) {
+	began := time.Now()
+	out := runShim(t, []string{"FAKE_COMPACT_FAIL=1"}, append([]string{fakePath(t)}, pArgs...), []string{`raw:{"type":"command","command":"/compact"}`}, 2)
+	if r := out[1]; r["type"] != "result" || r["is_error"] != true || r["local_command"] != "compact" || !strings.Contains(r["result"].(string), "Error during compaction") {
+		t.Fatalf("told %v", r)
+	}
+	if time.Since(began) > time.Minute {
+		t.Fatalf("a failed /compact was told after %v", time.Since(began))
 	}
 }
 

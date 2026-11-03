@@ -26,6 +26,8 @@ type translator struct {
 	// tap has the streams of the messages (tap.go): a message is told
 	// after its stream has begun, and a turn's end after its streams'
 	tap *tap
+	// compacting: a compact_boundary row was read, its summary not yet
+	compacting bool
 }
 
 func newTranslator(out emitter) *translator { return &translator{out: out} }
@@ -42,6 +44,7 @@ func (t *translator) row(b []byte) {
 		UUID          string          `json:"uuid"`
 		IsSidechain   bool            `json:"isSidechain"`
 		IsMeta        bool            `json:"isMeta"`
+		IsSummary     bool            `json:"isCompactSummary"`
 		RequestID     string          `json:"requestId"`
 		Error         json.RawMessage `json:"error"`
 		IsAPIError    bool            `json:"isApiErrorMessage"`
@@ -63,6 +66,15 @@ func (t *translator) row(b []byte) {
 			t.out.sawRow()
 		}
 	case "user":
+		if r.IsSummary && t.compacting {
+			// a /compact's summary, written after its boundary: the
+			// session goes on from it (shim.compact)
+			t.compacting = false
+			if c, ok := t.out.(interface{ compacted() }); ok {
+				c.compacted()
+			}
+			return
+		}
 		if !r.IsMeta && isPrompt(r.Message) {
 			t.failed = false
 			t.out.sawRow()
@@ -116,6 +128,9 @@ func (t *translator) row(b []byte) {
 		t.out.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true,
 			"result": text, "api_error_status": r.APIStatus})
 	case "system":
+		if r.Subtype == "compact_boundary" {
+			t.compacting = true
+		}
 		if r.Subtype == "turn_duration" {
 			t.tap.settle()
 		}

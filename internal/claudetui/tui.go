@@ -82,6 +82,8 @@ type shim struct {
 	rowsCh chan struct{}
 	// a turn is going: from a message's row to the turn's end
 	busy bool
+	// compacts ticks when a /compact's summary reaches the transcript
+	compacts chan struct{}
 
 	exited chan struct{}
 	exit   error
@@ -132,7 +134,7 @@ func Run(args []string) error {
 		return fmt.Errorf("Claude Code's interactive mode didn't run: %s", why)
 	}
 	args = interactiveArgs(pargs[len(wslArgs(wsl)):])
-	s := &shim{out: os.Stdout, changed: make(chan struct{}, 1), rowsCh: make(chan struct{}, 1), exited: make(chan struct{}), wsl: wsl, listed: mcpListed(args)}
+	s := &shim{out: os.Stdout, changed: make(chan struct{}, 1), rowsCh: make(chan struct{}, 1), compacts: make(chan struct{}, 1), exited: make(chan struct{}), wsl: wsl, listed: mcpListed(args)}
 	resume := ""
 	for i, a := range args {
 		if a == "--resume" && i+1 < len(args) {
@@ -520,27 +522,20 @@ var (
 // command runs /usage, which Claude Code answers itself, asking no model:
 // it is typed, and what Claude Code shows for it is told as the result -p's
 // /usage gives (usageText), its local_command named. The panel is closed
-// after. It is the one command a line {"type":"command"} runs: the plan's
-// allowance read in the interactive mode, where -p's /usage tells no
-// window of it (Claude Code 2.1.316).
+// after. A line {"type":"command"} runs it, the plan's allowance read in
+// the interactive mode, where -p's /usage tells no window of it (Claude
+// Code 2.1.316), or /compact (compact).
 func (s *shim) command(name string) error {
-	if name != "/usage" {
+	if name != "/usage" && name != "/compact" {
 		s.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "session_id": s.sid,
 			"result": "the helper types no " + name + " in Claude Code's interactive mode"})
 		return nil
 	}
-	for _, c := range name {
-		if _, err := io.WriteString(s.pty, string(c)); err != nil {
-			return err
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	// the command menu drawn as it was typed settles, and is left out of
-	// what is read
-	time.Sleep(commandSettle)
-	s.clearScreen()
-	if _, err := io.WriteString(s.pty, "\r"); err != nil {
+	if err := s.typeCommand(name); err != nil {
 		return err
+	}
+	if name == "/compact" {
+		return s.compact()
 	}
 	by := time.After(commandWait)
 	last, quiet := "", time.Now()
@@ -568,6 +563,73 @@ func (s *shim) command(name string) error {
 	s.emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": s.sid,
 		"local_command": "usage", "result": usageText(last)})
 	return nil
+}
+
+// typeCommand types name at the prompt, a key at a time, and presses
+// Enter once the command menu drawn as it was typed has settled; what is
+// drawn from then on is read.
+func (s *shim) typeCommand(name string) error {
+	for _, c := range name {
+		if _, err := io.WriteString(s.pty, string(c)); err != nil {
+			return err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(commandSettle)
+	s.clearScreen()
+	_, err := io.WriteString(s.pty, "\r")
+	return err
+}
+
+// compactWait is how long Claude Code's /compact may take: it asks the
+// model for a summary of the whole conversation, which took 56s to 282s
+// for 170K to 190K tokens in real sessions (2.1.233).
+var compactWait = 5 * time.Minute
+
+// compactFailed is what Claude Code shows when /compact didn't compact.
+var compactFailed = regexp.MustCompile(`Error during compaction[^\n]*|Not enough messages to compact[^\n]*`)
+
+// compact waits for the /compact typed to end: Claude Code writes its
+// compact_boundary row and then the summary (isCompactSummary) to the
+// transcript (compacted), and the result says so, its local_command
+// named; the bridge goes on from the session as it now is. One that
+// fails, takes past compactWait, or ends Claude Code is an error result,
+// the session then as it was or unknown.
+func (s *shim) compact() error {
+	by := time.After(compactWait)
+	fail := func(why string) error {
+		s.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "session_id": s.sid,
+			"local_command": "compact", "result": why})
+		return nil
+	}
+	for {
+		select {
+		case <-s.compacts:
+			// the rows Claude Code writes with the summary
+			time.Sleep(commandSettle)
+			s.emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": s.sid,
+				"local_command": "compact"})
+			return nil
+		case <-s.changed:
+			if m := compactFailed.FindString(s.plain()); m != "" {
+				return fail("Claude Code's /compact: " + strings.Join(strings.Fields(m), " "))
+			}
+		case <-time.After(100 * time.Millisecond):
+		case <-by:
+			return fail(fmt.Sprintf("Claude Code's /compact didn't end in %s: %s", compactWait, s.lastScreen()))
+		case <-s.exited:
+			return fmt.Errorf("Claude Code ended (%v): %s", s.exit, s.lastScreen())
+		}
+	}
+}
+
+// compacted is told by the transcript's reader that a /compact ended: its
+// summary is in the session.
+func (s *shim) compacted() {
+	select {
+	case s.compacts <- struct{}{}:
+	default:
+	}
 }
 
 var (
