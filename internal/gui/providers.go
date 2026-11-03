@@ -1838,6 +1838,12 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if in.ExtraBody == nil && old != nil {
 					in.ExtraBody = old.ExtraBody
 				}
+				// and its headers: {} clears them. A page that has only the
+				// kept list (keptProvider) leaves them out, with the proxies
+				// and extra body, rather than send none (T-083)
+				if in.Headers == nil && old != nil {
+					in.Headers = old.Headers
+				}
 				// and the reply headers passed on: [] clears them
 				if in.ReplyHeaders == nil && old != nil {
 					in.ReplyHeaders = old.ReplyHeaders
