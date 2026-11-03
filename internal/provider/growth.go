@@ -8,7 +8,9 @@ package provider
 // from AccountAdded, written as logins.json is written with an account it
 // didn't have (noteAdded): Claude's and Codex's sign-ins, a plugin's, the
 // side logins', an agent's own read the first time. An account added
-// before magpie kept this has none, and is not held. The time stays while
+// before magpie kept this has none, and is not held; as it leaves the list
+// it is marked from before (addedBefore), so it isn't new when back. The
+// time stays while
 // the account is gone from the list and back (a plugin's, when its
 // sign-ins can't be read a while, or the plugin is installed again): only
 // the user removing it (forgetAdded) lets it go, and one removed and
@@ -35,12 +37,22 @@ var growthWindows = map[string][]string{
 	settings.GrowthWeek:      {"weekly", "7 days", "7 days · opus", "7 days · sonnet", "7 days · fable"},
 }
 
+// addedBefore is the time kept for an account from before AccountAdded,
+// written as it leaves logins.json: back in the list, it is had, not
+// added. It is no time an account was added at: never held, and told as
+// not known (accountAdded).
+var addedBefore = time.Unix(0, 0).UTC()
+
+// addedKnown is whether added is a time an account was added at: not zero,
+// and not addedBefore.
+func addedKnown(added time.Time) bool { return added.After(addedBefore) }
+
 // growthCaps is the share of each window (WindowCapID) the policy stages
 // holds an account added at added to at now: the windows of the stage of
 // the latest start its days have reached, alone. nil when no stage has
-// started, or added is zero (not known: an account from before).
+// started, or added is not known (an account from before).
 func growthCaps(stages []settings.GrowthStage, added, now time.Time) map[string]int {
-	if added.IsZero() || len(stages) == 0 {
+	if !addedKnown(added) || len(stages) == 0 {
 		return nil
 	}
 	days := now.Sub(added).Hours() / 24
@@ -70,7 +82,7 @@ func growthCaps(stages []settings.GrowthStage, added, now time.Time) map[string]
 // account has a cap of its own, which holds every window. c's map is
 // never written: one with growth is a copy.
 func (c WindowCaps) withGrowth(added, now time.Time) WindowCaps {
-	if added.IsZero() || c.All > 0 {
+	if !addedKnown(added) || c.All > 0 {
 		return c
 	}
 	g := growthCaps(settings.Shared().GrowthOf(), added, now)
@@ -94,7 +106,9 @@ func (c WindowCaps) withGrowth(added, now time.Time) WindowCaps {
 // zero when it isn't known (one from before AccountAdded was kept).
 func accountAdded(id, user string) time.Time {
 	if s, ok := storedPicks(id); ok {
-		return s.AccountAdded[accountKey(user)]
+		if at := s.AccountAdded[accountKey(user)]; addedKnown(at) {
+			return at
+		}
 	}
 	return time.Time{}
 }
@@ -166,13 +180,36 @@ func addedIn(was, next []savedLogin) (added []loginAccount, renamed map[loginAcc
 	return added, renamed
 }
 
+// leftIn is each account of was (shown) that next doesn't have shown, and
+// that wasn't renamed: gone from the list, by the user's removal or a
+// sign-in not listed a while.
+func leftIn(was, next []savedLogin, renamed map[loginAccount]loginAccount) []loginAccount {
+	has := map[loginAccount]bool{}
+	for _, l := range next {
+		if l.Hidden == "" {
+			has[loginAccountOf(l)] = true
+		}
+	}
+	var left []loginAccount
+	for _, l := range was {
+		a := loginAccountOf(l)
+		if _, moved := renamed[a]; a.user == "" || l.Hidden != "" || has[a] || moved || slices.Contains(left, a) {
+			continue
+		}
+		left = append(left, a)
+	}
+	return left
+}
+
 // noteAdded writes now as when each account of added was added, and moves
 // each renamed account's time to its new name, in providers.json. An
 // account that has a time keeps it: one back in the list after it fell out
-// (a plugin's whose sign-ins weren't listed a while) is not new. The user's
-// removal took its time (forgetAdded), so one added again is new again.
-func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount) {
-	if len(added) == 0 && len(renamed) == 0 {
+// (a plugin's whose sign-ins weren't listed a while) is not new. Each of
+// left with no time is from before, and is marked so (addedBefore): back,
+// it isn't new either. The user's removal took its time (forgetAdded), so
+// one added again is new again.
+func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount, left []loginAccount) {
+	if len(added) == 0 && len(renamed) == 0 && len(left) == 0 {
 		return
 	}
 	f, err := read()
@@ -209,15 +246,26 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount) {
 		entry(now.id).AccountAdded[now.user] = t
 		changed = true
 	}
+	has := func(a loginAccount) bool {
+		i := slices.IndexFunc(f.Providers, func(p Provider) bool { return p.ID == a.id })
+		if i < 0 {
+			return false
+		}
+		_, ok := f.Providers[i].AccountAdded[a.user]
+		return ok
+	}
 	at := time.Now().UTC().Truncate(time.Second)
 	for _, a := range added {
-		if i := slices.IndexFunc(f.Providers, func(p Provider) bool { return p.ID == a.id }); i >= 0 {
-			if _, ok := f.Providers[i].AccountAdded[a.user]; ok {
-				continue
-			}
+		if !has(a) {
+			entry(a.id).AccountAdded[a.user] = at
+			changed = true
 		}
-		entry(a.id).AccountAdded[a.user] = at
-		changed = true
+	}
+	for _, a := range left {
+		if !has(a) {
+			entry(a.id).AccountAdded[a.user] = addedBefore
+			changed = true
+		}
 	}
 	if !changed {
 		return

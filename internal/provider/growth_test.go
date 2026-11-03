@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -465,5 +466,141 @@ func TestGrowthKeepsAPluginAccountsDay(t *testing.T) {
 	}
 	if at := accountAdded(id, user); !at.IsZero() {
 		t.Fatalf("removed by the user, its day kept: %v", at)
+	}
+}
+
+// An account from before magpie kept when each was added is never held:
+// gone from the list a while and back, it is marked from before, not
+// taken for new. Removed by the user and signed in to again, it is new.
+func TestGrowthFromBeforeBackNotHeld(t *testing.T) {
+	home := signIn(t) // me@example.com on codex, the first write: from before
+	rememberLogins(true)
+	if at := accountAdded("codex", "me@example.com"); !at.IsZero() {
+		t.Fatalf("the account from before has a day: %v", at)
+	}
+	loginsMu.Lock()
+	all := readLogins()
+	gone := slices.DeleteFunc(slices.Clone(all), func(l savedLogin) bool { return l.User == "me@example.com" })
+	if len(gone) == len(all) {
+		loginsMu.Unlock()
+		t.Fatal("no row for me@example.com")
+	}
+	if err := writeLogins(gone); err != nil {
+		loginsMu.Unlock()
+		t.Fatal(err)
+	}
+	if err := writeLogins(all); err != nil {
+		loginsMu.Unlock()
+		t.Fatal(err)
+	}
+	loginsMu.Unlock()
+	if at := accountAdded("codex", "me@example.com"); !at.IsZero() {
+		t.Fatalf("back in the list, the account from before was given a day: %v", at)
+	}
+	if s, _ := AccountCapsOf("codex", "me@example.com").Of("5 hours"); s != 0 {
+		t.Fatalf("back in the list, the account from before is held at %d%% of its five hours", s)
+	}
+	if s, _ := storedPicks("codex"); !s.AccountAdded["me@example.com"].Equal(addedBefore) {
+		t.Fatalf("the account from before isn't marked so: %v", s.AccountAdded)
+	}
+	codexSignIn(t, home, "new@example.com", "r-new")
+	rememberLogins(true)
+	if err := ForgetLogin("codex", "me@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := storedPicks("codex"); slices.Contains(slices.Collect(maps.Keys(s.AccountAdded)), "me@example.com") {
+		t.Fatalf("removed by the user, the mark kept: %v", s.AccountAdded)
+	}
+	codexSignIn(t, home, "me@example.com", "r-me2")
+	rememberLogins(true)
+	if at := accountAdded("codex", "me@example.com"); time.Since(at) > time.Minute {
+		t.Fatalf("signed in to again after its removal, its day is %v", at)
+	}
+}
+
+// A plugin removed and installed again keeps its accounts' days: one
+// added lately is held by its day, not its first, and one from before is
+// held by none, its sign-ins not listed a while as the host starts or not.
+func TestGrowthPluginInstalledAgainKeepsDays(t *testing.T) {
+	bun := testenv.Bun(t)
+	claudeHome(t)
+	t.Setenv("MAGPIE_BUN", bun)
+	t.Cleanup(plugin.Settle)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	abs, _ := filepath.Abs("../plugin/testdata/fake/index.js")
+	e, err := plugin.Add(ctx, abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Import(ctx, "fakeco", map[string]any{"type": "oauth", "refresh": "r", "access": "a", "expires": 9e15, "accountId": "old-acct"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Providers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id := PluginID("fakeco")
+	pluginAccounts() // from before
+	pp, ok := PluginOf(id)
+	if !ok || len(pp.Accounts) != 1 {
+		t.Fatalf("fakeco's account from before: %+v", pp.Accounts)
+	}
+	old := accountKey(PluginAccountUser(pp.ID, pp.Accounts[0].Key))
+	if _, err := plugin.Import(ctx, "fakeco", map[string]any{"type": "oauth", "refresh": "r2", "access": "a2", "expires": 9e15, "accountId": "new-acct"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Providers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pluginAccounts()
+	s, _ := storedPicks(id)
+	if len(s.AccountAdded) != 1 {
+		t.Fatalf("one new plugin account, stamped: %v", s.AccountAdded)
+	}
+	var user string
+	for u := range s.AccountAdded {
+		user = u
+	}
+	addedAgo(t, id, user, 4*24*time.Hour)
+	was := accountAdded(id, user)
+
+	if err := RemovePlugin(ctx, e.Spec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddPlugin(ctx, abs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Providers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pp, ok = PluginOf(id)
+	if !ok {
+		t.Fatal("no fakeco plugin once installed again")
+	}
+	// installed again, its sign-ins not listed yet, then listed
+	none := pp
+	none.Accounts = nil
+	pluginLogins(none)
+	pluginLogins(pp)
+	pluginAccounts()
+	if at := accountAdded(id, user); !at.Equal(was) {
+		t.Fatalf("installed again, its day went from %v to %v", was, at)
+	}
+	if s, _ := AccountCapsOf(id, user).Of("Weekly"); s != 80 {
+		t.Fatalf("installed again on its fourth day, the week at %d%%", s)
+	}
+	if at := accountAdded(id, old); !at.IsZero() {
+		t.Fatalf("installed again, the account from before was given a day: %v", at)
+	}
+	if s, _ := AccountCapsOf(id, old).Of("5 hours"); s != 0 {
+		t.Fatalf("installed again, the account from before is held at %d%% of its five hours", s)
+	}
+	// every account signed out by the user (the editor's Remove account):
+	// each signed in to again is new
+	if err := ForgetAccount(id); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := storedPicks(id); len(s.AccountAdded) != 0 {
+		t.Fatalf("signed out by the user, the days kept: %v", s.AccountAdded)
 	}
 }

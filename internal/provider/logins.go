@@ -378,7 +378,8 @@ func writeLogins(ls []savedLogin) error {
 	lastLoginsMu.Unlock()
 	if known {
 		// when each account first appeared, for the growth policy
-		noteAdded(addedIn(was, disk))
+		added, renamed := addedIn(was, disk)
+		noteAdded(added, renamed, leftIn(was, disk, renamed))
 	}
 	return nil
 }
