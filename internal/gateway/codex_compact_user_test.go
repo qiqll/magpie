@@ -160,6 +160,34 @@ func TestUserCompactOnTheUsersOwnAccount(t *testing.T) {
 			t.Fatalf("bob's compact went to %q, want the sign-in as it came", got)
 		}
 	})
+	t.Run("a pin to one of the user's own, encoded or by trace id", func(t *testing.T) {
+		// a pin is matched as every pin bound by user is (pinsSeat): its
+		// user decoded, or its trace id; matched as written only, the
+		// pin was missed and the compact went to the user's first
+		codexSignedIn(t, "spare@example.com", "third@example.com")
+		asked := compactUpstream(t)
+		pauseSignIn(t)
+		now := time.Now().UTC()
+		writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+			"alice": {Who: "codex@spare@example.com", Account: "spare@example.com", At: now, Tier: "free",
+				More: []userSeat{{Who: "codex@third@example.com", Account: "third@example.com", At: now}}},
+		}}})
+		h := byUserUpTo(t, New(), 2).Handler()
+		if rec := codexCompactFor(h, "alice", ""); rec.Code != 200 {
+			t.Fatalf("unpinned: %d %s", rec.Code, rec.Body.String())
+		}
+		if got := asked("/responses/compact"); len(got) != 1 || got[0] != "acct-2" {
+			t.Fatalf("unpinned compact went to %q, want her first, acct-2", got)
+		}
+		for _, pin := range []string{"third%40example.com", "codex@third@example.com"} {
+			if rec := codexCompactFor(h, "alice", "", AccountHeader, pin); rec.Code != 200 {
+				t.Fatalf("pin %s: %d %s", pin, rec.Code, rec.Body.String())
+			}
+			if got := asked("/responses/compact"); len(got) != 1 || got[0] != "acct-3" {
+				t.Fatalf("pin %s: compact went to %q, want acct-3", pin, got)
+			}
+		}
+	})
 	t.Run("its own sign-in goes as it came", func(t *testing.T) {
 		codexSignedIn(t, "spare@example.com", "third@example.com")
 		asked := compactUpstream(t)

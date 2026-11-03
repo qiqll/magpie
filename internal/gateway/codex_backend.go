@@ -872,7 +872,11 @@ func (s *Server) usersCompactOn(r *http.Request, model string, body []byte, on, 
 		}
 	}
 	if pin := r.Header.Get(AccountHeader); pin != "" {
-		if i := slices.IndexFunc(ons, func(o provider.Provider) bool { return strings.EqualFold(o.Account.User, pin) }); i >= 0 {
+		// by its user or its trace id, as written or decoded, as every
+		// pin bound by user is matched (pinsSeat)
+		if i := slices.IndexFunc(ons, func(o provider.Provider) bool {
+			return pinsSeat(pin, userSeat{Account: o.Account.User, Who: candidate{p: o, model: model, rest: o.ID}.who()})
+		}); i >= 0 {
 			ons = ons[i : i+1]
 		}
 	}
