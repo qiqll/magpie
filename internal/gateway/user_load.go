@@ -195,7 +195,9 @@ func buildUseSnapshot(now, since time.Time, visit func(func(usage.Record))) *use
 }
 
 // tallyOf is user's tokens to provider pid under every gateway key of
-// its group, as sharers (access.UserSharers) groups them: nil for none.
+// its group, as sharers groups them: nil for none. Binding passes
+// userBinds.sharers, read under its lock as seatUsesBy groups seats, never
+// a fresh access.UserSharers.
 func (s *useSnapshot) tallyOf(pid string, user userName, sharers map[string]bool) *useTally {
 	var t *useTally
 	merged := false
@@ -225,7 +227,11 @@ func (s *useSnapshot) tallyOf(pid string, user userName, sharers map[string]bool
 // every gateway key of its group as sharers groups them; ok is false
 // when it has under useHistory of use, or none.
 func (s *useSnapshot) demand(pid string, user userName, sharers map[string]bool, span time.Duration) (_ float64, ok bool) {
-	t := s.tallyOf(pid, user, sharers)
+	return s.demandOf(s.tallyOf(pid, user, sharers), span)
+}
+
+// demandOf is demand of a user's tally t (tallyOf).
+func (s *useSnapshot) demandOf(t *useTally, span time.Duration) (_ float64, ok bool) {
 	if t == nil {
 		return 0, false
 	}
@@ -287,7 +293,7 @@ func readUse(lookback time.Duration) *useSnapshot {
 			useSnap.s, useSnap.lookback, useSnap.building = n, lookback, false
 			useSnap.Unlock()
 			overSaid.Clear() // said again, if still so, by the new read
-			log.Printf("user accounts: by use, read %d user(s)' and %d account(s)' calls of the last %d days", len(n.users), len(n.accounts), int(lookback/(24*time.Hour)))
+			log.Printf("user accounts: by use, read %d user name(s)' and %d account(s)' calls of the last %d days", len(n.users), len(n.accounts), int(lookback/(24*time.Hour)))
 		}()
 	}
 	return s
@@ -309,6 +315,9 @@ type useBudget struct {
 	pid  string
 	snap *useSnapshot
 	caps map[string][]useCap
+	// tallies is each user's tally as load took it, merged once a
+	// binding rather than once an account and window
+	tallies map[userName]*useTally
 }
 
 // byUseOf is the budget a new seat of provider pid among cands is bound
@@ -322,7 +331,7 @@ func byUseOf(pid string, cands []candidate, tiers Tiers, now time.Time) *useBudg
 	if snap == nil {
 		return nil
 	}
-	b := &useBudget{pid: pid, snap: snap, caps: map[string][]useCap{}}
+	b := &useBudget{pid: pid, snap: snap, caps: map[string][]useCap{}, tallies: map[userName]*useTally{}}
 	target := func(span time.Duration) float64 {
 		if span >= 24*time.Hour {
 			return float64(cmp.Or(tiers.ByUse.WeekTarget, byUseWeek)) / 100
@@ -406,7 +415,12 @@ type seatLoad struct{ share, seats int }
 // its use over the accounts it is on; with under a day of use, 1/share,
 // and nothing for a tier of no limit (share 0), which no share holds.
 func (b *useBudget) load(user userName, l seatLoad, c useCap) float64 {
-	if d, ok := b.snap.demand(b.pid, user, userBinds.sharers, c.span); ok {
+	t, seen := b.tallies[user]
+	if !seen {
+		t = b.snap.tallyOf(b.pid, user, userBinds.sharers)
+		b.tallies[user] = t
+	}
+	if d, ok := b.snap.demandOf(t, c.span); ok {
 		return d / float64(max(l.seats, 1)) / c.holds
 	}
 	if l.share <= 0 {
