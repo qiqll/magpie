@@ -226,6 +226,8 @@ func takeMatching(id string, isNew func(string) bool) ([]string, error) {
 	if len(taken) == 0 {
 		return nil, nil
 	}
+	providersMu.Lock()
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return nil, err

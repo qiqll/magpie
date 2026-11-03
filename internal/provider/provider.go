@@ -27,6 +27,7 @@ import (
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/filelock"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/lastgood"
 	"github.com/yetone/magpie/internal/settings"
@@ -749,9 +750,30 @@ func Routings() ([]string, error) {
 	return out, nil
 }
 
+// providersMu is held for every read of providers.json a change is made
+// from, and the write: in this magpie, and across magpies, so that a
+// change made meanwhile is never written back over with what was read
+// before it (T-079) — an account's day noted as logins.json is written
+// (noteAdded) and a cap the user sets (Save) among them. Taken, it has
+// providers.json read afresh.
+//
+// noteAdded and moveAccountSettings take it under loginsMu, so nothing
+// held under it reads the accounts (All, Find, Accounts, Logins, a
+// provider's Available), which can take loginsMu: what a change needs of
+// them is read before it is taken.
+var providersMu = filelock.Mutex{
+	Path:   func() string { return Path() + ".lock" },
+	Locked: func() { filememo.Look(Path()) },
+}
+
+// beforeProvidersWrite is called as providers.json is about to be
+// written: for a test to have another change come at that moment.
+var beforeProvidersWrite = func() {}
+
 // store replaces providers.json whole, through a file renamed over it, so
 // that a read at that moment sees the old catalog or the new one, never a
-// file cut short.
+// file cut short. The read the change was made from is made under
+// providersMu, held until store returns.
 func store(f file) error {
 	p := Path()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -767,6 +789,7 @@ func store(f file) error {
 	if err != nil {
 		return err
 	}
+	beforeProvidersWrite()
 	if err := lastgood.Keep(p, validProviders, 0o600); err != nil {
 		return err
 	}
@@ -1119,18 +1142,52 @@ func Save(p Provider) error {
 			return fmt.Errorf("%s needs an API key", p.Name)
 		}
 	}
+	// what it lists now, asked outside providersMu once the picks are
+	// found new (listedWith)
+	var now *listing
+	for {
+		wrote, asked, err := saveRead(&p, now)
+		if err != nil {
+			return err
+		}
+		if !asked {
+			now = listedNow(p)
+			continue
+		}
+		if !wrote {
+			return nil
+		}
+		break
+	}
+	if p.ID == "claude" {
+		// an account's proxy picked in the editor reaches Claude Code at
+		// once, not at the gateway's next look (#1807)
+		syncClaudeProxyEnvNow()
+	}
+	return nil
+}
+
+// saveRead is Save's change to providers.json, under providersMu: p as it
+// is saved with what it keeps of the provider there (*p is changed so),
+// written unless it is there alike. asked is false, and nothing written,
+// when the models the provider lists now are needed and now hasn't them.
+func saveRead(p *Provider, now *listing) (wrote, asked bool, err error) {
+	providersMu.Lock()
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
-		return err
+		return false, true, err
 	}
 	i := slices.IndexFunc(f.Providers, func(q Provider) bool { return q.ID == p.ID })
 	var was *Provider
 	if i >= 0 {
 		was = &f.Providers[i]
 	}
-	p.PickedFrom = listedWith(p, was)
-	p.Delisted = delistedWith(p, was)
-	p.DelistedAt = delistedAtWith(p, was)
+	if p.PickedFrom, asked = listedWith(*p, was, now); !asked {
+		return false, false, nil
+	}
+	p.Delisted = delistedWith(*p, was)
+	p.DelistedAt = delistedAtWith(*p, was)
 	if was != nil {
 		// when its accounts were added is magpie's, never the editor's
 		p.AccountAdded = was.AccountAdded
@@ -1140,29 +1197,21 @@ func Save(p Provider) error {
 		if p.Gave == nil {
 			p.Gave = was.Gave
 		}
-		if sameStored(*was, p) {
+		if sameStored(*was, *p) {
 			// Save pressed on an editor left as it was: providers.json
 			// would be written byte for byte as it is, and its write
 			// handed the catalog to every agent again (agent.SyncCatalog),
 			// seconds of CPU with many agents set up (#1962, witt-bit)
-			return nil
+			return false, true, nil
 		}
-		f.Providers[i] = p
+		f.Providers[i] = *p
 	} else {
 		// a new provider under an id another had: what was recorded under
 		// it until now stays that one's
 		giveID(f.Providers, -1, p.ID, time.Now())
-		f.Providers = append(f.Providers, p)
+		f.Providers = append(f.Providers, *p)
 	}
-	if err := store(f); err != nil {
-		return err
-	}
-	if p.ID == "claude" {
-		// an account's proxy picked in the editor reaches Claude Code at
-		// once, not at the gateway's next look (#1807)
-		syncClaudeProxyEnvNow()
-	}
-	return nil
+	return true, true, store(f)
 }
 
 // sameStored is whether a and b are written to providers.json alike.
@@ -1219,25 +1268,24 @@ func delistedAtWith(p Provider, was *Provider) time.Time {
 // provider of keys saved before PickedFrom was kept is given it at its next
 // Save, the same picks too, as withNewlyListed serves those picks as they
 // are until it has one (TestLegacyPicksOfEveryModelGetPickedFromAtSave).
-func listedWith(p Provider, was *Provider) []string {
+//
+// The models listed now are now, asked by listedNow; asked is false when
+// they are needed and now is nil.
+func listedWith(p Provider, was *Provider, now *listing) (picked []string, asked bool) {
 	if len(p.Models) == 0 {
-		return nil
+		return nil, true
 	}
 	same := was != nil && slices.Equal(normalModels(was.Models), normalModels(p.Models))
 	if same && was.PickedFrom != nil {
-		return was.PickedFrom
+		return was.PickedFrom, true
 	}
-	from := p
-	if q, err := Find(p.ID); err == nil {
-		from = *q // with its account, whose list it is
+	if now == nil {
+		return nil, false
 	}
-	if same && (from.Account != nil || p.Account != nil) {
-		return was.PickedFrom // a subscription keeps the date rule
+	if same && (now.account || p.Account != nil) {
+		return was.PickedFrom, true // a subscription keeps the date rule
 	}
-	var ids []string
-	for _, m := range from.Available() {
-		ids = append(ids, m.ID)
-	}
+	ids := slices.Clone(now.ids)
 	if was != nil && len(ids) > 0 && len(delistedWith(p, was)) > 0 {
 		for _, id := range was.PickedFrom {
 			if !slices.Contains(ids, id) {
@@ -1245,7 +1293,28 @@ func listedWith(p Provider, was *Provider) []string {
 			}
 		}
 	}
-	return ids
+	return ids, true
+}
+
+// listing is what a provider lists now, for listedWith: whether it is a
+// signed-in account's, and its models' ids.
+type listing struct {
+	account bool
+	ids     []string
+}
+
+// listedNow is what p lists now, read with its account, whose list it is:
+// a read of the accounts, never made under providersMu.
+func listedNow(p Provider) *listing {
+	from := p
+	if q, err := Find(p.ID); err == nil {
+		from = *q
+	}
+	l := &listing{account: from.Account != nil}
+	for _, m := range from.Available() {
+		l.ids = append(l.ids, m.ID)
+	}
+	return l
 }
 
 // Add saves a provider the user just added, beside those already here: an
@@ -1446,6 +1515,8 @@ func tuckedAccount(id string) bool {
 // magpie" too (on), or lists it there again (off). Tucked, it is quiet as
 // well: no reminder line either (#116).
 func TuckAccount(id string, on bool) error {
+	providersMu.Lock()
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
@@ -1465,6 +1536,8 @@ func TuckAccount(id string, on bool) error {
 // QuietAccount stops reminding the user of an account they removed: its
 // "Add it back" line goes, and it is offered only from the Add sheet.
 func QuietAccount(id string) error {
+	providersMu.Lock()
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
@@ -1481,6 +1554,8 @@ func QuietAccount(id string) error {
 // ShowAccount brings back the signed-in account of an agent the user had
 // removed from magpie.
 func ShowAccount(id string) error {
+	providersMu.Lock()
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
@@ -1498,11 +1573,24 @@ func ShowAccount(id string) error {
 // only hidden from magpie (its accounts and model picks kept, shown again
 // from Hidden or by signing in); signing out is each account's Remove.
 func Delete(id string) error {
+	_, account := find(Accounts(), id) // read before providersMu is taken
+	if err := deleteRead(id, account); err != nil || account {
+		return err
+	}
+	// its StepFun sign-in goes with it, not to a provider added later
+	// under the same id
+	return forgetStepFun(id)
+}
+
+// deleteRead is Delete's change to providers.json, under providersMu.
+func deleteRead(id string, account bool) error {
+	providersMu.Lock()
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
 	}
-	if _, ok := find(Accounts(), id); ok {
+	if account {
 		for i := range f.Providers {
 			if f.Providers[i].ID == id {
 				f.Providers[i].Hidden = true
@@ -1528,12 +1616,7 @@ func Delete(id string) error {
 		return fmt.Errorf("no provider %q", id)
 	}
 	f.Providers = keep
-	if err := store(f); err != nil {
-		return err
-	}
-	// its StepFun sign-in goes with it, not to a provider added later
-	// under the same id
-	return forgetStepFun(id)
+	return store(f)
 }
 
 // keyOptional is true for a server on this computer or on the user's own

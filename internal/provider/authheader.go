@@ -80,6 +80,8 @@ var learnMu sync.Mutex
 func LearnAuthHeader(id, only string) {
 	learnMu.Lock()
 	defer learnMu.Unlock()
+	providersMu.Lock()
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return

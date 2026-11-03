@@ -574,6 +574,12 @@ func AutoGroupsOn() bool { return !load().NoAutoGroups }
 // taken out, as DeleteGroup keeps it: the user's group would lose it
 // unsaid.
 func SetAutoGroups(on bool) error {
+	var all []Group
+	if !on {
+		all = groupsIn(providerEntries()) // read before providersMu is taken
+	}
+	providersMu.Lock()
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
@@ -582,7 +588,6 @@ func SetAutoGroups(on bool) error {
 		return nil
 	}
 	if !on {
-		all := groupsIn(providerEntries())
 		found := func(ref string) bool {
 			gid, ok := strings.CutPrefix(ref, GroupPrefix)
 			return ok && slices.ContainsFunc(all, func(o Group) bool { return o.ID == gid && o.Auto && !o.Hidden })
@@ -718,6 +723,8 @@ func AutoGroupSkip() []string { return slices.Clone(load().AutoGroupSkip) }
 // are the user's. A request still naming a found group skipping took away
 // goes to its model from one provider (AutoStandIn).
 func SetAutoGroupSkip(ids []string) error {
+	providersMu.Lock()
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
@@ -1548,6 +1555,14 @@ func SaveGroup(g Group) error {
 	g.Auto, g.Hidden = false, false
 	g.Members = own // what the patterns match is found again as it is read
 	g.Disabled = false
+	// what is checked above reads the accounts (providerEntries, Resolve,
+	// ResolveAccount), never under providersMu: the group is put in the
+	// file as it is now
+	providersMu.Lock()
+	defer providersMu.Unlock()
+	if f, err = read(); err != nil {
+		return err
+	}
 	for i := range f.Groups {
 		if f.Groups[i].ID == g.ID {
 			g.Disabled = f.Groups[i].Disabled && !f.Groups[i].Hidden
@@ -1709,10 +1724,6 @@ func memberGroupsIn(entries []Entry) map[string][]string {
 // to come back with ShowGroup. A group another has in it, or classifies
 // with, stays until it is taken out of that one.
 func DeleteGroup(id string) error {
-	f, err := read()
-	if err != nil {
-		return err
-	}
 	if in := GroupsWith(id); len(in) > 0 {
 		var names []string
 		for _, g := range in {
@@ -1725,6 +1736,14 @@ func DeleteGroup(id string) error {
 			return fmt.Errorf("%s is %s's classifier: choose another first", id, g.Name)
 		}
 	}
+	// read before providersMu is taken
+	foundHere := slices.ContainsFunc(foundGroups(providerEntries()), func(g Group) bool { return g.ID == id })
+	providersMu.Lock()
+	defer providersMu.Unlock()
+	f, err := read()
+	if err != nil {
+		return err
+	}
 	found := false
 	f.Groups = slices.DeleteFunc(f.Groups, func(g Group) bool {
 		if g.ID == id {
@@ -1733,7 +1752,7 @@ func DeleteGroup(id string) error {
 		}
 		return false
 	})
-	if slices.ContainsFunc(foundGroups(providerEntries()), func(g Group) bool { return g.ID == id }) {
+	if foundHere {
 		f.Groups = append(f.Groups, Group{ID: id, Hidden: true})
 		found = true
 	}
@@ -1797,16 +1816,33 @@ func DeleteGroups(ids []string) error {
 // switched off; and one that classifies for another stays on, or that
 // group's rules would have no one to ask.
 func SwitchGroup(id string, on bool) error {
+	err := switchGroupRead(id, on)
+	if errors.Is(err, errNoGroup) {
+		// told apart outside providersMu: reading the groups found reads
+		// the accounts
+		if g, ok := groupOf(groupsIn(providerEntries()), id); ok && g.Auto {
+			return fmt.Errorf("%s was found by magpie: remove it, or change it to make it yours, to switch it off", g.Name)
+		}
+		return fmt.Errorf("magpie has no group %q", id)
+	}
+	return err
+}
+
+// errNoGroup is no group of the user's under an id.
+var errNoGroup = errors.New("no such group")
+
+// switchGroupRead is SwitchGroup's change to providers.json, under
+// providersMu: errNoGroup when the user has no group id.
+func switchGroupRead(id string, on bool) error {
+	providersMu.Lock()
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
 	}
 	i := slices.IndexFunc(f.Groups, func(g Group) bool { return g.ID == id && !g.Hidden })
 	if i < 0 {
-		if g, ok := groupOf(groupsIn(providerEntries()), id); ok && g.Auto {
-			return fmt.Errorf("%s was found by magpie: remove it, or change it to make it yours, to switch it off", g.Name)
-		}
-		return fmt.Errorf("magpie has no group %q", id)
+		return errNoGroup
 	}
 	if f.Groups[i].Disabled == !on {
 		return nil
@@ -1827,6 +1863,8 @@ func SwitchGroup(id string, on bool) error {
 // from wherever the user switches it: the tray panel (#2489) too. Nothing
 // else of the group changes, and only a Manual group can be switched so.
 func PickGroup(id, pick string) error {
+	providersMu.Lock()
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
@@ -1880,6 +1918,8 @@ func RemovedGroups() []string {
 
 // ShowGroup brings back a group magpie found that the user had removed.
 func ShowGroup(id string) error {
+	providersMu.Lock()
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
@@ -1901,11 +1941,26 @@ func RenameGroup(from, to string) error {
 	if to == from {
 		return nil
 	}
+	// read before providersMu is taken
+	all := groupsIn(providerEntries())
+	found := slices.ContainsFunc(foundGroups(providerEntries()), func(o Group) bool { return o.ID == from })
+	old, now := GroupPrefix+from, GroupPrefix+to
+	if err := renameGroupRead(from, to, all, found); err != nil {
+		return err
+	}
+	return renameGroupPicks(old, now)
+}
+
+// renameGroupRead is RenameGroup's change to providers.json, under
+// providersMu: all are the groups read before it, found whether from is
+// one magpie found.
+func renameGroupRead(from, to string, all []Group, found bool) error {
+	providersMu.Lock()
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
 	}
-	all := groupsIn(providerEntries())
 	g, ok := groupOf(all, from)
 	if !ok {
 		return fmt.Errorf("no group %q", from)
@@ -1914,7 +1969,6 @@ func RenameGroup(from, to string) error {
 		slices.ContainsFunc(f.Groups, func(o Group) bool { return o.ID == to }) {
 		return fmt.Errorf("there is a group %q already", to)
 	}
-	found := slices.ContainsFunc(foundGroups(providerEntries()), func(o Group) bool { return o.ID == from })
 	g.ID, g.Auto, g.Hidden = to, false, false
 	f.Groups = slices.DeleteFunc(f.Groups, func(o Group) bool { return o.ID == from })
 	if found {
@@ -1964,10 +2018,7 @@ func RenameGroup(from, to string) error {
 			f.Groups[i].Classifier = now
 		}
 	}
-	if err := store(f); err != nil {
-		return err
-	}
-	return renameGroupPicks(old, now)
+	return store(f)
 }
 
 // renameGroupPicks moves what each agent's list says of a group to its new
