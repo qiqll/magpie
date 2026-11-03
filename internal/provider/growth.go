@@ -8,7 +8,10 @@ package provider
 // from AccountAdded, written as logins.json is written with an account it
 // didn't have (noteAdded): Claude's and Codex's sign-ins, a plugin's, the
 // side logins', an agent's own read the first time. An account added
-// before magpie kept this has none, and is not held; one removed and
+// before magpie kept this has none, and is not held. The time stays while
+// the account is gone from the list and back (a plugin's, when its
+// sign-ins can't be read a while, or the plugin is installed again): only
+// the user removing it (forgetAdded) lets it go, and one removed and
 // added again is new again.
 //
 // The user's word comes first: an account with a cap of its own
@@ -130,17 +133,21 @@ func loginAccountOf(l savedLogin) loginAccount {
 // name (added), and each was had under another name (renamed, old to new),
 // whose time goes with it. The agent's own row whose name changed is
 // another account the agent signed in to (keepSideLogins writes it over),
-// added, unless it is Copilot's host put in the name (copilotRenamed).
+// added, unless it is Copilot's host put in the name (copilotRenamed). A
+// row hidden (the agent's own, removed in magpie) is no account had: shown
+// again, the agent signed in to it anew, it is added.
 func addedIn(was, next []savedLogin) (added []loginAccount, renamed map[loginAccount]loginAccount) {
 	byID := map[string]savedLogin{}
 	had := map[loginAccount]bool{}
 	for _, l := range was {
 		byID[loginID(l)] = l
-		had[loginAccountOf(l)] = true
+		if l.Hidden == "" {
+			had[loginAccountOf(l)] = true
+		}
 	}
 	for _, l := range next {
 		a := loginAccountOf(l)
-		if a.user == "" || had[a] {
+		if a.user == "" || had[a] || l.Hidden != "" {
 			continue
 		}
 		if w, ok := byID[loginID(l)]; ok && (!l.own() || l.Agent == "copilot" && copilotRenamed(w.User, l.User)) {
@@ -161,7 +168,9 @@ func addedIn(was, next []savedLogin) (added []loginAccount, renamed map[loginAcc
 
 // noteAdded writes now as when each account of added was added, and moves
 // each renamed account's time to its new name, in providers.json. An
-// account added again (removed before) is new again: its time is now.
+// account that has a time keeps it: one back in the list after it fell out
+// (a plugin's whose sign-ins weren't listed a while) is not new. The user's
+// removal took its time (forgetAdded), so one added again is new again.
 func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount) {
 	if len(added) == 0 && len(renamed) == 0 {
 		return
@@ -202,6 +211,11 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount) {
 	}
 	at := time.Now().UTC().Truncate(time.Second)
 	for _, a := range added {
+		if i := slices.IndexFunc(f.Providers, func(p Provider) bool { return p.ID == a.id }); i >= 0 {
+			if _, ok := f.Providers[i].AccountAdded[a.user]; ok {
+				continue
+			}
+		}
 		entry(a.id).AccountAdded[a.user] = at
 		changed = true
 	}
@@ -210,5 +224,37 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount) {
 	}
 	if err := store(f); err != nil {
 		log.Printf("providers.json: %v; when the accounts were added isn't kept", err)
+	}
+}
+
+// forgetAdded drops when each of users of the agent's accounts was added,
+// as the user removes them: one signed in to again is new again.
+func forgetAdded(agent string, users ...string) {
+	id := labelProvider(agent)
+	f, err := read()
+	if err != nil {
+		log.Printf("providers.json: %v; when the removed accounts were added is kept", err)
+		return
+	}
+	i := slices.IndexFunc(f.Providers, func(p Provider) bool { return p.ID == id })
+	if i < 0 {
+		return
+	}
+	p := &f.Providers[i]
+	changed := false
+	for _, u := range users {
+		if _, ok := p.AccountAdded[accountKey(u)]; ok {
+			if !changed {
+				p.AccountAdded = maps.Clone(p.AccountAdded)
+			}
+			delete(p.AccountAdded, accountKey(u))
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	if err := store(f); err != nil {
+		log.Printf("providers.json: %v; when the removed accounts were added is kept", err)
 	}
 }

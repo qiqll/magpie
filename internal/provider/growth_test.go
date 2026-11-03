@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -338,5 +339,131 @@ func TestGrowthStampsAPluginAccount(t *testing.T) {
 		if s, _ := AccountCapsOf(id, user).Of("5 hours"); s != 50 {
 			t.Fatalf("the new plugin account's five hours at %d%% on its first day", s)
 		}
+	}
+}
+
+// An account's day stays while it is gone from logins.json and back, as a
+// plugin's is when its sign-ins aren't listed a while: only the user's
+// removal lets it go, and the account signed in to again is new again.
+func TestGrowthKeepsADayUntilRemoved(t *testing.T) {
+	home := signIn(t) // me@example.com on codex, the first write
+	rememberLogins(true)
+	codexSignIn(t, home, "new@example.com", "r-new")
+	rememberLogins(true)
+	addedAgo(t, "codex", "new@example.com", 4*24*time.Hour)
+	was := accountAdded("codex", "new@example.com")
+	loginsMu.Lock()
+	all := readLogins()
+	gone := slices.DeleteFunc(slices.Clone(all), func(l savedLogin) bool { return l.User == "new@example.com" })
+	if len(gone) == len(all) {
+		loginsMu.Unlock()
+		t.Fatal("no row for new@example.com")
+	}
+	if err := writeLogins(gone); err != nil {
+		loginsMu.Unlock()
+		t.Fatal(err)
+	}
+	if err := writeLogins(all); err != nil {
+		loginsMu.Unlock()
+		t.Fatal(err)
+	}
+	loginsMu.Unlock()
+	if at := accountAdded("codex", "new@example.com"); !at.Equal(was) {
+		t.Fatalf("back in the list, its day went from %v to %v", was, at)
+	}
+	if err := ForgetLogin("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if at := accountAdded("codex", "new@example.com"); !at.IsZero() {
+		t.Fatalf("removed by the user, its day kept: %v", at)
+	}
+	codexSignIn(t, home, "new@example.com", "r-new2")
+	rememberLogins(true)
+	if at := accountAdded("codex", "new@example.com"); time.Since(at) > time.Minute {
+		t.Fatalf("signed in to again after its removal, its day is %v", at)
+	}
+}
+
+// The agent's own account removed in magpie is only hidden; shown again
+// as the agent signs in to it anew, it is added.
+func TestAddedInShownAgain(t *testing.T) {
+	signIn(t)
+	own := savedLogin{ID: "c1", Agent: "kimi", User: "me", Hidden: hiddenNoMark}
+	shown := own
+	shown.Hidden = ""
+	if added, _ := addedIn([]savedLogin{own}, []savedLogin{shown}); len(added) != 1 || added[0] != (loginAccount{"kimi", "me"}) {
+		t.Fatalf("shown again: added %v", added)
+	}
+	if added, _ := addedIn([]savedLogin{shown}, []savedLogin{own}); len(added) != 0 {
+		t.Fatalf("hidden: added %v", added)
+	}
+}
+
+// A plugin's account that falls out of its list (its sign-in not read a
+// while) keeps its day when it is back; removed by the user it goes.
+func TestGrowthKeepsAPluginAccountsDay(t *testing.T) {
+	bun := testenv.Bun(t)
+	claudeHome(t)
+	t.Setenv("MAGPIE_BUN", bun)
+	t.Cleanup(plugin.Settle)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	abs, _ := filepath.Abs("../plugin/testdata/fake/index.js")
+	if _, err := plugin.Add(ctx, abs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Import(ctx, "fakeco", map[string]any{"type": "oauth", "refresh": "r", "access": "a", "expires": 9e15, "accountId": "old-acct"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Providers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id := PluginID("fakeco")
+	pluginAccounts() // from before
+	if _, err := plugin.Import(ctx, "fakeco", map[string]any{"type": "oauth", "refresh": "r2", "access": "a2", "expires": 9e15, "accountId": "new-acct"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Providers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pluginAccounts()
+	s, _ := storedPicks(id)
+	if len(s.AccountAdded) != 1 {
+		t.Fatalf("one new plugin account, stamped: %v", s.AccountAdded)
+	}
+	var user string
+	for u := range s.AccountAdded {
+		user = u
+	}
+	addedAgo(t, id, user, 4*24*time.Hour)
+	was := accountAdded(id, user)
+	pp, ok := PluginOf(id)
+	if !ok {
+		t.Fatal("no fakeco plugin")
+	}
+	// its sign-in not listed: its row leaves logins.json
+	short := pp
+	short.Accounts = slices.DeleteFunc(slices.Clone(pp.Accounts), func(a plugin.Account) bool {
+		return accountKey(PluginAccountUser(pp.ID, a.Key)) == user
+	})
+	if len(short.Accounts) == len(pp.Accounts) {
+		t.Fatalf("no plugin account named %q in %+v", user, pp.Accounts)
+	}
+	pluginLogins(short)
+	if slices.ContainsFunc(sharedLogins(), func(l savedLogin) bool { return accountKey(l.User) == user }) {
+		t.Fatal("the account not listed kept its row")
+	}
+	pluginLogins(pp) // listed again
+	if at := accountAdded(id, user); !at.Equal(was) {
+		t.Fatalf("back in the plugin's list, its day went from %v to %v", was, at)
+	}
+	if s, _ := AccountCapsOf(id, user).Of("Weekly"); s != 80 {
+		t.Fatalf("back on its fourth day, the week at %d%%", s)
+	}
+	if err := ForgetLogin(pluginAgent(pp), user); err != nil {
+		t.Fatal(err)
+	}
+	if at := accountAdded(id, user); !at.IsZero() {
+		t.Fatalf("removed by the user, its day kept: %v", at)
 	}
 }

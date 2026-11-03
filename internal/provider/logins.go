@@ -1573,6 +1573,15 @@ func ForgetLogin(agent, user string) error {
 	if settings.AccountDiscoveryOff() {
 		return errAccountDiscoveryOff
 	}
+	err := forgetLoginOf(agent, user)
+	if err == nil {
+		// removed by the user: signed in to again, it is a new account
+		forgetAdded(agent, user)
+	}
+	return err
+}
+
+func forgetLoginOf(agent, user string) error {
 	if pp, ok := pluginOfAgent(agent); ok {
 		return forgetPluginLogin(pp, user)
 	}

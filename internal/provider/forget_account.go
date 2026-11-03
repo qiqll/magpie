@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -79,6 +80,8 @@ func forgetPluginAccounts(pp plugin.Provider) error {
 	for _, u := range owners {
 		if err := forgetPluginLogin(pp, u); err != nil {
 			errs = append(errs, err)
+		} else {
+			forgetAdded(agent, u)
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -107,6 +110,8 @@ func forgetPluginAccounts(pp plugin.Provider) error {
 		}
 	}
 	loginsMu.Unlock()
+	// signed out by the user: each signed in to again is a new account
+	forgetAdded(agent, slices.Collect(maps.Keys(users))...)
 	if PluginServes(pp.ID) {
 		// moving back would bring the accounts forgotten back from the
 		// backup the move set aside
