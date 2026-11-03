@@ -378,11 +378,11 @@ func (b *useBudget) load(user string, l seatLoad, c useCap) float64 {
 // over is why the account who, with others on it, has no room by use for
 // user, on mine: the first window its users with user would be reckoned
 // past its target in; "" when it has room or its windows aren't known.
-func (b *useBudget) over(who string, others map[string]seatLoad, user string, mine seatLoad) string {
+func (b *useBudget) over(who string, others map[userName]seatLoad, user string, mine seatLoad) string {
 	for _, c := range b.caps[who] {
 		sum := b.load(user, mine, c)
 		for u, l := range others {
-			sum += b.load(u, l, c)
+			sum += b.load(u.name, l, c)
 		}
 		if sum > c.target {
 			return fmt.Sprintf("its %s window would be %.0f%% used by its users' use, past its %.0f%%", spanSaid(c.span), sum*100, c.target*100)

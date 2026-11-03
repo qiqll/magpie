@@ -57,11 +57,14 @@ type userSpareJSON struct {
 	At      time.Time `json:"at"`
 }
 
-// userJSON is one user's binding of a provider, every gateway key's
-// it is bound under as one: the gateway counts a name sent with any key
-// as one user (the owner's option A2, 2026-10-30) and binds it to one
-// set of accounts (option A, 2026-11-03, T-075), and the page shows it
-// so. Its accounts are every key's, each once, as the gateway reads them
+// userJSON is one user's binding of a provider, every gateway key's of
+// one group it is bound under as one (UserRow's Group): the gateway
+// counts a name sent with any key of the group as one user (the owner's
+// option A2, 2026-10-30) and binds it to one set of accounts (option A,
+// 2026-11-03, T-075), and the page shows it so. The keys that share
+// their users and callers without a key are one group; any other key is
+// a group of its own (option B, T-089), its user of the same name
+// another row. Its accounts are every key's, each once, as the gateway reads them
 // (gateway's sharedOf): the first key's first, the key used last (the
 // earliest bound when alike), then the rest in that order. Whether each
 // is out is its account's, in accounts, by Seat. Keys is each key's
@@ -102,17 +105,18 @@ type userKeyJSON struct {
 	Used    time.Time `json:"used,omitzero"`
 }
 
-// userMerged is a user's bindings of a provider, one a key, the one used
-// last first, of those alike the earliest bound (a time left out of a
-// file edited by hand last), as the gateway reads them.
+// userMerged is a user's bindings of a provider, one a key of its group,
+// the one used last first, of those alike the earliest bound (a time left
+// out of a file edited by hand last), as the gateway reads them.
 type userMerged []gateway.UserRow
 
-// mergedUsers is rows by user and provider, in the order each first comes.
+// mergedUsers is rows by user, provider and group of keys, in the order
+// each first comes.
 func mergedUsers(rows []gateway.UserRow) []userMerged {
 	var out []userMerged
-	at := map[[2]string]int{}
+	at := map[[3]string]int{}
 	for _, r := range rows {
-		k := [2]string{r.Provider, r.User}
+		k := [3]string{r.Provider, r.User, r.Group}
 		if i, ok := at[k]; ok {
 			out[i] = append(out[i], r)
 			continue
@@ -276,8 +280,9 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 		writeJSON(w, out)
 	})
 	// one of a user's accounts let go of, as the page names it: its
-	// provider, user and seat, under every gateway key the user is bound
-	// under (a key an older page sends is no matter: it is one user);
+	// provider, user, seat and a gateway key it is bound under ("" for
+	// none), under every key of that key's group the user is bound under
+	// (gateway.Unbind): another group's user of the name is another;
 	// only while the gateway binds by user, as the page offers it: bound
 	// by session the bindings are kept as they are. unbound is false when
 	// the user was let go of it meanwhile; a file that doesn't read, or
@@ -285,6 +290,7 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 	// reader's language
 	mux.HandleFunc("POST /api/gateway/users/unbind", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
+			Key      string `json:"key"`
 			Provider string `json:"provider"`
 			User     string `json:"user"`
 			Seat     string `json:"seat"`
@@ -297,7 +303,7 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			http.Error(w, "the gateway doesn't bind by user now (start option --bind=user), so nothing is unbound", http.StatusConflict)
 			return
 		}
-		found, err := gateway.Unbind(in.Provider, in.User, in.Seat)
+		found, err := gateway.Unbind(in.Key, in.Provider, in.User, in.Seat)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -310,7 +316,7 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 
 // userAccounts is every account a user is bound to, as its first or a
 // spare, with its users counted and whether it is out: each read once. A
-// user bound to it under several gateway keys is counted once, and as a
+// user bound to it under several gateway keys of a group is counted once, and as a
 // spare only when it is the first under none of them.
 func userAccounts(users []userMerged, byID map[string]provider.Provider, seats map[string]map[string]bool, rests map[string]gateway.Rest,
 	nameOf func(string) providerShown, providerGone func(string) bool) []userAccountJSON {

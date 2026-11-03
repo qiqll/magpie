@@ -523,6 +523,15 @@ func TestUsersOfEachKeyOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	keys, err := access.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range keys {
+		if k.Name == "Tenant A" || k.Name == "Tenant B" {
+			shareUsers(t, k.ID) // both trusted to name users (T-089)
+		}
+	}
 	s := byUserUpTo(t, New(), 2) // no share: as many users as come on an account
 	if rec := userPostWith(s, a, "alice", "a's alice"); rec.Code != 200 {
 		t.Fatalf("a: %d %s", rec.Code, rec.Body.String())

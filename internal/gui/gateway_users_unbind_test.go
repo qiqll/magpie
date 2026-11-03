@@ -27,11 +27,12 @@ func unbindUser(t *testing.T, body string) (int, map[string]any) {
 }
 
 // The Gateway page's Unbind: one of a user's accounts let go of, of its
-// provider, the seat as the page names it, under every gateway key the
-// user is bound under and without one, as the gateway binds the same id
-// one user (T-075); the user's spare is its first then under each, and a
-// user left with none is gone from the list; one let go of meanwhile is
-// said so; a key named (an older page's) changes nothing of that; a
+// provider, the seat as the page names it, under every gateway key that
+// shares its users the user is bound under and without one, as the
+// gateway binds the same id one user (T-075, T-089); the user's spare is
+// its first then under each, and a user left with none is gone from the
+// list; one let go of meanwhile is said so; naming the key or none, the
+// same group, changes nothing of that; a
 // request that names nobody changes nothing, nor one while the gateway
 // binds by session; a file that doesn't read is said why, and left as it
 // is.
@@ -40,10 +41,12 @@ func TestGatewayUsersUnbind(t *testing.T) {
 	noGateway(t)
 	t.Setenv(gateway.BindEnv, "user")
 	at := time.Now().UTC().Format(time.RFC3339)
+	// a key that shares its users (T-089): its user 1 is the one without a key
+	k1 := sharingKey(t, "Front")
 	writeUsers(t, fmt.Sprintf(`{
   "users": {"antigravity": {"1": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q, "more": [{"who": "antigravity@b@x.com", "account": "b@x.com", "at": %q}]}}},
-  "keys": {"k1": {"antigravity": {"1": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q}}}}
-}`, at, at, at))
+  "keys": {%q: {"antigravity": {"1": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q}}}}
+}`, at, at, k1, at))
 	// the seat as the page has it, lower-cased; the same id under the
 	// key and without one is one user, each key's binding apart
 	keysOf := func(out gatewayUsersOut) map[string][]string {
@@ -73,18 +76,18 @@ func TestGatewayUsersUnbind(t *testing.T) {
 	if fmt.Sprint(keys[""]) != "[antigravity@b@x.com]" {
 		t.Fatalf("the user without a key: %+v", out.Users[0])
 	}
-	if fmt.Sprint(keys["k1"]) != "[antigravity@b@x.com]" {
+	if fmt.Sprint(keys[k1]) != "[antigravity@b@x.com]" {
 		t.Fatalf("the same id under the key, not let go of it alike: %+v", out.Users[0])
 	}
 	// let go of already, a key named or not: said so
-	for _, body := range []string{`{"provider":"antigravity","user":"1","seat":"` + seat + `"}`, `{"key":"k1","provider":"antigravity","user":"1","seat":"` + seat + `"}`} {
+	for _, body := range []string{`{"provider":"antigravity","user":"1","seat":"` + seat + `"}`, `{"key":"` + k1 + `","provider":"antigravity","user":"1","seat":"` + seat + `"}`} {
 		if code, out := unbindUser(t, body); code != 200 || out["unbound"] != false {
 			t.Fatalf("again %s: %d %v", body, code, out)
 		}
 	}
 	// its only account, a key named: let go of under every key, and the
 	// user gone from the list
-	if code, out := unbindUser(t, `{"key":"k1","provider":"antigravity","user":"1","seat":"antigravity@b@x.com"}`); code != 200 || out["unbound"] != true {
+	if code, out := unbindUser(t, `{"key":"`+k1+`","provider":"antigravity","user":"1","seat":"antigravity@b@x.com"}`); code != 200 || out["unbound"] != true {
 		t.Fatalf("its only one: %d %v", code, out)
 	}
 	if _, out := gatewayUsers(t, ""); out.Total != 0 || len(out.Users) != 0 {

@@ -181,6 +181,7 @@ function fixture(lang, theme, events, options = {}) {
       if (action === "accounts-key") k.accounts = body.accounts?.length ? body.accounts : undefined;
       if (action === "quotas-key") k.quotas = body.quotas || undefined;
       if (action === "access-key") k.readOnly = body.readOnly || undefined;
+      if (action === "users-key") k.sharesUsers = body.sharesUsers || undefined;
       // a key put at a place in the list, as access.Update keeps it;
       // options.refuseMove: the store can't be written
       if (action === "move-key") {

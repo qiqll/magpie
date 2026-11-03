@@ -381,8 +381,27 @@ func TestGatewayUsersOwnerSlow(t *testing.T) {
 	}
 }
 
-// A user bound under several gateway keys (the same id, which the gateway
-// counts as one user: the owner's option A2) is one user on the page: its
+// sharingKey adds a gateway key named name that shares its users
+// (access.Key.SharesUsers, T-089), and is its id.
+func sharingKey(t *testing.T, name string) string {
+	t.Helper()
+	if _, err := access.Update("add-key", access.Change{Name: name}); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := access.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := keys[len(keys)-1].ID
+	if _, err := access.Update("users-key", access.Change{Key: id, SharesUsers: true}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// A user bound under several gateway keys that share their users (the
+// same id, which the gateway counts as one user: the owner's option A2,
+// held to such keys by option B, T-089) is one user on the page: its
 // accounts each once, the earliest key's first its first, when it was
 // first bound and last used under any key, and each key's binding apart,
 // its tier and accounts with it, for one to be let go of under a key. An
@@ -402,6 +421,11 @@ func TestGatewayUsersMergedAcrossKeys(t *testing.T) {
 		keyNamed[k.Name] = k.ID
 	}
 	a, b := keyNamed["Tenant A"], keyNamed["Tenant B"]
+	for _, id := range []string{a, b} {
+		if _, err := access.Update("users-key", access.Change{Key: id, SharesUsers: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	early, late := time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC), time.Date(2026, 10, 30, 1, 0, 0, 0, time.UTC)
 	usedA, usedB := time.Now().UTC().Add(-3*time.Hour).Truncate(time.Second), time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	f := func(v time.Time) string { return v.Format(time.RFC3339) }
@@ -466,25 +490,77 @@ func TestGatewayUsersMergedAcrossKeys(t *testing.T) {
 	}
 }
 
-// A user bound apart under two gateway keys by a magpie before (T-075)
-// is shown as the gateway reads it: the first is the first of the key
-// it used last, though the other key bound it earlier.
+// A user bound apart under two gateway keys that share their users by a
+// magpie before (T-075) is shown as the gateway reads it: the first is
+// the first of the key it used last, though the other key bound it
+// earlier.
 func TestGatewayUsersFirstOfTheKeyUsedLast(t *testing.T) {
 	sandboxHome(t)
 	noGateway(t)
+	ka, kb := sharingKey(t, "A"), sharingKey(t, "B")
 	early, late := time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC), time.Date(2026, 10, 30, 1, 0, 0, 0, time.UTC)
 	used := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	f := func(v time.Time) string { return v.Format(time.RFC3339) }
 	writeUsers(t, fmt.Sprintf(`{"keys": {
-  "ka": {"antigravity": {"5": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q, "used": %q}}},
-  "kb": {"antigravity": {"5": {"who": "antigravity@b@x.com", "account": "b@x.com", "at": %q, "used": %q}}}
-}}`, f(early), f(used.Add(-2*time.Hour)), f(late), f(used)))
+  %q: {"antigravity": {"5": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q, "used": %q}}},
+  %q: {"antigravity": {"5": {"who": "antigravity@b@x.com", "account": "b@x.com", "at": %q, "used": %q}}}
+}}`, ka, f(early), f(used.Add(-2*time.Hour)), kb, f(late), f(used)))
 	_, out := gatewayUsers(t, "")
 	if len(out.Users) != 1 {
 		t.Fatalf("users: %+v", out.Users)
 	}
 	u := out.Users[0]
-	if u.Account != "b@x.com" || u.Key != "kb" || len(u.Spares) != 1 || u.Spares[0].Account != "a@x.com" || !u.Used.Equal(used) {
+	if u.Account != "b@x.com" || u.Key != kb || len(u.Spares) != 1 || u.Spares[0].Account != "a@x.com" || !u.Used.Equal(used) {
 		t.Fatalf("not the first of the key used last: %+v", u)
+	}
+}
+
+// The same id under two gateway keys that don't share their users is two
+// users on the page, as the gateway binds them (T-089): a row each, each
+// counted on the account they are on, and an Unbind under one key lets
+// go of its user alone; a key turned to share them is one row again.
+func TestGatewayUsersOfKeysThatDontShareApart(t *testing.T) {
+	sandboxHome(t)
+	noGateway(t)
+	t.Setenv(gateway.BindEnv, "user")
+	keyID := func(name string) string {
+		t.Helper()
+		if _, err := access.Update("add-key", access.Change{Name: name}); err != nil {
+			t.Fatal(err)
+		}
+		keys, _ := access.List()
+		return keys[len(keys)-1].ID
+	}
+	a, b := keyID("Tenant A"), keyID("Tenant B")
+	at := time.Now().UTC().Format(time.RFC3339)
+	writeUsers(t, fmt.Sprintf(`{"keys": {
+  %q: {"antigravity": {"7": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q}}},
+  %q: {"antigravity": {"7": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q}}}
+}}`, a, at, b, at))
+	_, out := gatewayUsers(t, "")
+	if out.Total != 2 || len(out.Users) != 2 || out.Users[0].Key == out.Users[1].Key || len(out.Users[0].Keys) != 1 || len(out.Users[1].Keys) != 1 {
+		t.Fatalf("one row a key: %+v", out.Users)
+	}
+	if len(out.Accounts) != 1 || out.Accounts[0].Users != 2 {
+		t.Fatalf("a@x.com counted once a user: %+v", out.Accounts)
+	}
+	if code, res := unbindUser(t, `{"key":"`+a+`","provider":"antigravity","user":"7","seat":"antigravity@a@x.com"}`); code != 200 || res["unbound"] != true {
+		t.Fatalf("unbind under Tenant A: %d %v", code, res)
+	}
+	_, out = gatewayUsers(t, "")
+	if len(out.Users) != 1 || out.Users[0].Key != b {
+		t.Fatalf("Tenant B's 7 let go of too: %+v", out.Users)
+	}
+	writeUsers(t, fmt.Sprintf(`{"keys": {
+  %q: {"antigravity": {"7": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q}}},
+  %q: {"antigravity": {"7": {"who": "antigravity@a@x.com", "account": "a@x.com", "at": %q}}}
+}}`, a, at, b, at))
+	for _, id := range []string{a, b} {
+		if _, err := access.Update("users-key", access.Change{Key: id, SharesUsers: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, out = gatewayUsers(t, ""); len(out.Users) != 1 || len(out.Users[0].Keys) != 2 {
+		t.Fatalf("shared, one row: %+v", out.Users)
 	}
 }

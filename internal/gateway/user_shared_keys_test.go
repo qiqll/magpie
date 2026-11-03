@@ -42,7 +42,8 @@ func keySeats(t *testing.T, keyID, user string) []string {
 func TestUserOneSessionUnderTwoKeysOneAccount(t *testing.T) {
 	codexSignedIn(t, "spare@example.com", "third@example.com")
 	asked, _ := usersUpstream(t, nil)
-	_, secrets := newCaller(t, "affd", "6acb")
+	keys, secrets := newCaller(t, "affd", "6acb")
+	shareUsers(t, keys[0].ID, keys[1].ID) // the owner's front ends, trusted to name users (T-089)
 	// no share: a user new to a key's bindings went to the account fewest
 	// users are on, which its own seat under the other key made another
 	s := byUserUpTo(t, New(), 2)
@@ -69,6 +70,7 @@ func TestUserBindingsOfTwoKeysMergedByLastUse(t *testing.T) {
 	codexSignedIn(t, "spare@example.com", "third@example.com")
 	asked, _ := usersUpstream(t, nil)
 	keys, secrets := newCaller(t, "affd", "6acb")
+	shareUsers(t, keys[0].ID, keys[1].ID)
 	writeUsers(t, userFile{Keys: map[string]map[string]map[string]userBinding{
 		keys[0].ID: {"codex": {"kai": {Who: "codex@me@example.com", Account: "me@example.com", At: ago(days(2)), Used: ago(5 * time.Hour), Tier: "pro",
 			More: []userSeat{{Who: "codex@third@example.com", Account: "third@example.com", At: ago(days(1))}}}}},
@@ -107,13 +109,14 @@ func TestUserBindingsUsedAlikeMergedByEarliest(t *testing.T) {
 	used := ago(time.Hour)
 	for _, keys := range [][2]string{{"a", "b"}, {"b", "a"}} {
 		userBinds.Lock()
-		was := userBinds.m
+		was, wasSharers := userBinds.m, userBinds.sharers
+		userBinds.sharers = map[string]bool{"a": true, "b": true} // both share their users (T-089)
 		userBinds.m = map[string]map[string]map[string]userBinding{
 			keys[0]: {"codex": {"kai": {Who: "codex@late@x.com", Account: "late@x.com", At: ago(time.Hour), Used: used}}},
 			keys[1]: {"codex": {"kai": {Who: "codex@early@x.com", Account: "early@x.com", At: ago(days(1)), Used: used}}},
 		}
 		b, ok := sharedOf(keys[0], "codex", "kai")
-		userBinds.m = was
+		userBinds.m, userBinds.sharers = was, wasSharers
 		userBinds.Unlock()
 		if seats := accountsOf(b.seats()); !ok || !slices.Equal(seats, []string{"early@x.com", "late@x.com"}) {
 			t.Fatalf("%v: %v %v", keys, ok, seats)
@@ -122,9 +125,11 @@ func TestUserBindingsUsedAlikeMergedByEarliest(t *testing.T) {
 }
 
 // An account let go of by hand is let go of under every gateway key the
-// user is bound under, and without one: it is one user.
+// user is bound under that shares its users, and without one: it is one
+// user.
 func TestUserUnboundUnderEveryKey(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
+	sharing(t, "k1")
 	two := func() userBinding {
 		return userBinding{Who: "codex@me@example.com", Account: "me@example.com", At: ago(time.Hour), Used: ago(time.Hour),
 			More: []userSeat{{Who: "codex@spare@example.com", Account: "spare@example.com", At: ago(time.Hour)}}}
@@ -133,7 +138,7 @@ func TestUserUnboundUnderEveryKey(t *testing.T) {
 		Users: map[string]map[string]userBinding{"codex": {"alice": two()}},
 		Keys:  map[string]map[string]map[string]userBinding{"k1": {"codex": {"alice": two()}}},
 	})
-	if found, err := Unbind("codex", "alice", "codex@me@example.com"); !found || err != nil {
+	if found, err := Unbind("", "codex", "alice", "codex@me@example.com"); !found || err != nil {
 		t.Fatalf("%v %v", found, err)
 	}
 	for _, k := range []string{"", "k1"} {
@@ -148,6 +153,7 @@ func TestUserUnboundUnderEveryKey(t *testing.T) {
 // Unbind, once it can be written, finds it and lets go under both.
 func TestUserUnbindUnderEveryKeyWriteFails(t *testing.T) {
 	codexSignedIn(t)
+	sharing(t, "k1")
 	one := func() userBinding {
 		return userBinding{Who: "codex@me@example.com", Account: "me@example.com", At: ago(time.Hour), Used: ago(time.Hour)}
 	}
@@ -158,7 +164,7 @@ func TestUserUnbindUnderEveryKeyWriteFails(t *testing.T) {
 	was := writeUsersFile
 	t.Cleanup(func() { writeUsersFile = was })
 	writeUsersFile = func(string, []byte, os.FileMode) error { return errors.New("disk full") }
-	if found, err := Unbind("codex", "alice", "codex@me@example.com"); found || err == nil {
+	if found, err := Unbind("", "codex", "alice", "codex@me@example.com"); found || err == nil {
 		t.Fatalf("unwritable: %v %v", found, err)
 	}
 	userBinds.Lock()
@@ -170,7 +176,7 @@ func TestUserUnbindUnderEveryKeyWriteFails(t *testing.T) {
 	}
 	userBinds.Unlock()
 	writeUsersFile = was
-	if found, err := Unbind("codex", "alice", "codex@me@example.com"); !found || err != nil {
+	if found, err := Unbind("", "codex", "alice", "codex@me@example.com"); !found || err != nil {
 		t.Fatalf("written once it can: %v %v", found, err)
 	}
 	f := usersFile(t)
@@ -187,6 +193,7 @@ func TestUserUnstampedBindingKeepsTheFirst(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	usersUpstream(t, nil)
 	keys, secrets := newCaller(t, "affd", "6acb")
+	shareUsers(t, keys[0].ID, keys[1].ID)
 	writeUsers(t, userFile{Keys: map[string]map[string]map[string]userBinding{
 		keys[0].ID: {"codex": {"kai": {Who: "codex@me@example.com", Account: "me@example.com", At: ago(days(2))}}},
 		keys[1].ID: {"codex": {"kai": {Who: "codex@spare@example.com", Account: "spare@example.com", At: ago(days(1)), Used: ago(time.Hour)}}},

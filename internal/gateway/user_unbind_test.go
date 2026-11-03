@@ -31,7 +31,7 @@ func TestUserUnboundByHand(t *testing.T) {
 	}
 
 	// her first let go of, named in another case: her spare is her first
-	if found, err := Unbind("codex", "alice", "CODEX@Me@example.com"); !found || err != nil {
+	if found, err := Unbind("", "codex", "alice", "CODEX@Me@example.com"); !found || err != nil {
 		t.Fatalf("alice's first: %v %v", found, err)
 	}
 	if got := seatsIn(t, "codex")["alice"]; len(got) != 1 || got[0] != "spare@example.com" {
@@ -45,12 +45,12 @@ func TestUserUnboundByHand(t *testing.T) {
 		t.Fatalf("route %+v", r.User)
 	}
 	// let go of already: nothing found, nothing written
-	if found, err := Unbind("codex", "alice", "codex@me@example.com"); found || err != nil {
+	if found, err := Unbind("", "codex", "alice", "codex@me@example.com"); found || err != nil {
 		t.Fatalf("again: %v %v", found, err)
 	}
 	// of another provider: not hers (a gateway key's is hers under every
 	// key: TestUserUnboundUnderEveryKey)
-	if found, err := Unbind("claude", "alice", "codex@spare@example.com"); found || err != nil {
+	if found, err := Unbind("", "claude", "alice", "codex@spare@example.com"); found || err != nil {
 		t.Fatalf("claude: %v %v", found, err)
 	}
 	if got := seatsIn(t, "codex")["alice"]; len(got) != 1 {
@@ -58,7 +58,7 @@ func TestUserUnboundByHand(t *testing.T) {
 	}
 
 	// bob's one account let go of: he is bound afresh on his next request
-	if found, err := Unbind("codex", "bob", "codex@me@example.com"); !found || err != nil {
+	if found, err := Unbind("", "codex", "bob", "codex@me@example.com"); !found || err != nil {
 		t.Fatalf("bob: %v %v", found, err)
 	}
 	if _, ok := seatsIn(t, "codex")["bob"]; ok {
@@ -79,7 +79,7 @@ func TestUserUnboundByHand(t *testing.T) {
 	if err := os.WriteFile(usersPath(), bad, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if found, err := Unbind("codex", "alice", "codex@spare@example.com"); found || err == nil {
+	if found, err := Unbind("", "codex", "alice", "codex@spare@example.com"); found || err == nil {
 		t.Fatalf("an unreadable file: %v %v", found, err)
 	}
 	if b, _ := os.ReadFile(usersPath()); !bytes.Equal(b, bad) {
@@ -103,7 +103,7 @@ func TestUserUnbindsWhileUsersAreBound(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			if found, err := Unbind("codex", fmt.Sprint("held-", i), "codex@me@example.com"); !found || err != nil {
+			if found, err := Unbind("", "codex", fmt.Sprint("held-", i), "codex@me@example.com"); !found || err != nil {
 				t.Errorf("held-%d: %v %v", i, found, err)
 			}
 		}()
@@ -185,11 +185,11 @@ func TestUserUnbindWriteFails(t *testing.T) {
 	was := writeUsersFile
 	t.Cleanup(func() { writeUsersFile = was })
 	writeUsersFile = func(string, []byte, os.FileMode) error { return errors.New("disk full") }
-	if found, err := Unbind("codex", "alice", "codex@me@example.com"); found || err == nil || err.Error() != "disk full" {
+	if found, err := Unbind("", "codex", "alice", "codex@me@example.com"); found || err == nil || err.Error() != "disk full" {
 		t.Fatalf("unwritable: %v %v", found, err)
 	}
 	writeUsersFile = was
-	if found, err := Unbind("codex", "alice", "codex@me@example.com"); !found || err != nil {
+	if found, err := Unbind("", "codex", "alice", "codex@me@example.com"); !found || err != nil {
 		t.Fatalf("written once it can: %v %v", found, err)
 	}
 	// bob's written by another magpie as Unbind writes: read again
@@ -207,7 +207,7 @@ func TestUserUnbindWriteFails(t *testing.T) {
 		}
 		return was(path, b, mode)
 	}
-	if found, err := Unbind("codex", "bob", "codex@me@example.com"); !found || err != nil || writes != 2 {
+	if found, err := Unbind("", "codex", "bob", "codex@me@example.com"); !found || err != nil || writes != 2 {
 		t.Fatalf("bob: %v %v after %d writes", found, err, writes)
 	}
 	if got := seatsIn(t, "codex"); len(got) != 1 || len(got["carol"]) != 1 {

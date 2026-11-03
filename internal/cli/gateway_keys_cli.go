@@ -59,6 +59,10 @@ func gatewayKeysTo(out io.Writer, args []string) error {
 		access.MigrateLegacyLANKeyBestEffort()
 		return gatewayKeyIssuer(out, args[1:])
 	}
+	if action == "users" {
+		access.MigrateLegacyLANKeyBestEffort()
+		return gatewayKeyUsers(out, args[1:])
+	}
 	if action == "oidc" {
 		access.MigrateLegacyLANKeyBestEffort()
 		return gatewayKeyOIDC(out, args[1:])
@@ -91,7 +95,7 @@ func gatewayKeysTo(out io.Writer, args []string) error {
 		args = args[:2]
 	}
 	if (action == "list" && len(args) != 1) || (action != "list" && len(args) != 2) {
-		return fmt.Errorf("usage: magpie gateway-key list | add <name> [--key <value> | --key -] [--read-only] | rotate <id> | remove <id> | limit <id> [list | off | reset [<n>] | remove <n> | [add] day|week|month|<N>d|<N>h [--tokens N] [--cost USD] [--cache-reads]] | models <id> [all | <provider>/<model>|<provider>/* ...] | accounts <id> [all | <provider>/<account>|<provider>/<key id> ...] | quotas <id> [on | off] | access <id> [read-only | full] | move <id> <place> | issue --ttl <duration> [--name <name>] [--models a,b] [--accounts a,b] [--tokens N] [--cost USD] [--read-only] [--from <id>] | issuer <id> [on | off] | oidc [list | add --key <id> --repo owner/name … | remove <rule id>]")
+		return fmt.Errorf("usage: magpie gateway-key list | add <name> [--key <value> | --key -] [--read-only] | rotate <id> | remove <id> | limit <id> [list | off | reset [<n>] | remove <n> | [add] day|week|month|<N>d|<N>h [--tokens N] [--cost USD] [--cache-reads]] | models <id> [all | <provider>/<model>|<provider>/* ...] | accounts <id> [all | <provider>/<account>|<provider>/<key id> ...] | quotas <id> [on | off] | access <id> [read-only | full] | move <id> <place> | issue --ttl <duration> [--name <name>] [--models a,b] [--accounts a,b] [--tokens N] [--cost USD] [--read-only] [--from <id>] | issuer <id> [on | off] | users <id> [shared | own] | oidc [list | add --key <id> --repo owner/name … | remove <rule id>]")
 	}
 	switch action {
 	case "list", "add", "rotate", "remove":
@@ -727,6 +731,42 @@ func gatewayKeyIssuer(out io.Writer, args []string) error {
 		_, err = fmt.Fprintf(out, "%s: may issue short-lived keys, each held to its own models, accounts, limits and life\n", keys[i].Name)
 	} else {
 		_, err = fmt.Fprintf(out, "%s: issues no keys\n", keys[i].Name)
+	}
+	return err
+}
+
+// gatewayKeyUsers shows or sets whether a key's users, bound by user
+// (X-Magpie-User), are one with those of every other key that shares
+// them, and of callers without a key (shared), or its own (own, as every
+// key is until it is set, T-089):
+//
+//	magpie gateway-key users <id> [shared | own]
+func gatewayKeyUsers(out io.Writer, args []string) error {
+	usage := fmt.Errorf("usage: magpie gateway-key users <id> [shared | own]")
+	if len(args) == 0 || len(args) > 2 {
+		return usage
+	}
+	id := args[0]
+	if len(args) == 2 {
+		if args[1] != "shared" && args[1] != "own" {
+			return usage
+		}
+		if _, err := access.Update("users-key", access.Change{Key: id, SharesUsers: args[1] == "shared"}); err != nil {
+			return err
+		}
+	}
+	keys, err := access.List()
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(keys, func(k access.Key) bool { return k.ID == id })
+	if i < 0 {
+		return fmt.Errorf("Key not found")
+	}
+	if keys[i].SharesUsers {
+		_, err = fmt.Fprintf(out, "%s: its users are shared: a user it names is the same user, on the same accounts, as one of that name under every other key that shares its users and under none. Only for a key whose callers set %s themselves and drop one sent to them\n", keys[i].Name, "X-Magpie-User")
+	} else {
+		_, err = fmt.Fprintf(out, "%s: its users are its own: a user it names is bound apart from one of that name under any other key\n", keys[i].Name)
 	}
 	return err
 }

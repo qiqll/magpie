@@ -185,7 +185,10 @@ func TestCodexResetBoundByUserOnlyItsOwn(t *testing.T) {
 		codexSignedIn(t, "spare@example.com") // me: acct-1, spare: acct-2
 		t.Setenv("MAGPIE_ADDR", "")
 		b := newResetBackend(t, "acct-1", "acct-2")
-		_, secrets := newCaller(t, "Full")
+		keys, secrets := newCaller(t, "Full")
+		// trusted to name users: its alice is the alice bound without a
+		// key (T-089; TestUserOfAKeyThatDoesntShareSpendsNoResetOfTheName)
+		shareUsers(t, keys[0].ID)
 		now := time.Now().UTC()
 		writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
 			"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: now, Tier: "free"},

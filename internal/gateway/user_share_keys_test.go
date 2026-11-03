@@ -11,14 +11,23 @@ import (
 
 // sharedAcrossKeys signs Codex in with kaAAw@post.com (acct-2) beside
 // it, makes the gateway keys other and qmcloud, qmcloud held to kaAAw@
-// alone, writes tiers (each user's default tier) and binds users of each
+// alone, both sharing their users (T-089) unless own, writes tiers (each user's default tier) and binds users of each
 // key as bound says, key name → user → accounts, each of the tier tierOf
 // names ("<key>/<user>" → tier), if any. It answers how to ask
 // as a user with qmcloud.
 func sharedAcrossKeys(t *testing.T, tiers string, bound map[string]map[string][]string, tierOf ...map[string]string) (s *Server, ask func(user string) *httptest.ResponseRecorder, ids map[string]string) {
+	return keysOfUsers(t, true, tiers, bound, tierOf...)
+}
+
+// keysOfUsers is sharedAcrossKeys, the keys sharing their users or, with
+// shared false, each keeping its own.
+func keysOfUsers(t *testing.T, shared bool, tiers string, bound map[string]map[string][]string, tierOf ...map[string]string) (s *Server, ask func(user string) *httptest.ResponseRecorder, ids map[string]string) {
 	t.Helper()
 	codexSignedIn(t, "kaAAw@post.com")
 	keys, secrets := newCaller(t, "other", "qmcloud")
+	if shared {
+		shareUsers(t, keys[0].ID, keys[1].ID)
+	}
 	if _, err := access.Update("accounts-key", access.Change{Key: keys[1].ID, Accounts: []string{"codex/kaAAw@post.com"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -106,8 +115,9 @@ func TestUserUnderTwoKeysCountedOnce(t *testing.T) {
 // qmcloud sending "2", the name a user of the key other goes by alone
 // on kaAAw@ (share 1), is put on kaAAw@ beside it as that same user.
 // The behaviour the owner chose (option A2, 2026-10-30: every key one
-// trust domain), held here so a change to it is deliberate; the risk is
-// in seatUsesOf's comment.
+// trust domain), held since T-089 to keys that share their users, held
+// here so a change to it is deliberate; the risk is in seatUsesOf's
+// comment.
 func TestUserNameOfAnotherKeySharesItsSeats(t *testing.T) {
 	_, ask, _ := sharedAcrossKeys(t, `{"default":"solo","tiers":{"solo":{"credits":1000,"max_accounts":2,"share":1}}}`,
 		map[string]map[string][]string{"other": {"2": {"kaAAw@post.com"}}})

@@ -298,6 +298,7 @@ func TestUserIdleOfAnotherKey(t *testing.T) {
 	codexSignedIn(t, "b@example.com")
 	usersUpstream(t, nil)
 	keys, secrets := newCaller(t, "Tenant A", "Tenant B")
+	shareUsers(t, keys[0].ID, keys[1].ID) // one user under both (T-075, T-089)
 	s := byUser(New())
 	write := func(aUsed, bUsed time.Time) {
 		// erin in use an hour ago: the gateway wasn't down meanwhile

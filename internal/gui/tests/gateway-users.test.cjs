@@ -310,7 +310,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await userRows.nth(0).locator(".user-unbind").first().click();
         await dialog.locator(".bar button").last().click();
         await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-bind")[0]?.querySelectorAll(".user-seat").length === 1);
-        assert.deepEqual(users.unbinds, [{ provider: "antigravity", user: "1", seat: "antigravity@a@x.com" }], "no key: under every one");
+        // its row's key, which names the user's group of keys (T-089): under
+        // every key of the group
+        assert.deepEqual(users.unbinds, [{ key: "k1", provider: "antigravity", user: "1", seat: "antigravity@a@x.com" }], "its row's key: under every one of its group");
         assert((await text(userRows.nth(0).locator(".user-seat"))).startsWith(`b@x.com (${w.first}`), "the spare is its first");
         assert.equal(await text(page.locator("#status")), w.unbound);
         // a file that can't be changed: said why, in the reader's language
@@ -330,8 +332,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert((await text(userRows.nth(0).locator(".sub").last())).startsWith(`ChatGPT · Tenant B (${w.tierFree}), Tenant A (${w.tierPro})`), "each key, with its tier");
         const mchips = userRows.nth(0).locator(".user-seat");
         assert.deepEqual(await mchips.evaluateAll((cs) => cs.map((c) => c.querySelector(".name").textContent + " " + [...c.classList].filter((k) => k !== "user-seat" && k !== "out").join(" "))), ["a@x.com first", "b@x.com spare"]);
-        // one Unbind an account, naming no key: it is let go of under
-        // every key, as the confirmation says
+        // one Unbind an account, naming its row's first key: it is let go
+        // of under every key of the row, as the confirmation says
         const held = userRows.nth(0).locator(".user-seat-held");
         assert.deepEqual(await held.nth(0).locator(".user-unbind").allTextContents(), [w.unbind]);
         assert.deepEqual(await held.nth(1).locator(".user-unbind").allTextContents(), [w.unbind]);
@@ -347,7 +349,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // let go of under both keys: Tenant A, left with none, is gone,
         // and the spare is the first under Tenant B
         await page.waitForFunction(() => document.querySelectorAll("#userBinds .user-unbind").length === 1);
-        assert.deepEqual(users.unbinds, [{ provider: "codex", user: "7", seat: "codex@a@x.com" }]);
+        assert.deepEqual(users.unbinds, [{ key: "k2", provider: "codex", user: "7", seat: "codex@a@x.com" }]);
         assert.equal(await text(mchips.nth(0).locator(".name")), "b@x.com");
         assert((await text(mchips.nth(0))).startsWith(`b@x.com (${w.first}`), "the spare is its first");
         assert((await text(userRows.nth(0).locator(".sub").last())).startsWith(`ChatGPT · Tenant B · ${w.tierFree}`), "one key left, its tier once");

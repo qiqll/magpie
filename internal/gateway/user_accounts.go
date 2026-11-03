@@ -24,12 +24,15 @@ package gateway
 // the provider for userIdle lets go of its accounts there too (sweepIdle),
 // for others to take their seats; on its next request it is bound afresh.
 //
-// Each gateway key's users are its own, apart from another key's and from
-// those of callers without a key: the same id sent with two keys is two
-// users. The bindings are kept for good in user-accounts.json next to
-// providers.json. A file that can't be read is unknown, never "no users":
-// what was read before still binds, nothing new is bound and nothing is
-// written over it. One edited by hand is read again.
+// Each gateway key's users are its own, apart from another key's: the same
+// id sent with two keys is two users (userGroup). The keys the owner lets
+// share their users (access.Key.SharesUsers, T-089) are one set of users,
+// with those of callers without a key, this computer's: the same id sent
+// with any of them is one user (sharedOf, T-075). The bindings are kept
+// for good in user-accounts.json next to providers.json. A file that
+// can't be read is unknown, never "no users": what was read before still
+// binds, nothing new is bound and nothing is written over it. One edited
+// by hand is read again.
 
 import (
 	"cmp"
@@ -247,10 +250,37 @@ func (b userBinding) withSeats(seats []userSeat) userBinding {
 	return n
 }
 
-// sharedOf is user's binding to provider pid as every gateway key shares
-// it (the owner's option A, 2026-11-03, T-075): one name sent with any
-// key, or with none, is one user bound to one set of accounts, so a
-// conversation that comes in under two keys stays on one account.
+// sharedUsers is the group of users of every gateway key that shares its
+// users (access.Key.SharesUsers), and of callers without a key (userGroup).
+const sharedUsers = "\x00shared"
+
+// groupOf is the users of the gateway key keyID are one with, of sharers
+// (access.UserSharers): those of every key that shares them and of
+// callers without a key, as one (sharedUsers), for a key among sharers or
+// none; another key's own (its id), apart from every other key's, as the
+// owner chose (option B, 2026-11-03, T-089): a name is the caller's to
+// send, and the caller of a key that doesn't share its users, sending
+// the name another key's user goes by, is another user.
+func groupOf(sharers map[string]bool, keyID string) string {
+	if keyID == "" || sharers[keyID] {
+		return sharedUsers
+	}
+	return keyID
+}
+
+// userGroup is groupOf the keys as user-accounts.json was last read
+// (loadUsers). Called with userBinds held.
+func userGroup(keyID string) string { return groupOf(userBinds.sharers, keyID) }
+
+// userSharers is the keys that share their users; a test's to set.
+var userSharers = access.UserSharers
+
+// sharedOf is user's binding to provider pid as every gateway key of
+// keyID's group shares it (userGroup; the owner's option A, 2026-11-03,
+// T-075, held to the keys that share their users by option B, T-089): one
+// name sent with any of them is one user bound to one set of accounts, so
+// a conversation that comes in under two of them stays on one account; a
+// key that doesn't share its users reads its own binding alone.
 // user-accounts.json keeps it under each key it came with
 // (keys.<key>.<provider>.<user>), each written alike (putShared), but
 // those a magpie before wrote apart may differ. They are read as one: the
@@ -259,14 +289,18 @@ func (b userBinding) withSeats(seats []userSeat) userBinding {
 // spares; more than the tier's max_accounts are kept, and no spare is
 // added beside them (growUser). Used is the latest of them. Tier is
 // keyID's own, as a tier is a key's (T-015), "" for none there. ok says
-// user is bound under any key. Called with userBinds held.
+// user is bound under any key of the group. Called with userBinds held.
 func sharedOf(keyID, pid, user string) (_ userBinding, ok bool) {
 	type kept struct {
 		key string
 		b   userBinding
 	}
 	var all []kept
+	g := userGroup(keyID)
 	for k, ps := range userBinds.m {
+		if userGroup(k) != g {
+			continue
+		}
 		if b, has := ps[pid][user]; has {
 			all = append(all, kept{k, b})
 		}
@@ -304,12 +338,15 @@ func sharedOf(keyID, pid, user string) (_ userBinding, ok bool) {
 }
 
 // putShared writes seats and used as user's binding to provider pid under
-// every gateway key it is bound under, and under each of keys, bound there
-// now; each keeps its own tier. No seats lets go of it under every key.
-// Called with userBinds held.
-func putShared(pid, user string, seats []userSeat, used time.Time, keys ...string) {
-	for _, ps := range userBinds.m {
-		if _, has := ps[pid][user]; !has {
+// every gateway key of keyID's group (userGroup) it is bound under, and
+// under each of keys, bound there now; each keeps its own tier. No seats
+// lets go of it under every key of the group. Another group's user of the
+// same name is another user, and left as it is. Called with userBinds
+// held.
+func putShared(keyID, pid, user string, seats []userSeat, used time.Time, keys ...string) {
+	g := userGroup(keyID)
+	for k, ps := range userBinds.m {
+		if _, has := ps[pid][user]; !has || userGroup(k) != g {
 			continue
 		}
 		if len(seats) == 0 {
@@ -327,7 +364,7 @@ func putShared(pid, user string, seats []userSeat, used time.Time, keys ...strin
 		return
 	}
 	for _, k := range keys {
-		if _, has := userBinds.m[k][pid][user]; has {
+		if _, has := userBinds.m[k][pid][user]; has || userGroup(k) != g {
 			continue
 		}
 		if userBinds.m == nil {
@@ -359,36 +396,37 @@ const UserIdleHours = int(userIdle / time.Hour)
 const userUsedEvery = time.Hour
 
 // userSeen is when each user last sent a provider a request in this
-// process, under any gateway key (sharedOf), provider and user (seenKey)
-// → when: kept while user-accounts.json doesn't read too, so a user
-// served from memory then isn't idle for the file's older `used` once it
-// reads again.
+// process, under any gateway key of its group (userGroup, sharedOf), the
+// group, provider and user (seenKey) → when: kept while user-accounts.json
+// doesn't read too, so a user served from memory then isn't idle for the
+// file's older `used` once it reads again.
 var userSeen = struct {
 	sync.Mutex
 	m map[string]time.Time
 }{m: map[string]time.Time{}}
 
-func seenKey(pid, user string) string { return pid + "\x00" + user }
+func seenKey(group, pid, user string) string { return group + "\x00" + pid + "\x00" + user }
 
-// noteSeen notes now as user's last request to provider pid, of any key.
-func noteSeen(pid, user string, now time.Time) {
+// noteSeen notes now as user's last request to provider pid, of any key of
+// group (userGroup).
+func noteSeen(group, pid, user string, now time.Time) {
 	userSeen.Lock()
-	userSeen.m[seenKey(pid, user)] = now
+	userSeen.m[seenKey(group, pid, user)] = now
 	userSeen.Unlock()
 }
 
-// lastUse is when b, user's to provider pid under some gateway key, was
-// last in use, as of now: its `used` (one ahead of now, edited or the
-// clock set back, is now), this process's last request of the user under
-// any key (userSeen), and the end of a rest one of its accounts is on,
-// which the user was told to wait out.
-func lastUse(b userBinding, pid, user string, now time.Time) time.Time {
+// lastUse is when b, user's to provider pid under some gateway key of
+// group, was last in use, as of now: its `used` (one ahead of now, edited
+// or the clock set back, is now), this process's last request of the user
+// under any key of the group (userSeen), and the end of a rest one of its
+// accounts is on, which the user was told to wait out.
+func lastUse(b userBinding, group, pid, user string, now time.Time) time.Time {
 	last := b.Used
 	if last.After(now) {
 		last = now
 	}
 	userSeen.Lock()
-	if t := userSeen.m[seenKey(pid, user)]; t.After(last) {
+	if t := userSeen.m[seenKey(group, pid, user)]; t.After(last) {
 		last = t
 	}
 	userSeen.Unlock()
@@ -406,34 +444,40 @@ func lastUse(b userBinding, pid, user string, now time.Time) time.Time {
 const userGap = 12 * time.Hour
 
 // sweepIdle lets go of every binding to provider pid whose user has sent
-// it nothing for userIdle under any gateway key (lastUse, the latest of
-// its keys': one user, sharedOf), under every key at once, but user's,
-// whose request this is. When no user sent pid anything for userGap or
+// it nothing for userIdle under any gateway key of its group (lastUse,
+// the latest of its keys': one user, sharedOf), under every key of the
+// group at once, but user's of keyID's group, whose request this is; a
+// name under two groups is two users, each judged by its own use. When no
+// user sent pid anything for userGap or
 // more before this request, that gap doesn't count: every binding's Used
 // moves on by it, as if the clock had stopped. One with no Used yet
 // (bound before it was kept) is stamped now instead, so an upgrade frees
 // nobody at once. changed says a binding was, for the file to be
 // written. Called with userBinds held, never while the file doesn't read.
-func sweepIdle(pid, user string, now time.Time) (changed bool) {
-	last := func(u string, b userBinding) time.Time {
-		if t := lastUse(b, pid, u, now); t.Before(now) {
+func sweepIdle(keyID, pid, user string, now time.Time) (changed bool) {
+	// a user of a group: its name, and a key of the group it is bound
+	// under, for sharedOf and putShared to read and write it by
+	type named struct{ group, name string }
+	asking := named{userGroup(keyID), user}
+	last := func(k, u string, b userBinding) time.Time {
+		if t := lastUse(b, userGroup(k), pid, u, now); t.Before(now) {
 			return t
 		}
 		return now
 	}
 	var prev time.Time
-	for _, ps := range userBinds.m {
+	for k, ps := range userBinds.m {
 		for u, b := range ps[pid] {
-			if t := last(u, b); !b.Used.IsZero() && t.After(prev) {
+			if t := last(k, u, b); !b.Used.IsZero() && t.After(prev) {
 				prev = t
 			}
 		}
 	}
 	if gap := now.Sub(prev); !prev.IsZero() && gap >= userGap {
-		for _, ps := range userBinds.m {
+		for k, ps := range userBinds.m {
 			for u, b := range ps[pid] {
 				if !b.Used.IsZero() {
-					b.Used = last(u, b).Add(gap)
+					b.Used = last(k, u, b).Add(gap)
 					if b.Used.After(now) {
 						b.Used = now
 					}
@@ -445,31 +489,32 @@ func sweepIdle(pid, user string, now time.Time) (changed bool) {
 		log.Printf("user accounts: no user sent %s a request for %s: that time doesn't count toward any user's %s idle", pid, gap.Round(time.Minute), userIdle)
 	}
 	// one with no Used yet under a key is written as it is read, under
-	// every key (putShared), with the latest Used it has under another,
-	// or now with none, and so in use now: its first stays the first of
-	// the one used last (sharedOf), not the one stamped
-	unstamped := map[string]bool{}
-	for _, ps := range userBinds.m {
+	// every key of its group (putShared), with the latest Used it has
+	// under another, or now with none, and so in use now: its first stays
+	// the first of the one used last (sharedOf), not the one stamped
+	unstamped := map[named]string{}
+	for k, ps := range userBinds.m {
 		for u, b := range ps[pid] {
-			if u != user && b.Used.IsZero() {
-				unstamped[u] = true
+			if n := (named{userGroup(k), u}); n != asking && b.Used.IsZero() {
+				unstamped[n] = k
 			}
 		}
 	}
-	for u := range unstamped {
-		b, _ := sharedOf("", pid, u)
-		putShared(pid, u, b.seats(), cmp.Or(b.Used, now))
+	for u, k := range unstamped {
+		b, _ := sharedOf(k, pid, u.name)
+		putShared(k, pid, u.name, b.seats(), cmp.Or(b.Used, now))
 		changed = true
 	}
-	// each user's last use, the latest under any key
-	latest := map[string]time.Time{}
-	for _, ps := range userBinds.m {
+	// each user's last use, the latest under any key of its group
+	latest := map[named]time.Time{}
+	for k, ps := range userBinds.m {
 		for u, b := range ps[pid] {
-			if u == user {
+			n := named{userGroup(k), u}
+			if n == asking {
 				continue
 			}
-			if t := last(u, b); t.After(latest[u]) {
-				latest[u] = t
+			if t := last(k, u, b); t.After(latest[n]) {
+				latest[n] = t
 			}
 		}
 	}
@@ -478,8 +523,10 @@ func sweepIdle(pid, user string, now time.Time) (changed bool) {
 		if now.Sub(t) < userIdle {
 			continue
 		}
-		for _, ps := range userBinds.m {
-			delete(ps[pid], u)
+		for k, ps := range userBinds.m {
+			if userGroup(k) == u.group {
+				delete(ps[pid], u.name)
+			}
 		}
 		gone++
 	}
@@ -494,16 +541,17 @@ func sweepIdle(pid, user string, now time.Time) (changed bool) {
 	return changed || gone > 0
 }
 
-// touchUsed keeps now as when user, under any gateway key, last sent
-// provider pid a request, when the latest kept is userUsedEvery ago or
-// more; written under every key it is bound under, its accounts as one
-// (putShared); changed says it was. Called with userBinds held.
-func touchUsed(pid, user string, now time.Time) (changed bool) {
-	b, ok := sharedOf("", pid, user)
+// touchUsed keeps now as when user, under any gateway key of keyID's
+// group, last sent provider pid a request, when the latest kept is
+// userUsedEvery ago or more; written under every key of the group it is
+// bound under, its accounts as one (putShared); changed says it was.
+// Called with userBinds held.
+func touchUsed(keyID, pid, user string, now time.Time) (changed bool) {
+	b, ok := sharedOf(keyID, pid, user)
 	if !ok || now.Sub(b.Used) < userUsedEvery && !b.Used.After(now) {
 		return false
 	}
-	putShared(pid, user, b.seats(), now)
+	putShared(keyID, pid, user, b.seats(), now)
 	return true
 }
 
@@ -541,6 +589,9 @@ var userBinds = struct {
 	// stale: the file changed and doesn't read; m is what was read
 	// before, and nothing is written over it
 	stale bool
+	// sharers: the gateway keys that share their users (userGroup), read
+	// with the file (loadUsers)
+	sharers map[string]bool
 }{}
 
 var userFileSaid sync.Map // a user-accounts.json that doesn't read, logged once a change
@@ -650,6 +701,9 @@ func userOf(h http.Header) (user, bad string) {
 // or written. Called with userBinds held. A file that doesn't read leaves
 // what was read before (stale), and is an error only when nothing was.
 func loadUsers() error {
+	// which keys share their users, as they do now: a key turned to share
+	// them, or not to, is so on its next request
+	userBinds.sharers = userSharers()
 	path := usersPath()
 	if path != userBinds.path {
 		userBinds.m, userBinds.path, userBinds.mod, userBinds.size, userBinds.read, userBinds.stale = nil, path, time.Time{}, 0, false, false
@@ -851,11 +905,11 @@ func bindUser(keyID, user string, tier Tier, named bool, p provider.Provider, ca
 	// never written over a file that doesn't read, but this request seen
 	// all the same
 	now := time.Now().UTC()
-	defer noteSeen(p.ID, user, now)
-	if !userBinds.stale && sweepIdle(p.ID, user, now) {
+	defer noteSeen(userGroup(keyID), p.ID, user, now)
+	if !userBinds.stale && sweepIdle(keyID, p.ID, user, now) {
 		saveUsersLogged()
 	}
-	// its accounts under every gateway key, as one (sharedOf)
+	// its accounts under every gateway key of its group, as one (sharedOf)
 	shared, _ := sharedOf(keyID, p.ID, user)
 	seats := shared.seats()
 	// an account not among cands may be gone: signed out, switched off or
@@ -905,7 +959,7 @@ func bindUser(keyID, user string, tier Tier, named bool, p provider.Provider, ca
 		}
 		// its use and tier kept as any bound user's, so it isn't let go
 		// as idle while its accounts wait to be signed in again
-		if tiered, used := keepTier(), touchUsed(p.ID, user, now); tiered || used {
+		if tiered, used := keepTier(), touchUsed(keyID, p.ID, user, now); tiered || used {
 			saveUsersLogged()
 		}
 		ub.Why = "lapsed"
@@ -918,7 +972,7 @@ func bindUser(keyID, user string, tier Tier, named bool, p provider.Provider, ca
 		if userBinds.stale {
 			return nil, pl, ub, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: user-accounts.json can't be read, so %q isn't bound to an account now; nothing was sent. magpie's log says why", UserHeader, user)}
 		}
-		uses := seatUsesBy(p.ID, tiers, user, budget, tier.Share)
+		uses := seatUsesBy(keyID, p.ID, tiers, user, budget, tier.Share)
 		pick := firstOf(p.ID, cands, pl, tier, uses, lapsedWho)
 		if pick < 0 {
 			if slices.ContainsFunc(cands, func(c candidate) bool { return c.p.ID == p.ID && !uses.of(c).takes(tier.Share) }) {
@@ -945,19 +999,19 @@ func bindUser(keyID, user string, tier Tier, named bool, p provider.Provider, ca
 	if ub.Why == "" {
 		ub.Why = "kept"
 	}
-	// bound under other gateway keys only: bound under this one too,
-	// alike (putShared), for the Gateway page to name the key and its
+	// bound under other gateway keys of its group only: bound under this
+	// one too, alike (putShared), for the Gateway page to name the key and its
 	// tier; another tier than its last request's, or its last use an
 	// hour or more ago: kept. Never written over a file that doesn't read
 	if !userBinds.stale {
 		joined := false
 		if _, own := userBinds.m[keyID][p.ID][user]; !own {
 			if b, ok := sharedOf(keyID, p.ID, user); ok {
-				putShared(p.ID, user, b.seats(), b.Used, keyID)
+				putShared(keyID, p.ID, user, b.seats(), b.Used, keyID)
 				joined = true
 			}
 		}
-		if tiered, used := keepTier(), touchUsed(p.ID, user, now); tiered || used || joined {
+		if tiered, used := keepTier(), touchUsed(keyID, p.ID, user, now); tiered || used || joined {
 			saveUsersLogged()
 		}
 	}
@@ -1050,7 +1104,7 @@ func setTier(keyID, pid, user, tier string) (changed bool) {
 	if !ok || b.Tier == tier {
 		return false
 	}
-	putShared(pid, user, b.seats(), b.Used, keyID)
+	putShared(keyID, pid, user, b.seats(), b.Used, keyID)
 	own := userBinds.m[keyID][pid][user]
 	own.Tier = tier
 	userBinds.m[keyID][pid][user] = own
@@ -1058,18 +1112,18 @@ func setTier(keyID, pid, user, tier string) (changed bool) {
 }
 
 // setSeats binds user, of the gateway key keyID, to seats of provider pid,
-// or to none, under every key it is bound under (putShared), each
-// keeping its tier. Called with userBinds held.
+// or to none, under every key of its group it is bound under (putShared),
+// each keeping its tier. Called with userBinds held.
 func setSeats(keyID, pid, user string, seats []userSeat) {
 	b, _ := sharedOf(keyID, pid, user)
-	putShared(pid, user, seats, b.Used, keyID)
+	putShared(keyID, pid, user, seats, b.Used, keyID)
 }
 
-// seatUse is how an account is taken: by n user names other than the
-// one asking, bound under any gateway key (the asking key's included),
-// as a first or a spare, one name under several keys counted once, the
-// least share of their tiers share (0 for no limit); own says the name
-// asking is on it too, under any key.
+// seatUse is how an account is taken: by n users other than the one
+// asking, bound under any gateway key (the asking key's included), as a
+// first or a spare, one name under several keys of a group counted once
+// (userGroup), the least share of their tiers share (0 for no limit); own
+// says the user asking is on it too, under any key of its group.
 type seatUse struct {
 	n, share int
 	own      bool
@@ -1099,33 +1153,39 @@ func (u seatUse) takes(share int) bool {
 
 // seatUses is how each account of provider pid is taken, lower-cased
 // who → its use, each user's share its tier's in tiers (Tiers.shareOf).
-// user's own seats, under any gateway key, never keep it off an account
-// (the owner's decision, 2026-10-30), and another name bound under
-// several keys is one user. A name is the caller's to send
-// (UserHeader), never tied to a key: the caller of one key that sends
-// the name another key's user goes by is on that user's seats as itself,
-// a share-1 account that user has alone included, when its key may use
-// the account (TestUserNameOfAnotherKeySharesItsSeats). By design (the
-// owner's option A2, 2026-10-30): names are one namespace across keys,
-// which holds only while every key is the owner's or one team's, one
-// trust domain. Keys handed to separate tenants would need names merged
-// per tenant instead. Called with userBinds held.
+// user's own seats, under any gateway key of its group (userGroup), never
+// keep it off an account (the owner's decision, 2026-10-30), and another
+// name bound under several keys of a group is one user. A name is the
+// caller's to send (UserHeader): among the keys that share their users
+// (access.Key.SharesUsers) and callers without a key, one namespace (the
+// owner's option A2, 2026-10-30), the caller of one that sends the name
+// another's user goes by is on that user's seats as itself, a share-1
+// account that user has alone included, when its key may use the account
+// (TestUserNameOfAnotherKeySharesItsSeats). A key that doesn't share its
+// users is a namespace of its own (option B, 2026-11-03, T-089): the same
+// name sent with it is another user, counted on those seats as any other
+// (TestUserNameOfAKeyThatDoesntShareIsAnother). Called with userBinds
+// held.
 type seatUses map[string]seatUse
 
+// seatUsesOf is seatUsesBy for user of a caller without a gateway key.
 func seatUsesOf(pid string, tiers Tiers, user string) seatUses {
-	return seatUsesBy(pid, tiers, user, nil, 0)
+	return seatUsesBy("", pid, tiers, user, nil, 0)
 }
 
-// seatUsesBy is seatUsesOf, each account others are on with no room by
+// seatUsesBy is how each account of provider pid is taken for user, of
+// the gateway key keyID, each account others are on with no room by
 // their use for user, of a tier with share, marked so (seatUse.over) by
 // budget: none with budget nil, or for a tier that doesn't share (1: an
 // account it takes is one nobody is on) or shares with no limit (0).
-func seatUsesBy(pid string, tiers Tiers, user string, budget *useBudget, share int) seatUses {
+func seatUsesBy(keyID, pid string, tiers Tiers, user string, budget *useBudget, share int) seatUses {
 	uses := seatUses{}
-	on := map[string]map[string]int{}       // who → the users counted on it, each its tier's share
-	seatsOf := map[string]map[string]bool{} // a user name → the accounts it is on, under any key
-	for _, ps := range userBinds.m {
-		for name, b := range ps[pid] {
+	asking := userName{userGroup(keyID), user}
+	on := map[string]map[userName]int{}       // who → the users counted on it, each its tier's share
+	seatsOf := map[userName]map[string]bool{} // a user → the accounts it is on, under any key of its group
+	for k, ps := range userBinds.m {
+		for n, b := range ps[pid] {
+			name := userName{userGroup(k), n}
 			share := tiers.shareOf(b.Tier)
 			for _, s := range b.seats() {
 				who := strings.ToLower(s.Who)
@@ -1134,7 +1194,7 @@ func seatUsesBy(pid string, tiers Tiers, user string, budget *useBudget, share i
 				}
 				seatsOf[name][who] = true
 				u := uses[who]
-				if name == user {
+				if name == asking {
 					// its own seat: counted toward which is picked,
 					// never toward its share
 					u.own = true
@@ -1142,7 +1202,7 @@ func seatUsesBy(pid string, tiers Tiers, user string, budget *useBudget, share i
 					continue
 				}
 				if on[who] == nil {
-					on[who] = map[string]int{}
+					on[who] = map[userName]int{}
 				}
 				if was, seen := on[who][name]; !seen {
 					on[who][name] = share
@@ -1161,13 +1221,13 @@ func seatUsesBy(pid string, tiers Tiers, user string, budget *useBudget, share i
 		return uses
 	}
 	// the user on one more account than it is: the one it would be given
-	mine := seatLoad{share, len(seatsOf[user]) + 1}
+	mine := seatLoad{share, len(seatsOf[asking]) + 1}
 	for who, names := range on {
 		u := uses[who]
 		if u.n == 0 {
 			continue
 		}
-		others := make(map[string]seatLoad, len(names))
+		others := make(map[userName]seatLoad, len(names))
 		for name, sh := range names {
 			others[name] = seatLoad{sh, len(seatsOf[name])}
 		}
@@ -1177,6 +1237,10 @@ func seatUsesBy(pid string, tiers Tiers, user string, budget *useBudget, share i
 	}
 	return uses
 }
+
+// userName is a user as seatUsesBy counts it: its group of gateway keys
+// (userGroup) and its name.
+type userName struct{ group, name string }
 
 // of is how c's account is taken.
 func (uses seatUses) of(c candidate) seatUse { return uses[strings.ToLower(c.who())] }
@@ -1415,7 +1479,7 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 	}
 	shared, _ := sharedOf(u.key, u.pid, u.User)
 	now := shared.seats()
-	// another request of the user's, under any gateway key, added a spare
+	// another request of the user's, under any gateway key of its group, added a spare
 	// since this one was bound: that one, if it can answer, not another
 	// beside it
 	for _, st := range now {
@@ -1436,7 +1500,7 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 	if n := len(slices.DeleteFunc(slices.Clone(now), func(st userSeat) bool { return keyHeld(st, u.pid, pool, left) })); n >= u.max {
 		return refuse(u.atTier(n), limitAccounts)
 	}
-	uses := seatUsesBy(u.pid, tiers, u.User, budget, u.tier.Share)
+	uses := seatUsesBy(u.key, u.pid, tiers, u.User, budget, u.tier.Share)
 	pick := spareOf(u.pid, pool, poolPl, now, true, u.tier, uses, lapsedWho)
 	if pick < 0 {
 		if !slices.ContainsFunc(pool, func(c candidate) bool {
@@ -1903,20 +1967,21 @@ func (s *Server) unbindTurnedAway(c candidate, why string) {
 	if loadUsers() != nil || userBinds.stale {
 		return // unknown: nothing is written over it
 	}
-	// of each user's accounts, under every gateway key as one (sharedOf),
-	// that one: its first spare is its first when it was the first, and a
-	// user left with none is bound afresh
-	users := map[string]bool{}
-	for _, ps := range userBinds.m {
+	// of each user's accounts, under every gateway key of its group as
+	// one (sharedOf), that one: its first spare is its first when it was
+	// the first, and a user left with none is bound afresh. A user is its
+	// group and name, a key of the group it is bound under to read it by
+	users := map[userName]string{}
+	for k, ps := range userBinds.m {
 		for u, b := range ps[c.p.ID] {
 			if seatIn(b.seats(), who) {
-				users[u] = true
+				users[userName{userGroup(k), u}] = k
 			}
 		}
 	}
-	for u := range users {
-		b, _ := sharedOf("", c.p.ID, u)
-		putShared(c.p.ID, u, slices.DeleteFunc(b.seats(), func(s userSeat) bool { return strings.EqualFold(s.Who, who) }), b.Used)
+	for u, k := range users {
+		b, _ := sharedOf(k, c.p.ID, u.name)
+		putShared(k, c.p.ID, u.name, slices.DeleteFunc(b.seats(), func(s userSeat) bool { return strings.EqualFold(s.Who, who) }), b.Used)
 	}
 	gone := len(users)
 	if gone > 0 {
@@ -1960,7 +2025,10 @@ func userKey(r *http.Request) string {
 
 // UserRow is one user's binding, as user-accounts.json has it.
 type UserRow struct {
-	Key      string    // the gateway key's id, "" for callers without one
+	Key string // the gateway key's id, "" for callers without one
+	// Group: the users Key's are one with (userGroup): rows of one user
+	// and provider in one group are one user, bound alike
+	Group    string
 	Provider string    // the provider's id
 	User     string    // the user's id, as the caller sent it
 	Who      string    // its first account or key: candidate.who()
@@ -2000,14 +2068,16 @@ func UserBindings() ([]UserRow, error) {
 	}
 	var out []UserRow
 	now := time.Now().UTC()
+	sharers := userSharers()
 	add := func(key string, ps map[string]map[string]userBinding) {
+		g := groupOf(sharers, key)
 		for pid, us := range ps {
 			for u, b := range us {
 				seats := b.seats()
 				if len(seats) == 0 {
 					continue
 				}
-				row := UserRow{Key: key, Provider: pid, User: u, Who: seats[0].Who, Account: seats[0].Account, At: seats[0].At, Tier: b.Tier, Used: shownUsed(b.Used, pid, u, now)}
+				row := UserRow{Key: key, Group: g, Provider: pid, User: u, Who: seats[0].Who, Account: seats[0].Account, At: seats[0].At, Tier: b.Tier, Used: shownUsed(b.Used, g, pid, u, now)}
 				for _, st := range seats[1:] {
 					row.Spares = append(row.Spares, UserSpare(st))
 				}
@@ -2026,15 +2096,15 @@ func UserBindings() ([]UserRow, error) {
 
 // shownUsed is a binding's last use as the Gateway page says it: the
 // file's, or this process's later request of its user under any gateway
-// key (userSeen: the file is written once an hour), never ahead of now
-// (an edited file, a clock set back). Zero stays zero: none kept for a
-// binding from before it was.
-func shownUsed(used time.Time, pid, user string, now time.Time) time.Time {
+// key of group (userSeen: the file is written once an hour), never ahead
+// of now (an edited file, a clock set back). Zero stays zero: none kept
+// for a binding from before it was.
+func shownUsed(used time.Time, group, pid, user string, now time.Time) time.Time {
 	if used.IsZero() {
 		return used
 	}
 	userSeen.Lock()
-	if t := userSeen.m[seenKey(pid, user)]; t.After(used) {
+	if t := userSeen.m[seenKey(group, pid, user)]; t.After(used) {
 		used = t
 	}
 	userSeen.Unlock()

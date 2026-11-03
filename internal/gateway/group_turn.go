@@ -212,8 +212,8 @@ func (g *groupTurn) pinned(pin string, cs []candidate, pl planned) (_ []candidat
 	}
 	// its use kept as any bound user's, so it isn't let go as idle
 	now := time.Now().UTC()
-	noteSeen(pid, user, now)
-	if !userBinds.stale && touchUsed(pid, user, now) {
+	noteSeen(userGroup(key), pid, user, now)
+	if !userBinds.stale && touchUsed(key, pid, user, now) {
 		saveUsersLogged()
 	}
 	b, _ := sharedOf(key, pid, user)

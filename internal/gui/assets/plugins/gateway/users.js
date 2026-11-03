@@ -2,14 +2,15 @@
 // accounts with how many of the caller's users the gateway keeps on them
 // and whether each is out, and the users with their first account and
 // spares, as /api/gateway/users reads user-accounts.json: a user bound
-// under several gateway keys is one row, as the gateway counts it one
-// user, with each key named and its accounts each once. Users a service
+// under several gateway keys of one group (the keys that share their
+// users and none; any other key alone, T-089) is one row, as the gateway
+// counts it one user, with each key named and its accounts each once. Users a service
 // names in X-Magpie-User (or the header MAGPIE_USER_HEADER names) are
 // bound only while the gateway binds by user (--bind=user); bound by
 // session, the bindings are shown as they are and nothing is bound by
 // them. Bound by user, each of a user's accounts has an Unbind, confirmed
 // first, that lets go of it (/api/gateway/users/unbind) under every key
-// the user is bound under, as the gateway binds it one user (T-075): its
+// of its row the user is bound under, as the gateway binds it one user (T-075): its
 // spare is its first then, and a user left with none is bound afresh on
 // its next request; bound by session nothing is changed here. A user is moved in
 // the file, which the gateway reads again when it changes. Bound by user
@@ -116,7 +117,7 @@ async function unbindUserSeat(u, account, seat, go) {
   go.classList.add("busy");
   let out;
   try {
-    out = await api("gateway/users/unbind", { provider: u.provider, user: u.user, seat });
+    out = await api("gateway/users/unbind", { key: u.key || "", provider: u.provider, user: u.user, seat });
   } catch (e) {
     status(e.why ? t("user-accounts.json can't be changed: {why}", { why: e.why }) : e.message, "err");
     return;

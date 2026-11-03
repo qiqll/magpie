@@ -648,6 +648,7 @@ magpie gateway-key models <id> all     # every model
 magpie gateway-key accounts <id> codex/me@example.com   # only these accounts
 magpie gateway-key accounts <id> all    # every account
 magpie gateway-key quotas <id> on      # told the quotas of what it may use
+magpie gateway-key users <id> shared   # bound by user, its users one with other sharing keys' (own: its own, the default)
 ```
 
 Each gateway key can have its own **limit**: a token total, an estimated
@@ -2400,8 +2401,26 @@ user only when it is no longer on the provider (signed out, switched off,
 removed) or its vendor turns it away for good (a sign-in revoked that a
 refresh doesn't mend, an account restricted or to be verified), never for
 being out of its allowance: the user's first spare is its first then, and
-a user left with none is bound afresh on its next request. Each gateway key's users are its own: the
-same id sent with two keys is two users. Bindings are kept for good, by
+a user left with none is bound afresh on its next request.
+
+Who a user is depends on the gateway key it comes with (since T-089). A
+key's users are its own: the same id sent with another key is another
+user, bound to accounts of its own, counted apart on an account's seats,
+let go of apart when idle, and never given the other one's Codex resets.
+A key you let share its users (Gateway → Gateway keys → a key's menu →
+**Share users with other keys**, or `magpie gateway-key users <id>
+shared`; the row then says **Users shared**) is one set of users with
+every other key that shares them and with callers without a key, this
+computer's: the same id sent with any of them is one user, bound to one
+set of accounts, so a conversation that comes in under two of them stays
+on one account. No key shares its users until you set it, a key from
+before this change included; an issued key never does. Turn it on only
+for a key held by a front end of your own that sets `X-Magpie-User`
+itself, from who it knows the caller to be, and removes one its own
+caller sent: magpie takes the header as it comes, so anyone holding a
+sharing key can name any user of every sharing key and be served on that
+user's accounts. A key handed to someone else keeps its users its own.
+Bindings are kept for good, by
 your user's id as sent, in `user-accounts.json` beside `providers.json`
 (`users` for callers without a key, `keys` by key id): a user's first
 account in `who`, `account` and `at`, as a magpie before spares wrote it
@@ -2527,17 +2546,18 @@ its state, provider, gateway key, tier (the default's for one bound before
 tiers), when they were bound and when they last sent the provider a
 request ("last used", none for a binding from before it was kept), 200 at a time,
 narrowed by a search, which matches a spare's account too. The same id
-sent with several gateway keys is one user, as the gateway counts it, so
-it is one row (the file keeps a binding a key, unchanged): every key it
-is bound under named, its accounts each once (first when it is the first
-under any key), each key's tier beside it when they differ, when it was
-first bound and last used under any key, and each account counts it once.
+sent with several gateway keys that share their users (and without a
+key) is one user, as the gateway counts it, so it is one row (the file
+keeps a binding a key, unchanged): every key it is bound under named,
+its accounts each once (first when it is the first under any key), each
+key's tier beside it when they differ, when it was first bound and last
+used under any key, and each account counts it once. The same id under a
+key that doesn't share its users is a row of its own.
 Bound by user,
 each of a user's accounts has an Unbind, confirmed first, that lets go of
-it (`POST /api/gateway/users/unbind`, behind the window's API guard), one
-for each key it is bound to the account under, naming the key when the
-user has several, under that key alone (nothing lets go of every key's
-at once): the
+it (`POST /api/gateway/users/unbind`, behind the window's API guard,
+naming the row's key) under every key of its row, saying so when the row
+has several: the
 user's next account is its first then, and a user left with none is bound
 afresh on its next request (possibly on the same account again, and with
 the default tier for a request that names none). The file is read again
@@ -2747,7 +2767,9 @@ app's scheme, a `*.localhost` page) included; a read-only key 403
 always named (400 without `user`). With `--bind=user`, a request that
 names its user in `X-Magpie-User` spends only the resets of the Codex
 accounts that user is bound to: any other account is refused 403 with
-nothing spent. A request without the header is the key owner's, as
+nothing spent. The user is the key's own unless the key shares its users
+(above), so a key that doesn't can't name another key's user to spend
+that user's resets. A request without the header is the key owner's, as
 before. A second ask for the same account
 while one is out is answered 409. Another magpie's Codex card uses this,
 and so can an app reading `/v1/magpie/quotas/cards`, such as a DSH

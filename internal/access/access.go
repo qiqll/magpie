@@ -149,6 +149,16 @@ type Key struct {
 	// Issues lets the key issue short-lived keys under itself
 	// (POST /v1/magpie/keys); an issued key never can.
 	Issues bool `json:"issues,omitempty"`
+	// SharesUsers: bound by user, the users the key's callers name
+	// (X-Magpie-User) are one with those of every other key that shares
+	// them, and of callers without a key, this computer's: one name, one
+	// set of accounts (T-075). Off, as every key is until the owner turns
+	// it on (T-089), the key's users are its own: a caller of it that
+	// names another key's user is another user, bound to accounts of its
+	// own. On only for a key whose callers are trusted to name users: a
+	// front end that sets the header itself and drops one its own caller
+	// sent. An issued key never shares (UserSharers).
+	SharesUsers bool `json:"sharesUsers,omitempty"`
 }
 
 // Identity is the gateway key a request came with, its budget, the
@@ -238,6 +248,58 @@ func List() ([]Key, error) {
 		k.Secret = ""
 	}
 	return keys, nil
+}
+
+// sharers is UserSharers' last read of the store, by its time and size.
+var sharers struct {
+	sync.Mutex
+	path string
+	mod  time.Time
+	size int64
+	ids  map[string]bool
+}
+
+// UserSharers is the ids of the keys whose users are one with every other
+// such key's (Key.SharesUsers), issued keys never among them, as the
+// store is now: read again when it changed, without mu, as it is written
+// whole to a file renamed over it (save). A store that can't be read is
+// as it was last read, and none before it was read once: each key's users
+// then are its own. Not to be changed by the caller.
+func UserSharers() map[string]bool {
+	sharers.Lock()
+	defer sharers.Unlock()
+	path := Path()
+	if path != sharers.path {
+		sharers.path, sharers.mod, sharers.size, sharers.ids = path, time.Time{}, 0, nil
+	}
+	fi, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		sharers.mod, sharers.size, sharers.ids = time.Time{}, 0, map[string]bool{}
+		return sharers.ids
+	}
+	if err != nil || sharers.ids != nil && fi.ModTime().Equal(sharers.mod) && fi.Size() == sharers.size {
+		return orNone(sharers.ids)
+	}
+	keys, err := load()
+	if err != nil {
+		return orNone(sharers.ids)
+	}
+	ids := map[string]bool{}
+	for _, k := range keys {
+		if k.SharesUsers && k.Issuer == "" && k.Expires.IsZero() && k.ID != "" {
+			ids[k.ID] = true
+		}
+	}
+	sharers.mod, sharers.size, sharers.ids = fi.ModTime(), fi.Size(), ids
+	return ids
+}
+
+// orNone is ids, or none for nil.
+func orNone(ids map[string]bool) map[string]bool {
+	if ids == nil {
+		return map[string]bool{}
+	}
+	return ids
 }
 
 // LANSecret is the key magpie shares the gateway on the local network with
@@ -346,6 +408,9 @@ type Change struct {
 	// Issues is what "issuer-key" sets: the key may issue short-lived
 	// keys under itself (Key.Issues).
 	Issues bool `json:"issues,omitempty"`
+	// SharesUsers is what "users-key" sets: the key's users are one with
+	// every other sharing key's (Key.SharesUsers).
+	SharesUsers bool `json:"sharesUsers,omitempty"`
 	// Secret is the value "add-key" gives the new key, one its clients
 	// already send (love1sbug on X: keys handed out from another gateway);
 	// "" for one magpie makes.
@@ -493,6 +558,13 @@ func Update(action string, in Change) (string, error) {
 				return "", errors.New("An issued key can't issue keys of its own: let a key of yours issue them")
 			}
 			keys[i].Issues = in.Issues
+		case "users-key":
+			// an issued key's users are its own: it is handed to someone
+			// for a while, never a front end trusted to name users
+			if in.SharesUsers && (keys[i].Issuer != "" || !keys[i].Expires.IsZero()) {
+				return "", errors.New("An issued key's users are its own: let the key that issued it share its users instead")
+			}
+			keys[i].SharesUsers = in.SharesUsers
 		case "access-key":
 			// the sharing key is the one magpie gives its own agents (a
 			// WSL distro's under NAT, LANSecret): read-only, they could
@@ -524,7 +596,7 @@ func Update(action string, in Change) (string, error) {
 		default:
 			return "", fmt.Errorf("unknown key action %q", action)
 		}
-		if defaultKey && action != "remove-key" && action != "rename-key" && action != "limit-key" && action != "reset-limit-key" && action != "models-key" && action != "accounts-key" && action != "quotas-key" && action != "access-key" && action != "issuer-key" && action != "move-key" {
+		if defaultKey && action != "remove-key" && action != "rename-key" && action != "limit-key" && action != "reset-limit-key" && action != "models-key" && action != "accounts-key" && action != "quotas-key" && action != "access-key" && action != "issuer-key" && action != "users-key" && action != "move-key" {
 			mirror = &keys[i]
 		}
 	}

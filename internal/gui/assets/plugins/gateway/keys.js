@@ -226,7 +226,7 @@ function renderGatewayKeys() {
     tick.onclick = () => gatewayKeyAction(k.off ? "on-key" : "off-key", { key: k.id });
     // the copy sits by the key it copies (the owner: stranded among the
     // badges it read as nobody's); Rotate and Remove wait in the row's menu
-    row.append(tick, gatewayRename(k), el("span", "plan mono", k.masked), copyCallerKeyBtn(k), el("span", "grow"), ...(k.readOnly ? [gatewayReadOnlyTag()] : []), gatewayModelsBadge(k), gatewayQuotasBadge(k), gatewayLimitBadge(k), gatewayKeyMore(k));
+    row.append(tick, gatewayRename(k), el("span", "plan mono", k.masked), copyCallerKeyBtn(k), el("span", "grow"), ...(k.readOnly ? [gatewayReadOnlyTag()] : []), ...(k.sharesUsers ? [gatewayUsersTag()] : []), gatewayModelsBadge(k), gatewayQuotasBadge(k), gatewayLimitBadge(k), gatewayKeyMore(k));
     const under = gatewayLimit?.id === k.id ? [gatewayLimitEditor(k)] : keyUsed(k).map((u) => gatewayLimitLine(k, u));
     if (under.length) row.classList.add("with-limit"), row.append(...under);
     list.append(row);
@@ -329,6 +329,12 @@ function gatewayKeyMore(k) {
       k.readOnly
         ? { name: "Give full access", icon: EYE_GLYPH, run: () => gatewayKeyAccess(k, false) }
         : { name: "Make read-only", icon: EYE_GLYPH, run: () => gatewayKeyAccess(k, true), off: k.lan, why: k.lan ? t("The sharing key is given to agents, so it can't be read-only") : "" },
+      // bound by user, its users one with every other sharing key's, or
+      // its own as every key's are until it is set (T-089); an issued
+      // key's are always its own
+      k.sharesUsers
+        ? { name: "Keep users to this key", icon: USERS_GLYPH, run: () => gatewayKeyUsers(k, false) }
+        : { name: "Share users with other keys", icon: USERS_GLYPH, run: () => gatewayKeyUsers(k, true), off: !!(k.issuer || k.expires), why: k.issuer || k.expires ? t("An issued key's users are its own") : "" },
       { name: "Rotate key", icon: ROTATE_GLYPH, run: () => askGatewayKey(k, true) },
       { name: "Remove", icon: REMOVE_GLYPH, sep: true, run: () => askGatewayKey(k, false) },
     ]);
@@ -346,6 +352,20 @@ async function gatewayKeyAccess(k, readOnly) {
 function gatewayReadOnlyTag() {
   const tag = el("span", "amodels key-readonly set", t("Read only"));
   tag.title = t("This key only reads quotas and usage. It can't use models or MCP servers, or change anything.");
+  return tag;
+}
+
+const USERS_GLYPH = "M8 7.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM3 13.5c.5-2.3 2.5-3.5 5-3.5s4.5 1.2 5 3.5";
+async function gatewayKeyUsers(k, shares) {
+  const out = await gatewayKeyAction("users-key", { key: k.id, sharesUsers: shares });
+  if (out) status(t(shares ? "{name} shares its users with other keys" : "{name} keeps its users to itself", { name: k.name }), "ok");
+}
+// a key that shares its users says so in its row, always: a user it
+// names (X-Magpie-User) is the same user under every key that shares
+// them, so it is for a front end that sets the header itself
+function gatewayUsersTag() {
+  const tag = el("span", "amodels key-users set", t("Users shared"));
+  tag.title = t("A user this key names (X-Magpie-User) is the same user, on the same accounts, under every key that shares its users and without a key. Only for a front end that sets the header itself and drops one its callers send.");
   return tag;
 }
 
