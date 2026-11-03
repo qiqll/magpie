@@ -17,18 +17,20 @@ var gatewayFreeEvery = 15 * time.Second
 // plainServe says args are magpie serve's for the gateway alone: no
 // --web, whose page shows the gateway another magpie serves and so starts
 // beside it (gui.StartWeb), and nothing serveCmd refuses, which it says
-// at once.
+// at once: a binding it can't take, from --bind or MAGPIE_BIND
+// (bindFlags), is one.
 func plainServe(args []string) bool {
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
-		case a == "--tls-cert" || a == "--tls-key":
+		case a == "--tls-cert" || a == "--tls-key" || a == "--bind":
 			i++
-		case strings.HasPrefix(a, "--tls-cert="), strings.HasPrefix(a, "--tls-key="):
+		case strings.HasPrefix(a, "--tls-cert="), strings.HasPrefix(a, "--tls-key="), strings.HasPrefix(a, "--bind="):
 		default:
 			return false
 		}
 	}
-	return true
+	_, _, _, err := bindingIn(args)
+	return err == nil
 }
 
 // awaitGatewayFree returns once nothing holds the gateway's port, looking

@@ -3,11 +3,14 @@ package cli
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/yetone/magpie/internal/gateway"
 )
 
 // #4938: the service's magpie serve, started by launchd beside the app
@@ -74,6 +77,8 @@ func TestServeWaitsForTheGatewayBeforeStartingUp(t *testing.T) {
 // magpie serves, and a mistyped flag is refused at once, not after the
 // app has quit.
 func TestPlainServe(t *testing.T) {
+	helpHome(t) // --bind=user reads user-tiers.json
+	t.Setenv(gateway.BindEnv, "")
 	for _, c := range []struct {
 		args []string
 		want bool
@@ -86,9 +91,22 @@ func TestPlainServe(t *testing.T) {
 		{[]string{"--tls-cert=c.pem", "--web"}, false},
 		{[]string{"--lan"}, false},
 		{[]string{"web"}, false},
+		// a binding it takes waits; one it can't is refused at once
+		{[]string{"--bind=user"}, true},
+		{[]string{"--bind", "session", "--tls-cert=c.pem"}, true},
+		{[]string{"--bind=users"}, false},
+		{[]string{"--bind"}, false},
 	} {
 		if got := plainServe(c.args); got != c.want {
 			t.Errorf("plainServe(%q) = %v, want %v", c.args, got, c.want)
 		}
+	}
+	// nor from MAGPIE_BIND, which magpie serve refuses at once
+	t.Setenv(gateway.BindEnv, "sessions")
+	if plainServe(nil) {
+		t.Errorf("plainServe with %s=sessions waits", gateway.BindEnv)
+	}
+	if os.Getenv(gateway.BindEnv) != "sessions" {
+		t.Errorf("plainServe set %s to %q", gateway.BindEnv, os.Getenv(gateway.BindEnv))
 	}
 }
