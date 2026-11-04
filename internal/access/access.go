@@ -269,20 +269,14 @@ var sharers struct {
 // key's users are its own then (logged once a failure). Not to be changed
 // by the caller.
 func UserSharers() map[string]bool {
-	ids, _ := userSharers()
+	ids, _ := UserSharersRead()
 	return ids
 }
 
-// UserSharersKnown says the store reads now: UserSharers is the keys that
-// share their users, not none for a store unknown. A change that takes a
-// seat from a user for not sharing (T-091) waits for one that does.
-func UserSharersKnown() bool {
-	_, ok := userSharers()
-	return ok
-}
-
-// userSharers is UserSharers, ok false for a store that can't be read.
-func userSharers() (_ map[string]bool, ok bool) {
+// UserSharersRead is UserSharers, known false for a store that can't be
+// read (none shares then), of one read: a change that takes a seat from a
+// user for not sharing (T-091) waits for one that does.
+func UserSharersRead() (_ map[string]bool, known bool) {
 	sharers.Lock()
 	defer sharers.Unlock()
 	path := Path()

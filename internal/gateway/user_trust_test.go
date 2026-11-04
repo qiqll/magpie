@@ -31,15 +31,16 @@ func shareUsers(t *testing.T, ids ...string) {
 // key store says, for keys a test's user-accounts.json names alone.
 func sharing(t *testing.T, ids ...string) {
 	t.Helper()
-	was := userSharers
-	userSharers = func() map[string]bool {
-		out := maps.Clone(was())
+	was := userSharersRead
+	userSharersRead = func() (map[string]bool, bool) {
+		ids0, known := was()
+		out := maps.Clone(ids0)
 		for _, id := range ids {
 			out[id] = true
 		}
-		return out
+		return out, known
 	}
-	t.Cleanup(func() { userSharers = was })
+	t.Cleanup(func() { userSharersRead = was })
 }
 
 // The owner's option B (T-089): bob, bound under the key Tenant B, is
@@ -146,12 +147,14 @@ func TestUserIdleUnderAKeyThatDoesntShare(t *testing.T) {
 // without a key, keeps it.
 func TestUserUnboundUnderAKeyThatDoesntShare(t *testing.T) {
 	codexSignedIn(t)
-	one := func() userBinding {
-		return userBinding{Who: "codex@me@example.com", Account: "me@example.com", At: ago(time.Hour), Used: ago(time.Hour)}
+	// each bound on its own, at a time of its own: none a copy of
+	// another's (T-091 lets go of a copy)
+	one := func(at time.Duration) userBinding {
+		return userBinding{Who: "codex@me@example.com", Account: "me@example.com", At: ago(at), Used: ago(time.Hour)}
 	}
 	writeUsers(t, userFile{
-		Users: map[string]map[string]userBinding{"codex": {"alice": one()}},
-		Keys:  map[string]map[string]map[string]userBinding{"k1": {"codex": {"alice": one()}}, "k2": {"codex": {"alice": one()}}},
+		Users: map[string]map[string]userBinding{"codex": {"alice": one(time.Hour)}},
+		Keys:  map[string]map[string]map[string]userBinding{"k1": {"codex": {"alice": one(2 * time.Hour)}}, "k2": {"codex": {"alice": one(3 * time.Hour)}}},
 	})
 	if found, err := Unbind("k1", "codex", "alice", "codex@me@example.com"); !found || err != nil {
 		t.Fatalf("%v %v", found, err)

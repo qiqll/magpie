@@ -2434,8 +2434,10 @@ magpie lets go of those copies on its own: whenever it reads
 `user-accounts.json` again or the keys that share change (a key turned
 from sharing to its own included, at once from the Gateway page or
 `magpie gateway-key users <id> own`), each account a key that keeps its
-users its own has for a user that the sharing keys' user of the same
-name has too is taken from that key's user, the sharing one keeping it.
+users its own has for a user, copied from the sharing keys' user of the
+same name (the same account, bound at the same time), is taken from that
+key's user, the sharing one keeping it; two users bound to one account
+each on its own keep it.
 A user left with no account is bound afresh on its next request. Before
 it writes the file, magpie keeps a copy of it beside it
 (`user-accounts.json.bak-<UTC time>`) and logs each account it let go

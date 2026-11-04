@@ -22,6 +22,14 @@ func lapsedAt(tier string) userBinding {
 		More: []userSeat{{Who: "codex@third@example.com", Account: "third@example.com", At: now}}}
 }
 
+// lapsedBefore is lapsedAt(""), bound d before now.
+func lapsedBefore(d time.Duration) userBinding {
+	b := lapsedAt("")
+	b.At = b.At.Add(-d)
+	b.More[0].At = b.At
+	return b
+}
+
 // boundOf is user's binding to pid under the gateway key keyID ("" for
 // none) as user-accounts.json has it.
 func boundOf(t *testing.T, keyID, pid, user string) userBinding {
@@ -101,7 +109,9 @@ func TestUsersOwnKeepsItsTierWithoutTheHeader(t *testing.T) {
 	lapseSaved(t, "third@example.com")
 	writeUsers(t, userFile{
 		Users: map[string]map[string]userBinding{"codex": {"bob": lapsedAt("pro"), "alice": lapsedAt("")}},
-		Keys:  map[string]map[string]map[string]userBinding{"other-key": {"codex": {"bob": lapsedAt("")}}},
+		// bound on its own, an hour before: no copy of the keyless bob's
+		// (T-091 lets go of a copy)
+		Keys: map[string]map[string]map[string]userBinding{"other-key": {"codex": {"bob": lapsedBefore(time.Hour)}}},
 	})
 	s := byUser(New())
 	p, err := provider.Find("codex")

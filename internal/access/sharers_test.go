@@ -82,17 +82,17 @@ func TestUserSharers(t *testing.T) {
 	}
 }
 
-// UserSharersKnown tells a store that can't be read, which UserSharers
+// UserSharersRead tells a store that can't be read, which UserSharers
 // says no key shares of, from one where none does (T-091): no store and
 // one that reads are known, one that doesn't read isn't, until it does.
 func TestUserSharersKnown(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	clockAt(t, time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC))
-	if !UserSharersKnown() {
+	if _, known := UserSharersRead(); !known {
 		t.Fatal("no store: unknown")
 	}
 	addKey(t, "Front")
-	if !UserSharersKnown() {
+	if _, known := UserSharersRead(); !known {
 		t.Fatal("a store that reads: unknown")
 	}
 	raw, err := os.ReadFile(Path())
@@ -102,13 +102,13 @@ func TestUserSharersKnown(t *testing.T) {
 	if err := os.WriteFile(Path(), []byte(`[{"id":`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if UserSharersKnown() {
-		t.Fatal("a store that doesn't read: known")
+	if ids, known := UserSharersRead(); known || len(ids) != 0 {
+		t.Fatalf("a store that doesn't read: known %v, %v", known, ids)
 	}
 	if err := os.WriteFile(Path(), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if !UserSharersKnown() {
+	if _, known := UserSharersRead(); !known {
 		t.Fatal("read again: unknown")
 	}
 }

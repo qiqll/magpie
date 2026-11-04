@@ -3,6 +3,7 @@ package gui
 import (
 	"cmp"
 	"encoding/json"
+	"log"
 	"net/http"
 	"slices"
 	"strings"
@@ -131,7 +132,9 @@ func callerKeyRoutes(mux *http.ServeMux) {
 		if r.PathValue("action") == "users-key" && !in.SharesUsers {
 			// its users' seats of the shared users' are let go of now
 			// (T-091); the next request bound by user does it otherwise
-			gateway.SettleUsers()
+			if err := gateway.SettleUsers(); err != nil {
+				log.Printf("user accounts: not read after the key's change (%v): its users' seats of the shared users' are let go of on the next request", err)
+			}
 		}
 		keys, err := access.List()
 		if err != nil {

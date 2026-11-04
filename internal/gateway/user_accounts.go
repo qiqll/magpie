@@ -272,8 +272,15 @@ func groupOf(sharers map[string]bool, keyID string) string {
 // (loadUsers). Called with userBinds held.
 func userGroup(keyID string) string { return groupOf(userBinds.sharers, keyID) }
 
-// userSharers is the keys that share their users; a test's to set.
-var userSharers = access.UserSharers
+// userSharersRead is the keys that share their users, and whether the
+// key store read (access.UserSharersRead); a test's to set.
+var userSharersRead = access.UserSharersRead
+
+// userSharers is the keys that share their users (userSharersRead).
+func userSharers() map[string]bool {
+	ids, _ := userSharersRead()
+	return ids
+}
 
 // sharedOf is user's binding to provider pid as every gateway key of
 // keyID's group shares it (userGroup; the owner's option A, 2026-11-03,
@@ -592,6 +599,9 @@ var userBinds = struct {
 	// sharers: the gateway keys that share their users (userGroup), read
 	// with the file (loadUsers)
 	sharers map[string]bool
+	// sharersKnown: the key store read when sharers was, so a key not
+	// among them keeps its users its own, not one unknown
+	sharersKnown bool
 	// swept: dropCopiedSeats looked at m as read, when sweptFor were the
 	// keys that share their users; looked at again when either changes
 	swept    bool
@@ -707,7 +717,7 @@ func userOf(h http.Header) (user, bad string) {
 func loadUsers() error {
 	// which keys share their users, as they do now: a key turned to share
 	// them, or not to, is so on its next request
-	userBinds.sharers = userSharers()
+	userBinds.sharers, userBinds.sharersKnown = userSharersRead()
 	path := usersPath()
 	if path != userBinds.path {
 		userBinds.m, userBinds.path, userBinds.mod, userBinds.size, userBinds.read, userBinds.stale = nil, path, time.Time{}, 0, false, false
@@ -725,6 +735,7 @@ func loadUsers() error {
 			userBinds.m = nil
 		}
 		userBinds.mod, userBinds.size, userBinds.read, userBinds.stale = time.Time{}, 0, true, false
+		dropCopiedSeats() // bound in memory alone
 		return nil
 	}
 	if err == nil && userBinds.read && fi.ModTime().Equal(userBinds.mod) && fi.Size() == userBinds.size {
@@ -773,23 +784,22 @@ func SettleUsers() error {
 	return loadUsers()
 }
 
-// userSharersKnown says the store of gateway keys reads now; a test's to
-// set.
-var userSharersKnown = access.UserSharersKnown
-
 // writeUsersBackup writes dropCopiedSeats' copy of the file; a test's to
 // fail.
 var writeUsersBackup = steady.WriteFile
 
 // dropCopiedSeats lets go of every seat a user of a gateway key that
-// keeps its users its own (userGroup) has of the shared users' user of
-// that name (the owner's option A, 2026-11-04, T-091): T-075 wrote one
+// keeps its users its own (userGroup) has copied from the shared users'
+// user of that name: the same account, bound at the same time (the
+// owner's option A, 2026-11-04, T-091). T-075 wrote one
 // user's accounts alike under every key it came with (putShared), and
 // T-089 left those copies under the keys that don't share, so that key's
 // user of the name had the shared one's seats and its Codex resets, and a
 // seat for one user had two; a key turned back to its own users has them
 // too. The shared users keep theirs; a user left with no seat is bound
-// afresh on its next request. Done whenever the file was read again or
+// afresh on its next request. Two users bound to one account each on its
+// own were bound at two times, and each keeps it: let go of, it would be
+// bound to it again, and let go of again on every read. Done whenever the file was read again or
 // the keys that share changed, never while either is unknown (the file
 // stale, the key store unreadable: no key shares then), and only once a
 // copy of the file as it was is beside it (user-accounts.json.bak-<UTC
@@ -829,7 +839,7 @@ func dropCopiedSeats() {
 			for u, b := range us {
 				d := drop{key: k, pid: pid, user: u}
 				for _, st := range b.seats() {
-					if seatIn(shared[pid][u], st.Who) {
+					if slices.ContainsFunc(shared[pid][u], func(s userSeat) bool { return strings.EqualFold(s.Who, st.Who) && s.At.Equal(st.At) }) {
 						d.gone = append(d.gone, st)
 					} else {
 						d.left = append(d.left, st)
@@ -842,7 +852,7 @@ func dropCopiedSeats() {
 		}
 	}
 	path := usersPath()
-	if len(drops) > 0 && !userSharersKnown() {
+	if len(drops) > 0 && !userBinds.sharersKnown {
 		// no key shares while the store is unknown: every key's users
 		// would look their own; looked at again on the next read
 		if _, said := userFileSaid.LoadOrStore("sharers unknown "+path, true); !said {

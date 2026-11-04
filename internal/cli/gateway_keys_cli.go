@@ -758,7 +758,9 @@ func gatewayKeyUsers(out io.Writer, args []string) error {
 		if args[1] == "own" {
 			// its users' seats of the shared users' are let go of now
 			// (T-091); the next request bound by user does it otherwise
-			gateway.SettleUsers()
+			if err := gateway.SettleUsers(); err != nil {
+				fmt.Fprintf(out, "user-accounts.json not read (%v): its users' seats of the shared users' are let go of on the gateway's next request\n", err)
+			}
 		}
 	}
 	keys, err := access.List()

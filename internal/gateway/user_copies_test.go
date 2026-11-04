@@ -202,12 +202,9 @@ func TestCopiedSeatKeptWhileUnsure(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		known := userSharersKnown
-		userSharersKnown = func() bool { return false }
-		t.Cleanup(func() { userSharersKnown = known })
-		sharers := userSharers
-		userSharers = func() map[string]bool { return map[string]bool{} }
-		t.Cleanup(func() { userSharers = sharers })
+		read := userSharersRead
+		userSharersRead = func() (map[string]bool, bool) { return map[string]bool{}, false }
+		t.Cleanup(func() { userSharersRead = read })
 		if err := SettleUsers(); err != nil {
 			t.Fatal(err)
 		}
@@ -218,7 +215,7 @@ func TestCopiedSeatKeptWhileUnsure(t *testing.T) {
 			t.Fatalf("copied: %v", backups)
 		}
 		// known again: let go of then
-		userSharersKnown, userSharers = known, sharers
+		userSharersRead = read
 		if err := SettleUsers(); err != nil {
 			t.Fatal(err)
 		}
@@ -280,4 +277,40 @@ func TestCopiedSeatKeptWhileUnsure(t *testing.T) {
 			t.Fatal("let go of while the file doesn't read")
 		}
 	})
+}
+
+// Two users of one name bound to one account each on its own, at two
+// times (a tier that shares an account): no copy, each keeps it, and
+// nothing is written or copied however often the file is read.
+func TestSeatBoundApartKept(t *testing.T) {
+	codexSignedIn(t)
+	keys, _ := newCaller(t, "Tenant")
+	writeUsers(t, userFile{
+		Users: map[string]map[string]userBinding{"codex": {"bob": bound("me@example.com", "", ago(time.Hour))}},
+		Keys:  map[string]map[string]map[string]userBinding{keys[0].ID: {"codex": {"bob": bound("me@example.com", "", ago(2*time.Hour))}}},
+	})
+	was, err := os.ReadFile(usersPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := SettleUsers(); err != nil {
+			t.Fatal(err)
+		}
+		forgetUsersRead()
+	}
+	if b, _ := os.ReadFile(usersPath()); string(b) != string(was) {
+		t.Fatalf("rewritten: %s", b)
+	}
+	if backups := usersBackups(t); len(backups) != 0 {
+		t.Fatalf("copied: %v", backups)
+	}
+}
+
+// forgetUsersRead has the next loadUsers read the file again, as a
+// restart does.
+func forgetUsersRead() {
+	userBinds.Lock()
+	userBinds.read = false
+	userBinds.Unlock()
 }
