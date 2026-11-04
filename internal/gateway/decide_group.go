@@ -590,9 +590,9 @@ func (s *Server) askDecider(ctx context.Context, wait time.Duration, p provider.
 // context, read for its user alone.
 func (s *Server) askDecideTries(as context.Context, wait time.Duration, cs []candidate, intents []string, prev before, effort bool, text string, gu *groupUsers) (v verdict, err error) {
 	full := classifyTimeout()
-	// as names only the user its usage rows are kept for (decideFor), and,
-	// bound by user, the key of that user's turn (withAskedKey), whose
-	// group by_use and the user's usage count them in (T-095)
+	// as names only the user its usage rows are kept for (decideFor), and
+	// the key of that user's turn (withAskedKey), bound by session too,
+	// whose group by_use and the user's usage count them in (T-095, T-102)
 	user := decideFor(as)
 	if f, ok := as.Value(askedForKey{}).(askedFor); ok && user == "" {
 		user = f.user

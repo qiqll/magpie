@@ -106,8 +106,14 @@ type askedFor struct{ key, user, tier string }
 
 // forUser is ctx for magpie's own asks made for r: carrying r's user and
 // tier, bound by user. Bound by session, or for a request without a user,
-// it is ctx.
+// it carries only r's gateway key, for the asks' rows (askedKeyKey).
 func (s *Server) forUser(ctx context.Context, r *http.Request) context.Context {
+	// the key whatever the binding, as appendUsage keeps the turn's own
+	// row under it: bound by session too, a classifier's and a run's
+	// search rows count for that key (T-102)
+	if k := askedKeyOf(r); k.id != "" {
+		ctx = context.WithValue(ctx, askedKeyKey{}, k)
+	}
 	if !s.bind.byUser() {
 		return ctx
 	}
@@ -115,7 +121,6 @@ func (s *Server) forUser(ctx context.Context, r *http.Request) context.Context {
 	if user == "" {
 		return ctx
 	}
-	ctx = context.WithValue(ctx, askedKeyKey{}, askedKeyOf(r))
 	return context.WithValue(ctx, askedForKey{}, askedFor{userKey(r), user, strings.TrimSpace(r.Header.Get(UserTierHeader))})
 }
 
@@ -175,12 +180,13 @@ func askAsUser(ctx context.Context, h http.Header) {
 	}
 }
 
-// askedAs is ctx asked for the user as is (forUser): for an ask made
-// later, from a request that carries none of its own (a Claude Code
-// run's web search, asked back through its MCP callback).
+// askedAs is ctx asked for the user as is (forUser), under its key: for
+// an ask made later, from a request that carries none of its own (a
+// Claude Code run's web search, asked back through its MCP callback).
 func askedAs(ctx, as context.Context) context.Context {
+	ctx = withAskedKey(ctx, as)
 	if f, ok := as.Value(askedForKey{}).(askedFor); ok {
-		return context.WithValue(withAskedKey(ctx, as), askedForKey{}, f)
+		return context.WithValue(ctx, askedForKey{}, f)
 	}
 	return ctx
 }
