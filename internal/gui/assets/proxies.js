@@ -65,6 +65,7 @@ window.savedProxiesFill = function (row, s) {
     }
     if (spEdit === i) box.append(spForm(list, keep, redraw));
   });
+  if (spErr && spEdit === null) box.append(el("div", "sub err sp-err", spErr));
   if (spEdit === -1) box.append(spForm(list, keep, redraw));
   else {
     const add = el("button", "text sp-add", t("Add a proxy"));
@@ -135,17 +136,14 @@ window.savedProxyFill = function (auth, addr, after) {
 // the address is traded through (T-110): the global one, Direct, a saved
 // one, the subscription's or an account's, or one typed. A sign-in that
 // keeps the proxy it started through (proxyFixed) says to pick from Proxy
-// above instead. flow.viaBody is what Finish sign-in sends with it.
+// above instead. Finish sign-in sends flow.pasteVia (pasteViaOf).
 window.pastePickFill = function (box, sub, flow) {
   box.replaceChildren();
   if (flow.proxyFixed) {
-    flow.viaBody = {};
     box.append(el("span", "s proxy-fixed", t("This sign-in keeps the proxy it started through. To finish it through another, pick it from Proxy above: the sign-in starts again.")));
     return;
   }
   const now = flow.proxy || "";
-  const body = () => { flow.viaBody = flow.pasteVia != null && flow.pasteVia !== now ? { proxy: flow.pasteVia } : {}; };
-  body();
   const via = flow.pasteVia ?? now;
   const b = el("button", "link via paste-via", t("Through: {proxy}", { proxy: proxyName(via) }));
   b.type = "button";
@@ -166,7 +164,7 @@ window.pastePickFill = function (box, sub, flow) {
   const cp = input(flow.pasteVia && flow.pasteVia !== now ? flow.pasteVia : "", "http://127.0.0.1:7890");
   cp.className = "paste-proxy";
   cp.setAttribute("aria-label", t("Proxy"));
-  const login = proxyLoginRow(cp, (v) => { flow.pasteVia = v.trim() || null; body(); });
+  const login = proxyLoginRow(cp, (v) => { flow.pasteVia = v.trim() || null; });
   for (const f of [cp, ...login.querySelectorAll("input")]) f.onkeydown = (e) => e.stopPropagation();
   ask.append(cp, login);
   box.append(ask);

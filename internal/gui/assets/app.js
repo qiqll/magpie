@@ -12925,7 +12925,7 @@ function renderSigning(sub) {
       url.disabled = true;
       why.textContent = "";
       try {
-        await api("signin/" + flow.id + "/callback", { url: url.value, ...flow.viaBody });
+        await api("signin/" + flow.id + "/callback", { url: url.value, ...pasteViaOf(flow) });
         flow.callbackSubmitted = true;
         url.disabled = true;
       } catch (err) {
@@ -20659,6 +20659,7 @@ function proxyAddress(a, f, user, pass) {
 // proxyLoginRow: a proxy login's fields for the proxy rows outside
 // Settings (#3382), split and joined as Settings' row does (proxyFields,
 // proxyAddress), so setURL gets the address Settings would save.
+const pasteViaOf = (f) => f.pasteVia != null && !f.proxyFixed ? { proxy: f.pasteVia } : {};
 const proxiesJs = (f) => import("./proxies.js").then(f, () => {});
 function proxyLoginRow(addr, setURL, changed) {
   const fields = {};

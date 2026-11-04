@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
@@ -1756,7 +1757,8 @@ type SavedProxy struct {
 // CheckProxies says whether ps can be kept as Settings.Proxies: each
 // with a name of its own and an address CheckProxy takes, neither
 // "" nor "direct", which aren't proxies to name. Names and addresses
-// are trimmed in place.
+// are trimmed in place. Only SetProxies checks them: a bad one kept by an
+// older magpie or a hand edit never holds up another setting's save.
 func CheckProxies(ps []SavedProxy) error {
 	seen := map[string]bool{}
 	for i := range ps {
@@ -1765,8 +1767,8 @@ func CheckProxies(ps []SavedProxy) error {
 		if p.Name == "" {
 			return errors.New("a saved proxy needs a name")
 		}
-		if len(p.Name) > 80 {
-			return fmt.Errorf("the proxy name %q is too long", p.Name[:80])
+		if utf8.RuneCountInString(p.Name) > 80 {
+			return fmt.Errorf("the proxy name %q… is too long", string([]rune(p.Name)[:20]))
 		}
 		k := strings.ToLower(p.Name)
 		if seen[k] {
@@ -2175,9 +2177,6 @@ func saveOwn(s Settings, recording, reads bool) error {
 	}
 	if s.Proxy != "" && s.Proxy != "direct" {
 		s.ProxyCustom = s.Proxy
-	}
-	if err := CheckProxies(s.Proxies); err != nil {
-		return err
 	}
 	s.Vision = strings.TrimSpace(s.Vision)
 	if s.Vision != "" && s.Vision != "off" && !strings.Contains(s.Vision, "/") {

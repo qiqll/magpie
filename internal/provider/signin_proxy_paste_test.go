@@ -218,3 +218,41 @@ func TestPluginCodeGoesThroughTheProxyPickedAtPaste(t *testing.T) {
 		t.Fatalf("the proxies saw %q", seen)
 	}
 }
+
+// A proxy picked with an address that isn't taken is undone with it: the
+// sign-in goes on through the proxy it had, and when the browser's own
+// callback finishes it, the proxy never used isn't kept as the account's.
+func TestRefusedPasteUndoesItsProxy(t *testing.T) {
+	claudeHome(t)
+	dialsOut(t)
+	vendor, saw := codexVendorProxy(t)
+	unused, unusedSaw := codexVendorProxy(t)
+	oldTok, oldAddr := codexTokenURL, codexCallbackAddr
+	t.Cleanup(func() { codexTokenURL, codexCallbackAddr = oldTok, oldAddr })
+	codexTokenURL = "http://auth.openai.invalid/oauth/token"
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	codexCallbackAddr = ln.Addr().String()
+	ln.Close()
+	pick := vendor.URL
+	st, err := StartSignInWith("codex", SignInOptions{Proxy: &pick})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := unused.URL
+	if err := SubmitSignInCallbackThrough(st.ID, "http://localhost:1/auth/callback?code=x&state=not-its", &other); err == nil {
+		t.Fatal("an address of another sign-in was taken")
+	}
+	if now, _ := SignInStatus(st.ID); now.State != "waiting" || now.Proxy != vendor.URL {
+		t.Fatalf("after the refused paste the sign-in is %+v", now)
+	}
+	finishInBrowser(t, st, "u")
+	if st = waitDone(t, st.ID); st.State != "done" || st.Proxy != vendor.URL {
+		t.Fatalf("state %+v", st)
+	}
+	if len(saw()) != 1 || len(unusedSaw()) != 0 {
+		t.Fatalf("the sign-in's proxy saw %q, the refused one %q", saw(), unusedSaw())
+	}
+	if got := ProxyOfLogin("codex", "u@example.com"); got != vendor.URL {
+		t.Fatalf("kept as %q", got)
+	}
+}

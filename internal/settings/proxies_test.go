@@ -3,6 +3,7 @@ package settings
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // T-110: the proxies the user named are kept to pick from: each with a
@@ -64,5 +65,24 @@ func TestSavedProxiesOwn(t *testing.T) {
 	from.KeepOwn(Settings{Proxies: []SavedProxy{{Name: "here", URL: "http://here:1"}}})
 	if len(from.Proxies) != 1 || from.Proxies[0].Name != "here" || from.Theme != "dark" {
 		t.Fatalf("KeepOwn: %+v", from)
+	}
+}
+
+// A bad saved proxy (an older magpie's, a hand edit) never holds up the
+// save of another setting: only SetProxies checks them.
+func TestBadSavedProxyHoldsNoSave(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	s := Load()
+	s.Proxies = []SavedProxy{{Name: "", URL: "direct"}}
+	s.Theme = "dark"
+	if err := Save(s); err != nil {
+		t.Fatalf("a save with a bad saved proxy: %v", err)
+	}
+	if got := Load(); got.Theme != "dark" {
+		t.Fatalf("theme %q", got.Theme)
+	}
+	long := strings.Repeat("代", 81)
+	if err := SetProxies([]SavedProxy{{Name: long, URL: "http://127.0.0.1:1"}}); err == nil || !utf8.ValidString(err.Error()) {
+		t.Fatalf("a long name: %v", err)
 	}
 }

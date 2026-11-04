@@ -222,29 +222,40 @@ func (s *signInFlow) proxyFixed() bool {
 }
 
 // repick has the rest of the sign-in go through proxy (T-110), picked as
-// its address is pasted; the same proxy as now changes nothing.
-func (s *signInFlow) repick(proxy string) error {
+// its address is pasted; the same proxy as now changes nothing. undo puts
+// back the proxy it had, for a paste that wasn't taken: the browser's own
+// callback, or a right paste later, then goes as it would have, and a
+// proxy never used isn't kept as the account's.
+func (s *signInFlow) repick(proxy string) (undo func(), err error) {
 	p := strings.TrimSpace(proxy)
 	if err := settings.CheckProxy(p); err != nil {
-		return err
+		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if p == s.proxy {
-		return nil
+		return func() {}, nil
 	}
 	if s.proxyFixed() {
-		return errProxyFixed
+		return nil, errProxyFixed
 	}
 	if s.st.State != "waiting" || s.claimed {
-		return errors.New("this sign-in is over or already finishing; start it again if it doesn't end")
+		return nil, errors.New("this sign-in is over or already finishing; start it again if it doesn't end")
+	}
+	was, chosen, repicked, from := s.proxy, s.chosen, s.repicked, s.proxyFrom
+	undo = func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.st.State == "waiting" && !s.claimed && s.proxy == p {
+			s.proxy, s.chosen, s.repicked, s.proxyFrom, s.st.Proxy = was, chosen, repicked, from, was
+		}
 	}
 	s.proxy, s.chosen, s.repicked, s.proxyFrom = p, true, true, ""
 	if p != "" {
 		s.proxyFrom = "picked"
 	}
 	s.st.Proxy = p
-	return nil
+	return undo, nil
 }
 
 // errProxyFixed is another proxy picked for a sign-in that can't take one
@@ -659,8 +670,10 @@ func SubmitSignInCallbackThrough(id, raw string, proxy *string) error {
 	if !ok {
 		return errors.New("no such sign-in")
 	}
+	undo := func() {}
 	if proxy != nil {
-		if err := s.repick(*proxy); err != nil {
+		var err error
+		if undo, err = s.repick(*proxy); err != nil {
 			return err
 		}
 	}
@@ -680,6 +693,7 @@ func SubmitSignInCallbackThrough(id, raw string, proxy *string) error {
 	}
 	logPasteRefused(s, raw, err)
 	if err != nil {
+		undo()
 		// the page says it with all the sign-in was given left out
 		err = heldErr{err, s.status().secrets}
 	}
