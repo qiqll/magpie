@@ -3038,6 +3038,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// accounts, another user's among them (saidToUser)
 			bindsUser = true
 			limitedUser, _ = userOf(r.Header)
+			// a seal none of the user's accounts wrote is refused before
+			// any member's provider is narrowed, as a provider's turn's is
+			// (sealedRefusal): checkpointReaders left only its writer,
+			// which usersOn would bind an unbound user to and serve, and
+			// a bound one was told groupTurnRefused's "none can take it
+			// now" (T-101)
+			if limitedUser != "" && len(cands) > 0 {
+				if refused := sealedRefusal(r, limitedUser, cands[0].model, checkpoint, userRefusal{}); refused.status != 0 {
+					call.Provider = cands[0].p.ID
+					s.userRefused(w, from, &call, &UserBound{User: limitedUser}, refused)
+					turnedAway()
+					return
+				}
+			}
 			// a pin holds only to one of the user's own, that one alone
 			// tried; one to another's is served as if unpinned, never on
 			// that account (T-009's decision, T-036), and one to its own
