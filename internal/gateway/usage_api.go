@@ -53,20 +53,44 @@ func refuseHeld(w http.ResponseWriter, r *http.Request, msg string) bool {
 
 // userCalls is, bound by user, which of the usage log's calls a request
 // naming its user (UserHeader) is told of in the summary (T-093): its own
-// (Record.User, under a key of its group: usersOwn.mine) that an account
-// or key it is on now answered (usersSeats). The summary of everyone's
-// names every account, key, user and session; the user is told its own
-// calls on its own accounts alone, as it is told their quotas alone
-// (T-090). keep is nil, and own too, as usersSeats says: everything, as
-// before. own also keys the summary's cache (usage.SummarizeWhere).
+// (Record.User, under a key of its group) that an account or key it is on
+// now answered (usersSeats): usersOwn.filter, which its requests are
+// narrowed to as well (T-098). The summary of everyone's names every
+// account, key, user and session; the user is told its own calls on its
+// own accounts alone, as it is told their quotas alone (T-090). keep is
+// nil, and own too, as usersSeats says: everything, as before. own also
+// keys the summary's cache (usage.SummarizeWhere).
 func (s *Server) userCalls(w http.ResponseWriter, r *http.Request) (keep func(usage.Record) bool, own *usersOwn, ok bool) {
 	own, ok = s.usersSeats(w, r)
 	if own == nil || !ok {
 		return nil, nil, ok
 	}
-	return func(rec usage.Record) bool {
-		return own.mine(rec.User, rec.CallerKeyID) && seatIn(own.seats, seatOfCall(rec))
-	}, own, true
+	o := own.filter()
+	return func(rec usage.Record) bool { return o.Keeps(&rec) }, own, true
+}
+
+// filter is own as the usage log narrows to it (usage.Own): its user, the
+// keys of its group (groupOf: every key that shares its users and the
+// calls with none, or its own key alone) and its seats.
+func (o *usersOwn) filter() usage.Own {
+	keys := []string{}
+	if o.group == sharedUsers {
+		keys = append(keys, "") // groupOf: a call with no key is the shared group's
+		for k, on := range o.sharers {
+			if on && k != "" {
+				keys = append(keys, k)
+			}
+		}
+	} else {
+		keys = append(keys, o.group)
+	}
+	slices.Sort(keys)
+	seats := make([]string, 0, len(o.seats))
+	for _, st := range o.seats {
+		seats = append(seats, strings.ToLower(st.Who))
+	}
+	slices.Sort(seats)
+	return usage.Own{User: o.user, Keys: strings.Join(keys, "\n"), Seats: strings.Join(seats, "\n")}
 }
 
 // ownKey is what own's summary is kept by: who is told it, of which
@@ -85,18 +109,6 @@ func (o *usersOwn) ownKey() string {
 	}
 	slices.Sort(sharers)
 	return strings.Join([]string{o.group, o.user, strings.Join(whos, ","), strings.Join(sharers, ",")}, "\x00")
-}
-
-// seatOfCall is the account or key that answered rec, as a seat names it
-// (candidate.who): the provider itself for a call neither answered.
-func seatOfCall(rec usage.Record) string {
-	if a := strings.TrimSpace(rec.Account()); a != "" {
-		return rec.Provider + "@" + strings.ToLower(a)
-	}
-	if rec.ProviderKeyID != "" {
-		return rec.Provider + "#" + rec.ProviderKeyID
-	}
-	return rec.Provider
 }
 
 func (s *Server) usageSummary(w http.ResponseWriter, r *http.Request) {
@@ -132,13 +144,34 @@ func (s *Server) usageRequests(w http.ResponseWriter, r *http.Request) {
 	offset, _ := strconv.Atoi(q.Get("offset"))
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	f := usageapi.FilterOf(q)
+	// bound by user, a request naming its user is told its own calls on
+	// its own seats alone, as its summary (userCalls; T-098), a held key's
+	// within the key's own
+	own, ok := s.usersSeats(w, r)
+	if !ok {
+		return
+	}
+	if own != nil {
+		f.Own = own.filter()
+	}
 	who := access.Caller(r.Context())
 	if !heldKey(who) {
-		writeJSON(w, 200, usageapi.LedgerPage(usageapi.PeriodOf(q.Get("period")), f, offset, limit))
+		writeJSON(w, 200, withoutOthers(usageapi.LedgerPage(usageapi.PeriodOf(q.Get("period")), f, offset, limit), own))
 		return
 	}
 	f.CallerKey = who.KeyID
-	writeJSON(w, 200, withoutAccounts(usageapi.OwnPage(usageapi.LedgerPage(usageapi.PeriodOf(q.Get("period")), f, offset, limit), who.KeyID)))
+	writeJSON(w, 200, withoutAccounts(withoutOthers(usageapi.OwnPage(usageapi.LedgerPage(usageapi.PeriodOf(q.Get("period")), f, offset, limit), who.KeyID), own)))
+}
+
+// withoutOthers is a user's own page (usage.Filter.Own) without the other
+// computers it made no call on: they are listed whether or not a call
+// was, and named by the operator. Unchanged for own nil.
+func withoutOthers(l usageapi.Ledger, own *usersOwn) usageapi.Ledger {
+	if own == nil {
+		return l
+	}
+	l.Computers = slices.DeleteFunc(l.Computers, func(s usageapi.Share) bool { return s.Calls == 0 && s.ID != usage.ThisComputer })
+	return l
 }
 
 // withoutAccounts is a held key's own calls with nothing of the accounts

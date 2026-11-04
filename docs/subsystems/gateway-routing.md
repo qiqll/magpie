@@ -569,13 +569,22 @@ the user's seats alone (`seatIn` over a lane's who) and no `active` (a
 request is counted in before its gateway key is known), and
 `/v1/magpie/usage` the summary of its own calls (`Record.User` under a
 key of its group) that one of its seats answered (`Server.userCalls`,
-`seatOfCall` in [`usage_api.go`](../../internal/gateway/usage_api.go),
-`usage.SummarizeWhere`, T-093), both through `usersSeats`;
-`TestBoundUserToldItsOwnLanesAndUsage` in
+`usersOwn.filter` in [`usage_api.go`](../../internal/gateway/usage_api.go),
+`usage.Own.Keeps` and `Record.Seat`, `usage.SummarizeWhere`, T-093), both
+through `usersSeats`; `TestBoundUserToldItsOwnLanesAndUsage` in
 [`users_lanes_usage_test.go`](../../internal/gateway/users_lanes_usage_test.go)
 covers them; the summary is kept per user, seats and sharing keys
-(`usersOwn.ownKey`). `/v1/magpie/usage/requests` and
-`/v1/magpie/route?session=` don't narrow to the user yet.
+(`usersOwn.ownKey`). `/v1/magpie/usage/requests` narrows its page to the
+same calls (`usage.Filter.Own`, T-098): a call it leaves out is in no cell
+of the page (`cellPass.part`) and not in the ledger a replacement reader
+pages (`pageFromLedgerAt`), so the filter lists, totals and splits beside
+the rows are of the user's calls too, and other computers with none of
+them are left out (`withoutOthers`). A held key's user is narrowed within
+the key's own calls. `TestBoundUserToldItsOwnRequests` in
+[`users_requests_test.go`](../../internal/gateway/users_requests_test.go)
+and `TestOwnFilterLeavesOthersOutOfThePage` in
+[`own_test.go`](../../internal/usage/own_test.go) cover it.
+`/v1/magpie/route?session=` doesn't narrow to the user yet.
 
 `POST /v1/magpie/quotas/codex-reset` (`Server.codexReset` in
 [`gateway.go`](../../internal/gateway/gateway.go), #3850) spends one of a

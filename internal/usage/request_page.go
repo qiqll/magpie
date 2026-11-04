@@ -2681,6 +2681,9 @@ func pageFromLedger(p Period, f Filter, offset, limit int, all Ledgered) Request
 // pageFromLedgerAt is the page of a ledger read at now, its chart over the
 // period read at the same moment.
 func pageFromLedgerAt(p Period, f Filter, offset, limit int, all Ledgered, now time.Time) RequestPage {
+	if f.Own.User != "" {
+		all = all.own(f.Own) // the calls it leaves out are not there at all
+	}
 	l := all.Filtered(f)
 	out := RequestPage{Sum: l.Sum, Total: len(l.Rows), Agents: l.Agents, Providers: l.Providers, Purposes: []string{}, By: map[string][]Share{}}
 	// the same split the streaming path makes, so both pages of the ledger

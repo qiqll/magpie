@@ -84,16 +84,10 @@ func (s *Server) scopeQuotas(w http.ResponseWriter, r *http.Request) (*quotaScop
 type usersOwn struct {
 	user  string
 	seats []userSeat
-	// sharers and group: userGroup as read with seats, for mine
+	// sharers and group: userGroup as read with seats, for filter: a call
+	// is the user's when it named it under a key of its group (T-089)
 	sharers map[string]bool
 	group   string
-}
-
-// mine says a call or request named user, under gateway key key
-// (Record.CallerKeyID), is the request's user's: one name under the keys
-// of its group (userGroup; T-089).
-func (o *usersOwn) mine(user, key string) bool {
-	return user == o.user && groupOf(o.sharers, key) == o.group
 }
 
 // usersSeats is, bound by user, every account and key r's user

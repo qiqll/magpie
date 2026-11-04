@@ -166,8 +166,13 @@ func (pass *cellPass) part(ps *pairedRows, rows *chunkRows, c *rowChunk, r *Row)
 	var last []int
 	n := 0
 	ps.visitChunk(rows, c, r, func(_ timedRef, r *Row) {
-		n++
 		f := &pass.f
+		// a call Own leaves out is in no cell: the lists and counts beside
+		// the rows are of the user's own calls alone
+		if f.Own.User != "" && !f.Own.Keeps(&r.Record) {
+			return
+		}
+		n++
 		uncounted := r.IsRejected() || r.IsProbe()
 		keep := f.keepsRow(r)
 		k := cellRow{provider: r.Provider, agent: r.Agent, kind: r.Kind}

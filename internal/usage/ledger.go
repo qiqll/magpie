@@ -83,6 +83,83 @@ type Filter struct {
 	// switchable. Not Record.Via, which is the computer that forwarded the
 	// call (#542).
 	Through string
+	// Own narrows, bound by user, to one user's own calls on the accounts
+	// and keys it is on (Own.Keeps; T-093, T-098). Unlike the others it is
+	// no pick: a call it leaves out is not there at all, in the rows or
+	// in any list or count beside them. Zero (User "") keeps all.
+	Own Own
+}
+
+// Own is one user's calls, bound by user: those that named it under a
+// gateway key its name is one user under, answered by an account or key
+// it is on. Strings, "\n" between, so a Filter holding it is still a
+// cache's key.
+type Own struct {
+	User string
+	// Keys are the gateway key ids its name is one user under (the
+	// gateway's userGroup), "" among them for the calls with none
+	Keys string
+	// Seats are the accounts and keys it is on, as Record.Seat names them
+	Seats string
+}
+
+// Keeps says r is the user's own call on one of its seats.
+func (o Own) Keeps(r *Record) bool {
+	if r.User != o.User {
+		return false
+	}
+	in := false
+	for k := range strings.SplitSeq(o.Keys, "\n") {
+		if k == r.CallerKeyID {
+			in = true
+			break
+		}
+	}
+	if !in {
+		return false
+	}
+	seat := r.Seat()
+	for s := range strings.SplitSeq(o.Seats, "\n") {
+		if s != "" && strings.EqualFold(s, seat) {
+			return true
+		}
+	}
+	return false
+}
+
+// Seat is the account or key that answered r, as the gateway names a
+// seat (candidate.who): provider@account or provider#key id, the provider
+// itself for a call neither answered.
+func (r *Record) Seat() string {
+	if a := strings.TrimSpace(r.Account()); a != "" {
+		return r.Provider + "@" + strings.ToLower(a)
+	}
+	if r.ProviderKeyID != "" {
+		return r.Provider + "#" + r.ProviderKeyID
+	}
+	return r.Provider
+}
+
+// own is l of the calls o keeps alone, with the agents and providers of
+// those (Filter.Own).
+func (l Ledgered) own(o Own) Ledgered {
+	out := Ledgered{Rows: []Row{}, Agents: []string{}, Providers: []string{}}
+	for _, r := range l.Rows {
+		if !o.Keeps(&r.Record) {
+			continue
+		}
+		out.Rows = append(out.Rows, r)
+		if !r.IsRejected() {
+			out.Sum.addRow(r)
+		}
+		if !slices.Contains(out.Agents, r.Agent) {
+			out.Agents = append(out.Agents, r.Agent)
+		}
+		if r.Provider != "" && !slices.Contains(out.Providers, r.Provider) {
+			out.Providers = append(out.Providers, r.Provider)
+		}
+	}
+	return out
 }
 
 // SourceGateway and SourceSession are the two sources a request row is of,
@@ -150,6 +227,9 @@ func (f Filter) keeps(r Record) bool {
 }
 
 func (f Filter) keepsRecord(r *Record, codexIdentity bool, subagent, parentAgent string) bool {
+	if f.Own.User != "" && !f.Own.Keeps(r) {
+		return false
+	}
 	if f.Day != "" {
 		var day [len(time.DateOnly)]byte
 		if string(r.Time.In(f.loc()).AppendFormat(day[:0], time.DateOnly)) != f.Day {
