@@ -3,6 +3,7 @@ package gui
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/netproxy"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // Settings › Proxy's Test (#2076, c4ex): whether the proxy in force is the
@@ -193,7 +195,38 @@ func redactProxyErr(s string) string {
 	return strings.Join(words, " ")
 }
 
+// checkNamedProxy is checkProxy through p, a proxy named in the request
+// rather than the one in force, said back as "saved" with its login left
+// out. "" and "direct" are no proxy to check.
+func checkNamedProxy(ctx context.Context, client *http.Client, p string) (proxyCheck, error) {
+	if err := settings.CheckProxy(p); err != nil || p == "" || p == "direct" {
+		return proxyCheck{}, fmt.Errorf("proxy must look like http://127.0.0.1:7890 or socks5://127.0.0.1:1080")
+	}
+	out := checkProxy(ctx, client, netproxy.With(ctx, p), true)
+	out.Proxy, out.Source = netproxy.Redact(p), "saved"
+	if out.Through != nil {
+		out.Through.Error = redactProxyErr(out.Through.Error)
+	}
+	return out, nil
+}
+
+// handleProxyCheck checks the proxy in force, or the one the body names
+// ({"proxy": …}, a saved proxy's Test in Settings › Network, T-110), said
+// back as "saved" with its login left out.
 func handleProxyCheck(rw http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Proxy string `json:"proxy"`
+	}
+	_ = json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&in)
+	if p := strings.TrimSpace(in.Proxy); p != "" {
+		out, err := checkNamedProxy(r.Context(), http.DefaultClient, p)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, out)
+		return
+	}
 	proxy, source := netproxy.Describe()
 	through := source == "settings" || source == "environment" || source == "system"
 	out := checkProxy(r.Context(), http.DefaultClient, r.Context(), through)

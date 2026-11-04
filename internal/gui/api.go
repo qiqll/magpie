@@ -1574,6 +1574,22 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	})
 	// the load over which a model its plugin says is busy goes behind
 	// the others (settings.BusyLoad, axelburks on Discord): 0 for off
+	// the proxies the user named, to pick from wherever a proxy is picked
+	// (T-110): the whole list, as Settings › Network edits it
+	mux.HandleFunc("POST /api/settings/proxies", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Proxies []settings.SavedProxy `json:"proxies"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if err := settings.SetProxies(in.Proxies); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
 	mux.HandleFunc("POST /api/settings/busy-load", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ At int }
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {

@@ -186,13 +186,20 @@ func (s *signInFlow) pluginCode(code string) error {
 	session := s.plugin
 	s.plugin = ""
 	waiting := s.st.State == "waiting"
+	// one picked as the code was pasted (repick) goes to the plugin in
+	// place of the one it was authorized through
+	var through *string
+	if s.repicked {
+		p := s.proxy
+		through = &p
+	}
 	s.mu.Unlock()
 	if session == "" || !waiting {
 		return errors.New("this sign-in is over; start it again")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	saved, err := plugin.Finish(ctx, session, code)
+	saved, err := plugin.FinishThrough(ctx, session, code, through)
 	s.pluginDone(saved, err)
 	return err
 }

@@ -104,6 +104,10 @@ type SignInState struct {
 	// ProxyUsed is the proxy its CLI was given and where that came from,
 	// said once it failed (Claude Code's `claude auth login`, T-103)
 	ProxyUsed *SignInProxy `json:"proxyUsed,omitempty"`
+	// ProxyFixed is a sign-in waiting that can't take another proxy as its
+	// address is pasted (SubmitSignInCallbackThrough): only starting it
+	// again through one reaches it
+	ProxyFixed bool `json:"proxyFixed,omitempty"`
 	// SaidKey is the i18n.js key of the sentence Error says in place of a
 	// reason that may hold the sign-in's code or key (Said), SaidStatus the
 	// vendor's HTTP status it fills in
@@ -154,6 +158,9 @@ type signInFlow struct {
 	// the account's once it is done (#1663)
 	proxy  string
 	chosen bool
+	// repicked is a proxy picked as the address or code was pasted
+	// (repick), after the sign-in started through another
+	repicked bool
 	// proxyFrom is whose proxy is: "picked", "account", "subscription",
 	// or "" for the global one
 	proxyFrom string
@@ -194,8 +201,55 @@ type SignInOptions struct {
 // signed in through the global proxy and used through its own (#1663).
 // It carries the sign-in too, for keepLogin.
 func (s *signInFlow) via(ctx context.Context) context.Context {
-	return context.WithValue(netproxy.With(ctx, s.proxy), signInKey{}, s)
+	s.mu.Lock()
+	proxy := s.proxy
+	s.mu.Unlock()
+	return context.WithValue(netproxy.With(ctx, proxy), signInKey{}, s)
 }
+
+// proxyFixed is a sign-in whose proxy was handed, as it started, to what
+// trades its address for the account: Claude Code's `claude auth login`
+// (its *_PROXY), a plugin's own callback server waiting already, or an
+// agent's CLI or device sign-in, which takes no address pasted. A proxy
+// picked later only reaches it by starting it again. Those traded by
+// magpie as the address comes take one: a browser sign-in's callback
+// (srv), a plugin's pasted code or key. Called with s.mu held.
+func (s *signInFlow) proxyFixed() bool {
+	if s.claude != nil || s.pluginPorts != nil {
+		return true
+	}
+	return s.plugin == "" && s.pluginKey == nil && s.srv == nil
+}
+
+// repick has the rest of the sign-in go through proxy (T-110), picked as
+// its address is pasted; the same proxy as now changes nothing.
+func (s *signInFlow) repick(proxy string) error {
+	p := strings.TrimSpace(proxy)
+	if err := settings.CheckProxy(p); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p == s.proxy {
+		return nil
+	}
+	if s.proxyFixed() {
+		return errProxyFixed
+	}
+	if s.st.State != "waiting" || s.claimed {
+		return errors.New("this sign-in is over or already finishing; start it again if it doesn't end")
+	}
+	s.proxy, s.chosen, s.repicked, s.proxyFrom = p, true, true, ""
+	if p != "" {
+		s.proxyFrom = "picked"
+	}
+	s.st.Proxy = p
+	return nil
+}
+
+// errProxyFixed is another proxy picked for a sign-in that can't take one
+// once it started (proxyFixed).
+var errProxyFixed = errors.New("this sign-in keeps the proxy it started through; to finish it through another, start it again through that one")
 
 type signInKey struct{}
 
@@ -588,11 +642,27 @@ func CancelSignIn(id string) {
 // reach this machine — the address the browser ended on, pasted — or a
 // plugin's with the code its page showed.
 func SubmitSignInCallback(id, raw string) error {
+	return SubmitSignInCallbackThrough(id, raw, nil)
+}
+
+// SubmitSignInCallbackThrough is SubmitSignInCallback with the address
+// traded for the account through proxy (as SignInOptions.Proxy takes it),
+// when it isn't nil: the proxy picked as the address is pasted (T-110), so
+// an account is added through its own proxy without the global one
+// changed. Picked, it is kept as the account's once the sign-in is done,
+// as one picked to start it is. A sign-in whose requests went out before
+// the paste through its proxy can't take another (ProxyFixed).
+func SubmitSignInCallbackThrough(id, raw string, proxy *string) error {
 	signIns.Lock()
 	s, ok := signIns.m[id]
 	signIns.Unlock()
 	if !ok {
 		return errors.New("no such sign-in")
+	}
+	if proxy != nil {
+		if err := s.repick(*proxy); err != nil {
+			return err
+		}
 	}
 	s.give(PastedSecrets(raw))
 	var err error
@@ -766,6 +836,7 @@ func (s *signInFlow) status() SignInState {
 	defer s.mu.Unlock()
 	st := s.st
 	st.secrets = s.secrets
+	st.ProxyFixed = st.State == "waiting" && s.proxyFixed()
 	return st
 }
 

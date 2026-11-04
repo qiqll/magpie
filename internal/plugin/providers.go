@@ -936,12 +936,23 @@ func failure(why string) error {
 // a "code" one with the code pasted back, through the proxy Authorize was
 // given. It gives where the sign-in was saved.
 func Finish(ctx context.Context, session, code string) (Saved, error) {
+	return FinishThrough(ctx, session, code, nil)
+}
+
+// FinishThrough is Finish with the code traded through proxy (a
+// netproxy.With choice) in place of the one Authorize was given, when it
+// isn't nil: one picked as the code is pasted (T-110).
+func FinishThrough(ctx context.Context, session, code string, proxy *string) (Saved, error) {
 	var r struct {
 		OK    bool   `json:"ok"`
 		Error string `json:"error"`
 		Saved
 	}
-	if err := Call(ctx, "callback", map[string]any{"session": session, "code": code}, &r); err != nil {
+	params := map[string]any{"session": session, "code": code}
+	if proxy != nil {
+		params["proxy"] = forHost(*proxy)
+	}
+	if err := Call(ctx, "callback", params, &r); err != nil {
 		return Saved{}, err
 	}
 	if !r.OK {

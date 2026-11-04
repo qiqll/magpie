@@ -2714,12 +2714,17 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		rw.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /api/signin/{id}/callback", func(rw http.ResponseWriter, r *http.Request) {
-		var in struct{ URL string }
+		// Proxy, when sent, is the one the address is traded through, picked
+		// as it is pasted and kept as the account's (T-110)
+		var in struct {
+			URL   string
+			Proxy *string
+		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&in); err != nil {
 			fail(rw, err)
 			return
 		}
-		if err := provider.SubmitSignInCallback(r.PathValue("id"), in.URL); err != nil {
+		if err := provider.SubmitSignInCallbackThrough(r.PathValue("id"), in.URL, in.Proxy); err != nil {
 			failSignIn(rw, err, provider.PastedSecrets(in.URL))
 			return
 		}

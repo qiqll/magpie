@@ -110,7 +110,13 @@ type Settings struct {
 	// Save sets it from Proxy, and it is stored as Proxy is. This
 	// computer's own (KeepOwn), as Proxy is.
 	ProxyCustom string `json:"proxyCustom,omitempty"`
-	OTel        OTel   `json:"otel,omitempty"`
+	// Proxies are proxies the user named, kept to pick from wherever a
+	// proxy is picked: the global one, a provider's or an account's, and
+	// a sign-in's (T-110). Picking one copies its address there, so
+	// editing or removing one here changes nothing already picked. This
+	// computer's own (KeepOwn), as Proxy is.
+	Proxies []SavedProxy `json:"proxies,omitempty"`
+	OTel    OTel         `json:"otel,omitempty"`
 	// GitHubToken is a GitHub token the library's requests to GitHub's
 	// API carry, raising its rate limit from 60 requests an hour to 5,000.
 	// It is a secret: the Settings page is told only a masked one, and a
@@ -1352,7 +1358,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.UIFont, s.CodeFont = cur.UIFont, cur.CodeFont
 	s.Window, s.Proxy, s.Port, s.Dock, s.DockWindow, s.Lightweight = cur.Window, cur.Proxy, cur.Port, cur.Dock, cur.DockWindow, cur.Lightweight
 	s.DockNever, s.DockSettled = cur.DockNever, cur.DockSettled
-	s.ProxyCustom = cur.ProxyCustom
+	s.ProxyCustom, s.Proxies = cur.ProxyCustom, cur.Proxies
 	s.WindowMaximised, s.KeepAwake, s.KeepAwakeDisplay = cur.WindowMaximised, cur.KeepAwake, cur.KeepAwakeDisplay
 	s.WindowAt = cur.WindowAt
 	s.TrayUsages, s.TrayUsage, s.TrayUsageEvery, s.TrayNoLogos, s.TrayNoBird, s.TrayPace, s.TrayNoCost = cur.TrayUsages, cur.TrayUsage, cur.TrayUsageEvery, cur.TrayNoLogos, cur.TrayNoBird, cur.TrayPace, cur.TrayNoCost
@@ -1741,6 +1747,42 @@ func CheckProxy(p string) error {
 	return nil
 }
 
+// SavedProxy is a proxy the user named (Settings.Proxies).
+type SavedProxy struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// CheckProxies says whether ps can be kept as Settings.Proxies: each
+// with a name of its own and an address CheckProxy takes, neither
+// "" nor "direct", which aren't proxies to name. Names and addresses
+// are trimmed in place.
+func CheckProxies(ps []SavedProxy) error {
+	seen := map[string]bool{}
+	for i := range ps {
+		p := &ps[i]
+		p.Name, p.URL = strings.TrimSpace(p.Name), strings.TrimSpace(p.URL)
+		if p.Name == "" {
+			return errors.New("a saved proxy needs a name")
+		}
+		if len(p.Name) > 80 {
+			return fmt.Errorf("the proxy name %q is too long", p.Name[:80])
+		}
+		k := strings.ToLower(p.Name)
+		if seen[k] {
+			return fmt.Errorf("two saved proxies are named %q", p.Name)
+		}
+		seen[k] = true
+		if p.URL == "" || p.URL == "direct" {
+			return fmt.Errorf("the saved proxy %q needs an address", p.Name)
+		}
+		if err := CheckProxy(p.URL); err != nil {
+			return fmt.Errorf("%s: %w", p.Name, err)
+		}
+	}
+	return nil
+}
+
 // DefaultPort is the gateway's port unless Settings or MAGPIE_ADDR say
 // another.
 const DefaultPort = 3425
@@ -1887,6 +1929,26 @@ func EditCheckinOff(edit func([]string) []string) error {
 		off = nil
 	}
 	s.CheckinOff = off
+	return save(s, false)
+}
+
+// SetProxies changes Proxies alone, to ps checked (CheckProxies), on what
+// the file holds now, so a save elsewhere from an older snapshot isn't
+// undone. A settings file that can't be read is left as it is.
+func SetProxies(ps []SavedProxy) error {
+	ps = slices.Clone(ps)
+	if err := CheckProxies(ps); err != nil {
+		return err
+	}
+	if len(ps) == 0 {
+		ps = nil
+	}
+	defer lockFile()()
+	s, err := loadChecked()
+	if err != nil {
+		return err
+	}
+	s.Proxies = ps
 	return save(s, false)
 }
 
@@ -2113,6 +2175,9 @@ func saveOwn(s Settings, recording, reads bool) error {
 	}
 	if s.Proxy != "" && s.Proxy != "direct" {
 		s.ProxyCustom = s.Proxy
+	}
+	if err := CheckProxies(s.Proxies); err != nil {
+		return err
 	}
 	s.Vision = strings.TrimSpace(s.Vision)
 	if s.Vision != "" && s.Vision != "off" && !strings.Contains(s.Vision, "/") {

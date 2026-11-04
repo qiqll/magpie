@@ -2376,11 +2376,13 @@ function signingIn(signal, proxy, provider, key, fn) {
   return signal ? bounded(Promise.resolve(step), signal) : step
 }
 
-async function callback({ session, code }, signal) {
+// callback finishes a sign-in; proxy, when given, is one picked as its
+// code was pasted (T-110), in place of the one it was authorized through.
+async function callback({ session, code, proxy }, signal) {
   const s = sessions.get(session)
   if (!s) throw new Error("no such sign-in")
   sessions.delete(session)
-  const r = await signingIn(signal, s.proxy, s.provider, s.key, () => (s.a.method === "code" ? s.a.callback(code ?? "", { signal }) : s.a.callback(undefined, { signal })))
+  const r = await signingIn(signal, proxy ?? s.proxy, s.provider, s.key, () => (s.a.method === "code" ? s.a.callback(code ?? "", { signal }) : s.a.callback(undefined, { signal })))
   if (signal?.aborted) throw abortedSignIn()
   if (!r || r.type !== "success") return failed(r)
   return { ok: true, ...save(s.provider, s.key, r, undefined) }
