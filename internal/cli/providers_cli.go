@@ -458,22 +458,23 @@ func providerCmd(args []string) error {
 		if len(rest) < 2 {
 			return fmt.Errorf("magpie provider set <id> k=v…\n\n%s", providerUsage)
 		}
-		p, err := provider.Find(rest[0])
+		// id= renames it: the rest is saved under the id it has, then the
+		// groups and agents on its models move to the new one. Only the
+		// pairs given are written, on providers.json as it is then (T-100)
+		var to string
+		before, saved, err := editProvider(rest[0], func(p *provider.Provider) error {
+			from := p.ID
+			if err := applyPairs(p, rest[1:]); err != nil {
+				return err
+			}
+			to = strings.ToLower(strings.TrimSpace(p.ID))
+			p.ID = from
+			return nil
+		})
 		if err != nil {
 			return err
 		}
-		// id= renames it: the rest is saved under the id it has, then the
-		// groups and agents on its models move to the new one
-		from := p.ID
-		before := *p
-		if err := applyPairs(p, rest[1:]); err != nil {
-			return err
-		}
-		to := strings.ToLower(strings.TrimSpace(p.ID))
-		p.ID = from
-		if err := provider.Save(*p); err != nil {
-			return err
-		}
+		p, from := &saved, saved.ID
 		if to != from {
 			moved, err := agent.RenameProvider(from, to)
 			if err != nil {
@@ -494,15 +495,14 @@ func providerCmd(args []string) error {
 		if len(rest) != 2 {
 			return fmt.Errorf("magpie provider key <id> <key>")
 		}
-		p, err := provider.Find(rest[0])
+		_, p, err := editProvider(rest[0], func(p *provider.Provider) error {
+			if p.IsVertex() {
+				return fmt.Errorf("%s is asked with your Google credentials, not an API key · magpie provider set %s credentials=<file> impersonate=<service account> changes them", p.Name, p.ID)
+			}
+			p.Key = rest[1]
+			return nil
+		})
 		if err != nil {
-			return err
-		}
-		if p.IsVertex() {
-			return fmt.Errorf("%s is asked with your Google credentials, not an API key · magpie provider set %s credentials=<file> impersonate=<service account> changes them", p.Name, p.ID)
-		}
-		p.Key = rest[1]
-		if err := provider.Save(*p); err != nil {
 			return err
 		}
 		fmt.Println(green.Render("✓"), p.Name, "key", muted.Render(provider.Mask(p.Key)))
@@ -511,21 +511,20 @@ func providerCmd(args []string) error {
 		if len(rest) != 2 {
 			return fmt.Errorf("magpie provider icon <id> <picture file | built-in name | \"\">")
 		}
-		p, err := provider.Find(rest[0])
+		_, p, err := editProvider(rest[0], func(p *provider.Provider) error {
+			if p.Account != nil || p.Preset != "" {
+				return fmt.Errorf("%s has its own icon; only a custom provider takes one", p.Name)
+			}
+			p.Icon = rest[1]
+			if err := applyPairs(p, []string{"icon=" + rest[1]}); err != nil {
+				return err
+			}
+			if p.Icon == "" {
+				p.Icon = "generic"
+			}
+			return nil
+		})
 		if err != nil {
-			return err
-		}
-		if p.Account != nil || p.Preset != "" {
-			return fmt.Errorf("%s has its own icon; only a custom provider takes one", p.Name)
-		}
-		p.Icon = rest[1]
-		if err := applyPairs(p, []string{"icon=" + rest[1]}); err != nil {
-			return err
-		}
-		if p.Icon == "" {
-			p.Icon = "generic"
-		}
-		if err := provider.Save(*p); err != nil {
 			return err
 		}
 		fmt.Println(green.Render("✓"), p.Name, "icon", muted.Render(p.Icon))
@@ -541,7 +540,7 @@ func providerCmd(args []string) error {
 			return err
 		}
 		if len(rest) > 1 {
-			p.Fallback = nil
+			var fallback []string
 			if !(len(rest) == 2 && rest[1] == "none") {
 				for _, id := range rest[1:] {
 					// a routing group's id ("group/<id>") resolves too: the
@@ -549,10 +548,13 @@ func providerCmd(args []string) error {
 					if _, _, ok := provider.Resolve(id); !ok {
 						return fmt.Errorf("magpie knows no model or group %q (magpie models lists them)", id)
 					}
-					p.Fallback = append(p.Fallback, id)
+					fallback = append(fallback, id)
 				}
 			}
-			if err := provider.Save(*p); err != nil {
+			if _, _, err := editProvider(p.ID, func(p *provider.Provider) error {
+				p.Fallback = fallback
+				return nil
+			}); err != nil {
 				return err
 			}
 			if p, err = provider.Find(p.ID); err != nil {
@@ -659,12 +661,11 @@ func providerCmd(args []string) error {
 		if len(rest) != 2 || (rest[1] != "yes" && rest[1] != "no") {
 			return fmt.Errorf("magpie provider listed <id> yes|no")
 		}
-		p, err := provider.Find(rest[0])
+		_, p, err := editProvider(rest[0], func(p *provider.Provider) error {
+			p.Unlisted = rest[1] == "no"
+			return nil
+		})
 		if err != nil {
-			return err
-		}
-		p.Unlisted = rest[1] == "no"
-		if err := provider.Save(*p); err != nil {
 			return err
 		}
 		if p.Unlisted {
@@ -706,26 +707,28 @@ func providerCmd(args []string) error {
 			return fmt.Errorf("magpie provider %s <id> fetches its list · magpie provider models <id> <ids…> picks from it", verb)
 		}
 		if len(rest) > 1 {
-			before := *p
 			// none: no model served at all, the provider kept for its
 			// balance and usage (#1818); best: the newest of each family
 			// the vendor lists (Best in family); all is the vendor's list
 			// again
 			none := len(rest) == 2 && rest[1] == "none"
 			best := len(rest) == 2 && rest[1] == "best"
-			picks, err := editPicks(*p, rest[1:])
-			if none || best {
-				picks, err = nil, nil
-			}
+			before, saved, err := editProvider(p.ID, func(p *provider.Provider) error {
+				picks, err := editPicks(*p, rest[1:])
+				if none || best {
+					picks, err = nil, nil
+				}
+				if err != nil {
+					return err
+				}
+				p.Models, p.NoModels, p.BestInFamily = picks, none, best
+				return nil
+			})
 			if err != nil {
 				return err
 			}
-			p.Models, p.NoModels, p.BestInFamily = picks, none, best
-			if err := provider.Save(*p); err != nil {
-				return err
-			}
-			printPicksChange(before, *p, rest[1:])
-			return showProvider(*p)
+			printPicksChange(before, saved, rest[1:])
+			return showProvider(saved)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -752,6 +755,13 @@ func providerCmd(args []string) error {
 	}
 	return showProvider(*p)
 }
+
+// editProvider is provider.Edit: a command's change to a provider written
+// on providers.json as it is then, so a change made meanwhile (the GUI,
+// another magpie) stays (T-100). A change refused because another magpie
+// holds providers.json says so (filelock.BusyError), and nothing is
+// written. A test puts a change meanwhile in.
+var editProvider = provider.Edit
 
 // addProvider: `magpie provider add <preset> [key]` or `magpie provider add <name> k=v…`
 func addProvider(rest []string) error {

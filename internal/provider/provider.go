@@ -1076,82 +1076,9 @@ func Slug(name string) string {
 
 // Save adds or replaces a provider.
 func Save(p Provider) error {
-	// a key given a Vertex AI provider is refused here, before normalize
-	// drops it: it would never be sent
-	if p.IsVertex() && (strings.TrimSpace(p.Key) != "" || len(p.Keys) > 0) {
-		return errVertexKey
-	}
-	p = normalize(p)
-	p.IconURL = "" // import-only: never stored
-	// where a picture came from goes only with that picture
-	if p.IconFrom = strings.TrimSpace(p.IconFrom); !strings.HasPrefix(p.Icon, iconPrefix) {
-		p.IconFrom = ""
-	}
-	if p.ID == "" {
-		p.ID = Slug(p.Name)
-	}
-	// an id stored already is the provider's, whatever it is: one put in
-	// providers.json by hand ("b.ai") was refused on every Save, so the
-	// editor could neither change it nor rename it to one that is right
-	// (01huadalang on Discord: 我不管改成什么都显示不能用 b.ai)
-	if p.ID == "" || p.ID != Slug(p.ID) && !stored(p.ID) {
-		return fmt.Errorf("provider id must be lowercase letters, digits and dashes, not %q", p.ID)
-	}
-	if p.ID == "magpie" {
-		return errors.New(`"magpie" is what agents call the gateway itself; pick another id`)
-	}
-	if p.ID == strings.TrimSuffix(GroupPrefix, "/") {
-		return errors.New(`"group" starts the ids of routing groups; pick another id`)
-	}
-	if p.ID == autoID && !stored(p.ID) { // one saved before keeps it (autoRefsOn)
-		return errAutoID
-	}
-	if err := settings.CheckProxy(p.Proxy); err != nil {
+	p, account, err := prepare(p)
+	if err != nil {
 		return err
-	}
-	if err := checkAccountProxies(p.AccountProxies); err != nil {
-		return err
-	}
-	if p.Name == "" {
-		p.Name = p.ID
-	}
-	_, account := find(Accounts(), p.ID)
-	if account || p.ID == "kiro" && (p.Key != "" || stored(p.ID)) {
-		// an account keeps only the user's model picks; the rest is the
-		// agent's own sign-in. One the user removed stays removed: only
-		// ShowAccount brings it back. Kiro's alone also keeps a key, which
-		// it takes in place of a sign-in — so saving one is how a Kiro
-		// that isn't signed in is added.
-		key := ""
-		if p.ID == "kiro" {
-			key = p.Key
-		}
-		p = accountSettings(Provider{ID: p.ID, Key: key, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}, p)
-	} else {
-		p.AccountProxies = keyProxies(p) // a provider of keys proxies each key apart
-		if subscriptionID(p.ID) && !stored(p.ID) {
-			// taken, it would hide that subscription once signed in
-			return fmt.Errorf("%q is the id of the %s subscription; pick another name", p.ID, p.ID)
-		}
-		if p.IsVertex() {
-			if err := p.Vertex.check(); err != nil {
-				return err
-			}
-		} else if !hasEndpoint(p) {
-			if p.Preset == AzurePreset {
-				return errors.New("Azure OpenAI needs your resource's endpoint, e.g. https://<resource>.openai.azure.com")
-			}
-			return errors.New("a provider needs a base URL")
-		}
-		if p.InsecureTLS && !p.TakesInsecureTLS() {
-			return fmt.Errorf("%s is a preset's: only a provider you added with your own base URL can skip the certificate check", p.Name)
-		}
-		if strings.Contains(p.Decide, WorkspaceID) {
-			return errors.New("Bailian's decision model is asked at your workspace's host: give its workspace ID (workspace=… or the editor's Workspace ID), or pick the Token Plan")
-		}
-		if p.Key == "" && !keyOptional(p) && !p.IsVertex() {
-			return fmt.Errorf("%s needs an API key", p.Name)
-		}
 	}
 	// what it lists now, asked outside providersMu once the picks are
 	// found new (listedWith)
@@ -1176,6 +1103,90 @@ func Save(p Provider) error {
 		syncClaudeProxyEnvNow()
 	}
 	return nil
+}
+
+// prepare is p as Save writes it, normalized and checked, and whether it
+// is a signed-in account's; or why Save refuses it. It reads the accounts,
+// so it is never called under providersMu.
+func prepare(p Provider) (Provider, bool, error) {
+	// a key given a Vertex AI provider is refused here, before normalize
+	// drops it: it would never be sent
+	if p.IsVertex() && (strings.TrimSpace(p.Key) != "" || len(p.Keys) > 0) {
+		return Provider{}, false, errVertexKey
+	}
+	p = normalize(p)
+	p.IconURL = "" // import-only: never stored
+	// where a picture came from goes only with that picture
+	if p.IconFrom = strings.TrimSpace(p.IconFrom); !strings.HasPrefix(p.Icon, iconPrefix) {
+		p.IconFrom = ""
+	}
+	if p.ID == "" {
+		p.ID = Slug(p.Name)
+	}
+	// an id stored already is the provider's, whatever it is: one put in
+	// providers.json by hand ("b.ai") was refused on every Save, so the
+	// editor could neither change it nor rename it to one that is right
+	// (01huadalang on Discord: 我不管改成什么都显示不能用 b.ai)
+	if p.ID == "" || p.ID != Slug(p.ID) && !stored(p.ID) {
+		return Provider{}, false, fmt.Errorf("provider id must be lowercase letters, digits and dashes, not %q", p.ID)
+	}
+	if p.ID == "magpie" {
+		return Provider{}, false, errors.New(`"magpie" is what agents call the gateway itself; pick another id`)
+	}
+	if p.ID == strings.TrimSuffix(GroupPrefix, "/") {
+		return Provider{}, false, errors.New(`"group" starts the ids of routing groups; pick another id`)
+	}
+	if p.ID == autoID && !stored(p.ID) { // one saved before keeps it (autoRefsOn)
+		return Provider{}, false, errAutoID
+	}
+	if err := settings.CheckProxy(p.Proxy); err != nil {
+		return Provider{}, false, err
+	}
+	if err := checkAccountProxies(p.AccountProxies); err != nil {
+		return Provider{}, false, err
+	}
+	if p.Name == "" {
+		p.Name = p.ID
+	}
+	_, account := find(Accounts(), p.ID)
+	if account || p.ID == "kiro" && (p.Key != "" || stored(p.ID)) {
+		// an account keeps only the user's model picks; the rest is the
+		// agent's own sign-in. One the user removed stays removed: only
+		// ShowAccount brings it back. Kiro's alone also keeps a key, which
+		// it takes in place of a sign-in — so saving one is how a Kiro
+		// that isn't signed in is added.
+		key := ""
+		if p.ID == "kiro" {
+			key = p.Key
+		}
+		p = accountSettings(Provider{ID: p.ID, Key: key, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}, p)
+	} else {
+		p.AccountProxies = keyProxies(p) // a provider of keys proxies each key apart
+		if subscriptionID(p.ID) && !stored(p.ID) {
+			// taken, it would hide that subscription once signed in
+			return Provider{}, false, fmt.Errorf("%q is the id of the %s subscription; pick another name", p.ID, p.ID)
+		}
+		if p.IsVertex() {
+			if err := p.Vertex.check(); err != nil {
+				return Provider{}, false, err
+			}
+		} else if !hasEndpoint(p) {
+			if p.Preset == AzurePreset {
+				return Provider{}, false, errors.New("Azure OpenAI needs your resource's endpoint, e.g. https://<resource>.openai.azure.com")
+			}
+			return Provider{}, false, errors.New("a provider needs a base URL")
+		}
+		if p.InsecureTLS && !p.TakesInsecureTLS() {
+			return Provider{}, false, fmt.Errorf("%s is a preset's: only a provider you added with your own base URL can skip the certificate check", p.Name)
+		}
+		if strings.Contains(p.Decide, WorkspaceID) {
+			return Provider{}, false, errors.New("Bailian's decision model is asked at your workspace's host: give its workspace ID (workspace=… or the editor's Workspace ID), or pick the Token Plan")
+		}
+		if p.Key == "" && !keyOptional(p) && !p.IsVertex() {
+			return Provider{}, false, fmt.Errorf("%s needs an API key", p.Name)
+		}
+	}
+	return p, account, nil
 }
 
 // saveRead is Save's change to providers.json, under providersMu: p as it
