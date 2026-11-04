@@ -645,7 +645,7 @@ func (u *unroutedHold) showLocked() {
 	if u.f.redacting() {
 		rt.Phase = phaseRedact
 	}
-	rt.callerKey = access.Caller(u.r.Context()).KeyID
+	rt.callerKey, rt.caller = access.Caller(u.r.Context()).KeyID, callerOfRoute(u.r)
 	u.shown = u.s.trace.begin(rt)
 }
 

@@ -49,7 +49,11 @@ type Route struct {
 	// callerKey: the gateway key the request came with, so a key held to
 	// a budget, models or accounts is told the routes of its own requests
 	// alone (sessionLatest, #1981)
-	callerKey     string
+	callerKey string
+	// caller: the user the request named and the key its users are of,
+	// as its usage row has them (appendUsage), so, bound by user, a user
+	// is told the routes of its own requests alone (usersOwn.owns, T-099)
+	caller        routeCaller
 	imageTurn     string
 	imageCaller   string
 	imageProvider string
@@ -669,7 +673,7 @@ func (t *trace) changed() {
 // Every route of a request begins here, so a held key's own routes are
 // told it: one begun without (begin alone) is told to no held key.
 func (t *trace) beginFor(req *http.Request, r Route) *Route {
-	r.callerKey = access.Caller(req.Context()).KeyID
+	r.callerKey, r.caller = access.Caller(req.Context()).KeyID, callerOfRoute(req)
 	rt := t.begin(r)
 	noteRoute(req.Context(), rt)
 	return rt

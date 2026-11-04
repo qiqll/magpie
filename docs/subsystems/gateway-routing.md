@@ -587,7 +587,16 @@ per user never pushes the owner's cells or pages out
 [`users_requests_test.go`](../../internal/gateway/users_requests_test.go)
 and `TestOwnFilterLeavesOthersOutOfThePage` in
 [`own_test.go`](../../internal/usage/own_test.go) cover it.
-`/v1/magpie/route?session=` doesn't narrow to the user yet.
+`/v1/magpie/route?session=` tells it the routes of its own requests alone
+(T-099): those that named it under a key of its group, as `usage.Own.Keeps`
+has a call, though not by seat (`usersOwn.owns` in
+[`session_route.go`](../../internal/gateway/session_route.go)), from
+`Route.caller`, which `trace.beginFor` and the unrouted hold's route set
+as `appendUsage` writes the row's user and key (`callerOfRoute`). A
+session with none of its routes is 404, another user's word for word as
+one with no route at all, so whether it is anyone's is not told; a long
+poll waits for one of its own. `TestBoundUserToldItsOwnSessionRoute` in
+[`users_route_test.go`](../../internal/gateway/users_route_test.go).
 
 `POST /v1/magpie/quotas/codex-reset` (`Server.codexReset` in
 [`gateway.go`](../../internal/gateway/gateway.go), #3850) spends one of a

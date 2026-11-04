@@ -7,6 +7,7 @@ package gateway
 // session's latest route from the trace, nothing the trace doesn't hold.
 
 import (
+	"cmp"
 	"context"
 	"net/http"
 	"slices"
@@ -102,7 +103,11 @@ func sessionRouteOf(r Route) SessionRoute {
 // seq. Like the quotas, it answers this machine, and another only with the
 // shared gateway's key. A key held to a budget, models or accounts is told
 // only the routes of its own requests (#1981): a session id is not a
-// secret the key can be trusted to lack.
+// secret the key can be trusted to lack. Bound by user, a request that
+// names its user is told the routes of its own requests alone (T-099),
+// those it sent under a key of its group (usersOwn.owns), and a session
+// with none of them is 404, another user's as one with no route: whether
+// it is anyone's is not told either.
 func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
 	if !local(r) && !sharedWith(r) {
 		writeError(w, provider.Chat, http.StatusForbidden, "magpie's routes are told to another machine only when magpie is shared on the local network (Settings → Network and sharing → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
@@ -123,12 +128,25 @@ func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
 	after, _ := strconv.ParseInt(q.Get("after"), 10, 64)
 	secs, _ := strconv.ParseFloat(q.Get("wait"), 64)
 	wait := min(time.Duration(secs*float64(time.Second)), routeWaitMax)
+	// a user header that can't be taken 400, its seats unread 503, as
+	// every other read of the user's
+	own, ok := s.usersSeats(w, r)
+	if !ok {
+		return
+	}
 	only := ""
 	held := false
 	if who := access.Caller(r.Context()); heldKey(who) {
 		only, held = who.KeyID, true
 	}
-	seq, route := s.trace.sessionLatest(r.Context(), session, only, after, wait)
+	keep := func(rt *Route) bool {
+		return (only == "" || rt.callerKey == only) && (own == nil || own.owns(rt.caller))
+	}
+	seq, route := s.trace.sessionLatest(r.Context(), session, keep, after, wait)
+	if own != nil && route == nil {
+		writeError(w, provider.Chat, http.StatusNotFound, "no route of yours for that session: none of its requests named "+UserHeader+" as this one does under its key")
+		return
+	}
 	out := map[string]any{"session": session, "seq": seq, "route": nil}
 	if route != nil {
 		sr := sessionRouteOf(*route)
@@ -165,10 +183,29 @@ func classifiedHidden(h *RuleHit) *RuleHit {
 	return &hc
 }
 
+// routeCaller is who a route's request was: the user it named and the
+// key its users are of (callerOfRoute).
+type routeCaller struct{ user, key string }
+
+// callerOfRoute is req's user and key, as appendUsage writes them in its
+// usage row (Record.User, Record.CallerKeyID), which usage.Own reads.
+func callerOfRoute(req *http.Request) routeCaller {
+	key, _, _ := rowCaller(req.Context())
+	return routeCaller{user: cmp.Or(callerUser(req), decideFor(req.Context())), key: key}
+}
+
+// owns says a route of c's is the user's own: it named the user under a
+// key of its group (groupOf, T-089), as usage.Own.Keeps has a call. Not
+// by seat: a route is the turn itself, the user's whichever account
+// answers it.
+func (o *usersOwn) owns(c routeCaller) bool {
+	return c.user == o.user && groupOf(o.sharers, c.key) == o.group
+}
+
 // sessionLatest is a copy of session's latest route, and its seq; with
-// wait, it waits up to that long for it to change past after. With only
-// set, the routes of the requests made with that gateway key alone.
-func (t *trace) sessionLatest(ctx context.Context, session, only string, after int64, wait time.Duration) (int64, *Route) {
+// wait, it waits up to that long for it to change past after. With keep
+// set, the latest of the routes it keeps alone.
+func (t *trace) sessionLatest(ctx context.Context, session string, keep func(*Route) bool, after int64, wait time.Duration) (int64, *Route) {
 	deadline := time.NewTimer(max(wait, 0))
 	defer deadline.Stop()
 	for {
@@ -176,7 +213,7 @@ func (t *trace) sessionLatest(ctx context.Context, session, only string, after i
 		var seq int64
 		var found *Route
 		for i := len(t.routes) - 1; i >= 0; i-- {
-			if r := t.routes[i]; r.Session == session && (only == "" || r.callerKey == only) {
+			if r := t.routes[i]; r.Session == session && (keep == nil || keep(r)) {
 				c := *r
 				c.Order = append([]Weighed{}, r.Order...) // [] for none: the GUI reads it as a list
 				c.Left = append([]Weighed(nil), r.Left...)

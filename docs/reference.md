@@ -2616,6 +2616,10 @@ named is told; like `/v1/magpie/quotas`, it answers this machine, and
 another only with the key of a gateway shared on the local network. A key
 held to a budget, to some models or to some accounts is told the routes of
 its own requests alone: another key's session answers `route: null`.
+Bound by user (`MAGPIE_BIND=user`), a request that sends `X-Magpie-User`
+is told the routes of its own requests alone, those that named the same
+user under a key of its group; a session with none of them, another
+user's or one that has no route at all, answers 404, the same for both.
 
 To show the one in use without a session, `GET /v1/magpie/quotas` (and
 `magpie quota --json`, the same list) has `lastServedAt` on each
