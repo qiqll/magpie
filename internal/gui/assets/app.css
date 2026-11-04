@@ -3314,6 +3314,9 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .editor .proxy-auth.proxy-login input.proxy-credential { width: 140px; max-width: 100%; min-width: 0; }
 .editor .proxy-auth.proxy-login.off { visibility: hidden; }
 .signing .callback-form .proxy-login { flex-basis: 100%; }
+/* a typed proxy's Test result, on a line of its own under the row (T-110) */
+.proxy-auth .typed-proxy-check { flex-basis: 100%; min-width: 0; overflow-wrap: anywhere; }
+.proxy-auth .typed-proxy-check[hidden] { display: none; }
 /* what a balance token's URL wants instead, and a balance checked in the form */
 .editor .bal-fix { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 6px; font-size: 12px; line-height: 1.45; color: var(--muted); }
 .editor .bal-fix:empty { display: none; }

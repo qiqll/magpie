@@ -178,6 +178,62 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(errors, []);
       });
 
+      test(`${engine} ${lang} ${size.width}: a proxy typed in the sign-in has a Test of that proxy`, async (t) => {
+        const seen = { starts: [], pastes: [], saves: [], checks: [], proxies: [{ name: "Home", url: HOME }] };
+        const { page, errors } = await open(engine, size, lang, seen, "?view=providers", t);
+        await page.locator(".row.provider", { hasText: "Codex" }).first().click();
+        await page.locator(".editor .accts .acc.add").first().click();
+        const box = page.locator(".editor .signing");
+        const works = w("Works: through the proxy requests leave from {where}, {ms} ms; direct ones from {direct}", { where: "203.0.113.9 (US)", ms: 312, direct: "198.51.100.7 (CN)" });
+
+        // Proxy above's Custom…: the address and its login, tested as typed
+        const via = box.locator(".acts .via");
+        await via.waitFor();
+        await via.scrollIntoViewIfNeeded();
+        await via.click();
+        await page.locator(".proto-menu .pm-item", { hasText: w("Custom…") }).click();
+        const form = box.locator("form.proxy-ask");
+        await form.waitFor();
+        const test = form.locator(".typed-proxy-test");
+        await test.waitFor();
+        assert.equal(await test.isDisabled(), true, "nothing typed, nothing to test");
+        await form.locator("input").first().fill("http://10.2.2.2:8080");
+        const [user, pass] = await form.locator("input.proxy-credential").all();
+        await user.fill("bob");
+        await pass.fill("p@ss");
+        assert.equal((await test.textContent()).trim(), w("Test"));
+        await test.click();
+        const said = form.locator(".typed-proxy-check");
+        await page.waitForFunction(() => !document.querySelector(".editor .signing form.proxy-ask .typed-proxy-check")?.hidden);
+        assert.deepEqual(seen.checks, [{ proxy: "http://bob:p%40ss@10.2.2.2:8080" }]);
+        assert.equal(await said.textContent(), works);
+        assert.equal(seen.starts.length, 1, "testing starts no sign-in");
+        // a saved proxy picked into the row tests that one instead
+        await form.locator(".saved-proxy").click();
+        await page.locator(".proto-menu .pm-item", { hasText: HOME_SHOWN }).click();
+        assert.equal(await said.isHidden(), true, "the other address's result goes with it");
+        await test.click();
+        await page.waitForFunction(() => !document.querySelector(".editor .signing form.proxy-ask .typed-proxy-check")?.hidden);
+        assert.deepEqual(seen.checks[1], { proxy: HOME });
+        assert.equal(await wide(page), false, "nothing wider than the window");
+
+        // Through: …'s Custom… beside the pasted address
+        const pp = box.locator("button.paste-via");
+        await pp.scrollIntoViewIfNeeded();
+        await pp.click();
+        await page.locator(".proto-menu .pm-item", { hasText: w("Custom…") }).click();
+        const typed = box.locator("input.paste-proxy");
+        await typed.waitFor();
+        await typed.fill("socks5://127.0.0.1:1080");
+        const pt = box.locator(".proxy-ask:has(input.paste-proxy) .typed-proxy-test");
+        await pt.click();
+        await page.waitForFunction(() => !document.querySelector(".editor .signing .proxy-ask:has(input.paste-proxy) .typed-proxy-check")?.hidden);
+        assert.deepEqual(seen.checks[2], { proxy: "socks5://127.0.0.1:1080" });
+        assert.equal(await box.locator(".proxy-ask:has(input.paste-proxy) .typed-proxy-check").textContent(), works);
+        assert.equal(await wide(page), false, "nothing wider than the window");
+        assert.deepEqual(errors, []);
+      });
+
       test(`${engine} ${lang} ${size.width}: Settings › Network keeps named proxies, each with a Test`, async (t) => {
         const seen = { starts: [], pastes: [], saves: [], checks: [], proxies: [{ name: "Home", url: HOME }] };
         const { page, errors } = await open(engine, size, lang, seen, "?view=settings&tab=network", t);

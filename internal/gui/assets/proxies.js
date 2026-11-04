@@ -110,10 +110,58 @@ function spForm(list, keep, redraw) {
   return form;
 }
 
+// typedChecks: what a typed proxy's Test found, by the address tested,
+// kept over the sign-in's redraws as spChecks is
+const typedChecks = {};
+
+// typedProxyTest adds Test to a typed proxy's login row (proxyLoginRow;
+// T-110: 手动输入代理时希望增加一个代理测试的按钮): it checks the address
+// typed, login and all, as a saved one's Test does, and says what it found
+// under the row while that address stays typed.
+function typedProxyTest(auth, addr) {
+  if (auth.querySelector(".typed-proxy-test")) return;
+  const typed = () => {
+    const [user, pass] = [...auth.querySelectorAll("input.proxy-credential")].map((f) => f.value);
+    return proxyAddress(addr.value, {}, user, pass);
+  };
+  const test = el("button", "link typed-proxy-test");
+  test.type = "button";
+  test.title = t("Ask Cloudflare through the proxy and direct, and compare the addresses the two leave from");
+  const said = el("div", "sub typed-proxy-check");
+  said.setAttribute("role", "status");
+  const draw = () => {
+    const c = typedChecks[typed()];
+    test.textContent = c?.busy ? t("Testing…") : t("Test");
+    test.disabled = !addr.value.trim() || !!c?.busy;
+    const [text, bad] = proxyCheckText(c);
+    said.hidden = !text;
+    said.textContent = text;
+    said.classList.toggle("err", bad);
+  };
+  said.redraw = draw;
+  // every row drawn since (the sign-in redraws on each poll) shows it
+  const drawAll = () => { for (const s of document.querySelectorAll(".typed-proxy-check")) s.redraw?.(); };
+  test.onclick = (e) => {
+    e.stopPropagation();
+    const p = typed();
+    if (!p || typedChecks[p]?.busy) return;
+    typedChecks[p] = { busy: true };
+    drawAll();
+    api("proxy/check", { proxy: p })
+      .then((out) => { typedChecks[p] = { out }; }, (err) => { typedChecks[p] = { err: t(err.message) }; })
+      .finally(drawAll);
+  };
+  for (const f of [addr, ...auth.querySelectorAll("input")]) f.addEventListener("input", draw);
+  auth.append(test, said);
+  draw();
+}
+
 // savedProxyFill adds Saved… to a proxy's login row (auth): the saved
 // proxy picked is put in addr, its login moved into the row's fields as a
 // pasted one is, then after is called. None in the saved list's own form.
+// A typed proxy's row (proxyLoginRow) gets its Test here too.
 window.savedProxyFill = function (auth, addr, after) {
+  if (auth.classList.contains("proxy-login")) typedProxyTest(auth, addr);
   const ps = (state?.settings || prefs)?.proxies || [];
   auth.querySelector(".saved-proxy")?.remove();
   if (!ps.length || auth.closest(".saved-proxies")) return;
@@ -126,10 +174,14 @@ window.savedProxyFill = function (auth, addr, after) {
       addr.value = v;
       addr.oninput();
       for (const f of auth.querySelectorAll("input.proxy-credential")) f.oninput?.();
+      auth.querySelector(".typed-proxy-check")?.redraw?.();
       after?.();
     }, "Saved proxies");
   };
-  auth.append(b);
+  // before Test, whose result line takes the row's whole width
+  const at = auth.querySelector(".typed-proxy-test");
+  if (at) at.before(b);
+  else auth.append(b);
 };
 
 // pastePickFill draws, beside a sign-in's Callback URL field, the proxy
