@@ -580,7 +580,10 @@ of the page (`cellPass.part`) and not in the ledger a replacement reader
 pages (`pageFromLedgerAt`), so the filter lists, totals and splits beside
 the rows are of the user's calls too, and other computers with none of
 them are left out (`withoutOthers`). A held key's user is narrowed within
-the key's own calls. `TestBoundUserToldItsOwnRequests` in
+the key's own calls. A user's page keeps no cells and nothing on disk,
+and is kept among the users' pages (`requestIndex.ownPages`), so a filter
+per user never pushes the owner's cells or pages out
+(`TestOwnPagesKeepTheOwnersCells`). `TestBoundUserToldItsOwnRequests` in
 [`users_requests_test.go`](../../internal/gateway/users_requests_test.go)
 and `TestOwnFilterLeavesOthersOutOfThePage` in
 [`own_test.go`](../../internal/usage/own_test.go) cover it.

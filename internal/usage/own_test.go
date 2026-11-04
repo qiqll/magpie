@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -75,5 +76,50 @@ func TestOwnFilterLeavesOthersOutOfThePage(t *testing.T) {
 		if p := QueryPage(All, Filter{}, 0, 100); p.Total != 6 {
 			t.Errorf("ledger %v: unnarrowed: %d rows", ledger, p.Total)
 		}
+	}
+}
+
+// A user's own page (Filter.Own) keeps no cells and its page apart: six
+// users bound by user, a filter each, read after the owner, leave the
+// owner's cells and page where they were (review of T-098: they pushed
+// out the few sets of cells kept, partSets, and the page with them).
+func TestOwnPagesKeepTheOwnersCells(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	os.MkdirAll(filepath.Dir(Path()), 0o755)
+	Append(Record{Time: time.Now().Add(-time.Hour), Agent: "codex", Provider: "codex", Model: "m1", Status: 200, Input: 10, Output: 1,
+		User: "u0", ProviderAccount: "me@example.com"})
+	if p := QueryPage(Month, Filter{}, 0, 100); p.Total != 1 {
+		t.Fatalf("owner's page: %d rows", p.Total)
+	}
+	for i := range 6 {
+		u := fmt.Sprintf("u%d", i)
+		p := QueryPage(Month, Filter{Own: Own{User: u, Keys: "", Seats: "codex@me@example.com"}}, 0, 100)
+		if want := map[bool]int{true: 1, false: 0}[i == 0]; p.Total != want {
+			t.Errorf("%s told %d rows, want %d", u, p.Total, want)
+		}
+	}
+	requestCache.Lock()
+	defer requestCache.Unlock()
+	owner, users := 0, 0
+	for pk := range requestCache.parts {
+		if pk.f.Own.User != "" {
+			users++
+		} else if pk.p == Month {
+			owner++
+		}
+	}
+	if owner != 1 || users != 0 {
+		t.Errorf("cells kept: the owner's %d, users' %d", owner, users)
+	}
+	kept := false
+	for q := range requestCache.pages {
+		kept = kept || q.Period == Month && q.Filter == (Filter{})
+	}
+	if !kept || len(requestCache.ownPages) != 6 {
+		t.Errorf("owner's page kept %v, users' pages %d", kept, len(requestCache.ownPages))
 	}
 }

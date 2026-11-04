@@ -691,7 +691,11 @@ type requestIndex struct {
 	root, meta, key string
 	chunks          map[string]*rowChunk
 	pages           map[pageKey]RequestPage
-	tick            uint64
+	// ownPages are the pages of one user's own calls (Filter.Own), kept
+	// apart so that the users bound by user, a filter each, never push
+	// the owner's pages out
+	ownPages map[pageKey]RequestPage
+	tick     uint64
 	// flights are the pages being worked out: a second ask for one waits
 	// for it rather than reading the whole history beside it (a refresh
 	// pressed while a 750k-call All was still being read, Vantiboo1ean)
@@ -922,7 +926,7 @@ func queryPageOf(p Period, f Filter, offset, limit int, readSource func(sessions
 	idx.keepWhileAsked()
 	idx.adopt(st)
 	q := pageKey{p, f, offset, limit, now.Format(time.DateOnly)}
-	if page, ok := idx.pages[q]; ok {
+	if page, ok := idx.pagesOf(f)[q]; ok {
 		idx.Unlock()
 		return page
 	}
@@ -955,7 +959,11 @@ func queryPageOf(p Period, f Filter, offset, limit int, readSource func(sessions
 	// same twice; the heatmap's sums are kept apart (heatParts)
 	var cache *partCache
 	pk := partKey{p: p, f: f, since: p.Since(now), until: p.Until(now), loc: now.Location()}
-	if p == heatmapPeriod {
+	if f.Own.User != "" {
+		// a user's own page keeps no cells and nothing on disk: a filter
+		// for each user bound by user would push out the few sets of
+		// cells and the disk's pages the owner's are read again from
+	} else if p == heatmapPeriod {
 		cache = &partCache{old: idx.heatParts[pk], next: map[uint64]*chunkPart{}, pairs: idx.pairs[All], heatOld: idx.heatOld[pk], disk: heatDiskRef{root: idx.root, meta: idx.meta}}
 	} else if p.Last() == 0 {
 		cache = &partCache{old: idx.parts[pk], next: map[uint64]*chunkPart{}, pairs: idx.pairs[p], pageOld: idx.pageOld[pk], disk: heatDiskRef{root: idx.root, meta: idx.meta}}
@@ -1019,10 +1027,17 @@ func queryPageOf(p Period, f Filter, offset, limit int, readSource func(sessions
 			shared.pageOld[pk] = cache.pageOldNext
 		}
 	}
-	if len(shared.pages) >= 16 {
-		shared.pages = map[pageKey]RequestPage{}
+	if f.Own.User != "" {
+		if shared.ownPages == nil || len(shared.ownPages) >= 16 {
+			shared.ownPages = map[pageKey]RequestPage{}
+		}
+		shared.ownPages[q] = page
+	} else {
+		if len(shared.pages) >= 16 {
+			shared.pages = map[pageKey]RequestPage{}
+		}
+		shared.pages[q] = page
 	}
-	shared.pages[q] = page
 	if p == heatmapPeriod {
 		if shared.heats == nil || len(shared.heats) >= 16 {
 			shared.heats = map[pageKey]heatPage{}
@@ -1361,6 +1376,7 @@ func (idx *requestIndex) adopt(st requestState) {
 		idx.root, idx.meta = st.root, st.meta
 		idx.chunks = map[string]*rowChunk{}
 		idx.pages = nil
+		idx.ownPages = nil
 		idx.heats = nil
 		idx.parts = nil
 		idx.heatParts = nil
@@ -1371,8 +1387,17 @@ func (idx *requestIndex) adopt(st requestState) {
 	}
 	if idx.key != st.key {
 		idx.pages = map[pageKey]RequestPage{}
+		idx.ownPages = nil
 		idx.key = st.key
 	}
+}
+
+// pagesOf is the pages a page of f is kept among (ownPages).
+func (idx *requestIndex) pagesOf(f Filter) map[pageKey]RequestPage {
+	if f.Own.User != "" {
+		return idx.ownPages
+	}
+	return idx.pages
 }
 
 // use is c, a chunk of idx's, as used by this read. Both the map and the
