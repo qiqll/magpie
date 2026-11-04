@@ -317,35 +317,64 @@ func EnvWith(choice string, env []string) []string {
 	if env == nil {
 		env = os.Environ()
 	}
-	var p string
-	var bypass []string
-	s := strings.TrimSpace(choice)
+	p, bypass, _, keep := envPick(choice, env)
+	if keep {
+		return env
+	}
+	return withProxy(env, p, bypass)
+}
+
+// EnvSaid says what EnvWith gives a CLI: the proxy (Redact), "" for
+// none, and where it came from: "own" (choice), "settings" (magpie's
+// global one), "environment" (env's own *_PROXY, kept), "system",
+// "direct" (choice or the global one says none) or "none" (nothing names
+// one). For a sign-in's failure, which says what its CLI was given.
+func EnvSaid(choice string, env []string) (proxy, source string) {
+	if env == nil {
+		env = os.Environ()
+	}
+	p, _, source, _ := envPick(choice, env)
+	return Redact(p), source
+}
+
+// envPick is the proxy EnvWith gives env, the hosts that skip it, where
+// it came from (EnvSaid) and whether env is kept as it is (keep).
+func envPick(choice string, env []string) (p string, bypass []string, source string, keep bool) {
+	s, source := strings.TrimSpace(choice), "own"
 	if s == "" {
-		s = strings.TrimSpace(settings.Load().Proxy)
+		s, source = strings.TrimSpace(settings.Load().Proxy), "settings"
 	}
 	switch s {
 	case "direct":
-		return withProxy(env, "", nil)
+		return "", nil, "direct", false
 	case "":
-		for _, e := range env {
-			k, v, _ := strings.Cut(e, "=")
-			if proxyVar(k) && !strings.EqualFold(k, "NO_PROXY") && strings.TrimSpace(v) != "" {
-				return env
-			}
+		if v := envProxy(env); v != "" {
+			return v, nil, "environment", true
 		}
 		sys := System()
 		if sys.URL == "" {
-			return env
+			return "", nil, "none", true
 		}
-		p, bypass = sys.URL, sys.Bypass
-	default:
-		u, err := Parse(s)
-		if err != nil {
-			return env
-		}
-		p = u.String()
+		return sys.URL, sys.Bypass, "system", false
 	}
-	return withProxy(env, p, bypass)
+	u, err := Parse(s)
+	if err != nil {
+		return s, nil, source, true
+	}
+	return u.String(), nil, source, false
+}
+
+// envProxy is the proxy env's own *_PROXY names, HTTPS first, as Bun reads
+// them; "" for none.
+func envProxy(env []string) string {
+	for _, want := range []string{"HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"} {
+		for _, e := range env {
+			if k, v, _ := strings.Cut(e, "="); strings.EqualFold(k, want) && strings.TrimSpace(v) != "" {
+				return strings.TrimSpace(v)
+			}
+		}
+	}
+	return ""
 }
 
 func proxyVar(k string) bool {

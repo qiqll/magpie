@@ -193,7 +193,12 @@ func startClaudeSignIn(s *signInFlow) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := cli.command(ctx, "auth", "login", "--claudeai")
 	cmd.Dir = dir
-	// through the proxy the account's requests will go through (#1663)
+	// through the proxy the account's requests will go through (#1663);
+	// a failure says which, and whose (T-103)
+	used := s.signInProxyUsed(env)
+	s.mu.Lock()
+	s.used = used
+	s.mu.Unlock()
 	env, err = cli.proxied(s.proxy, env)
 	if err != nil {
 		cancel()

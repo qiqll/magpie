@@ -3076,6 +3076,11 @@ func fail(rw http.ResponseWriter, err error) {
 	if errors.As(err, &noHandler) {
 		out["code"], out["app"], out["exe"], out["said"] = "no_link_handler", noHandler.App, noHandler.Exe, linkSaid[noHandler.Exe != ""]
 	}
+	// a sign-in that didn't start: the proxy its CLI was given (T-103)
+	var used *provider.SignInProxyError
+	if errors.As(err, &used) {
+		out["proxyUsed"], out["proxyFrom"] = used.Used.Proxy, used.Used.From
+	}
 	var held saidErr
 	if errors.As(err, &held) {
 		out["said"] = held.key

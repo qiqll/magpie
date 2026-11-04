@@ -64,14 +64,24 @@ func ProxyOf(id string) string {
 // proxy, another through another): the account's own, or else the
 // subscription's (ProxyOf); "" follows the global one.
 func ProxyOfLogin(id, user string) string {
+	p, _ := proxyOfLoginFrom(id, user)
+	return p
+}
+
+// proxyOfLoginFrom is ProxyOfLogin and whose it is: "account" or
+// "subscription", "" when it is "" (the global one).
+func proxyOfLoginFrom(id, user string) (proxy, from string) {
 	s, ok := storedPicks(id)
 	if !ok {
-		return ""
+		return "", ""
 	}
 	if v := s.AccountProxies[accountKey(user)]; v != "" {
-		return v
+		return v, "account"
 	}
-	return s.Proxy
+	if s.Proxy != "" {
+		return s.Proxy, "subscription"
+	}
+	return "", ""
 }
 
 // Via is ctx for requests made on behalf of the provider or signed-in

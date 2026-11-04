@@ -101,6 +101,9 @@ type SignInState struct {
 	// Proxy is the one the sign-in goes through ("" the global one,
 	// "direct" none): the one the account's requests will (#1663)
 	Proxy string `json:"proxy,omitempty"`
+	// ProxyUsed is the proxy its CLI was given and where that came from,
+	// said once it failed (Claude Code's `claude auth login`, T-103)
+	ProxyUsed *SignInProxy `json:"proxyUsed,omitempty"`
 	// SaidKey is the i18n.js key of the sentence Error says in place of a
 	// reason that may hold the sign-in's code or key (Said), SaidStatus the
 	// vendor's HTTP status it fills in
@@ -151,6 +154,11 @@ type signInFlow struct {
 	// the account's once it is done (#1663)
 	proxy  string
 	chosen bool
+	// proxyFrom is whose proxy is: "picked", "account", "subscription",
+	// or "" for the global one
+	proxyFrom string
+	// used is the proxy the sign-in's CLI was given (SignInState.ProxyUsed)
+	used *SignInProxy
 	// user is the account signed in to again, "" for a new one
 	user string
 	// listed are the agent's accounts (accountKey) when the sign-in
@@ -228,7 +236,7 @@ func (s *signInFlow) keep(store func() error) error {
 // accounts it has listed already.
 func (s *signInFlow) pickProxy(agent string, o SignInOptions) error {
 	s.user = strings.TrimSpace(o.User)
-	s.proxy = ProxyOfLogin(agent, s.user)
+	s.proxy, s.proxyFrom = proxyOfLoginFrom(agent, s.user)
 	for _, l := range Logins(agent) {
 		s.listed = append(s.listed, accountKey(l.User))
 		if l.Lapsed != "" {
@@ -242,9 +250,46 @@ func (s *signInFlow) pickProxy(agent string, o SignInOptions) error {
 	if err := settings.CheckProxy(p); err != nil {
 		return err
 	}
-	s.proxy, s.chosen = p, true
+	s.proxy, s.chosen, s.proxyFrom = p, true, "picked"
 	return nil
 }
+
+// SignInProxy is the proxy a sign-in's CLI was given: Proxy as Redact
+// shows it ("" for none), From where it came from: "picked" (in the
+// sign-in), "account", "subscription", "settings" (the global one),
+// "environment" (magpie's own *_PROXY), "system", "direct" or "none".
+type SignInProxy struct {
+	Proxy string `json:"proxy"`
+	From  string `json:"from"`
+}
+
+// signInProxyUsed is what the CLI is given of env with the sign-in's
+// proxy (netproxy.EnvSaid), its own one named by whose it is.
+func (s *signInFlow) signInProxyUsed(env []string) *SignInProxy {
+	p, from := netproxy.EnvSaid(s.proxy, env)
+	if from == "own" || (from == "direct" && s.proxyFrom != "") {
+		from = s.proxyFrom
+	}
+	return &SignInProxy{Proxy: p, From: from}
+}
+
+// logText is u for the log.
+func (u *SignInProxy) logText() string {
+	if u.Proxy == "" {
+		return "given no proxy (" + u.From + ")"
+	}
+	return "given the proxy " + u.Proxy + " (" + u.From + ")"
+}
+
+// SignInProxyError is a sign-in that couldn't start, with the proxy its
+// CLI was given, for the page to say beside why.
+type SignInProxyError struct {
+	Err  error
+	Used SignInProxy
+}
+
+func (e *SignInProxyError) Error() string { return e.Err.Error() }
+func (e *SignInProxyError) Unwrap() error { return e.Err }
 
 var signIns = struct {
 	sync.Mutex
@@ -283,6 +328,12 @@ func StartSignInWith(agent string, o SignInOptions) (SignInState, error) {
 	// one that couldn't start ends here, logged as failed by finish
 	failed := func(err error) (SignInState, error) {
 		s.finish(failedWith(err))
+		s.mu.Lock()
+		used := s.used
+		s.mu.Unlock()
+		if used != nil {
+			err = &SignInProxyError{Err: err, Used: *used}
+		}
 		return SignInState{}, err
 	}
 	if settings.AccountDiscoveryOff() {
@@ -751,8 +802,18 @@ func (s *signInFlow) finish(out SignInState) bool {
 		s.mu.Lock()
 	}
 	out.ID, out.Agent, out.URL, out.Code, out.Proxy = s.st.ID, s.st.Agent, s.st.URL, s.st.Code, s.st.Proxy
+	if out.State == "failed" {
+		out.ProxyUsed = s.used
+	}
 	s.st = out
 	stop, srv, said, user, ofPlugin := s.stop, s.srv, s.said, s.user, s.ofPlugin
+	if out.State == "failed" && s.used != nil {
+		// the proxy the CLI was given, beside how it ended (T-103)
+		if said != "" {
+			said += "; "
+		}
+		said += s.used.logText()
+	}
 	s.mu.Unlock()
 	// the window says how it ended only while it is open: the log keeps it,
 	// after the lock, as its writer can block

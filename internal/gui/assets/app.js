@@ -174,6 +174,8 @@ async function api(path, body, heads, signal) {
       setTimeout(() => configBlockedAsk(data.blocked), 0);
     }
     if (data?.why) err.why = data.why; // a failed move's reason, said in the reader's language
+    // a sign-in that didn't start: the proxy its CLI was given (T-103)
+    if (data?.proxyFrom) err.proxyUsed = { proxy: data.proxyUsed || "", from: data.proxyFrom };
     if (data?.said) err.message = t(data.said, data); // an i18n.js key (api.go)
     // an account the agent is signed in to, refused removal while it has
     // another: said in the reader's language
@@ -12299,7 +12301,7 @@ async function startSignIn(agent, risky, site, o = {}) {
     renderProviders();
     followSignIn(signing.id);
   } catch (e) {
-    signing = { agent, ...keep, proxy: o.proxy ?? signInProxyOf(agent, o.user), state: "failed", error: e.message };
+    signing = { agent, ...keep, proxy: o.proxy ?? signInProxyOf(agent, o.user), state: "failed", error: e.message, proxyUsed: e.proxyUsed };
     renderProviders();
     saySignInFailed();
   }
@@ -12339,6 +12341,19 @@ async function followSignIn(id) {
     renderProviders();
     saySignInFailed();
   }
+}
+
+// signInProxySaid: the proxy a failed sign-in's CLI was given and whose
+// it was (proxyUsed, T-103), "" when it isn't known
+const signInProxyFrom = {
+  picked: "picked for this sign-in", account: "this account's own", subscription: "this subscription's own",
+  settings: "magpie's global proxy", environment: "magpie's own environment", system: "the system's proxy",
+  direct: "magpie's global proxy is set to none", none: "no proxy is set anywhere",
+};
+function signInProxySaid(u) {
+  if (!u?.from) return "";
+  const from = t(signInProxyFrom[u.from] || u.from);
+  return u.proxy ? t("Proxy given to it: {proxy} ({from})", { proxy: u.proxy, from }) : t("No proxy given to it ({from})", { from });
 }
 
 // signInWhy: a failure's reason, or the i18n.js key said in place of one
@@ -12803,6 +12818,8 @@ function renderSigning(sub) {
   if (signing.state === "failed") {
     box.append(el("span", "mark", "!"));
     tt.append(el("span", "n", t("Sign-in didn't finish")), el("span", "s", signing.error || ""));
+    const used = signInProxySaid(signing.proxyUsed);
+    if (used) tt.append(el("span", "s proxy-used", used));
     box.append(tt);
     const again = el("button", "text primary", t("Try again"));
     const o = { user: signing.forUser, proxy: signing.picked };

@@ -346,3 +346,28 @@ func TestWatchSeesTheGlobalProxyMove(t *testing.T) {
 		t.Fatal("a check of its own starts in the middle")
 	}
 }
+
+// EnvSaid says the proxy EnvWith gives, without its password, and where
+// it came from (T-103).
+func TestEnvSaid(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	settings.Save(settings.Settings{Proxy: "direct"})
+	env := []string{"HTTPS_PROXY=http://10.0.0.1:1"}
+	for _, c := range []struct{ choice, proxy, source string }{
+		{"http://u:p@10.0.0.2:3128", "http://10.0.0.2:3128", "own"},
+		{"direct", "", "direct"},
+		{"", "", "direct"},
+	} {
+		if p, s := EnvSaid(c.choice, env); p != c.proxy || s != c.source {
+			t.Fatalf("%q: %q %q", c.choice, p, s)
+		}
+	}
+	settings.Save(settings.Settings{Proxy: "127.0.0.1:6152"})
+	if p, s := EnvSaid("", env); p != "http://127.0.0.1:6152" || s != "settings" || !slices.Contains(EnvWith("", env), "HTTPS_PROXY="+p) {
+		t.Fatalf("settings: %q %q", p, s)
+	}
+	settings.Save(settings.Settings{})
+	if p, s := EnvSaid("", []string{"https_proxy=http://u:p@10.0.0.1:1"}); p != "http://10.0.0.1:1" || s != "environment" {
+		t.Fatalf("environment: %q %q", p, s)
+	}
+}
