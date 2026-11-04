@@ -269,6 +269,20 @@ var sharers struct {
 // key's users are its own then (logged once a failure). Not to be changed
 // by the caller.
 func UserSharers() map[string]bool {
+	ids, _ := userSharers()
+	return ids
+}
+
+// UserSharersKnown says the store reads now: UserSharers is the keys that
+// share their users, not none for a store unknown. A change that takes a
+// seat from a user for not sharing (T-091) waits for one that does.
+func UserSharersKnown() bool {
+	_, ok := userSharers()
+	return ok
+}
+
+// userSharers is UserSharers, ok false for a store that can't be read.
+func userSharers() (_ map[string]bool, ok bool) {
 	sharers.Lock()
 	defer sharers.Unlock()
 	path := Path()
@@ -278,10 +292,10 @@ func UserSharers() map[string]bool {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		sharers.raw, sharers.ids, sharers.said = nil, map[string]bool{}, ""
-		return sharers.ids
+		return sharers.ids, true
 	}
 	if err == nil && sharers.ids != nil && bytes.Equal(b, sharers.raw) {
-		return sharers.ids
+		return sharers.ids, true
 	}
 	var keys []Key
 	if err == nil {
@@ -293,7 +307,7 @@ func UserSharers() map[string]bool {
 			log.Printf("gateway keys: %s can't be read (%v): no key shares its users until it can", path, err)
 		}
 		sharers.raw, sharers.ids = nil, nil
-		return map[string]bool{}
+		return map[string]bool{}, false
 	}
 	ids := map[string]bool{}
 	for _, k := range keys {
@@ -302,7 +316,7 @@ func UserSharers() map[string]bool {
 		}
 	}
 	sharers.raw, sharers.ids, sharers.said = b, ids, ""
-	return ids
+	return ids, true
 }
 
 // LANSecret is the key magpie shares the gateway on the local network with

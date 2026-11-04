@@ -2429,10 +2429,18 @@ agents (a WSL distro's under NAT) is its own until you set it, so its
 users are apart from this computer's keyless ones. A conversation's
 affinity and a routing group's rules are kept by user within the same
 set. If a key reached another key's user while every key shared (this
-branch before T-089), that user's accounts were copied under the key and
-stay there after the upgrade: Unbind them on the Gateway page, or delete
-the key's entry in `user-accounts.json`. If a key goes from sharing to
-its own, its users keep the accounts they had too.
+branch before T-089), that user's accounts were copied under the key.
+magpie lets go of those copies on its own: whenever it reads
+`user-accounts.json` again or the keys that share change (a key turned
+from sharing to its own included, at once from the Gateway page or
+`magpie gateway-key users <id> own`), each account a key that keeps its
+users its own has for a user that the sharing keys' user of the same
+name has too is taken from that key's user, the sharing one keeping it.
+A user left with no account is bound afresh on its next request. Before
+it writes the file, magpie keeps a copy of it beside it
+(`user-accounts.json.bak-<UTC time>`) and logs each account it let go
+of, by key id, provider, user and account; with no copy written, or
+while the file or the key store can't be read, it lets go of nothing.
 Bindings are kept for good, by
 your user's id as sent, in `user-accounts.json` beside `providers.json`
 (`users` for callers without a key, `keys` by key id): a user's first

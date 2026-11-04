@@ -15,6 +15,7 @@ import (
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/budget"
+	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/oidc"
 	"github.com/yetone/magpie/internal/provider"
 )
@@ -753,6 +754,11 @@ func gatewayKeyUsers(out io.Writer, args []string) error {
 		}
 		if _, err := access.Update("users-key", access.Change{Key: id, SharesUsers: args[1] == "shared"}); err != nil {
 			return err
+		}
+		if args[1] == "own" {
+			// its users' seats of the shared users' are let go of now
+			// (T-091); the next request bound by user does it otherwise
+			gateway.SettleUsers()
 		}
 	}
 	keys, err := access.List()

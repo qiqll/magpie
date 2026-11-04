@@ -592,6 +592,10 @@ var userBinds = struct {
 	// sharers: the gateway keys that share their users (userGroup), read
 	// with the file (loadUsers)
 	sharers map[string]bool
+	// swept: dropCopiedSeats looked at m as read, when sweptFor were the
+	// keys that share their users; looked at again when either changes
+	swept    bool
+	sweptFor map[string]bool
 }{}
 
 var userFileSaid sync.Map // a user-accounts.json that doesn't read, logged once a change
@@ -707,6 +711,7 @@ func loadUsers() error {
 	path := usersPath()
 	if path != userBinds.path {
 		userBinds.m, userBinds.path, userBinds.mod, userBinds.size, userBinds.read, userBinds.stale = nil, path, time.Time{}, 0, false, false
+		userBinds.swept = false
 		// another file's users: what this process saw of the last one's
 		// isn't theirs
 		userSeen.Lock()
@@ -723,6 +728,7 @@ func loadUsers() error {
 		return nil
 	}
 	if err == nil && userBinds.read && fi.ModTime().Equal(userBinds.mod) && fi.Size() == userBinds.size {
+		dropCopiedSeats()
 		return nil
 	}
 	var f userFile
@@ -752,7 +758,152 @@ func loadUsers() error {
 		}
 	}
 	userBinds.m, userBinds.mod, userBinds.size, userBinds.read, userBinds.stale = m, fi.ModTime(), fi.Size(), true, false
+	userBinds.swept = false
+	dropCopiedSeats()
 	return nil
+}
+
+// SettleUsers reads user-accounts.json again as a request bound by user
+// does (loadUsers), for a gateway key turned to keep its users its own
+// ("users-key") to let go of the seats it has of a shared user's at once,
+// not on the next request (dropCopiedSeats).
+func SettleUsers() error {
+	userBinds.Lock()
+	defer userBinds.Unlock()
+	return loadUsers()
+}
+
+// userSharersKnown says the store of gateway keys reads now; a test's to
+// set.
+var userSharersKnown = access.UserSharersKnown
+
+// writeUsersBackup writes dropCopiedSeats' copy of the file; a test's to
+// fail.
+var writeUsersBackup = steady.WriteFile
+
+// dropCopiedSeats lets go of every seat a user of a gateway key that
+// keeps its users its own (userGroup) has of the shared users' user of
+// that name (the owner's option A, 2026-11-04, T-091): T-075 wrote one
+// user's accounts alike under every key it came with (putShared), and
+// T-089 left those copies under the keys that don't share, so that key's
+// user of the name had the shared one's seats and its Codex resets, and a
+// seat for one user had two; a key turned back to its own users has them
+// too. The shared users keep theirs; a user left with no seat is bound
+// afresh on its next request. Done whenever the file was read again or
+// the keys that share changed, never while either is unknown (the file
+// stale, the key store unreadable: no key shares then), and only once a
+// copy of the file as it was is beside it (user-accounts.json.bak-<UTC
+// time>): one that can't be written lets go of nothing. Each seat let go
+// of is logged by its key's id, provider, user and account. One the file
+// can't be written for stays let go of in memory, written with the next
+// change. Called with userBinds held.
+func dropCopiedSeats() {
+	if !userBinds.read || userBinds.stale || userBinds.swept && maps.Equal(userBinds.sweptFor, userBinds.sharers) {
+		return
+	}
+	// the shared users' seats: provider → user → seats
+	shared := map[string]map[string][]userSeat{}
+	for k, ps := range userBinds.m {
+		if userGroup(k) != sharedUsers {
+			continue
+		}
+		for pid, us := range ps {
+			for u, b := range us {
+				if shared[pid] == nil {
+					shared[pid] = map[string][]userSeat{}
+				}
+				shared[pid][u] = append(shared[pid][u], b.seats()...)
+			}
+		}
+	}
+	type drop struct {
+		key, pid, user string
+		gone, left     []userSeat
+	}
+	var drops []drop
+	for k, ps := range userBinds.m {
+		if userGroup(k) == sharedUsers {
+			continue
+		}
+		for pid, us := range ps {
+			for u, b := range us {
+				d := drop{key: k, pid: pid, user: u}
+				for _, st := range b.seats() {
+					if seatIn(shared[pid][u], st.Who) {
+						d.gone = append(d.gone, st)
+					} else {
+						d.left = append(d.left, st)
+					}
+				}
+				if len(d.gone) > 0 {
+					drops = append(drops, d)
+				}
+			}
+		}
+	}
+	path := usersPath()
+	if len(drops) > 0 && !userSharersKnown() {
+		// no key shares while the store is unknown: every key's users
+		// would look their own; looked at again on the next read
+		if _, said := userFileSaid.LoadOrStore("sharers unknown "+path, true); !said {
+			log.Printf("user accounts: which gateway keys share their users isn't known (the key store doesn't read): no seat copied to a key that keeps its users its own is let go of until it does")
+		}
+		return
+	}
+	userBinds.swept, userBinds.sweptFor = true, maps.Clone(userBinds.sharers)
+	if len(drops) == 0 {
+		return
+	}
+	slices.SortFunc(drops, func(a, b drop) int {
+		return cmp.Or(strings.Compare(a.key, b.key), strings.Compare(a.pid, b.pid), strings.Compare(a.user, b.user))
+	})
+	was, err := os.ReadFile(path)
+	if err == nil {
+		err = writeUsersBackup(usersBackupPath(path, time.Now()), was, 0o600)
+	} else if errors.Is(err, fs.ErrNotExist) {
+		err = nil // bound in memory alone: no file to keep a copy of
+	}
+	if err != nil {
+		log.Printf("user accounts: %d user(s) of gateway keys that keep their users their own have seats of a shared user's of the name, but a copy of %s can't be written beside it (%v): none is let go of until the file or the keys that share change", len(drops), path, err)
+		return
+	}
+	for _, d := range drops {
+		ps := userBinds.m[d.key]
+		if len(d.left) == 0 {
+			delete(ps[d.pid], d.user)
+			if len(ps[d.pid]) == 0 {
+				delete(ps, d.pid)
+			}
+			if len(ps) == 0 {
+				delete(userBinds.m, d.key)
+			}
+		} else {
+			ps[d.pid][d.user] = ps[d.pid][d.user].withSeats(d.left)
+		}
+		for _, st := range d.gone {
+			log.Printf("user accounts: gateway key %s keeps its users its own, and its user %q of %s had %s, a seat of the shared users' %q: let go of", d.key, d.user, d.pid, st.Who, d.user)
+		}
+		if len(d.left) == 0 {
+			log.Printf("user accounts: gateway key %s's user %q of %s has no seat left there: bound afresh on its next request", d.key, d.user, d.pid)
+		}
+	}
+	if err := saveUsers(); err != nil {
+		log.Printf("user accounts: the seats copied to keys that keep their users their own are let go of, but %s can't be written (%v): the next change writes it", path, err)
+	}
+}
+
+// usersBackupPath is a name beside path for a copy of it made at now,
+// one no copy has yet (one that can't be looked at is left to the write
+// to fail on).
+func usersBackupPath(path string, now time.Time) string {
+	base := path + ".bak-" + now.UTC().Format("20060102T150405Z")
+	out := base
+	for i := 2; ; i++ {
+		if _, err := os.Lstat(out); err != nil {
+			return out
+		}
+		out = fmt.Sprintf("%s-%d", base, i)
+	}
 }
 
 // errUsersChanged is a write refused because the file changed since it

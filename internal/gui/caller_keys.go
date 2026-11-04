@@ -10,6 +10,7 @@ import (
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/budget"
+	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -126,6 +127,11 @@ func callerKeyRoutes(mux *http.ServeMux) {
 		if err != nil {
 			fail(w, err)
 			return
+		}
+		if r.PathValue("action") == "users-key" && !in.SharesUsers {
+			// its users' seats of the shared users' are let go of now
+			// (T-091); the next request bound by user does it otherwise
+			gateway.SettleUsers()
 		}
 		keys, err := access.List()
 		if err != nil {
