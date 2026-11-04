@@ -214,7 +214,10 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount, left
 	if len(added) == 0 && len(renamed) == 0 && len(left) == 0 {
 		return
 	}
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		log.Printf("%v; when the accounts were added isn't kept", err)
+		return
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -283,7 +286,10 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount, left
 // as the user removes them: one signed in to again is new again.
 func forgetAdded(agent string, users ...string) {
 	id := labelProvider(agent)
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		log.Printf("%v; when the removed accounts were added is kept", err)
+		return
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {

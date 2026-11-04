@@ -36,7 +36,9 @@ func orderedGroups(gs []Group, order []string) []Group {
 // later goes after them all.
 func SetGroupOrder(ids []string) error {
 	all := groupsIn(providerEntries()) // read before providersMu is taken
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -77,7 +79,9 @@ func MirrorGroupOrder(order []string) error {
 	if len(order) == 0 {
 		return nil
 	}
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {

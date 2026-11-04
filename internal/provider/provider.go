@@ -761,10 +761,19 @@ func Routings() ([]string, error) {
 // held under it reads the accounts (All, Find, Accounts, Logins, a
 // provider's Available), which can take loginsMu: what a change needs of
 // them is read before it is taken.
-var providersMu = filelock.Mutex{
+//
+// It never goes on without the lock (filelock.Strict): held by another
+// magpie through a wait and one more, a change is refused unmade with
+// *filelock.BusyError, which asks the user to make it again.
+var providersMu = filelock.Strict{
 	Path:   func() string { return Path() + ".lock" },
 	Locked: func() { filememo.Look(Path()) },
 }
+
+// ClearLeftLock is called as magpie starts: what a magpie that ended
+// while holding providersMu (crashed, or was killed) left in
+// providers.json.lock is cleared. The lock itself went with it.
+func ClearLeftLock() { filelock.Clear(Path() + ".lock") }
 
 // beforeProvidersWrite is called as providers.json is about to be
 // written: for a test to have another change come at that moment.
@@ -1174,7 +1183,9 @@ func Save(p Provider) error {
 // account's. asked is false, and nothing written, when the models the
 // provider lists now are needed and now hasn't them.
 func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err error) {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return false, false, err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -1234,7 +1245,9 @@ func editStored(id string, change func(q *Provider) bool) error {
 // error, nothing written); a record there is none of is made only when
 // made is true, else the provider is told gone.
 func editRecord(id string, made bool, change func(q *Provider) (bool, error)) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -1609,7 +1622,9 @@ func tuckedAccount(id string) bool {
 // magpie" too (on), or lists it there again (off). Tucked, it is quiet as
 // well: no reminder line either (#116).
 func TuckAccount(id string, on bool) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -1630,7 +1645,9 @@ func TuckAccount(id string, on bool) error {
 // QuietAccount stops reminding the user of an account they removed: its
 // "Add it back" line goes, and it is offered only from the Add sheet.
 func QuietAccount(id string) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -1648,7 +1665,9 @@ func QuietAccount(id string) error {
 // ShowAccount brings back the signed-in account of an agent the user had
 // removed from magpie.
 func ShowAccount(id string) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -1678,7 +1697,9 @@ func Delete(id string) error {
 
 // deleteRead is Delete's change to providers.json, under providersMu.
 func deleteRead(id string, account bool) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {

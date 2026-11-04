@@ -62,7 +62,9 @@ func Rename(from, to string) error {
 // signedIn is whether from is an account signed in, sub and subTo whether
 // from and to are subscriptions' ids.
 func renameRead(from, to string, signedIn, sub, subTo bool) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -582,7 +584,9 @@ func MergeDeleted(id, into string) error {
 	into = strings.ToLower(strings.TrimSpace(into))
 	// read before providersMu is taken
 	there := into == "" || slices.ContainsFunc(All(), func(p Provider) bool { return p.ID == into })
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -607,7 +611,9 @@ func MergeDeleted(id, into string) error {
 // NameDeleted names the deleted provider the Usage page lists under id
 // as the user wants it shown there; "" shows it by its own name again.
 func NameDeleted(id, name string) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {

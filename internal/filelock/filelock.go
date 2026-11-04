@@ -30,6 +30,26 @@ var mkdirAll = os.MkdirAll
 // held is false when it went on without the lock: on a file system
 // without locks, or after wait.
 func Lock(path string, wait time.Duration) (unlock func(), held bool) {
+	f, got := take(path, wait)
+	switch got {
+	case taken:
+		return func() { Unlock(f); f.Close() }, true
+	case timedOut:
+		log.Printf("%s: another magpie held it for %v; going on without it", path, wait)
+	}
+	return func() {}, false
+}
+
+// what take got
+const (
+	taken    = iota
+	noLocks  // no lock to be had on this file system, or no file to lock
+	timedOut // another process held it all through the wait
+)
+
+// take opens the lock file at path and takes its lock, waiting up to wait
+// for another process to let it go; f is open and locked when it is taken.
+func take(path string, wait time.Duration) (f *os.File, got int) {
 	// the folder is made only when the file can't be opened for want of
 	// it: made first, each lock asked the system for the folder too, on
 	// every take (#1665: ~190 times in a Windows start's first 25s, each
@@ -40,22 +60,21 @@ func Lock(path string, wait time.Duration) (unlock func(), held bool) {
 		f, err = os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	}
 	if err != nil {
-		return func() {}, false // no lock to be had here: no file to change either
+		return nil, noLocks // no lock to be had here: no file to change either
 	}
 	start := time.Now()
 	for {
-		got, err := TryLock(f)
+		ok, err := TryLock(f)
 		if err != nil { // a file system without locks, as an NFS home with no lockd
 			f.Close()
-			return func() {}, false
+			return nil, noLocks
 		}
-		if got {
-			return func() { Unlock(f); f.Close() }, true
+		if ok {
+			return f, taken
 		}
 		if time.Since(start) > wait {
 			f.Close()
-			log.Printf("%s: another magpie held it for %v; going on without it", path, wait)
-			return func() {}, false
+			return nil, timedOut
 		}
 		time.Sleep(5 * time.Millisecond)
 	}

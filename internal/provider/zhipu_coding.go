@@ -158,7 +158,9 @@ func LearnZhipuCoding(p Provider, from string) {
 	}
 	learnMu.Lock()
 	defer learnMu.Unlock()
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {

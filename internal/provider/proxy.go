@@ -169,7 +169,9 @@ func keepSignInProxy(id, user, proxy string) error {
 			alone = false
 		}
 	}
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {

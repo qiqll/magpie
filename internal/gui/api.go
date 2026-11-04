@@ -36,6 +36,7 @@ import (
 	"github.com/yetone/magpie/internal/applog"
 	"github.com/yetone/magpie/internal/autostart"
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/filelock"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/fonts"
 	"github.com/yetone/magpie/internal/fx"
@@ -3050,6 +3051,9 @@ func proxySecret(proxy *string) provider.SignInSecrets {
 	return provider.SignInSecrets{Given: []string{*proxy}}
 }
 
+// busyKey is the i18n.js key of filelock.BusyError's words.
+const busyKey = "another magpie is changing {file} right now, so this change wasn't saved: try again in a moment"
+
 // saidErr is a sign-in's error said in other words, still what it wraps:
 // key the i18n.js key of those words, status the HTTP status it fills in.
 type saidErr struct {
@@ -3105,6 +3109,12 @@ func fail(rw http.ResponseWriter, err error) {
 	if errors.As(err, &allHidden) {
 		out["code"] = "all_hidden"
 		out["agent"] = allHidden.Agent
+	}
+	// a change refused while another magpie held the file (T-079): said
+	// in the reader's language, for the user to make it again
+	var busy *filelock.BusyError
+	if errors.As(err, &busy) {
+		out["error"], out["said"], out["file"] = busy.Error(), busyKey, busy.File()
 	}
 	var signedIn *provider.SignedInError
 	if errors.As(err, &signedIn) {

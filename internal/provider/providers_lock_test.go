@@ -39,7 +39,9 @@ func interleave(t *testing.T, first, second func()) {
 }
 
 func setWriteHook(f func()) {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		panic(err)
+	}
 	beforeProvidersWrite = f
 	providersMu.Unlock()
 }

@@ -221,7 +221,9 @@ func SetSearchAPI(a SearchAPI) error {
 	a.Vendor = strings.ToLower(strings.TrimSpace(a.Vendor))
 	a.Key, a.URL = strings.Join(a.Keys(), ","), strings.TrimSpace(a.URL)
 	pick := strings.ToLower(strings.TrimSpace(a.Pick))
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -259,7 +261,9 @@ func SetSearchAPI(a SearchAPI) error {
 
 // RemoveSearchAPI takes the vendor's search API away.
 func RemoveSearchAPI(vendor string) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -276,7 +280,9 @@ func RemoveSearchAPI(vendor string) error {
 // SwitchSearchAPI switches the vendor's search API on or off (#2286),
 // keeping its key, address and place.
 func SwitchSearchAPI(vendor string, on bool) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -298,7 +304,9 @@ func SwitchSearchAPI(vendor string, on bool) error {
 // after them; a name of none set up is refused, so an order sent from a
 // page drawn before one was removed changes nothing.
 func ArrangeSearchAPIs(order []string) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -332,7 +340,9 @@ func RestoreSearchAPIs(as []SearchAPI) error {
 	if len(as) == 0 {
 		return nil
 	}
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -360,7 +370,9 @@ func RestoreSearchAPIs(as []SearchAPI) error {
 // MirrorSearchAPIs makes the search APIs exactly these, as sync brings
 // them; one that came without a key keeps the key it has here.
 func MirrorSearchAPIs(as []SearchAPI) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {

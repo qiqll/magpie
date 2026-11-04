@@ -578,7 +578,9 @@ func SetAutoGroups(on bool) error {
 	if !on {
 		all = groupsIn(providerEntries()) // read before providersMu is taken
 	}
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -723,7 +725,9 @@ func AutoGroupSkip() []string { return slices.Clone(load().AutoGroupSkip) }
 // are the user's. A request still naming a found group skipping took away
 // goes to its model from one provider (AutoStandIn).
 func SetAutoGroupSkip(ids []string) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -1558,7 +1562,9 @@ func SaveGroup(g Group) error {
 	// what is checked above reads the accounts (providerEntries, Resolve,
 	// ResolveAccount), never under providersMu: the group is put in the
 	// file as it is now
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	if f, err = read(); err != nil {
 		return err
@@ -1738,7 +1744,9 @@ func DeleteGroup(id string) error {
 	}
 	// read before providersMu is taken
 	foundHere := slices.ContainsFunc(foundGroups(providerEntries()), func(g Group) bool { return g.ID == id })
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -1834,7 +1842,9 @@ var errNoGroup = errors.New("no such group")
 // switchGroupRead is SwitchGroup's change to providers.json, under
 // providersMu: errNoGroup when the user has no group id.
 func switchGroupRead(id string, on bool) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -1863,7 +1873,9 @@ func switchGroupRead(id string, on bool) error {
 // from wherever the user switches it: the tray panel (#2489) too. Nothing
 // else of the group changes, and only a Manual group can be switched so.
 func PickGroup(id, pick string) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -1918,7 +1930,9 @@ func RemovedGroups() []string {
 
 // ShowGroup brings back a group magpie found that the user had removed.
 func ShowGroup(id string) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -1955,7 +1969,9 @@ func RenameGroup(from, to string) error {
 // providersMu: all are the groups read before it, found whether from is
 // one magpie found.
 func renameGroupRead(from, to string, all []Group, found bool) error {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {

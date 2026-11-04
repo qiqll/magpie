@@ -260,7 +260,9 @@ func foldWhere(candidates func([]Provider) [][]int) (int, error) {
 // sets folded (indexes into ps, the providers as they were in the user's
 // order), and ref a model ref with the folded ones' ids moved.
 func foldRead(candidates func([]Provider) [][]int, stepfun map[string]stepfunSession, s *settings.Settings) (gone map[string]string, folds [][]int, ps []Provider, ref func(string) string, err error) {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return nil, nil, nil, nil, err
+	}
 	defer providersMu.Unlock()
 	// read from its last good generation, the file is the user's to mend:
 	// a fold would write that generation over it

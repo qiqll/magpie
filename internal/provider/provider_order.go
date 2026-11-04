@@ -70,7 +70,9 @@ func samePlace(id string) string {
 // named, as they are now, so a provider added later goes after them all.
 func SetOrder(ids []string) error {
 	all := All() // read before providersMu is taken
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -112,7 +114,9 @@ func MirrorOrder(order []string) error {
 	if len(order) == 0 {
 		return nil
 	}
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {

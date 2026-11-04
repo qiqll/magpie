@@ -352,7 +352,9 @@ func liveIDs(id string) map[string]bool {
 // not forgotten, and those of its Delisted now has go back among the picks
 // (relistPicks): a list that shrank for a while gives back what it took.
 func dropGonePicks(id string, before, now map[string]bool) ([]string, error) {
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return nil, err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -1264,7 +1266,9 @@ func (p Provider) fixV1(base, at string) string {
 		return base
 	}
 	fixed := base + "/v1"
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return base
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {

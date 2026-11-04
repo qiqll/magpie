@@ -76,7 +76,9 @@ func setAside(pkg string, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
@@ -106,7 +108,9 @@ func setAside(pkg string, ids []string) error {
 // gave the id to a provider since) stays aside.
 func takeBackLeft(spec string) error {
 	pkg := plugin.PackageName(spec)
-	providersMu.Lock()
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
 	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
