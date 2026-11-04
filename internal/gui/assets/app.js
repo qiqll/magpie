@@ -12261,9 +12261,7 @@ const accountToolsOpen = new Set(); // rows whose ⋯ is open
 // hasLogins: the subscription has an account signed in already
 const hasLogins = (agent) => (providers?.providers || []).some((p) => p.account?.agent === agent && p.account.logins?.length);
 
-// o: { user } signing that account in again, { proxy } the one picked to
-// sign in through (#1663): none picked, the one the account's requests go
-// through
+// o: { user } signed in again, { proxy } picked to sign in through (#1663)
 async function startSignIn(agent, risky, site, o = {}) {
   if (signingOpen()) api("signin/" + signing.id + "/cancel", {}).catch(() => {});
   if (signing?.behind) api("signin/" + signing.behind + "/cancel", {}).catch(() => {});
@@ -12367,7 +12365,7 @@ const saySignInFailed = () => signing?.state === "failed" && signAgainJS().then(
 
 // signingKept: a sign-in's site, way, account and proxy across updates
 function signingKept() {
-  return { site: signing.site, method: signing.method, inputs: signing.inputs, forUser: signing.forUser, picked: signing.picked, askProxy: signing.askProxy, customProxy: signing.customProxy, openError: signing.openError, linkOnly: signing.linkOnly };
+  return { site: signing.site, method: signing.method, inputs: signing.inputs, forUser: signing.forUser, picked: signing.picked, askProxy: signing.askProxy, customProxy: signing.customProxy, pasteVia: signing.pasteVia, askVia: signing.askVia, openError: signing.openError, linkOnly: signing.linkOnly };
 }
 
 // signInProxyOf: the proxy a sign-in goes through when none is picked (#1663)
@@ -12519,9 +12517,7 @@ function renderPluginAsk(sub) {
     return box;
   }
   const key = flow.state === "key";
-  // the key's field is titled by the way's label, as OpenCode's dialog
-  // is, unless that only says "API key"; the plugin's placeholder hints
-  // at what the key looks like
+  // titled by the way's label, as OpenCode's dialog is
   const way = key ? sub.plugin.methods?.[flow.method] || {} : {};
   const own = (way.label || "").trim();
   const label = key ? (own && own.toLowerCase() !== "api key" ? own : t("{name} API key", { name: sub.name })) : q.message;
@@ -12650,6 +12646,7 @@ function signInProxyChoices(sub) {
   opts.push({ v: "direct", name: "Direct", note: "Through no proxy" });
   if (own) add(own, t("{name}'s proxy", { name: sub.name }));
   for (const [u, v] of Object.entries(p?.accountProxies || {})) add((v || "").trim(), t("{user}'s proxy", { user: u }));
+  for (const x of (state?.settings || prefs)?.proxies || []) add(x.url, x.name);
   if (signing.proxy) add(signing.proxy, "");
   opts.push({ v: "\x01", name: "Custom…", note: "http://, https:// or socks5://" });
   return opts;
@@ -12777,10 +12774,7 @@ function renderSigning(sub) {
     // ZCode: a Z.ai account or a BigModel (智谱) one, a team's seat included
     tt.append(el("span", "n", t("Where is your {name} account?", { name: sub.name })),
       el("span", "s", t("Sign in where your GLM Coding Plan was bought, a team's plan too: z.ai, or bigmodel.cn for 智谱.")));
-    // the question keeps the row's width, Cancel beside it; the sites go
-    // under it as one group and a plugin's other ways under them as links,
-    // each line wrapping (361: four buttons in its row left the question a
-    // strip a character or two wide)
+    // the question keeps the row's width; sites and ways wrap under it (361)
     box.classList.add("site-pick");
     box.append(tt);
     const close = el("button", "text", t("Cancel"));
@@ -12864,8 +12858,7 @@ function renderSigning(sub) {
   }
   box.append(tt);
   if (signing.url) {
-    // the link itself, to select or copy into another browser or profile
-    // than the one magpie opened it in
+    // the link, to copy into another browser or profile
     const link = el("span", "signlink");
     const u = el("code", "", signing.url);
     u.title = t("Open it in another browser or profile: copy it there");
@@ -12899,9 +12892,7 @@ function renderSigning(sub) {
     const flow = signing;
     const what = flow.pasteCode ? t("Code") : flow.pasteKey ? t("API key") : t("Callback URL");
     if (flow.pasteKey) {
-      // Command Code's page posts its key to magpie unseen: a browser that
-      // can't reach magpie (Docker) has no address to paste, so a key made
-      // on the keys page finishes it, as Command Code's CLI takes one
+      // Command Code's page posts its key unseen: a key made on its keys page finishes it
       const s = el("span", "s", t("If the page can't reach magpie (it runs on a server or in Docker), make an API key on {name}'s keys page and paste it here.", { name: sub.name }) + " ");
       if (flow.keysURL) {
         const keys = el("button", "link", t("Open the keys page"));
@@ -12934,7 +12925,7 @@ function renderSigning(sub) {
       url.disabled = true;
       why.textContent = "";
       try {
-        await api("signin/" + flow.id + "/callback", { url: url.value });
+        await api("signin/" + flow.id + "/callback", { url: url.value, ...flow.viaBody });
         flow.callbackSubmitted = true;
         url.disabled = true;
       } catch (err) {
@@ -12949,7 +12940,9 @@ function renderSigning(sub) {
     form.onsubmit = finish;
     submit.onclick = finish;
     form.append(url, submit);
-    tt.append(form, why);
+    const via = el("span", "paste-pick");
+    tt.append(form, via, why);
+    proxiesJs(() => pastePickFill(via, sub, flow));
   }
   // a plugin's browser sign-in whose page can't reach magpie (Docker: the
   // Command Code plugin's Studio posts its key to 127.0.0.1) can be left
@@ -19844,6 +19837,7 @@ function renderSettings() {
   renderPluginCheckins(s);
   renderTrayUsage(s, keep);
   renderProxy(s, keep);
+  proxiesJs(() => savedProxiesFill($("#savedProxies"), s));
   renderGitHubToken(s);
   renderImages(s, keep);
   renderSearch(s, keep);
@@ -20665,6 +20659,7 @@ function proxyAddress(a, f, user, pass) {
 // proxyLoginRow: a proxy login's fields for the proxy rows outside
 // Settings (#3382), split and joined as Settings' row does (proxyFields,
 // proxyAddress), so setURL gets the address Settings would save.
+const proxiesJs = (f) => import("./proxies.js").then(f, () => {});
 function proxyLoginRow(addr, setURL, changed) {
   const fields = {};
   const auth = el("div", "proxy-auth proxy-login");
@@ -20695,6 +20690,7 @@ function proxyLoginRow(addr, setURL, changed) {
   username.oninput = password.oninput = join;
   addr.oninput = () => split();
   split(true);
+  proxiesJs(() => savedProxyFill(auth, addr));
   return auth;
 }
 function proxyDisplay(value) {
@@ -20772,6 +20768,7 @@ function renderProxy(s, keep) {
     apply.onclick = save;
     apply.onblur = saveOnLeave;
     auth.append(username, password, apply);
+    proxiesJs(() => savedProxyFill(auth, i, save));
     row.append(i);
     box.append(auth);
     if (proxyCustom) queueMicrotask(() => i.focus());

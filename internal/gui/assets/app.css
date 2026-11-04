@@ -4899,3 +4899,17 @@ body .row.agent .ag-prefs .row.pref .who { display: block; }
 .sess-tools .led-rename { flex: none; width: 180px; height: 26px; padding: 0 8px; border-radius: 7px; font-size: 12px; }
 /* Settings › About › Open-source licenses: the notices, as written */
 .notices-text { margin: 0; font: 11px/1.5 var(--code); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Settings › Network's saved proxies (proxies.js, T-110) */
+.saved-proxies-row { align-items: flex-start; }
+.saved-proxies { gap: 6px; min-width: 0; flex: 1 1 260px; }
+.saved-proxies .sp-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.saved-proxies .sp-words { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.saved-proxies .sp-name { font-weight: 500; white-space: nowrap; }
+.saved-proxies .sp-addr { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.saved-proxies .acts { display: flex; gap: 10px; flex: none; }
+.saved-proxies .sp-form { gap: 6px; }
+.saved-proxies .sp-form > input { width: 100%; box-sizing: border-box; }
+.saved-proxies .sp-form .acts { justify-content: flex-end; }
+.saved-proxies .sp-add { align-self: flex-start; }
+.signing .paste-via { align-self: flex-start; }

@@ -27,6 +27,15 @@ password, escaped and non-UTF-8 credentials, a login saved in the address
 before loading into the fields, masked addresses/status, clearing
 authentication, Tab and Escape, mode switches, and narrow windows in all
 five languages on Chromium and WebKit.
+`proxy-saved-pick.test.cjs` (T-110) checks a proxy picked beside a
+sign-in's Callback URL field: its menu (global, Direct, a saved proxy with
+no password shown, Custom…), the pick sent with the pasted address and
+nothing started again, a typed one sent the same way, and Claude Code's
+sign-in (proxyFixed) offering no pick and saying why. It also checks
+Settings › Network's saved proxies: listed without a password, a Test of
+that one proxy, add, edit and remove saved as one list, and Saved… beside
+the global Custom address. All five languages, at 900px and 380px, on
+Chromium and WebKit; the API is faked.
 ## Installed desktop fonts
 
 `fonts.test.cjs` exercises the interface/code font controls with installed
