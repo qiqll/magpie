@@ -51,9 +51,8 @@ func holdProviders(t *testing.T) *exec.Cmd {
 // shortWait makes each of providersMu's two tries wait d.
 func shortWait(t *testing.T, d time.Duration) {
 	t.Helper()
-	was := providersMu.Wait
-	providersMu.Wait = d
-	t.Cleanup(func() { providersMu.Wait = was })
+	providersMu.SetWait(d)
+	t.Cleanup(func() { providersMu.SetWait(0) })
 }
 
 // T-079: while another magpie holds providers.json's lock, a change waits,
@@ -104,7 +103,14 @@ func TestProvidersChangeRefusedWhileAnotherMagpieHolds(t *testing.T) {
 	if b, _ := os.ReadFile(Path() + ".lock"); len(bytes.TrimSpace(b)) == 0 {
 		t.Fatal("the other magpie left nothing to clear in the lock file")
 	}
-	ClearLeftLock()
+	// the system lets go of a killed process's lock at once on Unix, and
+	// soon after on Windows
+	for deadline := time.Now().Add(5 * time.Second); ClearLeftLock() == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("nothing cleared once the other magpie was killed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if b, _ := os.ReadFile(Path() + ".lock"); len(b) != 0 {
 		t.Errorf("the lock file still says %q once a magpie started", b)
 	}
@@ -126,7 +132,11 @@ func TestProvidersDayNotedWhileAnotherMagpieHoldsIsNotWritten(t *testing.T) {
 	before, _ := os.ReadFile(Path())
 	shortWait(t, 100*time.Millisecond)
 	holdProviders(t)
+	start := time.Now()
 	noteAdded([]loginAccount{{"codex", "other@example.com"}}, nil, nil)
+	if took := time.Since(start); took < 200*time.Millisecond {
+		t.Errorf("let go after %v: not after a try and one more", took)
+	}
 	if after, _ := os.ReadFile(Path()); !bytes.Equal(after, before) {
 		t.Fatalf("providers.json was written while another magpie held it:\n%s", after)
 	}

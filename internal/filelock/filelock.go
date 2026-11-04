@@ -30,51 +30,56 @@ var mkdirAll = os.MkdirAll
 // held is false when it went on without the lock: on a file system
 // without locks, or after wait.
 func Lock(path string, wait time.Duration) (unlock func(), held bool) {
-	f, got := take(path, wait)
+	f, got, _ := take(path, wait)
 	switch got {
 	case taken:
 		return func() { Unlock(f); f.Close() }, true
 	case timedOut:
 		log.Printf("%s: another magpie held it for %v; going on without it", path, wait)
 	}
+	// noLocks and openFailed: no lock to be had here, gone on without
 	return func() {}, false
 }
 
 // what take got
 const (
-	taken    = iota
-	noLocks  // no lock to be had on this file system, or no file to lock
-	timedOut // another process held it all through the wait
+	taken      = iota
+	noLocks    // no lock to be had on this file system
+	openFailed // the lock file couldn't be opened (no file to change either, mostly)
+	timedOut   // another process held it all through the wait
 )
 
 // take opens the lock file at path and takes its lock, waiting up to wait
-// for another process to let it go; f is open and locked when it is taken.
-func take(path string, wait time.Duration) (f *os.File, got int) {
+// for another process to let it go; f is open and locked when it is taken,
+// and err says why the file couldn't be opened.
+func take(path string, wait time.Duration) (f *os.File, got int, err error) {
 	// the folder is made only when the file can't be opened for want of
 	// it: made first, each lock asked the system for the folder too, on
 	// every take (#1665: ~190 times in a Windows start's first 25s, each
 	// an antivirus filter driver's work)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err = os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if errors.Is(err, fs.ErrNotExist) {
-		mkdirAll(filepath.Dir(path), 0o700)
-		f, err = os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+		merr := mkdirAll(filepath.Dir(path), 0o700)
+		if f, err = os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600); err != nil && merr != nil {
+			err = merr // why it isn't there: a folder not the user's, as a rule
+		}
 	}
 	if err != nil {
-		return nil, noLocks // no lock to be had here: no file to change either
+		return nil, openFailed, err
 	}
 	start := time.Now()
 	for {
 		ok, err := TryLock(f)
 		if err != nil { // a file system without locks, as an NFS home with no lockd
 			f.Close()
-			return nil, noLocks
+			return nil, noLocks, nil
 		}
 		if ok {
-			return f, taken
+			return f, taken, nil
 		}
 		if time.Since(start) > wait {
 			f.Close()
-			return nil, timedOut
+			return nil, timedOut, nil
 		}
 		time.Sleep(5 * time.Millisecond)
 	}

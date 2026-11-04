@@ -772,8 +772,9 @@ var providersMu = filelock.Strict{
 
 // ClearLeftLock is called as magpie starts: what a magpie that ended
 // while holding providersMu (crashed, or was killed) left in
-// providers.json.lock is cleared. The lock itself went with it.
-func ClearLeftLock() { filelock.Clear(Path() + ".lock") }
+// providers.json.lock is cleared. The lock itself went with it. left is
+// filelock.Clear's.
+func ClearLeftLock() (left int) { return filelock.Clear(Path() + ".lock") }
 
 // beforeProvidersWrite is called as providers.json is about to be
 // written: for a test to have another change come at that moment.

@@ -1,6 +1,7 @@
 package filelock
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -17,7 +18,10 @@ import (
 // let go, tries once more, and then answers BusyError, for the change to
 // be refused and the user asked to make it again. On a file system with
 // no locks at all it goes on without one, as Mutex does: nothing could
-// ever be changed there otherwise.
+// ever be changed there otherwise. A lock file that can't be opened is
+// not such a system (too many files open, one another user made): it is
+// tried once more and the change refused with the open's error, which a
+// caller tells apart as it would the file's own (a folder not the user's).
 //
 // The lock is the system's own (flock, LockFileEx), on the open file: it
 // is let go when the process holding it ends, however it ends, so a magpie
@@ -32,10 +36,17 @@ type Strict struct {
 	// Locked, when set, is called once both locks are held: to have the
 	// file guarded read afresh.
 	Locked func()
-	// Wait is how long each of the two tries waits for another magpie;
+	// wait is how long each of the two tries waits for another magpie;
 	// 0 is half of Wait, so both together wait as long as Mutex does.
-	Wait time.Duration
+	wait time.Duration
 	f    *os.File
+}
+
+// SetWait sets how long each of the two tries waits.
+func (s *Strict) SetWait(d time.Duration) {
+	s.mu.Lock()
+	s.wait = d
+	s.mu.Unlock()
 }
 
 // BusyError is a change refused because another magpie held the file's
@@ -57,16 +68,25 @@ func (e *BusyError) File() string { return strings.TrimSuffix(filepath.Base(e.Pa
 func (s *Strict) Take() error {
 	s.mu.Lock()
 	path := s.Path()
-	wait := s.Wait
+	wait := s.wait
 	if wait <= 0 {
 		wait = Wait / 2
 	}
-	f, got := take(path, wait)
-	if got == timedOut {
+	f, got, err := take(path, wait)
+	switch got {
+	case timedOut:
 		log.Printf("%s: another magpie%s held it for %v; trying once more", path, pidSaid(holder(path)), wait)
-		f, got = take(path, wait)
+		f, got, err = take(path, wait)
+	case openFailed:
+		log.Printf("%s: %v; trying once more", path, err)
+		time.Sleep(100 * time.Millisecond) // no other magpie to wait for
+		f, got, err = take(path, wait)
 	}
 	switch got {
+	case openFailed:
+		s.mu.Unlock()
+		log.Printf("%s: %v, a try and one more; the change wasn't saved", path, err)
+		return fmt.Errorf("this change wasn't saved: %w", err)
 	case timedOut:
 		s.mu.Unlock()
 		e := &BusyError{Path: path, Pid: holder(path)}
@@ -74,6 +94,8 @@ func (s *Strict) Take() error {
 		return e
 	case taken:
 		s.f = f
+		// who holds it, for another magpie to say: only ever said, so a
+		// write that fails costs nothing but the name
 		f.Truncate(0)
 		f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
 	}
@@ -121,7 +143,8 @@ func Clear(path string) (left int) {
 	if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 0 {
 		left = pid
 	}
-	log.Printf("%s: cleared what magpie%s left there as it ended holding it", path, pidSaid(left))
+	// nothing logged: magpie's log isn't open yet as it starts, and a
+	// terminal's command isn't to print it
 	return left
 }
 

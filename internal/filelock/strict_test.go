@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,7 +47,8 @@ func TestStrictAcrossProcesses(t *testing.T) {
 		t.Fatalf("the other magpie: %q", line)
 	}
 
-	s := Strict{Path: func() string { return path }, Wait: 200 * time.Millisecond}
+	s := Strict{Path: func() string { return path }}
+	s.SetWait(200 * time.Millisecond)
 	start := time.Now()
 	err := s.Take()
 	var busy *BusyError
@@ -79,7 +81,13 @@ func TestStrictAcrossProcesses(t *testing.T) {
 	}
 	holder.Process.Kill()
 	holder.Wait()
-	if left := Clear(path); left != holder.Process.Pid {
+	// the system lets go of a killed process's lock at once on Unix, and
+	// soon after on Windows
+	left := Clear(path)
+	for deadline := time.Now().Add(5 * time.Second); left == 0 && time.Now().Before(deadline); left = Clear(path) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if left != holder.Process.Pid {
 		t.Fatalf("cleared %d, want the killed magpie's %d", left, holder.Process.Pid)
 	}
 	if b, _ := os.ReadFile(path); len(b) != 0 {
@@ -102,4 +110,33 @@ func TestStrictAcrossProcesses(t *testing.T) {
 	if b, _ := os.ReadFile(path); len(b) != 0 {
 		t.Errorf("let go, the lock file says %q", b)
 	}
+}
+
+// A lock file that can't be opened is no file system without locks: the
+// change is tried once more and refused, never made without the lock.
+func TestStrictRefusesALockFileItCantOpen(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a folder's permissions are ACLs there")
+	}
+	dir := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	if f, err := os.Create(filepath.Join(dir, "probe")); err == nil {
+		f.Close()
+		t.Skip("this user writes into a folder it can't write to (root)")
+	}
+	s := Strict{Path: func() string { return filepath.Join(dir, "f.json.lock") }}
+	s.SetWait(50 * time.Millisecond)
+	err := s.Take()
+	if err == nil {
+		s.Unlock()
+	}
+	// the open's own error, for a caller to tell a folder not the user's
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("a lock file that can't be opened answered %v", err)
+	}
+	// refused, it holds nothing: this would wait on its mutex
+	s.SetWait(50 * time.Millisecond)
 }
