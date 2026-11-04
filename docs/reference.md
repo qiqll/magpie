@@ -2862,7 +2862,10 @@ that `id` and drops it once `phase` is `done` or `dropped`. A 409
 connection means: take a snapshot again. No session, account, key, folder,
 prompt, reply or error text is in it. It answers as `/v1/magpie/usage`
 does: this machine, another only with a gateway key while magpie is
-shared, and never a held key. Give a display a read-only key,
+shared, and never a held key. Bound by user, a request that sends
+`X-Magpie-User` is told its own requests alone, as `/v1/magpie/route` is,
+and `active` counts those; a header that can't be taken is 400, a
+user-accounts.json that doesn't read 503. Give a display a read-only key,
 `magpie gateway-key add Screen --read-only`, which can spend nothing. See
 the [route event contract](subsystems/gateway-routing.md#route-events-for-a-display).
 

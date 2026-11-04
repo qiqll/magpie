@@ -597,6 +597,15 @@ session with none of its routes is 404, another user's word for word as
 one with no route at all, so whether it is anyone's is not told; a long
 poll waits for one of its own. `TestBoundUserToldItsOwnSessionRoute` in
 [`users_route_test.go`](../../internal/gateway/users_route_test.go).
+The route-events feed and its snapshot are narrowed the same way (T-105,
+`ownEvent` and `activitySnapshot` in
+[`route_events.go`](../../internal/gateway/route_events.go)): the user is
+told the changes of its own requests alone, each `active` counting its own
+going, and another user's change is passed over with the cursor moved past
+it. A stream reads the user's group again as it reads its key
+(`usersOwnOf`), and ends once user-accounts.json doesn't read.
+`TestBoundUserToldItsOwnRouteEvents` in
+[`users_route_events_test.go`](../../internal/gateway/users_route_events_test.go).
 
 `POST /v1/magpie/quotas/codex-reset` (`Server.codexReset` in
 [`gateway.go`](../../internal/gateway/gateway.go), #3850) spends one of a
@@ -1136,9 +1145,10 @@ key reads it (`readOnlyRoutes`), so a display is given
 `magpie gateway-key add Screen --read-only`: it can spend nothing. Every
 route's guards come first (`lanGuard`, `corsGuard`): a page sending
 `Origin: null`, a `*.localhost` page, a rebound name and a proxy's client
-are refused it without a key. A separate key type, as the community patch
-had, was left out: the read-only key already reads more than this feed
-(every call's usage), and is the key for a display.
+are refused it without a key. Bound by user, a request naming its user is
+told its own requests alone (T-105, above). A separate key type, as the
+community patch had, was left out: the read-only key already reads more
+than this feed (every call's usage), and is the key for a display.
 `TestRouteEventsTold`, `TestRouteEventsReplayAndRevocation`,
 `TestRouteEventsDroppedRouteGoes`, `TestRouteEventsEndWithTheGateway`,
 `TestRouteEventsLiveFallback` in

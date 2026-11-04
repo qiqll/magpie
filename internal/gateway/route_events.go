@@ -28,7 +28,8 @@ import (
 // computer, and to another with an enabled gateway key while magpie is
 // shared (a read-only key reads them too, readOnlyRoutes), never to a
 // key held to a budget, models or accounts, which is told no one else's
-// requests.
+// requests. Bound by user, a request naming its user is told its own
+// requests alone, as GET /v1/magpie/route is (T-105, usersOwn.owns).
 const (
 	routeSnapshotPath = "/v1/magpie/route-events/snapshot"
 	routeEventsPath   = "/v1/magpie/route-events"
@@ -137,6 +138,28 @@ type routeActivityEvent struct {
 	// Active is how many requests were going once this change was made
 	Active int           `json:"active"`
 	Route  routeActivity `json:"route"`
+	// caller is whose request the change is of, and going whose requests
+	// were going then, for a user to be told its own alone (ownEvent)
+	caller routeCaller
+	going  []routeCaller
+}
+
+// ownEvent is ev as own's reader is told it: false when it is of another
+// user's request, Active counting own's requests alone. own nil: ev.
+func ownEvent(ev routeActivityEvent, own *usersOwn) (routeActivityEvent, bool) {
+	if own == nil {
+		return ev, true
+	}
+	if !own.owns(ev.caller) {
+		return ev, false
+	}
+	ev.Active = 0
+	for _, c := range ev.going {
+		if own.owns(c) {
+			ev.Active++
+		}
+	}
+	return ev, true
 }
 
 // routeActivityLog is the feed's last routeEventsKeep changes, a ring
@@ -185,7 +208,8 @@ func (t *trace) noteActivity(r *Route, kind string) {
 	l := &t.activity
 	l.init()
 	l.seq++
-	l.events[(l.seq-1)%routeEventsKeep] = routeActivityEvent{l.cursor(), kind, t.going(), activityOf(r)}
+	going := t.going()
+	l.events[(l.seq-1)%routeEventsKeep] = routeActivityEvent{Cursor: l.cursor(), Kind: kind, Active: len(going), Route: activityOf(r), caller: r.caller, going: going}
 }
 
 // noteDropped tells the feed r left the trace unfinished, under t.mu,
@@ -199,19 +223,20 @@ func (t *trace) noteDropped(r *Route) {
 	l.seq++
 	a := activityOf(r)
 	a.Phase = phaseDropped
-	l.events[(l.seq-1)%routeEventsKeep] = routeActivityEvent{l.cursor(), "request_dropped", t.going(), a}
+	going := t.going()
+	l.events[(l.seq-1)%routeEventsKeep] = routeActivityEvent{Cursor: l.cursor(), Kind: "request_dropped", Active: len(going), Route: a, caller: r.caller, going: going}
 	r.offFeed = true
 }
 
-// going counts the requests still going, under t.mu.
-func (t *trace) going() int {
-	n := 0
+// going is whose requests are still going, one for each, under t.mu.
+func (t *trace) going() []routeCaller {
+	var out []routeCaller
 	for _, r := range t.routes {
 		if !r.Done {
-			n++
+			out = append(out, r.caller)
 		}
 	}
-	return n
+	return out
 }
 
 // routeEventsAllowed: r may read the feed. It is answered as the usage
@@ -225,14 +250,14 @@ func routeEventsAllowed(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // activitySnapshot is the requests going now, by id, and the cursor of
-// the last change, read together.
-func (t *trace) activitySnapshot() (string, []routeActivity) {
+// the last change, read together; with own, own's requests alone.
+func (t *trace) activitySnapshot(own *usersOwn) (string, []routeActivity) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.activity.init()
 	routes := []routeActivity{}
 	for _, r := range t.routes {
-		if !r.Done && !r.offFeed {
+		if !r.Done && !r.offFeed && (own == nil || own.owns(r.caller)) {
 			routes = append(routes, activityOf(r))
 		}
 	}
@@ -243,7 +268,11 @@ func (s *Server) routeSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !routeEventsAllowed(w, r) {
 		return
 	}
-	cursor, routes := s.trace.activitySnapshot()
+	own, ok := s.usersSeats(w, r)
+	if !ok {
+		return
+	}
+	cursor, routes := s.trace.activitySnapshot(own)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{"cursor": cursor, "active": len(routes), "routes": routes})
 }
@@ -251,10 +280,15 @@ func (s *Server) routeSnapshot(w http.ResponseWriter, r *http.Request) {
 // routeEvents streams the feed's changes after a cursor (Last-Event-ID,
 // else ?after=). It ends when the client goes, when the gateway stops
 // serving (streamsEnding: Shutdown would wait its whole drain for it),
-// when the key it came with is turned off, removed or runs out, and when
-// magpie stops being shared with a reader on another machine.
+// when the key it came with is turned off, removed or runs out, when
+// magpie stops being shared with a reader on another machine, and, bound
+// by user, when its user's users file stops reading (usersOwnOf).
 func (s *Server) routeEvents(w http.ResponseWriter, r *http.Request) {
 	if !routeEventsAllowed(w, r) {
+		return
+	}
+	own, ok := s.usersSeats(w, r)
+	if !ok {
 		return
 	}
 	cursor := r.Header.Get("Last-Event-ID")
@@ -271,7 +305,19 @@ func (s *Server) routeEvents(w http.ResponseWriter, r *http.Request) {
 			return true
 		}
 		checked = time.Now()
-		return (keyID == "" || access.On(keyID)) && (!remote || remoteKeyed())
+		if !(keyID == "" || access.On(keyID)) || (remote && !remoteKeyed()) {
+			return false
+		}
+		if own != nil {
+			// whose requests are its user's as user-accounts.json is now:
+			// a key turned to share its users, or not to, moves them
+			now, code, _ := s.usersOwnOf(r)
+			if code != 0 || now == nil {
+				return false
+			}
+			own = now
+		}
+		return true
 	}
 	t := &s.trace
 	beat := time.NewTicker(routeEventsBeat)
@@ -328,7 +374,8 @@ func (s *Server) routeEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			for _, event := range events {
-				if !write("route", event.Cursor, event) {
+				// another user's change is passed over, the cursor past it
+				if ev, mine := ownEvent(event, own); mine && !write("route", ev.Cursor, ev) {
 					return
 				}
 				cursor = event.Cursor

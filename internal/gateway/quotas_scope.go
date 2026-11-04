@@ -99,16 +99,27 @@ type usersOwn struct {
 // read, or changed and doesn't read now (stale), 503: which seats are the
 // user's is unknown, so it is told none.
 func (s *Server) usersSeats(w http.ResponseWriter, r *http.Request) (own *usersOwn, ok bool) {
+	own, code, msg := s.usersOwnOf(r)
+	if code != 0 {
+		writeError(w, provider.Chat, code, msg)
+		return nil, false
+	}
+	return own, true
+}
+
+// usersOwnOf is usersSeats' answer without writing it: the status and
+// message a request is refused with, code 0 when it isn't. A stream
+// reads it again as it goes (routeEvents).
+func (s *Server) usersOwnOf(r *http.Request) (own *usersOwn, code int, msg string) {
 	if !s.bind.byUser() {
-		return nil, true
+		return nil, 0, ""
 	}
 	user, bad := userOf(r.Header)
 	if bad != "" {
-		writeError(w, provider.Chat, http.StatusBadRequest, bad)
-		return nil, false
+		return nil, http.StatusBadRequest, bad
 	}
 	if user == "" {
-		return nil, true
+		return nil, 0, ""
 	}
 	own = &usersOwn{user: user}
 	key := userKey(r)
@@ -134,10 +145,9 @@ func (s *Server) usersSeats(w http.ResponseWriter, r *http.Request) (own *usersO
 	own.sharers, own.group = maps.Clone(userBinds.sharers), g
 	userBinds.Unlock()
 	if err != nil {
-		writeError(w, provider.Chat, http.StatusServiceUnavailable, fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know which accounts %q is on and tells it nothing of them. Its log says why", UserHeader, user))
-		return nil, false
+		return nil, http.StatusServiceUnavailable, fmt.Sprintf("%s: magpie can't read user-accounts.json, so it doesn't know which accounts %q is on and tells it nothing of them. Its log says why", UserHeader, user)
 	}
-	return own, true
+	return own, 0, ""
 }
 
 func newQuotaScope(who access.Identity, catalog []provider.Entry) *quotaScope {
