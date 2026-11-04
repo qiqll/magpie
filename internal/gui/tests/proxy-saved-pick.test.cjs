@@ -208,6 +208,15 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(seen.checks, [{ proxy: "http://bob:p%40ss@10.2.2.2:8080" }]);
         assert.equal(await said.textContent(), works);
         assert.equal(seen.starts.length, 1, "testing starts no sign-in");
+        // the sign-in drawn again (each poll does) keeps it on the new row
+        await page.evaluate(() => renderProviders());
+        await page.waitForFunction(() => !document.querySelector(".editor .signing form.proxy-ask .typed-proxy-check")?.hidden);
+        assert.equal(await said.textContent(), works);
+        // another address typed hides it, and the one tested brings it back
+        await form.locator("input").first().fill("http://10.2.2.3:8080");
+        assert.equal(await said.isHidden(), true, "another address hides the result");
+        await form.locator("input").first().fill("http://10.2.2.2:8080");
+        assert.equal(await said.isHidden(), false);
         // a saved proxy picked into the row tests that one instead
         await form.locator(".saved-proxy").click();
         await page.locator(".proto-menu .pm-item", { hasText: HOME_SHOWN }).click();
@@ -215,6 +224,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await test.click();
         await page.waitForFunction(() => !document.querySelector(".editor .signing form.proxy-ask .typed-proxy-check")?.hidden);
         assert.deepEqual(seen.checks[1], { proxy: HOME });
+        // a login pasted with an escape that isn't UTF-8 is tested as Save
+        // keeps it, not encoded again
+        await form.locator("input").first().fill("socks5://name:p%FFss@[::1]:1080");
+        await test.click();
+        for (let i = 0; i < 40 && seen.checks.length < 3; i++) await page.waitForTimeout(50);
+        assert.deepEqual(seen.checks[2], { proxy: "socks5://name:p%FFss@[::1]:1080" });
         assert.equal(await wide(page), false, "nothing wider than the window");
 
         // Through: …'s Custom… beside the pasted address
@@ -228,9 +243,24 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const pt = box.locator(".proxy-ask:has(input.paste-proxy) .typed-proxy-test");
         await pt.click();
         await page.waitForFunction(() => !document.querySelector(".editor .signing .proxy-ask:has(input.paste-proxy) .typed-proxy-check")?.hidden);
-        assert.deepEqual(seen.checks[2], { proxy: "socks5://127.0.0.1:1080" });
+        assert.deepEqual(seen.checks[3], { proxy: "socks5://127.0.0.1:1080" });
         assert.equal(await box.locator(".proxy-ask:has(input.paste-proxy) .typed-proxy-check").textContent(), works);
         assert.equal(await wide(page), false, "nothing wider than the window");
+
+        // the provider editor's proxy row: its login and Test hidden with
+        // its address until Custom is picked
+        await page.keyboard.press("Escape");
+        await page.goto("http://magpie.test/?view=providers");
+        await page.locator(".row.provider", { hasText: "Codex" }).first().click();
+        const adv = page.locator(".editor details.advanced");
+        await adv.waitFor({ state: "attached" });
+        if (!(await adv.evaluate((d) => d.open))) await adv.locator(":scope > summary").click();
+        const pick = page.locator(".editor .proxy-pick");
+        await pick.locator(".typed-proxy-test").waitFor({ state: "attached" });
+        const shown = () => pick.locator(".proxy-login").evaluate((e) => getComputedStyle(e).visibility);
+        assert.equal(await shown(), "hidden", "no login or Test while the provider follows the global proxy");
+        await pick.locator(".proxy-mode .opt", { hasText: w("Custom") }).click();
+        assert.equal(await shown(), "visible");
         assert.deepEqual(errors, []);
       });
 

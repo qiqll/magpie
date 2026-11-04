@@ -20656,14 +20656,15 @@ function proxyAddress(a, f, user, pass) {
   const [, scheme = "", rest] = /^([a-z][\w+.-]*:\/\/)?(.*)$/is.exec(a);
   return scheme + enc(user, f.username, f.eu) + (pass ? ":" + enc(pass, f.password, f.ep) : "") + "@" + rest;
 }
-// proxyLoginRow: a proxy login's fields for the proxy rows outside
-// Settings (#3382), split and joined as Settings' row does (proxyFields,
-// proxyAddress), so setURL gets the address Settings would save.
+// proxyLoginRow: a proxy login's fields outside Settings (#3382), joined
+// as Settings' row does; hidden with an address that is off (T-110).
 const pasteViaOf = (f) => f.pasteVia != null && !f.proxyFixed ? { proxy: f.pasteVia } : {};
 const proxiesJs = (f) => import("./proxies.js").then(f, () => {});
 function proxyLoginRow(addr, setURL, changed) {
   const fields = {};
   const auth = el("div", "proxy-auth proxy-login");
+  auth.fields = fields;
+  auth.classList.toggle("off", addr.classList.contains("off"));
   const username = input("", t("Username (optional)"));
   const password = input("", t("Password (optional)"), "password");
   for (const f of [username, password]) {

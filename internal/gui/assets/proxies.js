@@ -120,9 +120,11 @@ const typedChecks = {};
 // under the row while that address stays typed.
 function typedProxyTest(auth, addr) {
   if (auth.querySelector(".typed-proxy-test")) return;
+  // joined as proxyLoginRow's join is, escapes kept as loaded, so Test
+  // checks the address Save keeps
   const typed = () => {
     const [user, pass] = [...auth.querySelectorAll("input.proxy-credential")].map((f) => f.value);
-    return proxyAddress(addr.value, {}, user, pass);
+    try { return proxyAddress(addr.value.trim(), auth.fields || {}, user, pass); } catch { return addr.value.trim(); }
   };
   const test = el("button", "link typed-proxy-test");
   test.type = "button";
