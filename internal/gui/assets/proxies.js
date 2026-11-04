@@ -103,7 +103,11 @@ function spForm(list, keep, redraw) {
   };
   const acts = el("span", "acts");
   acts.append(cancel, save);
-  form.append(name, addr, login, acts);
+  // name and address on one line, the login under them in the same
+  // columns, as the global proxy's row draws them
+  const fields = el("div", "sp-fields");
+  fields.append(name, addr);
+  form.append(fields, login, acts);
   if (spErr) form.append(el("div", "sub err sp-err", spErr));
   for (const f of form.querySelectorAll("input")) f.onkeydown = (e) => e.stopPropagation();
   setTimeout(() => { if (name.isConnected && !name.value) name.focus(NO_SCROLL); });

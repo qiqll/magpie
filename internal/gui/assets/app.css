@@ -3829,11 +3829,11 @@ img.nav-ic { border-radius: 3px; object-fit: contain; }
 .proxy-segs { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin-left: auto; min-width: 0; max-width: 100%; }
 .proxy-controls, .proxy-auth { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 100%; }
 .proxy-auth[hidden] { display: none; }
-.proxy-segs input.proxy, .proxy-segs input.proxy-credential, input.words { width: 180px; max-width: 100%; min-width: 0; height: 27px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); font-size: 12.5px; outline: none; transition: border-color .12s, box-shadow .12s; }
+.proxy-segs input.proxy, .proxy-segs input.proxy-credential, .saved-proxies .sp-form input, input.words { width: 180px; max-width: 100%; min-width: 0; height: 27px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); font-size: 12.5px; outline: none; transition: border-color .12s, box-shadow .12s; }
 .proxy-segs input.proxy-credential { width: 140px; }
 .proxy-auth .text { flex: none; }
-.proxy-segs input:focus, input.words:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
-.proxy-segs input::placeholder, input.words::placeholder { color: var(--faint); }
+.proxy-segs input:focus, .saved-proxies .sp-form input:focus, input.words:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.proxy-segs input::placeholder, .saved-proxies .sp-form input::placeholder, input.words::placeholder { color: var(--faint); }
 input.words { width: 240px; max-width: 100%; }
 /* Settings → Long conversations: 272K or the size typed, beside it (#876) */
 .compact-at { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: none; }
@@ -4905,14 +4905,17 @@ body .row.agent .ag-prefs .row.pref .who { display: block; }
 
 /* Settings › Network's saved proxies (proxies.js, T-110) */
 .saved-proxies-row { align-items: flex-start; }
-.saved-proxies { gap: 6px; min-width: 0; flex: 1 1 260px; }
+.saved-proxies { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1 1 260px; }
 .saved-proxies .sp-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .saved-proxies .sp-words { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .saved-proxies .sp-name { font-weight: 500; white-space: nowrap; }
 .saved-proxies .sp-addr { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .saved-proxies .acts { display: flex; gap: 10px; flex: none; }
-.saved-proxies .sp-form { gap: 6px; }
-.saved-proxies .sp-form > input { width: 100%; box-sizing: border-box; }
+.saved-proxies .sp-form { display: flex; flex-direction: column; gap: 8px; }
+.saved-proxies .sp-fields { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.saved-proxies .sp-fields .sp-name-in, .saved-proxies .sp-form input.proxy-credential { width: 140px; flex: none; }
+.saved-proxies .sp-fields .sp-url-in { width: auto; flex: 1 1 180px; }
+.saved-proxies .sp-form .proxy-login { justify-content: flex-start; }
 .saved-proxies .sp-form .acts { justify-content: flex-end; }
 .saved-proxies .sp-add { align-self: flex-start; }
 .signing .paste-via { align-self: flex-start; }
