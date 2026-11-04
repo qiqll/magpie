@@ -79,6 +79,8 @@ func TestClaudeSignInFailureSaysThePickedProxy(t *testing.T) {
 	}{
 		{"http://10.0.0.1:3128", SignInProxy{Proxy: "http://10.0.0.1:3128", From: "picked"}, "http://10.0.0.1:3128"},
 		{"direct", SignInProxy{From: "picked"}, ""},
+		// "Global proxy" picked is the global one, not one of its own
+		{"", SignInProxy{Proxy: "http://127.0.0.1:9", From: "settings"}, "http://127.0.0.1:9"},
 	} {
 		pick := c.pick
 		_, err := StartSignInWith("claude", SignInOptions{Proxy: &pick})
@@ -112,4 +114,40 @@ func TestClaudeSignInFailedStateSaysItsProxy(t *testing.T) {
 		t.Fatalf("state %+v, proxy %+v", st, st.ProxyUsed)
 	}
 	logSays(t, buf, "auth login` ended (exit status 1)", "given no proxy (direct)")
+}
+
+// "Global proxy" picked with the global one set to none is said as the
+// global one's none, not as one picked (review of T-103, M1); and the
+// failure's log line has no empty reason (L4).
+func TestClaudeSignInPickedGlobalDirectSaysDirect(t *testing.T) {
+	claudeHome(t)
+	noAnthropic(t)
+	fakeProxyRefusedClaudeLogin(t)
+	_ = settings.Save(settings.Settings{Proxy: "direct"})
+	pick := ""
+	_, err := StartSignInWith("claude", SignInOptions{Proxy: &pick})
+	var used *SignInProxyError
+	if !errors.As(err, &used) || used.Used != (SignInProxy{From: "direct"}) {
+		t.Fatalf("err %v, said %+v", err, used)
+	}
+	claudeLogins.Wait()
+}
+
+// An account's own proxy, and its subscription's, are said as theirs.
+func TestClaudeSignInFailureSaysWhoseProxy(t *testing.T) {
+	claudeHome(t)
+	noAnthropic(t)
+	fakeProxyRefusedClaudeLogin(t)
+	writeProviders(t, []Provider{{ID: "claude", Proxy: "http://10.0.0.5:8080", AccountProxies: map[string]string{"me@example.com": "http://u:p@10.0.0.6:8080"}}})
+	for user, want := range map[string]SignInProxy{
+		"":               {Proxy: "http://10.0.0.5:8080", From: "subscription"},
+		"me@example.com": {Proxy: "http://10.0.0.6:8080", From: "account"},
+	} {
+		_, err := StartSignInWith("claude", SignInOptions{User: user})
+		var used *SignInProxyError
+		if !errors.As(err, &used) || used.Used != want {
+			t.Fatalf("%q: err %v, said %+v", user, err, used)
+		}
+		claudeLogins.Wait()
+	}
 }

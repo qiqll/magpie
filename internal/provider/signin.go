@@ -250,14 +250,20 @@ func (s *signInFlow) pickProxy(agent string, o SignInOptions) error {
 	if err := settings.CheckProxy(p); err != nil {
 		return err
 	}
-	s.proxy, s.chosen, s.proxyFrom = p, true, "picked"
+	// "" picked is the global one, said as that
+	s.proxy, s.chosen, s.proxyFrom = p, true, ""
+	if p != "" {
+		s.proxyFrom = "picked"
+	}
 	return nil
 }
 
 // SignInProxy is the proxy a sign-in's CLI was given: Proxy as Redact
 // shows it ("" for none), From where it came from: "picked" (in the
 // sign-in), "account", "subscription", "settings" (the global one),
-// "environment" (magpie's own *_PROXY), "system", "direct" or "none".
+// "environment" (magpie's own *_PROXY), "system", "direct", "none" or
+// "invalid" (one that can't be read, so the CLI kept magpie's own
+// environment).
 type SignInProxy struct {
 	Proxy string `json:"proxy"`
 	From  string `json:"from"`
@@ -821,7 +827,11 @@ func (s *signInFlow) finish(out SignInState) bool {
 	case "failed":
 		at := SignInState{ID: out.ID, Agent: out.Agent, User: user}
 		if said != "" {
-			log.Print(signInLine(at, "failed", out.status) + ": " + logReason(out.Error) + " (" + said + ")")
+			line := signInLine(at, "failed", out.status)
+			if out.Error != "" {
+				line += ": " + logReason(out.Error)
+			}
+			log.Print(line + " (" + said + ")")
 			break
 		}
 		logSignIn(at, "failed", out.status, out.Error)

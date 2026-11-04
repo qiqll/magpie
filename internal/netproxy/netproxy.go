@@ -327,13 +327,17 @@ func EnvWith(choice string, env []string) []string {
 // EnvSaid says what EnvWith gives a CLI: the proxy (Redact), "" for
 // none, and where it came from: "own" (choice), "settings" (magpie's
 // global one), "environment" (env's own *_PROXY, kept), "system",
-// "direct" (choice or the global one says none) or "none" (nothing names
-// one). For a sign-in's failure, which says what its CLI was given.
+// "direct" (choice or the global one says none), "none" (nothing names
+// one) or "invalid" (the one named can't be read, so env is kept). For a
+// sign-in's failure, which says what its CLI was given.
 func EnvSaid(choice string, env []string) (proxy, source string) {
 	if env == nil {
 		env = os.Environ()
 	}
-	p, _, source, _ := envPick(choice, env)
+	p, _, source, keep := envPick(choice, env)
+	if keep && p != "" && source != "environment" {
+		return "", "invalid"
+	}
 	return Redact(p), source
 }
 

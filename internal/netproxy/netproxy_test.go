@@ -370,4 +370,9 @@ func TestEnvSaid(t *testing.T) {
 	if p, s := EnvSaid("", []string{"https_proxy=http://u:p@10.0.0.1:1"}); p != "http://10.0.0.1:1" || s != "environment" {
 		t.Fatalf("environment: %q %q", p, s)
 	}
+	// one that can't be read keeps env as it is, and is said so (review
+	// of T-103, L1), never as no proxy
+	if p, s := EnvSaid("http://u:p@[bad", env); p != "" || s != "invalid" || !slices.Equal(EnvWith("http://u:p@[bad", env), env) {
+		t.Fatalf("invalid: %q %q", p, s)
+	}
 }

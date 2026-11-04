@@ -12349,6 +12349,7 @@ const signInProxyFrom = {
   picked: "picked for this sign-in", account: "this account's own", subscription: "this subscription's own",
   settings: "magpie's global proxy", environment: "magpie's own environment", system: "the system's proxy",
   direct: "magpie's global proxy is set to none", none: "no proxy is set anywhere",
+  invalid: "the proxy set can't be read, so magpie's own environment was kept",
 };
 function signInProxySaid(u) {
   if (!u?.from) return "";
