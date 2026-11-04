@@ -132,20 +132,20 @@ func TestBoundUserToldItsOwnRouteEvents(t *testing.T) {
 	if ev := mustActivity(t, scan); ev.Route.Agent != "alice-live" || ev.Kind != "request_started" || ev.Active != 3 {
 		t.Fatalf("alice's next change: %+v", ev)
 	}
+	if ev := mustActivity(t, scan); ev.Route.Agent != "alice-live" || ev.Kind != "attempt_started" {
+		t.Fatalf("alice's try: %+v", ev)
+	}
 	bound.trace.update(bobLive, func(r *Route) { r.Done, r.Status = true, 200 })
 	// a users file that no longer reads: her stream ends at its next change
 	if err := os.WriteFile(usersPath(), []byte(`{"keys":`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	begin(bound, keys[0].ID, "alice", "alice-after")
-	for {
-		ev, ok := nextActivity(t, scan)
-		if !ok {
-			break
-		}
-		if ev.Route.Agent != "alice-live" {
-			t.Fatalf("told a change once the users file didn't read: %+v", ev)
-		}
+	if ev, ok := nextActivity(t, scan); ok {
+		t.Fatalf("told a change once the users file didn't read: %+v", ev)
+	}
+	if err := scan.Err(); err != nil {
+		t.Fatal("the stream didn't end:", err)
 	}
 	for _, path := range []string{routeSnapshotPath, routeEventsPath} {
 		if res := get(srv.URL, path, secrets[0], "alice", "Last-Event-ID", cursor.Cursor); res.StatusCode != http.StatusServiceUnavailable {
@@ -155,4 +155,93 @@ func TestBoundUserToldItsOwnRouteEvents(t *testing.T) {
 			t.Errorf("%s, a user that can't be taken: %s", path, res.Status)
 		}
 	}
+}
+
+// Bound by user, a stream reads its user's group again as it goes: Other's
+// alice is told Full's alice's requests once Other shares its users, not
+// before. And a quiet alice whose last change is far behind others' many
+// is carried past them: she reconnects with the id she last read, not
+// sent back to the snapshot.
+func TestBoundUserRouteEventsFollowItsGroup(t *testing.T) {
+	fresh(t)
+	t.Setenv("MAGPIE_ADDR", "")
+	was := routeEventsRecheck
+	routeEventsRecheck = 0
+	t.Cleanup(func() { routeEventsRecheck = was })
+	now := time.Now().UTC().Truncate(time.Second)
+	keys, secrets := newCaller(t, "Full", "Other")
+	one := "alpha#" + provider.KeyID("alpha-one")
+	writeUsers(t, userFile{Keys: map[string]map[string]map[string]userBinding{
+		keys[0].ID: {"alpha": {"alice": {Who: one, Account: "One", At: now}, "bob": {Who: one, Account: "One", At: now}}},
+		keys[1].ID: {"alpha": {"alice": {Who: one, Account: "One", At: now}}},
+	}})
+	s := byUserUpTo(t, New(), 1)
+	srv := httptest.NewServer(lanGuard(s.Handler()))
+	t.Cleanup(srv.Close) // after each stream's body is closed
+	begin := func(key, user, agent string) *Route {
+		r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		r.Header.Set(UserHeader, user)
+		r = r.WithContext(access.WithIdentity(r.Context(), access.Identity{KeyID: key}))
+		return s.trace.beginFor(r, Route{Time: now, Agent: agent, Model: "m"})
+	}
+	stream := func(secret, user, cursor string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest("GET", srv.URL+routeEventsPath, nil)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		req.Header.Set(UserHeader, user)
+		req.Header.Set("Last-Event-ID", cursor)
+		res, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { res.Body.Close() })
+		return res
+	}
+	cursor := activitySnapshot(t, srv.URL, secrets[1]).Cursor
+	other := bufio.NewScanner(stream(secrets[1], "alice", cursor).Body)
+	begin(keys[0].ID, "alice", "full-alice-before")
+	begin(keys[1].ID, "alice", "other-alice")
+	if ev := mustActivity(t, other); ev.Route.Agent != "other-alice" || ev.Active != 1 {
+		t.Fatalf("Other's alice told before Other shared its users: %+v", ev)
+	}
+	sharing(t, keys[0].ID, keys[1].ID)
+	begin(keys[0].ID, "alice", "full-alice-after")
+	if ev := mustActivity(t, other); ev.Route.Agent != "full-alice-after" || ev.Active != 3 {
+		t.Fatalf("Other's alice not told Full's alice's once Other shares its users: %+v", ev)
+	}
+	// a quiet alice: her last change, then bob's more than the ring keeps
+	res := stream(secrets[0], "alice", activitySnapshot(t, srv.URL, secrets[0]).Cursor)
+	scan := bufio.NewScanner(res.Body)
+	begin(keys[0].ID, "alice", "alice-last")
+	if ev := mustActivity(t, scan); ev.Route.Agent != "alice-last" {
+		t.Fatal(ev)
+	}
+	for i := 0; i < routeEventsKeep+8; i++ {
+		begin(keys[0].ID, "bob", "bob-busy")
+	}
+	begin(keys[0].ID, "bob", "bob-busy") // wakes it past the last bob's once more
+	// the id she was last sent: the last she read
+	id := ""
+	for id != activityCursorNow(s) {
+		if !scan.Scan() {
+			t.Fatal("the stream ended:", scan.Err())
+		}
+		if v, ok := strings.CutPrefix(scan.Text(), "id: "); ok {
+			id = v
+		}
+		if strings.Contains(scan.Text(), "bob-busy") {
+			t.Fatal("alice told bob's:", scan.Text())
+		}
+	}
+	res.Body.Close()
+	if res := stream(secrets[0], "alice", id); res.StatusCode != 200 {
+		t.Fatalf("a quiet alice reconnecting with her last id: %s", res.Status)
+	}
+}
+
+// activityCursorNow is the feed's cursor as of its last change.
+func activityCursorNow(s *Server) string {
+	s.trace.mu.Lock()
+	defer s.trace.mu.Unlock()
+	return s.trace.activity.cursor()
 }

@@ -281,8 +281,9 @@ func (s *Server) routeSnapshot(w http.ResponseWriter, r *http.Request) {
 // else ?after=). It ends when the client goes, when the gateway stops
 // serving (streamsEnding: Shutdown would wait its whole drain for it),
 // when the key it came with is turned off, removed or runs out, when
-// magpie stops being shared with a reader on another machine, and, bound
-// by user, when its user's users file stops reading (usersOwnOf).
+// magpie stops being shared with a reader on another machine, and, for
+// a reader naming its user, when user-accounts.json stops reading or
+// magpie is no longer bound by user (usersOwnOf).
 func (s *Server) routeEvents(w http.ResponseWriter, r *http.Request) {
 	if !routeEventsAllowed(w, r) {
 		return
@@ -298,7 +299,8 @@ func (s *Server) routeEvents(w http.ResponseWriter, r *http.Request) {
 	keyID, remote := access.Caller(r.Context()).KeyID, !local(r)
 	// still: the reader may still be told the feed, read again at most
 	// once routeEventsRecheck, as it reads the key store and settings
-	// from disk under the lock every request's key check takes
+	// from disk under the lock every request's key check takes, and,
+	// bound by user, user-accounts.json (usersOwnOf)
 	var checked time.Time
 	still := func() bool {
 		if time.Since(checked) < routeEventsRecheck {
@@ -373,12 +375,20 @@ func (s *Server) routeEvents(w http.ResponseWriter, r *http.Request) {
 			if !still() {
 				return
 			}
+			told := false
 			for _, event := range events {
 				// another user's change is passed over, the cursor past it
-				if ev, mine := ownEvent(event, own); mine && !write("route", ev.Cursor, ev) {
+				ev, mine := ownEvent(event, own)
+				if mine && !write("route", ev.Cursor, ev) {
 					return
 				}
-				cursor = event.Cursor
+				cursor, told = event.Cursor, mine
+			}
+			// the last passed over: a heartbeat carries the cursor past it,
+			// so a quiet user reconnecting after others' many changes isn't
+			// told to take a snapshot (its Last-Event-ID fell out of the ring)
+			if !told && !write("heartbeat", cursor, struct{}{}) {
+				return
 			}
 			if rc.Flush() != nil {
 				return

@@ -602,8 +602,13 @@ The route-events feed and its snapshot are narrowed the same way (T-105,
 [`route_events.go`](../../internal/gateway/route_events.go)): the user is
 told the changes of its own requests alone, each `active` counting its own
 going, and another user's change is passed over with the cursor moved past
-it. A stream reads the user's group again as it reads its key
-(`usersOwnOf`), and ends once user-accounts.json doesn't read.
+it, a `heartbeat` carrying the cursor (`id`) when the last change of a
+batch was another's, so a quiet user isn't sent back to the snapshot. The
+cursor counts every change, so its gaps show how much else went on, not
+what. A stream reads the user's group again as it reads its key
+(`usersOwnOf`), a key turned to share its users, or not to, moving whose
+requests it is told, and ends once user-accounts.json doesn't read or
+magpie is no longer bound by user.
 `TestBoundUserToldItsOwnRouteEvents` in
 [`users_route_events_test.go`](../../internal/gateway/users_route_events_test.go).
 
