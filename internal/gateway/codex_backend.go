@@ -840,9 +840,14 @@ func sealRefusal(r *http.Request, user, model string, cp checkpointWriter) userR
 // for none) is told in place of refused, once checkpointReaders left only
 // its writer: sealRefusal's when the seal isn't the user's (T-096), before
 // bindUser binds it, and over growUser's "paused, or sealed by another
-// account"; refused as it is otherwise (zero before bindUser).
-func sealedRefusal(r *http.Request, user, model string, cp *checkpointWriter, refused userRefusal) userRefusal {
+// account"; refused as it is otherwise (zero before bindUser). A seal of
+// a provider in cands with no key or account is no user's, as usersOn
+// binds nobody there: it goes on (T-101's review).
+func sealedRefusal(r *http.Request, user, model string, cp *checkpointWriter, cands []candidate, refused userRefusal) userRefusal {
 	if cp == nil || strings.Contains(cp.Who, "#") {
+		return refused
+	}
+	if slices.ContainsFunc(cands, func(c candidate) bool { return c.p.ID == cp.Provider && c.p.Account == nil && c.p.Key == "" }) {
 		return refused
 	}
 	if sr := sealRefusal(r, user, model, *cp); sr.status != 0 {

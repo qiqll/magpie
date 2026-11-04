@@ -2996,7 +2996,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// it is bound: checkpointReaders left only its writer, which
 			// bindUser would bind an unbound user to and serve (T-096),
 			// where its compact is refused (sealRefusal)
-			if refused := sealedRefusal(r, user, model, checkpoint, userRefusal{}); refused.status != 0 {
+			if refused := sealedRefusal(r, user, model, checkpoint, cands, userRefusal{}); refused.status != 0 {
 				s.userRefused(w, from, &call, &UserBound{User: user}, refused)
 				turnedAway()
 				return
@@ -3044,9 +3044,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// which usersOn would bind an unbound user to and serve, and
 			// a bound one was told groupTurnRefused's "none can take it
 			// now" (T-101)
-			if limitedUser != "" && len(cands) > 0 {
-				if refused := sealedRefusal(r, limitedUser, cands[0].model, checkpoint, userRefusal{}); refused.status != 0 {
-					call.Provider = cands[0].p.ID
+			if limitedUser != "" && checkpoint != nil && len(cands) > 0 {
+				if refused := sealedRefusal(r, limitedUser, cmp.Or(checkpoint.Model, cands[0].model), checkpoint, cands, userRefusal{}); refused.status != 0 {
+					call.Provider = checkpoint.Provider
 					s.userRefused(w, from, &call, &UserBound{User: limitedUser}, refused)
 					turnedAway()
 					return
@@ -3107,7 +3107,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		var refused userRefusal
 		if cands, pl, userBound, grew, refused = growUser(userBound, pool, poolPl, cands, pl); refused.status != 0 {
 			call.Provider = p.ID
-			refused = sealedRefusal(r, limitedUser, model, checkpoint, refused)
+			refused = sealedRefusal(r, limitedUser, model, checkpoint, pool, refused)
 			s.userRefused(w, from, &call, userBound, refused)
 			turnedAway()
 			return

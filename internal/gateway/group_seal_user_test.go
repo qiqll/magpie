@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -112,6 +113,39 @@ func TestUserGroupTurnUnboundOnAnothersSeal(t *testing.T) {
 		}
 		if b, err := os.ReadFile(usersPath()); err != nil || strings.Contains(string(b), "carol") {
 			t.Fatalf("tiers %q: carol bound on bob's seal: %s %v", tiers, b, err)
+		}
+	}
+}
+
+// Bound by user, a seal written by a provider with no key and no account
+// (one on this machine) is no user's, as usersOn binds nobody there: a
+// turn carrying it goes on, to that provider directly or through a group,
+// where sealedRefusal refused it with the 400 for every user, and each
+// conversation there broke at its first native compaction (T-101's
+// review).
+func TestUserTurnOnASealOfNoAccount(t *testing.T) {
+	fresh(t)
+	var n int
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(
+			`data: {"type":"response.created","response":{"id":"r1","model":"m"}}`,
+			`data: {"type":"response.completed","response":{"id":"r1","model":"m","usage":{"input_tokens":9,"output_tokens":2}}}`))
+	}))
+	t.Cleanup(up.Close)
+	if err := provider.Save(provider.Provider{ID: "loc", Name: "Loc", Models: []string{"m"}, Responses: up.URL + "/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	nativeOn(t, "loc")
+	refusalGroup(t, "loc/m")
+	wroteCheckpoint("gAAAAB-sealed-by-loc", candidate{p: provider.Provider{ID: "loc"}, model: "m", rest: "loc"})
+	s := byUserUpTo(t, New(), 1)
+	for _, model := range []string{"loc/m", "group/g"} {
+		body := []byte(`{"model":"` + model + `","stream":true,"input":[{"type":"compaction","encrypted_content":"gAAAAB-sealed-by-loc"},{"type":"message","role":"user","content":[{"type":"input_text","text":"go on"}]}]}`)
+		was := n
+		if rec := userAt(s, "/v1/responses", "", body, "alice"); rec.Code != 200 || n != was+1 {
+			t.Fatalf("%s: %d %s (asked %d)", model, rec.Code, rec.Body.String(), n-was)
 		}
 	}
 }
