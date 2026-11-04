@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -48,6 +49,25 @@ func TestBoundUserToldItsOwnSessionRoute(t *testing.T) {
 		begin(keys[0].ID, "bob", "bob-s", "bob's try on two@example.com")
 		begin(keys[1].ID, "alice", "other-alice-s", "Other's alice's try")
 		begin(keys[0].ID, "", "nobody-s", "a try of no user's")
+		// magpie's own asks for alice: a classifier's (decideFor) and one
+		// made for her (forUser), with no header and no key of their own,
+		// the key the turn came with beside them (askedKeyKey)
+		for _, c := range []struct {
+			session string
+			ctx     func(context.Context) context.Context
+		}{
+			{"alice-decide-s", func(ctx context.Context) context.Context { return context.WithValue(ctx, decideForKey{}, "alice") }},
+			{"alice-asked-s", func(ctx context.Context) context.Context {
+				return context.WithValue(ctx, askedForKey{}, askedFor{key: keys[0].ID, user: "alice"})
+			}},
+		} {
+			r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+			r = r.WithContext(context.WithValue(c.ctx(r.Context()), askedKeyKey{}, askedKey{id: keys[0].ID}))
+			rt := s.trace.beginFor(r, Route{Time: now, Session: c.session, Model: "m", Provider: "alpha"})
+			s.trace.update(rt, func(rt *Route) {
+				rt.Tries = append(rt.Tries, Try{Model: "m", Status: 429, Fail: "magpie's ask for alice"})
+			})
+		}
 		// one id both send: each is told its own latest
 		begin(keys[0].ID, "alice", "shared-s", "alice's turn")
 		begin(keys[0].ID, "bob", "shared-s", "bob's later turn")
@@ -97,6 +117,14 @@ func TestBoundUserToldItsOwnSessionRoute(t *testing.T) {
 	}
 	if c, b := do(bound, "/v1/magpie/route", "alice", SessionHeader, "alice-s"); c != 200 || fail(b) != "alice's try" {
 		t.Errorf("alice's own session by header: %d %s", c, b)
+	}
+	for _, session := range []string{"alice-decide-s", "alice-asked-s"} {
+		if c, b := do(bound, "/v1/magpie/route?session="+session, "alice"); c != 200 || fail(b) != "magpie's ask for alice" {
+			t.Errorf("magpie's own ask for alice, %s: %d %s", session, c, b)
+		}
+		if c, b := do(bound, "/v1/magpie/route?session="+session, "bob"); c != http.StatusNotFound {
+			t.Errorf("bob asking %s: %d %s", session, c, b)
+		}
 	}
 	// a session of no route at all, and every one that isn't hers: one
 	// answer, word for word

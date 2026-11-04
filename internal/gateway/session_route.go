@@ -188,10 +188,13 @@ func classifiedHidden(h *RuleHit) *RuleHit {
 type routeCaller struct{ user, key string }
 
 // callerOfRoute is req's user and key, as appendUsage writes them in its
-// usage row (Record.User, Record.CallerKeyID), which usage.Own reads.
+// usage row (Record.User, Record.CallerKeyID), which usage.Own reads, and
+// magpie's own ask for a user (forUser) as logSearch writes its row.
 func callerOfRoute(req *http.Request) routeCaller {
-	key, _, _ := rowCaller(req.Context())
-	return routeCaller{user: cmp.Or(callerUser(req), decideFor(req.Context())), key: key}
+	ctx := req.Context()
+	key, _, _ := rowCaller(ctx)
+	f, _ := ctx.Value(askedForKey{}).(askedFor)
+	return routeCaller{user: cmp.Or(callerUser(req), decideFor(ctx), f.user), key: key}
 }
 
 // owns says a route of c's is the user's own: it named the user under a
