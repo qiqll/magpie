@@ -2,13 +2,16 @@ package provider
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/filelock"
 )
 
 // T-100: Edit, what a command or a TUI key changes a provider with, writes
@@ -143,5 +146,71 @@ func TestEditClearsAndLeavesAlone(t *testing.T) {
 	}
 	if s, _ := storedPicks("relay"); len(s.Fallback) != 0 {
 		t.Fatalf("the fallback cleared stayed: %v", s.Fallback)
+	}
+}
+
+// The picks changed by Edit are saved with the list they were picked from,
+// as Save saves them.
+func TestEditPicksAsSaveDoes(t *testing.T) {
+	editRelay(t)
+	if _, _, err := Edit("relay", func(p *Provider) error { p.Models = []string{"b"}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	byEdit, _ := storedPicks("relay")
+	p, err := Find("relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Models = []string{"a"}
+	if err := Save(*p); err != nil {
+		t.Fatal(err)
+	}
+	p.Models = []string{"b"}
+	if err := Save(*p); err != nil {
+		t.Fatal(err)
+	}
+	bySave, _ := storedPicks("relay")
+	if !slices.Equal(byEdit.PickedFrom, bySave.PickedFrom) || !slices.Equal(byEdit.Delisted, bySave.Delisted) {
+		t.Fatalf("Edit saved the picks from %v (set aside %v), Save from %v (%v)", byEdit.PickedFrom, byEdit.Delisted, bySave.PickedFrom, bySave.Delisted)
+	}
+}
+
+// What Save checks of one field against another is checked on the record
+// as it is when written: a certificate check skipped on a provider made a
+// preset's meanwhile is refused, nothing written.
+func TestEditChecksTheRecordAsItIsThen(t *testing.T) {
+	editRelay(t)
+	_, _, err := Edit("relay", func(p *Provider) error {
+		if err := editStored("relay", func(q *Provider) bool { q.Preset = "openai"; return true }); err != nil {
+			t.Fatal(err)
+		}
+		p.InsecureTLS = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "certificate check") {
+		t.Fatalf("a certificate check skipped on a preset's provider: %v", err)
+	}
+	if s, _ := storedPicks("relay"); s.InsecureTLS {
+		t.Fatal("the refused change was written")
+	}
+}
+
+// T-100 with T-079: while another magpie holds providers.json, Edit is
+// refused with BusyError and providers.json is as it was.
+func TestEditRefusedWhileAnotherMagpieHolds(t *testing.T) {
+	editRelay(t)
+	before, err := os.ReadFile(Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shortWait(t, 200*time.Millisecond)
+	holdProviders(t)
+	_, _, err = Edit("relay", func(p *Provider) error { p.Unlisted = true; return nil })
+	var busy *filelock.BusyError
+	if !errors.As(err, &busy) || !strings.Contains(err.Error(), "another magpie is changing providers.json") {
+		t.Fatalf("an edit while another magpie held providers.json answered %v", err)
+	}
+	if now, _ := os.ReadFile(Path()); !bytes.Equal(before, now) {
+		t.Fatalf("a refused edit wrote providers.json:\n%s", now)
 	}
 }

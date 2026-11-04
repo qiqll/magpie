@@ -407,7 +407,7 @@ func (m *model) openProviderModels(id string) {
 		// (#2113), as m does on the providers list
 		refetch: func() tea.Cmd { return refetchCmd(id) },
 		toggle: func(model string) ([]agent.Option, string, bool) {
-			// on the picks as they are when written (T-100)
+			// worked out on the picks read, and only the picks written (T-100)
 			verb := "on"
 			if _, _, err := editProvider(id, func(p *provider.Provider) error {
 				ids := p.Picks()

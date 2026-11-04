@@ -3,7 +3,9 @@ package provider
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"slices"
+	"strings"
 )
 
 // Edit changes the provider id as change changes it and saves it, checked
@@ -14,6 +16,10 @@ import (
 // magpie, an account's day noted, a key added) stays, as Save of the
 // provider read would write it over. A provider removed meanwhile isn't
 // made again. It answers the provider as read and as changed.
+//
+// What is written is field by field: a field the change changed is
+// written whole, a map or list too (its headers, its windows), so only
+// another change to that same field made meanwhile is written over.
 func Edit(id string, change func(p *Provider) error) (was, now Provider, err error) {
 	p, err := Find(id)
 	if err != nil {
@@ -54,9 +60,10 @@ func saveEdit(was, p Provider) error {
 	}
 	var now *listing
 	picks := slices.ContainsFunc(pickFields, func(k string) bool { return changed[k] })
-	if picks {
+	if picks && len(next.Models) > 0 { // listedWith asks it only of picks
 		now = listedNow(next) // the accounts are read before the lock
 	}
+	wrote := false
 	err = editRecord(next.ID, account, func(q *Provider) (bool, error) {
 		cur := *q
 		if !account {
@@ -74,6 +81,12 @@ func saveEdit(was, p Provider) error {
 		}
 		if !account {
 			merged.AccountProxies = keyProxies(merged)
+			// what Save checks of one field against another, on the
+			// record as it is now: another change meanwhile can have
+			// changed the other (a preset given, Vertex AI picked)
+			if err := checkMerged(&merged); err != nil {
+				return false, err
+			}
 		}
 		if picks {
 			merged.PickedFrom, _ = listedWith(merged, &cur, account, now)
@@ -85,12 +98,30 @@ func saveEdit(was, p Provider) error {
 			return false, err
 		}
 		*q = merged
+		wrote = true
 		return true, nil
 	})
-	if err == nil && next.ID == "claude" {
+	if err == nil && wrote && next.ID == "claude" {
 		syncClaudeProxyEnvNow() // as Save does (#1807)
 	}
 	return err
+}
+
+// checkMerged refuses p as Save would for what one field of it says of
+// another, and drops a picture's source from an icon that isn't one, as
+// Save does; nothing it checks reads the accounts, so it is made under
+// providersMu.
+func checkMerged(p *Provider) error {
+	if p.IsVertex() && (strings.TrimSpace(p.Key) != "" || len(p.Keys) > 0) {
+		return errVertexKey
+	}
+	if p.InsecureTLS && !p.TakesInsecureTLS() {
+		return fmt.Errorf("%s is a preset's: only a provider you added with your own base URL can skip the certificate check", p.Name)
+	}
+	if !strings.HasPrefix(p.Icon, iconPrefix) {
+		p.IconFrom = ""
+	}
+	return nil
 }
 
 // storedChanges are the fields of providers.json's record a and b are
