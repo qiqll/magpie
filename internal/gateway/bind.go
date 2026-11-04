@@ -124,15 +124,15 @@ func (s *Server) forUser(ctx context.Context, r *http.Request) context.Context {
 	return context.WithValue(ctx, askedForKey{}, askedFor{userKey(r), user, strings.TrimSpace(r.Header.Get(UserTierHeader))})
 }
 
-// askedKeyKey holds, beside askedForKey, the gateway key of the turn
-// magpie's own ask is made for, for that ask's usage rows alone
-// (rowCaller): an ask that goes out in a context of its own (a decision
-// group's classifier, a Claude Code run's web search) carries no caller,
-// and its row went to the users of no key, by_use's and the user's usage
-// counting it in the shared group (T-095). It is never the ask's caller:
-// nothing but a row reads it. It is apart from askedFor, whose key names
-// the user's binding, since askDecideTries carries the key on to a
-// context that carries no askedFor.
+// askedKeyKey holds the gateway key of the turn magpie's own ask is made
+// for, bound by user or by session (T-102), for that ask's usage rows
+// and the route's caller key (rowCaller, callerOfRoute): an ask that goes
+// out in a context of its own (a decision group's classifier, a Claude
+// Code run's web search) carries no caller, and its row went to the users
+// of no key, by_use's and the user's usage counting it in the shared
+// group (T-095). It is never the ask's caller: what the ask may use
+// doesn't read it. It is apart from askedFor, whose key names the user's
+// binding, since it is carried with no askedFor too.
 type askedKeyKey struct{}
 
 type askedKey struct{ id, name, issuer string }
