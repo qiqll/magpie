@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/tidwall/gjson"
 	"github.com/yetone/magpie/internal/provider"
@@ -65,7 +64,7 @@ func (s *Server) stoppedToolLoop(w http.ResponseWriter, r *http.Request, from pr
 	}
 	why := loop.why()
 	s.answeredHere(r, from, body, toolLoopWho, why, func() {
-		writeLocalText(w, from, req, loop.notice())
+		writeLocalText(w, r, from, req, loop.notice())
 	})
 	return true
 }
@@ -390,9 +389,9 @@ func (l toolLoop) notice() string {
 
 // writeLocalText answers req with text in from's API, as a whole reply or
 // a stream as it asked: a finished assistant turn with no call in it.
-func writeLocalText(w http.ResponseWriter, from provider.Protocol, req *Request, text string) {
+func writeLocalText(w http.ResponseWriter, r *http.Request, from provider.Protocol, req *Request, text string) {
 	events := make(chan Event, 4)
-	events <- Event{Kind: KStart, MsgID: fmt.Sprintf("msg_magpie_%d", time.Now().UnixNano()), Model: req.Model}
+	events <- Event{Kind: KStart, MsgID: madeID(w, r, "msg"), Model: req.Model}
 	events <- Event{Kind: KText, Text: text}
 	events <- Event{Kind: KStop, Stop: "stop"}
 	close(events)

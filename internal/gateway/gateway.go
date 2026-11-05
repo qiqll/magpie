@@ -7122,6 +7122,13 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		defer kept()
 	}
 	rd, sse := eventStream(res)
+	if !keepsBrandFor(w, r) {
+		// a plugin's usage fields for magpie, read already, aren't told
+		// to a caller that isn't magpie's (unbranded.go)
+		uw := &usageUnbrand{ResponseWriter: w, sse: sse}
+		defer uw.finish()
+		w = uw
+	}
 	client := w
 	if gather != nil {
 		w = gather

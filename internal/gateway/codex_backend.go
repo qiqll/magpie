@@ -3938,7 +3938,7 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 	s.compactFails.done(key)
 	id := res.ID
 	if id == "" {
-		id = fmt.Sprintf("resp_magpie_%d", time.Now().UnixNano())
+		id = madeID(w, r, "resp")
 	}
 	item := map[string]any{"type": "compaction", "id": "cmp_" + strings.TrimPrefix(id, "resp_"),
 		"encrypted_content": codexsummary.Encrypted(sum.String())}

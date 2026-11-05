@@ -20,15 +20,24 @@ package gateway
 // whole body. A key, the model's text and every header are left as they
 // came. A Responses socket's own error frames and close reasons are said
 // the same way (responsesSocket.say).
+//
+// A model's reply that succeeded is told no magpie either (T-119), judged
+// by the same caller (keepsBrandFor): a plugin's usage fields for magpie
+// (magpie_deferred, magpie_cache_unknown), which a relayed reply carried
+// to the client as they came, go (usageUnbrand), and a reply magpie makes
+// itself has an id with no magpie in it (madeID).
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tidwall/gjson"
 
@@ -121,7 +130,26 @@ func brandOf(w http.ResponseWriter) *brandWriter {
 // are: true when w goes through no brandWriter (Handler called without
 // Front, as a test does).
 func keepsBrandOn(w http.ResponseWriter) bool {
+	return brandOf(w).keeps()
+}
+
+// keepsBrandFor is keepsBrandOn for a writer that may wrap the client's
+// without unwrapping to it (holdWriter, a recorder): the brandWriter is
+// found by r's context then, where branded put it.
+func keepsBrandFor(w http.ResponseWriter, r *http.Request) bool {
 	b := brandOf(w)
+	if b == nil && r != nil {
+		b, _ = r.Context().Value(brandKey{}).(*brandWriter)
+	}
+	return b.keeps()
+}
+
+// brandKey holds a request's brandWriter in its context.
+type brandKey struct{}
+
+// keeps is keepOf for a writer that may be none: a reply through no
+// brandWriter keeps every word.
+func (b *brandWriter) keeps() bool {
 	if b == nil {
 		return true
 	}
@@ -140,6 +168,7 @@ func branded(next http.Handler) http.Handler {
 			return
 		}
 		b := &brandWriter{w: w, r: r, length: -1}
+		r = r.WithContext(context.WithValue(r.Context(), brandKey{}, b))
 		defer func() {
 			// a handler's panic is net/http's, as before; what it wrote
 			// goes out first, unless it aborted the reply
@@ -618,4 +647,127 @@ func theAt(s string) string {
 		return "The "
 	}
 	return "the "
+}
+
+// madeID is the id of a reply magpie makes itself, kind its prefix
+// ("resp", "msg"): kind_magpie_<now> to a caller that keeps magpie's
+// words, as it always was, kind_<now> to any other.
+func madeID(w http.ResponseWriter, r *http.Request, kind string) string {
+	if keepsBrandFor(w, r) {
+		return fmt.Sprintf("%s_magpie_%d", kind, time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%s_%d", kind, time.Now().UnixNano())
+}
+
+// usageUnbrand is a relayed reply's writer for a caller that doesn't keep
+// magpie's words: the usage fields a plugin tells magpie
+// (magpie_deferred, magpie_cache_unknown), which magpie has read already
+// (the sniffer reads the upstream's bytes), leave each usage object a
+// Chat, Messages or Responses reply carries. Only a usage's own keys go;
+// the model's output, a tool call's arguments among it, is left as it
+// came. A stream is gone through by its whole lines, and only a line
+// with "magpie_ in it is read; any other write, a whole reply among them
+// (the relay's filters hold one to its end), is read only when it has
+// "magpie_ in it and is whole JSON.
+type usageUnbrand struct {
+	http.ResponseWriter
+	sse  bool
+	part []byte // a stream's line not yet ended
+}
+
+func (u *usageUnbrand) Unwrap() http.ResponseWriter { return u.ResponseWriter }
+
+func (u *usageUnbrand) Flush() {
+	if f, ok := u.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (u *usageUnbrand) Write(p []byte) (int, error) {
+	if !u.sse {
+		_, err := u.ResponseWriter.Write(withoutMagpieUsage(p))
+		return len(p), err
+	}
+	if len(u.part) == 0 && len(p) > 0 && p[len(p)-1] == '\n' && !bytes.Contains(p, magpieKey) {
+		return u.ResponseWriter.Write(p)
+	}
+	u.part = append(u.part, p...)
+	cut := bytes.LastIndexByte(u.part, '\n') + 1
+	if len(u.part)-cut > brandLineMost {
+		cut = len(u.part) // a line too long to hold goes as it is
+	}
+	if cut == 0 {
+		return len(p), nil
+	}
+	_, err := u.ResponseWriter.Write(magpieUsageLines(u.part[:cut]))
+	u.part = append(u.part[:0], u.part[cut:]...)
+	return len(p), err
+}
+
+// finish sends a stream's last line, one the upstream never ended.
+func (u *usageUnbrand) finish() {
+	if len(u.part) > 0 {
+		u.ResponseWriter.Write(magpieUsageLines(u.part))
+		u.part = nil
+	}
+}
+
+var magpieKey = []byte(`"magpie_`)
+
+// magpieUsageLines is a stream's lines, each data line's (or NDJSON
+// line's) usage without magpie's fields.
+func magpieUsageLines(b []byte) []byte {
+	if !bytes.Contains(b, magpieKey) {
+		return b
+	}
+	lines := bytes.SplitAfter(b, []byte("\n"))
+	for i, ln := range lines {
+		if !bytes.Contains(ln, magpieKey) {
+			continue
+		}
+		body := bytes.TrimRight(ln, "\r\n")
+		end := ln[len(body):]
+		prefix := []byte(nil)
+		if d, ok := bytes.CutPrefix(body, []byte("data:")); ok {
+			prefix = body[:len(body)-len(d)]
+			body = d
+		}
+		lead := len(body) - len(bytes.TrimLeft(body, " "))
+		said := withoutMagpieUsage(body[lead:])
+		if len(said) == len(body)-lead {
+			continue
+		}
+		lines[i] = append(append(append(append([]byte(nil), prefix...), body[:lead]...), said...), end...)
+	}
+	return bytes.Join(lines, nil)
+}
+
+// usageAt are where a reply or an event carries its usage: Chat's and a
+// Messages reply's own, a Messages stream's message_start, a Responses
+// reply's and its events'.
+var usageAt = []string{"usage", "message.usage", "response.usage"}
+
+// withoutMagpieUsage is b, a reply's or an event's JSON, with no
+// magpie_ key in its usage; b as it came when it has none, or isn't
+// whole JSON.
+func withoutMagpieUsage(b []byte) []byte {
+	if !bytes.Contains(b, magpieKey) || !gjson.ValidBytes(b) {
+		return b
+	}
+	for _, path := range usageAt {
+		v := gjson.GetBytes(b, path)
+		if !v.IsObject() || v.Index <= 0 || !bytes.Contains([]byte(v.Raw), magpieKey) {
+			continue
+		}
+		var kept [][]byte
+		v.ForEach(func(k, val gjson.Result) bool {
+			if !strings.HasPrefix(strings.ToLower(k.String()), "magpie_") {
+				kept = append(kept, []byte(k.Raw+":"+val.Raw))
+			}
+			return true
+		})
+		said := append(append([]byte("{"), bytes.Join(kept, []byte(","))...), '}')
+		b = append(append(append([]byte(nil), b[:v.Index]...), said...), b[v.Index+len(v.Raw):]...)
+	}
+	return b
 }

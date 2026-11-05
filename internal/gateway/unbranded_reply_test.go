@@ -1,0 +1,181 @@
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/yetone/magpie/internal/provider"
+)
+
+// brandAsk is one ask of h by c, as T-118's sweep makes it.
+func brandAsk(h http.Handler, c brandCaller, method, path, body string) (int, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r := httptest.NewRequest(method, path, strings.NewReader(body)).WithContext(ctx)
+	r.RemoteAddr = c.from
+	r.Header.Set("Content-Type", "application/json")
+	if c.secret != "" {
+		r.Header.Set("Authorization", "Bearer "+c.secret)
+	}
+	if c.ua != "" {
+		r.Header.Set("User-Agent", c.ua)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w.Code, w.Body.String()
+}
+
+// magpieUsageKey is a magpie_ key of a reply's JSON, not one the model
+// wrote inside a string (escaped there: \"magpie_deferred\").
+var magpieUsageKey = regexp.MustCompile(`(^|[^\\])"magpie_[a-z_]+"\s*:`)
+
+// A plugin's usage fields for magpie (the Cursor plugin's magpie_deferred,
+// Kiro's and Trae's magpie_cache_unknown) were relayed to the client as the
+// plugin wrote them. A caller that isn't magpie's (a key's holder, on this
+// computer or another) is told none of them, in a reply whole or streamed,
+// Chat's or Messages'; the model's words, magpie and a "magpie_" key in a
+// call's arguments among them, are as it wrote them. The owner and another
+// magpie get the bytes Front gave before (no brandWriter).
+func TestRepliesSayNoMagpieUsageToOtherCallers(t *testing.T) {
+	fresh(t)
+	t.Setenv("MAGPIE_ADDR", "")
+	const text = `the magpie said \"magpie_deferred\"`
+	const args = `{\"magpie_cache_unknown\":1}`
+	chatUsage := `"usage":{"prompt_tokens":185670,"completion_tokens":2240,"prompt_tokens_details":{"cached_tokens":181266},"magpie_cache_unknown":true,"magpie_deferred":{"prompt_tokens":181270,"completion_tokens":1913,"cached_tokens":177533,"cache_write_tokens":3735}}`
+	chatUp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(b), `"stream":true`) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, `data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"`+text+`"}}]}`+"\n\n")
+			// the usage chunk cut across two writes, as a socket may
+			io.WriteString(w, `data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],`)
+			w.(http.Flusher).Flush()
+			io.WriteString(w, chatUsage+"}\n\ndata: [DONE]\n\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"c1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"`+text+`","tool_calls":[{"id":"call_1","type":"function","function":{"name":"Bash","arguments":"`+args+`"}}]},"finish_reason":"tool_calls"}],`+chatUsage+`}`)
+	}))
+	defer chatUp.Close()
+	antUp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(b), `"stream":true`) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"a1\",\"content\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":1,\"magpie_cache_unknown\":true}}}\n\n"+
+				"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"+
+				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\""+text+"\"}}\n\n"+
+				"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"+
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3,\"magpie_cache_unknown\":true}}\n\n"+
+				"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","model":"a1","content":[{"type":"text","text":"`+text+`"},{"type":"tool_use","id":"tu_1","name":"Bash","input":{"magpie_cache_unknown":1}}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":3,"magpie_cache_unknown":true}}`)
+	}))
+	defer antUp.Close()
+	if err := provider.Save(provider.Provider{ID: "plan", Name: "Plan", Key: "k", Chat: chatUp.URL + "/v1", Models: []string{"m1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Save(provider.Provider{ID: "ant", Name: "Ant", Key: "k", Anthropic: antUp.URL, Models: []string{"a1"}}); err != nil {
+		t.Fatal(err)
+	}
+	_, secrets := newCaller(t, "Laptop")
+	s := New()
+	front := s.Front()
+	plain := socketEntry(s.dumpFirst(lanGuard(s.Handler()))) // Front without its brandWriter
+
+	told := 0 // replies that told magpie's usage fields before
+	for _, a := range [][2]string{
+		{"/v1/chat/completions", `{"model":"plan/m1","messages":[{"role":"user","content":"hi"}]}`},
+		{"/v1/chat/completions", `{"model":"plan/m1","stream":true,"messages":[{"role":"user","content":"hi"}]}`},
+		{"/v1/messages", `{"model":"ant/a1","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}`},
+		{"/v1/messages", `{"model":"ant/a1","max_tokens":5,"stream":true,"messages":[{"role":"user","content":"hi"}]}`},
+		{"/v1/messages", `{"model":"plan/m1","max_tokens":5,"stream":true,"messages":[{"role":"user","content":"hi"}]}`},
+		{"/v1/responses", `{"model":"plan/m1","stream":true,"input":"hi"}`},
+		{"/v1/chat/completions", `{"model":"ant/a1","stream":true,"messages":[{"role":"user","content":"hi"}]}`},
+	} {
+		for _, c := range brandCallers(secrets[0]) {
+			refCode, ref := brandAsk(plain, c, "POST", a[0], a[1])
+			code, got := brandAsk(front, c, "POST", a[0], a[1])
+			name := c.name + ": " + a[0] + " " + a[1]
+			if code != 200 || refCode != 200 {
+				t.Fatalf("%s: %d (before %d) %.400s", name, code, refCode, got)
+			}
+			if c.keeps {
+				if replyStamps.ReplaceAllString(got, "#") != replyStamps.ReplaceAllString(ref, "#") {
+					t.Errorf("%s: answered %.600q, before %.600q", name, got, ref)
+				}
+				continue
+			}
+			// the model's call input, a magpie_ key it wrote, is no usage
+			const input = `"input":{"magpie_cache_unknown":1}`
+			if magpieUsageKey.MatchString(strings.ReplaceAll(ref, input, "")) {
+				told++
+			}
+			if m := magpieUsageKey.FindString(strings.ReplaceAll(got, input, "")); m != "" {
+				t.Errorf("%s: told %s: %.800s", name, m, got)
+			}
+			if strings.Contains(ref, `magpie said`) && !strings.Contains(got, text) {
+				t.Errorf("%s: the model's words changed: %.800s", name, got)
+			}
+			if strings.Contains(ref, args) && !strings.Contains(got, args) || strings.Contains(ref, input) && !strings.Contains(got, input) {
+				t.Errorf("%s: the call's arguments changed: %.800s", name, got)
+			}
+			if !strings.Contains(a[1], `"stream":true`) && !json.Valid([]byte(got)) {
+				t.Errorf("%s: not JSON now: %s", name, got)
+			}
+			if strings.Contains(ref, `"cached_tokens":181266`) && !strings.Contains(got, `"cached_tokens":181266`) {
+				t.Errorf("%s: the usage's own counts changed: %.800s", name, got)
+			}
+		}
+	}
+	if told < 6 {
+		t.Errorf("only %d replies told magpie's usage fields before: the asks reach too few", told)
+	}
+}
+
+// A turn magpie answers itself (the tool-loop guard's) has an id with no
+// magpie in it for a key's holder; the owner's is msg_magpie_ as before.
+func TestMadeReplyIDSaysNoMagpie(t *testing.T) {
+	v := &countingVendor{}
+	toolLoopOn(t, v)
+	t.Setenv("MAGPIE_ADDR", "")
+	_, secrets := newCaller(t, "Laptop")
+	h := New().Front()
+	body := toolTurns(provider.Anthropic, toolLoopRepeats, codexRead, false)
+	for _, c := range brandCallers(secrets[0]) {
+		code, got := brandAsk(h, c, "POST", "/v1/messages", body)
+		var reply struct{ ID, Type string }
+		if code != 200 || json.Unmarshal([]byte(got), &reply) != nil || reply.Type != "message" {
+			t.Fatalf("%s: %d %.400s", c.name, code, got)
+		}
+		if strings.Contains(reply.ID, "magpie") != c.keeps || !strings.HasPrefix(reply.ID, "msg_") {
+			t.Errorf("%s: id %q", c.name, reply.ID)
+		}
+	}
+	if n := v.asked.Load(); n != 0 {
+		t.Fatalf("the vendor was asked %d times", n)
+	}
+}
+
+func TestWithoutMagpieUsage(t *testing.T) {
+	for in, want := range map[string]string{
+		`{"usage":{"a":1,"magpie_deferred":{"b":2},"c":3}}`:                          `{"usage":{"a":1,"c":3}}`,
+		`{"type":"message_start","message":{"usage":{"magpie_cache_unknown":true}}}`: `{"type":"message_start","message":{"usage":{}}}`,
+		`{"response":{"usage":{"x":1, "magpie_x" : 2}}}`:                             `{"response":{"usage":{"x":1}}}`,
+		`{"choices":[{"delta":{"content":"\"magpie_x\":1"}}]}`:                       `{"choices":[{"delta":{"content":"\"magpie_x\":1"}}]}`,
+		`{"usage":{"magpie_x":1`:                                                     `{"usage":{"magpie_x":1`,
+		`{"args":{"magpie_x":1},"usage":{"n":1}}`:                                    `{"args":{"magpie_x":1},"usage":{"n":1}}`,
+	} {
+		if got := string(withoutMagpieUsage([]byte(in))); got != want {
+			t.Errorf("withoutMagpieUsage(%s) = %s, want %s", in, got, want)
+		}
+	}
+}

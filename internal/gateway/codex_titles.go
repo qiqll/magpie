@@ -176,7 +176,7 @@ func (s *Server) codexTitle(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	id := res.ID
 	if id == "" {
-		id = fmt.Sprintf("resp_magpie_%d", time.Now().UnixNano())
+		id = madeID(w, r, "resp")
 	}
 	var out []any
 	if t := titleJSON(messageText(res), shape); t != "" {
@@ -252,7 +252,7 @@ func (s *Server) codexShaped(w http.ResponseWriter, r *http.Request, body []byte
 	}
 	id := res.ID
 	if id == "" {
-		id = fmt.Sprintf("resp_magpie_%d", time.Now().UnixNano())
+		id = madeID(w, r, "resp")
 	}
 	var out []any
 	if d := shaped(messageText(res)); d != "" {
@@ -272,7 +272,7 @@ func (s *Server) codexShaped(w http.ResponseWriter, r *http.Request, body []byte
 func (s *Server) codexPrediction(w http.ResponseWriter, r *http.Request, body []byte, to string) {
 	if to == "off" {
 		s.sentNowhere(w, r, body, "Predictions off",
-			"Codex composer predictions are off in Codex's settings on magpie's Agents page: answered with no prediction, sent nowhere", []any{predictionItem(fmt.Sprintf("resp_magpie_%d", time.Now().UnixNano()), noSuggestion)})
+			"Codex composer predictions are off in Codex's settings on magpie's Agents page: answered with no prediction, sent nowhere", []any{predictionItem(madeID(w, r, "resp"), noSuggestion)})
 		return
 	}
 	body, _ = codexInput(body, true)
@@ -305,7 +305,7 @@ func (s *Server) codexPrediction(w http.ResponseWriter, r *http.Request, body []
 	}
 	id := res.ID
 	if id == "" {
-		id = fmt.Sprintf("resp_magpie_%d", time.Now().UnixNano())
+		id = madeID(w, r, "resp")
 	}
 	p, _ := predictionJSON(messageText(res))
 	writeTitleReply(w, id, []any{predictionItem(id, p)}, res.Usage)
@@ -516,7 +516,7 @@ func (s *Server) codexTitleOff(w http.ResponseWriter, r *http.Request, body []by
 // was, answered by magpie.
 func (s *Server) sentNowhere(w http.ResponseWriter, r *http.Request, body []byte, who, why string, out []any) {
 	s.answeredHere(r, provider.Responses, body, who, why, func() {
-		writeTitleReply(w, fmt.Sprintf("resp_magpie_%d", time.Now().UnixNano()), out, nil)
+		writeTitleReply(w, madeID(w, r, "resp"), out, nil)
 	})
 }
 
