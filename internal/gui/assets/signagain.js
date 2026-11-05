@@ -57,7 +57,7 @@ const signInName = (agent) => providers.providers.find((p) => p.account?.agent =
 // line (saySignInFailed); one drawn before this loaded is drawn again with
 // its proxy (signInProxySaid)
 window.sayFailed = function () {
-  if (signInProxySaid(signing?.proxyUsed) && !$(".signing.failed .proxy-used")) renderProviders();
+  if (signing?.state === "failed" && $(".signing.failed") && !$(".signing.failed .proxy-used") && signInProxySaid(signing.proxyUsed)) renderProviders();
   if (signing?.state !== "failed" || $(".signing.failed")?.getClientRects().length) return;
   const name = signInName(signing.agent);
   status(signing.error ? t("Sign-in to {name} didn't finish: {error}", { name, error: signing.error }) : t("Sign-in to {name} didn't finish", { name }), "err");

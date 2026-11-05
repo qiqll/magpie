@@ -5,7 +5,9 @@
 // from a sign-in that failed later (its state's proxyUsed). No proxy
 // given is said too, with why. A failure with nothing known of its proxy
 // says nothing more. Chromium and WebKit, 420 and 1100 wide, in every
-// language.
+// language. A sign-in failing before signagain.js, which says the proxy,
+// is in (no account to sign in again, so nothing loaded it) says it too,
+// once it is (sayFailed, T-115).
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -27,7 +29,7 @@ const claude = {
 // proxy), "later" (failed once waiting, the proxy in its state), "none"
 // (no proxy given, the global one set to none) or "unknown" (nothing
 // said of it).
-function serve(lang, how) {
+function serve(lang, how, fresh) {
   const state = { agents: [], profiles: [], settings: { lang, theme: "light" } };
   return async (route) => {
     const url = new URL(route.request().url());
@@ -35,7 +37,8 @@ function serve(lang, how) {
     if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: `window.bootPrefs = {lang:"${lang}",theme:"light",web:false};` });
     if (url.pathname === "/wails/runtime.js") return route.fulfill({ contentType: "text/javascript", body: "export const Window = {};" });
     if (url.pathname === "/api/state") return json(state);
-    if (url.pathname === "/api/providers") return json({ providers: [claude], presets: [], excluded: [], gateway: { running: true, window: true }, plugins: [], onPlugins: [] });
+    const ps = fresh ? [{ ...claude, account: { ...claude.account, logins: [{ ...claude.account.logins[0], lapsed: undefined }] } }] : [claude];
+    if (url.pathname === "/api/providers") return json({ providers: ps, presets: [], excluded: [], gateway: { running: true, window: true }, plugins: [], onPlugins: [] });
     if (url.pathname === "/api/groups") return json({ groups: [], pools: [] });
     if (url.pathname === "/api/login/usage") return json({});
     if (url.pathname === "/api/signin" && route.request().method() === "POST") {
@@ -96,6 +99,36 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
             await page.context().close();
           });
         }
+      }
+    }
+  });
+}
+
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  test(engine + ": a sign-in failing before signagain.js is in says its proxy once it is", async (t) => {
+    const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+    t.after(() => browser.close());
+    for (const lang of Object.keys(W)) {
+      for (const width of [420, 1100]) {
+        await t.test(`${lang} ${width}`, async () => {
+          const page = await (await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: "reduce" })).newPage();
+          page.setDefaultTimeout(5000);
+          const errors = [];
+          page.on("pageerror", (e) => errors.push(e.message));
+          await page.route("**/*", serve(lang, "start", true));
+          await page.goto("http://magpie.test/?view=providers");
+          await page.waitForFunction(() => typeof providers !== "undefined" && providers?.providers?.length);
+          assert.equal(await page.evaluate(() => typeof window.signInProxySaid), "undefined", "signagain.js is in already");
+          // the editor open, its sign-in started again where nothing loaded signagain.js
+          await page.evaluate(() => { editing = "claude"; draft = null; renderProviders(); startSignIn("claude", false, undefined, { user: "me@example.com" }); });
+          const box = page.locator(".signing.failed");
+          await box.waitFor();
+          assert.equal(await box.locator(".s").first().innerText(), why);
+          await box.locator(".s.proxy-used").waitFor();
+          assert.equal(await box.locator(".s.proxy-used").innerText(), W[lang].start);
+          assert.deepEqual(errors, []);
+          await page.context().close();
+        });
       }
     }
   });

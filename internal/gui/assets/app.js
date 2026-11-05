@@ -6082,7 +6082,9 @@ function providersWhileFetching() {
 }
 
 // Vendors' status pages (#971): an API degraded or down marked on its
-// providers' rows and cards; a page that couldn't be read marks nothing.
+// providers' rows and cards, so an outage isn't taken for a sign-in or
+// quota problem. A page that couldn't be read marks nothing: unknown is
+// not "all well".
 let upstream = null, upstreamAsking = null;
 function loadUpstream() {
   if (upstreamAsking) return upstreamAsking;
@@ -6816,7 +6818,9 @@ function accountPlan(a) {
 // and a snippet in whichever language the reader is holding.
 
 // copy: through magpie (the window refuses the page's clipboard), else the
-// page's ways (#1881); when none copies, the text is shown to copy by hand.
+// page's ways: magpie refuses a copy it can't read back (#1881), and a tab
+// over plain http (a NAS's) has no clipboard API, so the old copy command
+// is the last try. When none copies, the text is shown to copy by hand.
 async function copy(text, what, btn, message) {
   const done = () => { status(message || t("{what} copied", { what }), "ok"); flashCopied(btn); };
   const res = await fetch("/api/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }).catch(() => null);
@@ -7667,8 +7671,9 @@ function providerDirty() {
   return !!draft && draft === providerDraftRef && (providerDraftValue() !== providerDraftBase ||
     (active?.matches(".editor .mprice input") && active.value !== active.defaultValue));
 }
-// backdropClick(el, on): pressed and let go both on the backdrop, not a
-// selection dragged out of a field (#1373)
+// backdropClick(el, on): pressed and let go both on the backdrop. A drag
+// out of a field (#1373) clicks the backdrop too, so the target alone
+// can't tell it apart.
 function backdropClick(el, on = (e) => e.target === el) {
   let down = false, up = false;
   el.addEventListener("pointerdown", (e) => { down = on(e); up = false; }, true);
@@ -8102,7 +8107,8 @@ function keyProxyPicker(p) {
   return proxyLines((p?.keyList || []).map((k) => ({ k: k.id, name: k.name || k.masked, key: k.id, info: k })), KEY_PROXY_HINT, true);
 }
 // proxyLines: a line for each account or key, keys folded as Accounts
-// folds them (keyFold, @NetRozee on X); one not drawn keeps its proxy.
+// folds them (keyFold): a line for each of a thousand keys took the editor
+// a minute to open (@NetRozee on X). One not drawn keeps its proxy.
 function proxyLines(items, hint, foldKeys) {
   if (items.length < 2) return null;
   draft.accountProxies = draft.accountProxies || {};
@@ -8193,7 +8199,8 @@ function accountProxiesOfDraft() {
 }
 
 // Custom request headers: an ordered [name, value, json?] list in the
-// draft; headersOf folds it back, dropping empty rows, JSON minified.
+// draft; headersOf folds it back: a row with no name or value dropped, the
+// last of one name kept, JSON minified.
 function headerRows(obj) {
   return Object.entries(obj || {}).map(([k, v]) => [k, v, false]);
 }
@@ -12013,7 +12020,8 @@ function mediaChips(cls, ids, key, p) {
 }
 
 // renderRouting: how requests spread over a provider's keys or accounts
-// and stay with one, staged in the draft until Save (01huadalang).
+// and stay with one, staged in the draft until Save: each click saving and
+// redrawing lagged (01huadalang).
 const ROUTINGS = [
   ["", "Smart", "The first takes requests while it has quota to spare; when it runs low, the one with the most left takes over. One out of credit sits out half an hour, one out of quota until it resets, one rate limited as long as the vendor asks, and one that fails a minute, longer each time it fails again."],
   ["order", "In order", "Requests go to the first; the next takes over when the one before runs out of quota, hits a rate limit or fails."],
@@ -13060,7 +13068,8 @@ function renderSigning(sub) {
     proxiesJs(() => pastePickFill(via, sub, flow));
   }
   // a plugin's browser sign-in whose page can't reach magpie can be left
-  // for its API key way, unless it takes a pasted key already (#2468)
+  // for its API key way, unless it takes a pasted key already (#2468) or
+  // is a moved one importing its key (Factory)
   const keyWay = sub.plugin && signing.method != null && !signing.pasteCode && !signing.pasteKey && signing.state === "waiting"
     ? (sub.plugin.methods || []).findIndex((m) => m.type === "api") : -1;
   if (keyWay >= 0 && keyWay !== signing.method && !(sub.moved && sub.importable)) {
@@ -13215,7 +13224,7 @@ function loginsInOrder(a, p) {
 // (provider.CLIProxyAgents), its icon, words and press in cliproxy.js
 function cliproxyButton(a, l) {
   const b = el("button", "key-edit acc-export");
-  import("./cliproxy.js").then(() => cliproxyDress(b, a, l), () => b.remove());
+  window.cliproxyDress ? cliproxyDress(b, a, l) : import("./cliproxy.js").then(() => cliproxyDress(b, a, l), () => b.remove());
   return b;
 }
 
@@ -13539,7 +13548,8 @@ function codexNote(cls, n, s) {
 }
 
 // Accounts imported from another tool's export, each checked with the
-// vendor; a sign-in waiting for its address is kept behind it (LuvLetter).
+// vendor. A sign-in waiting for its address is kept behind it: that address
+// pasted here finishes it (LuvLetter, magpie in Docker).
 function startImport(agent) {
   const behind = signingOpen() && signing.pasteCallback ? signing.id : signing?.behind;
   if (signingOpen() && signing.id !== behind) api("signin/" + signing.id + "/cancel", {}).catch(() => {});
