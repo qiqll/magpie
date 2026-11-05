@@ -2,10 +2,12 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +243,7 @@ func TestUnbrandWords(t *testing.T) {
 		"no MAGPIE_ADDR, send sk-magpie-…":            "no MAGPIE_ADDR, send sk-magpie-…",
 		"turn off the Remote magpie provider":         "turn off the Remote gateway provider",
 		"over loopback: run magpie heap there":        "over loopback: run the gateway's command heap there",
+		"couldn't read magpie.json":                   "couldn't read magpie.json",
 		"nothing of it":                               "nothing of it",
 	} {
 		if got := unbrand(in); got != want {
@@ -285,5 +288,110 @@ func TestKeepsBrandCallers(t *testing.T) {
 		if got := keepsBrand(r); got != c.keeps {
 			t.Errorf("keepsBrand(%s, %q, %q) = %v, want %v", c.from, c.auth, c.ua, got, c.keeps)
 		}
+	}
+}
+
+// brandWriter's own framing, under a recorder: the length it sends is the
+// body's, a body cut by a flush goes as it came, a failure's stream is
+// said again event by event, the model's words in a stream never are.
+func TestBrandWriterFraming(t *testing.T) {
+	const said = `{"error":{"message":"magpie refused it","type":"invalid_request_error"}}` + "\n"
+	serve := func(from string, h http.HandlerFunc) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/v1/models", nil)
+		r.RemoteAddr = from
+		w := httptest.NewRecorder()
+		func() {
+			defer func() { recover() }()
+			branded(h).ServeHTTP(w, r)
+		}()
+		return w
+	}
+	const other, owner = "192.168.1.9:5000", "127.0.0.1:5000"
+	lengthOf := func(w *httptest.ResponseRecorder) string { return w.Header().Get("Content-Length") }
+
+	// a failure of a set length in two writes: said again, its length too
+	w := serve(other, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(said)))
+		w.WriteHeader(400)
+		io.WriteString(w, said[:20])
+		io.WriteString(w, said[20:])
+	})
+	if b := w.Body.String(); saysMagpie(b) || !json.Valid([]byte(b)) || lengthOf(w) != strconv.Itoa(len(b)) {
+		t.Errorf("a set length in two writes: %q, Content-Length %s", b, lengthOf(w))
+	}
+	// cut by a flush: as it came, its length as the handler set it
+	w = serve(other, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(said)))
+		w.WriteHeader(400)
+		io.WriteString(w, said[:20])
+		w.(http.Flusher).Flush()
+		io.WriteString(w, said[20:])
+	})
+	if b := w.Body.String(); b != said || lengthOf(w) != strconv.Itoa(len(said)) {
+		t.Errorf("a set length cut by a flush: %q, Content-Length %s", b, lengthOf(w))
+	}
+	// a HEAD's failure: no body, its length as set
+	w = serve(other, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "50")
+		w.WriteHeader(404)
+	})
+	if lengthOf(w) != "50" || w.Code != 404 {
+		t.Errorf("a HEAD's failure: %d, Content-Length %s", w.Code, lengthOf(w))
+	}
+	// an error body of a reply that succeeded, in pieces
+	w = serve(other, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"error":{"message":"magpie`)
+		io.WriteString(w, ` stopped"}}`)
+	})
+	if b := w.Body.String(); b != `{"error":{"message":"The gateway stopped"}}` || w.Code != 200 {
+		t.Errorf("a 200's error in pieces: %d %q", w.Code, b)
+	}
+	// a failure's stream, flushed event by event: each said again
+	w = serve(other, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(503)
+		for range 2 {
+			io.WriteString(w, "data: {\"message\":\"magpie is busy\"}\n\n")
+			w.(http.Flusher).Flush()
+		}
+	})
+	if b := w.Body.String(); saysMagpie(b) || strings.Count(b, "The gateway is busy") != 2 {
+		t.Errorf("a failure's stream: %q", b)
+	}
+	// a stream that succeeded: an error event cut across writes is said
+	// again, the model's words as written
+	stream := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"a mag")
+		io.WriteString(w, "pie sings\"}}]}\n\ndata: {\"error\":{\"message\":\"Mag")
+		w.(http.Flusher).Flush()
+		io.WriteString(w, "pie relay gone\"}}\n\n")
+	}
+	w = serve(other, stream)
+	if b := w.Body.String(); w.Code != 200 || !strings.Contains(b, "a magpie sings") || !strings.Contains(b, `"The gateway relay gone"`) {
+		t.Errorf("a stream: %d %q", w.Code, b)
+	}
+	// the owner: every byte as written
+	w = serve(owner, stream)
+	if b := w.Body.String(); !strings.Contains(b, "Magpie relay gone") {
+		t.Errorf("the owner's stream: %q", b)
+	}
+	w = serve(owner, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(said)))
+		w.WriteHeader(400)
+		io.WriteString(w, said)
+	})
+	if b := w.Body.String(); b != said || lengthOf(w) != strconv.Itoa(len(said)) {
+		t.Errorf("the owner's failure: %q", b)
+	}
+	// a handler that panics after its failure: what it wrote goes out
+	w = serve(other, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		io.WriteString(w, "magpie broke")
+		panic("boom")
+	})
+	if b := w.Body.String(); b != "The gateway broke" {
+		t.Errorf("after a panic: %q", b)
 	}
 }

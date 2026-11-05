@@ -46,12 +46,16 @@ func keepsBrand(r *http.Request) bool {
 // brandWriter is the client's writer, marked with who the caller is.
 type brandWriter struct {
 	w http.ResponseWriter
+	r *http.Request // as it came: judged so when no guard marks it
 
-	mu   sync.Mutex
-	keep bool // the caller reads the errors as they are
-	mode int  // what is done with the reply, once it begins
-	code int  // the status held while the body is gathered
-	buf  bytes.Buffer
+	mu     sync.Mutex
+	marked bool // keep is judged (markCaller, keepOf)
+	keep   bool // the caller reads the errors as they are
+	mode   int  // what is done with the reply, once it begins
+	code   int  // the status, held while the body is gathered
+	all    bool // brandLines of a failure reply: every data line said again
+	length int  // the Content-Length the handler set, -1 for none
+	buf    bytes.Buffer
 	// sent: the reply's headers have gone to w
 	sent bool
 }
@@ -64,12 +68,14 @@ const (
 	brandSniff     // a reply that succeeded: held until its first bytes say what it is
 )
 
-// brandWholeMost is the most of a failure reply gathered before it is said;
-// past it, what came is said and the rest passed as it is.
-const brandWholeMost = 4 << 20
+// brandWholeMost is the most of a failure reply gathered before it is
+// said; past it, what came is said and the rest passed as it is. An error
+// message is a few KB; a body past this is a vendor's page, not one.
+const brandWholeMost = 256 << 10
 
 // brandLineMost is the most of a stream's unfinished line held back to be
-// read whole; a longer one is passed as it is.
+// read whole; a longer one is passed as it is. A flush doesn't send it: an
+// error event cut across two writes is read whole, a moment later.
 const brandLineMost = 64 << 10
 
 // markCaller tells w's brandWriter who r's caller is. Called before
@@ -81,9 +87,19 @@ func markCaller(w http.ResponseWriter, r *http.Request) {
 	}
 	b.mu.Lock()
 	if b.mode == brandUndecided {
-		b.keep = keepsBrand(r)
+		b.keep, b.marked = keepsBrand(r), true
 	}
 	b.mu.Unlock()
+}
+
+// keepOf is whether the caller keeps magpie's words, judged by the request
+// as it came when no guard said (a reply before lanGuard's). Called with mu
+// held.
+func (b *brandWriter) keepOf() bool {
+	if !b.marked {
+		b.keep, b.marked = keepsBrand(b.r), true
+	}
+	return b.keep
 }
 
 // brandOf is the brandWriter w writes through, nil for none.
@@ -111,7 +127,7 @@ func keepsBrandOn(w http.ResponseWriter) bool {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.keep
+	return b.keepOf()
 }
 
 // branded is next with each reply's writer marked: the gateway's own
@@ -123,9 +139,19 @@ func branded(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		b := &brandWriter{w: w, keep: keepsBrand(r)}
+		b := &brandWriter{w: w, r: r, length: -1}
+		defer func() {
+			// a handler's panic is net/http's, as before; what it wrote
+			// goes out first, unless it aborted the reply
+			p := recover()
+			if p != http.ErrAbortHandler {
+				b.finish()
+			}
+			if p != nil {
+				panic(p)
+			}
+		}()
 		next.ServeHTTP(b, r)
-		b.finish()
 	})
 }
 
@@ -140,8 +166,9 @@ func (b *brandWriter) WriteHeader(code int) {
 	b.writeHeader(code)
 }
 
-// writeHeader decides the reply's mode by its status and type. Called with
-// mu held.
+// writeHeader decides the reply's mode by its status and type. A status
+// held while the body is gathered goes with the headers as they are when
+// it is sent. Called with mu held.
 func (b *brandWriter) writeHeader(code int) {
 	if b.mode != brandUndecided {
 		if b.mode == brandPass || b.mode == brandLines {
@@ -153,27 +180,26 @@ func (b *brandWriter) writeHeader(code int) {
 		b.w.WriteHeader(code) // an informational status, the reply still to come
 		return
 	}
-	h := b.w.Header()
-	ct := strings.ToLower(h.Get("Content-Type"))
-	streams := strings.Contains(ct, "event-stream") || strings.Contains(ct, "ndjson")
-	switch {
-	case b.keep:
+	b.code = code
+	if b.keepOf() {
 		b.mode = brandPass
-	case code >= 400:
-		b.mode, b.code = brandWhole, code
-		return
-	case streams && h.Get("Content-Length") == "":
-		b.mode = brandLines
-	case streams:
-		// a stream of a known length, played back whole
-		b.mode, b.code = brandWhole, code
-		return
-	default:
-		b.mode, b.code = brandSniff, code
+		b.sendHeader()
 		return
 	}
-	b.code = code
-	b.sendHeader()
+	h := b.w.Header()
+	if n, err := strconv.Atoi(h.Get("Content-Length")); err == nil && n >= 0 {
+		b.length = n
+	}
+	switch streams := b.isStream(); {
+	case streams && b.length < 0:
+		b.mode, b.all = brandLines, code >= 400
+		b.sendHeader()
+	case code >= 400 || streams:
+		// a failure, or a stream of a known length played back whole
+		b.mode = brandWhole
+	default:
+		b.mode = brandSniff
+	}
 }
 
 func (b *brandWriter) Write(p []byte) (int, error) {
@@ -199,10 +225,15 @@ func (b *brandWriter) Write(p []byte) (int, error) {
 		fallthrough
 	case brandWhole:
 		b.buf.Write(p)
-		if b.buf.Len() >= brandWholeMost || !b.isStream() && json.Valid(b.buf.Bytes()) {
+		switch {
+		case b.whole(p):
 			// a JSON error comes in one write; the client has it now, as a
 			// reply magpie answers while the handler is still held must
-			if err := b.emit(); err != nil {
+			if err := b.emit(true); err != nil {
+				return 0, err
+			}
+		case b.buf.Len() >= brandWholeMost:
+			if err := b.emit(false); err != nil {
 				return 0, err
 			}
 		}
@@ -217,6 +248,23 @@ func (b *brandWriter) Write(p []byte) (int, error) {
 	return b.w.Write(p)
 }
 
+// whole is whether the body gathered is all of it: as long as its
+// Content-Length says, or JSON that has ended (read only once the write
+// just made, p, ends as JSON does). Called with mu held.
+func (b *brandWriter) whole(p []byte) bool {
+	if b.length >= 0 {
+		return b.buf.Len() >= b.length
+	}
+	if b.isStream() {
+		return false
+	}
+	t := bytes.TrimRight(p, " \t\r\n")
+	if len(t) == 0 || t[len(t)-1] != '}' && t[len(t)-1] != ']' {
+		return false
+	}
+	return json.Valid(b.buf.Bytes())
+}
+
 // sendHeader sends the status held, once. Called with mu held.
 func (b *brandWriter) sendHeader() {
 	if !b.sent {
@@ -228,14 +276,18 @@ func (b *brandWriter) sendHeader() {
 func (b *brandWriter) Flush() { _ = b.FlushError() }
 
 // FlushError is http.ResponseController's Flush, which looks for it before
-// it unwraps: a reply gathered whole is said at a flush, as it stands, and
-// a held status goes, so a flush never holds back what it was asked to send.
+// it unwraps: a flush before anything is written sends 200, as net/http's
+// does; a reply gathered whole is said at a flush, as it stands, and a held
+// status goes, so a flush never holds back what it was asked to send.
 func (b *brandWriter) FlushError() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.mode == brandUndecided {
+		b.writeHeader(http.StatusOK)
+	}
 	switch b.mode {
 	case brandWhole:
-		if err := b.emit(); err != nil {
+		if err := b.emit(false); err != nil {
 			return err
 		}
 	case brandSniff:
@@ -250,7 +302,7 @@ func (b *brandWriter) finish() {
 	defer b.mu.Unlock()
 	switch b.mode {
 	case brandWhole:
-		b.emit()
+		b.emit(b.length < 0 || b.buf.Len() == b.length)
 	case brandSniff:
 		b.mode = brandPass
 		b.sendHeader()
@@ -264,11 +316,11 @@ func (b *brandWriter) isStream() bool {
 	return strings.Contains(ct, "event-stream") || strings.Contains(ct, "ndjson")
 }
 
-// emit says the gathered body again and sends it, its length set to what
-// is sent; what comes after is passed as it is. A body whose length went
-// out already in a status sent at a flush is sent as it came. Called with
-// mu held.
-func (b *brandWriter) emit() error {
+// emit says the gathered body again and sends it; what comes after is
+// passed as it is. A body whose length the handler set is said again only
+// when all of it is here (whole) and the status is still held, with the
+// length it now has; otherwise it goes as it came. Called with mu held.
+func (b *brandWriter) emit(whole bool) error {
 	body := b.buf.Bytes()
 	out := body
 	switch {
@@ -279,11 +331,11 @@ func (b *brandWriter) emit() error {
 	default:
 		out = unbrandErrorAt(body)
 	}
-	if h := b.w.Header(); h.Get("Content-Length") != "" {
-		if b.sent {
+	if b.length >= 0 && len(out) != len(body) {
+		if !whole || b.sent {
 			out = body
 		} else {
-			h.Set("Content-Length", strconv.Itoa(len(out)))
+			b.w.Header().Set("Content-Length", strconv.Itoa(len(out)))
 		}
 	}
 	b.mode = brandPass
@@ -305,7 +357,7 @@ func (b *brandWriter) lines(last bool) error {
 	if cut == 0 {
 		return nil
 	}
-	out := unbrandLines(data[:cut], false)
+	out := unbrandLines(data[:cut], b.all)
 	_, err := b.w.Write(out)
 	rest := append([]byte(nil), data[cut:]...)
 	b.buf.Reset()
@@ -495,7 +547,9 @@ func unbrand(msg string) string {
 		out.WriteString(msg[last:i])
 		last = j
 		plural := next == 's' && !isWordByte(byteAt(msg, j+1))
-		inName := strings.IndexByte("/_.-", prev) >= 0 || strings.IndexByte("/_-", next) >= 0 ||
+		// magpie.json, magpie.app: a file's name
+		file := next == '.' && isWordByte(byteAt(msg, j+1))
+		inName := strings.IndexByte("/_.-", prev) >= 0 || strings.IndexByte("/_-", next) >= 0 || file ||
 			isWordByte(prev) || isWordByte(next) && !plural
 		if inName {
 			// a route, a header, a key's form or a tool's id is the
