@@ -430,6 +430,8 @@ func lanGuard(next http.Handler) http.Handler {
 		if fromWSL(r) {
 			r = asFromLoopback(r)
 		}
+		// the address as judged here: a refusal below is said to it
+		markCaller(w, r)
 		// the allow list comes before the key: one that leaked is of no
 		// use from an address left out of it
 		if refuseNotAllowed(w, r) {

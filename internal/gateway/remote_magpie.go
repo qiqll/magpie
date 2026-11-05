@@ -67,6 +67,8 @@ type callerCtx struct{}
 // headers that said so off it.
 func withCaller(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// the caller's gateway key is known by now (lanGuard, callerGuard)
+		markCaller(w, r)
 		c := callerFrom(r)
 		if c.hops >= catalog.MaxVia {
 			writeError(w, protoOfPath(r.URL.Path), http.StatusLoopDetected, "this request went round magpies that are each other's Remote magpie "+strconv.Itoa(c.hops)+" times: on one of them, turn off or remove the Remote magpie provider that points back")

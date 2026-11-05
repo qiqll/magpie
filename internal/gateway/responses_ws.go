@@ -167,6 +167,8 @@ type responsesSocket struct {
 	c    *websocket.Conn
 	ctx  context.Context
 	live context.Context // the socket's, for writes (send)
+	// plain: the caller reads no magpie in the socket's own errors (say)
+	plain bool
 
 	writeMu sync.Mutex
 	turns   []heldTurn // the newest last
@@ -205,9 +207,9 @@ func (s *Server) serveResponsesSocket(w http.ResponseWriter, r *http.Request) bo
 		most = s.codexLimitOf()
 	}
 	c.SetReadLimit(most)
-	sock := &responsesSocket{s: s, o: o, path: r.URL.Path, c: c, ctx: o.ctx}
+	sock := &responsesSocket{s: s, o: o, path: r.URL.Path, c: c, ctx: o.ctx, plain: !keepsBrandOn(w)}
 	if !s.sockets.add(sock) {
-		c.Close(websocket.StatusGoingAway, "magpie is restarting")
+		c.Close(websocket.StatusGoingAway, sock.say("magpie is restarting"))
 		return true
 	}
 	defer s.sockets.remove(sock)
@@ -219,6 +221,16 @@ func (s *Server) serveResponsesSocket(w http.ResponseWriter, r *http.Request) bo
 	return true
 }
 
+// say is msg as the socket's caller is told it: without magpie's name for
+// one that is neither another magpie nor this computer's owner
+// (unbranded.go). A turn's own reply is said by its brandWriter.
+func (rs *responsesSocket) say(msg string) string {
+	if !rs.plain {
+		return msg
+	}
+	return unbrand(msg)
+}
+
 func (rs *responsesSocket) goingAway() {
 	rs.mu.Lock()
 	rs.away = true
@@ -226,7 +238,7 @@ func (rs *responsesSocket) goingAway() {
 	rs.mu.Unlock()
 	if idle {
 		// Close waits for the client's reply: not one socket after another
-		go rs.c.Close(websocket.StatusGoingAway, "magpie is restarting")
+		go rs.c.Close(websocket.StatusGoingAway, rs.say("magpie is restarting"))
 	}
 }
 
@@ -340,7 +352,7 @@ func (rs *responsesSocket) serve() {
 			return
 		}
 		if away {
-			rs.c.Close(websocket.StatusGoingAway, "magpie is restarting")
+			rs.c.Close(websocket.StatusGoingAway, rs.say("magpie is restarting"))
 			return
 		}
 	}
@@ -366,7 +378,7 @@ func (rs *responsesSocket) write(ctx context.Context, frame []byte) error {
 // writeError is an error frame as Codex reads one: the HTTP status and
 // the error object an HTTP reply would have carried.
 func (rs *responsesSocket) writeError(ctx context.Context, status int, typ, code, msg, param string) error {
-	e := map[string]any{"type": typ, "code": code, "message": msg}
+	e := map[string]any{"type": typ, "code": code, "message": rs.say(msg)}
 	if param != "" {
 		e["param"] = param
 	}
