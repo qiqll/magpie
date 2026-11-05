@@ -6220,8 +6220,15 @@ var ratelimitWindows = map[string]string{
 // user's.
 func (s *Server) runSearch(r *http.Request) func(ctx context.Context, query string) (string, []Hit, error) {
 	turn := s.forUser(context.Background(), r)
+	// the run's callback comes from Claude Code on this computer: a
+	// failure is said as the turn's caller reads magpie's words
+	keep := keepsBrandFor(nil, r)
 	return func(ctx context.Context, query string) (string, []Hit, error) {
-		return s.webSearch(askedAs(ctx, turn), query)
+		said, hits, err := s.webSearch(askedAs(ctx, turn), query)
+		if err != nil && !keep {
+			err = unbrandedErr{err}
+		}
+		return said, hits, err
 	}
 }
 

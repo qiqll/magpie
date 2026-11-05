@@ -249,7 +249,7 @@ func (s *Server) searchMCPRun(r *http.Request, query string) (string, error) {
 		if errors.Is(err, errNoSearcher) {
 			msg += ": add a search API in magpie's Settings → Models → Web search (or magpie search add <api> <key>), or a provider that can search"
 		}
-		return "", searchMCPError(msg)
+		return "", searchMCPError(ownWords(r.Context(), msg))
 	}
 	// what was masked on the way out (maskedQuery, or the searcher's
 	// request) is the agent's own: it gets it back

@@ -83,7 +83,7 @@ func (s *Server) alphaSearchBody(w http.ResponseWriter, r *http.Request, body []
 		var why string
 		if ons, why = s.usersSearchers(r, q.Model, ons, model); why != "" {
 			log.Printf("web search on ChatGPT for %s: %s", q.Model, why)
-			note = "ChatGPT's web search isn't for this user (" + why + "); magpie searched in its place.\n\n"
+			note = ownWords(r.Context(), "ChatGPT's web search isn't for this user ("+why+"); magpie searched in its place.\n\n")
 		}
 	}
 	if len(ons) > 0 {
@@ -97,9 +97,9 @@ func (s *Server) alphaSearchBody(w http.ResponseWriter, r *http.Request, body []
 			// every account failed as one to be signed in again, or,
 			// bound by user, as anything but a limit: that is the
 			// log's alone
-			note = "ChatGPT's web search failed; magpie searched in its place.\n\n"
+			note = ownWords(r.Context(), "ChatGPT's web search failed; magpie searched in its place.\n\n")
 		} else {
-			note = "ChatGPT's web search failed (" + told + "); magpie searched in its place.\n\n"
+			note = ownWords(r.Context(), "ChatGPT's web search failed ("+told+"); magpie searched in its place.\n\n")
 		}
 	}
 	s.alphaSearchHere(w, r, q, note)
@@ -305,7 +305,7 @@ func (s *Server) alphaSearchHere(w http.ResponseWriter, r *http.Request, q alpha
 		queries = append(queries, text)
 	}
 	if len(queries) == 0 {
-		writeJSON(w, http.StatusOK, alphaSearchReply{Output: note + "magpie can only search the web for " + q.Model + ": give web.run a search_query. Opening, clicking or finding in a page goes to the ChatGPT backend, for a ChatGPT account's model in magpie."})
+		writeJSON(w, http.StatusOK, alphaSearchReply{Output: note + ownWords(r.Context(), "magpie can only search the web for "+q.Model+": give web.run a search_query. Opening, clicking or finding in a page goes to the ChatGPT backend, for a ChatGPT account's model in magpie.")})
 		return
 	}
 	ctx := withWebAccess(context.WithValue(s.forUser(r.Context(), r), searchForKey{}, &CallFor{Agent: callerOf(r).agent, Model: q.Model, User: callerUser(r)}), q.Settings.ExternalWebAccess)
@@ -317,12 +317,14 @@ func (s *Server) alphaSearchHere(w http.ResponseWriter, r *http.Request, q alpha
 				return
 			}
 			log.Printf("web search for %s: %v", q.Model, err)
-			msg := "magpie couldn't search the web for " + query
+			// magpie's words as the caller reads them (ownWords); the
+			// query is as it was asked
+			msg := ownWords(r.Context(), "magpie couldn't search the web for ") + query
 			if why := s.searchFailSaid(err); why != "" {
-				msg += ": " + why
+				msg += ownWords(r.Context(), ": "+why)
 			}
 			if errors.Is(err, errNoSearcher) {
-				msg += ": add a search API in magpie's Settings → Models → Web search (or magpie search add <api> <key>), or a provider that can search"
+				msg += ownWords(r.Context(), ": add a search API in magpie's Settings → Models → Web search (or magpie search add <api> <key>), or a provider that can search")
 			}
 			said = append(said, msg)
 			continue

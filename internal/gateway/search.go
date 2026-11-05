@@ -1441,7 +1441,7 @@ func (s *Server) searchRounds(ctx context.Context, q *Request, tool string, in <
 				}
 				found, hits, err := s.webSearch(context.WithValue(ctx, searchCallKey{}, c.ID), a.Query)
 				if err != nil {
-					results[i].Text, results[i].IsError = "search failed: "+sideSaid(err), true
+					results[i].Text, results[i].IsError = ownWords(ctx, "search failed: "+sideSaid(err)), true
 					return
 				}
 				results[i].Text = found

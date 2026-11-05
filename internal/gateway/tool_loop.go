@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -64,7 +65,7 @@ func (s *Server) stoppedToolLoop(w http.ResponseWriter, r *http.Request, from pr
 	}
 	why := loop.why()
 	s.answeredHere(r, from, body, toolLoopWho, why, func() {
-		writeLocalText(w, r, from, req, loop.notice())
+		writeLocalText(w, r, from, req, loop.notice(r.Context()))
 	})
 	return true
 }
@@ -381,10 +382,13 @@ func (l toolLoop) why() string {
 	return fmt.Sprintf("tool loop: the same tool call got the same result %d turns in a row (%s); answered by magpie, sent nowhere", l.turns, l.called())
 }
 
-// notice is what the agent shows the user, as the turn's answer.
-func (l toolLoop) notice() string {
-	return fmt.Sprintf("magpie stopped this turn before it reached the model: the agent ran the same tool call %d times in a row and got the same result every time (%s). The model is stuck repeating it, and each further turn would spend your quota with no progress, so this turn was sent nowhere. Tell the agent how to go on and the conversation continues; Settings › Models › Replies › Stop looping replies turns this check off.",
-		l.turns, l.called())
+// toolLoopNotice is notice's words, the turns and the calls left to fill.
+const toolLoopNotice = "magpie stopped this turn before it reached the model: the agent ran the same tool call %d times in a row and got the same result every time (%s). The model is stuck repeating it, and each further turn would spend your quota with no progress, so this turn was sent nowhere. Tell the agent how to go on and the conversation continues; Settings › Models › Replies › Stop looping replies turns this check off."
+
+// notice is what the agent shows the user, as the turn's answer: magpie's
+// words as ctx's caller reads them (ownWords), the calls as they were made.
+func (l toolLoop) notice(ctx context.Context) string {
+	return fmt.Sprintf(ownWords(ctx, toolLoopNotice), l.turns, l.called())
 }
 
 // writeLocalText answers req with text in from's API, as a whole reply or

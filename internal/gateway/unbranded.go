@@ -25,7 +25,10 @@ package gateway
 // by the same caller (keepsBrandFor): a plugin's usage fields for magpie
 // (magpie_deferred, magpie_cache_unknown), which a relayed reply carried
 // to the client as they came, go (usageUnbrand), and a reply magpie makes
-// itself has an id with no magpie in it (madeID).
+// itself has an id with no magpie in it (madeID). The words magpie writes
+// itself into such a reply, or into what goes on to the model's vendor for
+// it (a local summary's opening, the tool-loop notice, a search's note or
+// failure), are said at the place they are made (ownWords, T-120).
 
 import (
 	"bytes"
@@ -651,6 +654,28 @@ func theAt(s string) string {
 	}
 	return "the "
 }
+
+// ownWords is msg, words magpie writes itself into what a model's request
+// gets back or sends on (a local summary's opening, the tool-loop notice,
+// a web search's note or failure as its tool result), as the caller of
+// ctx's request reads them (T-120): as they are to one that keeps magpie's
+// words, unbrand'd to any other. Only magpie's own words go through it,
+// never the model's, the user's or a page's.
+func ownWords(ctx context.Context, msg string) string {
+	b, _ := ctx.Value(brandKey{}).(*brandWriter)
+	if b.keeps() {
+		return msg
+	}
+	return unbrand(msg)
+}
+
+// unbrandedErr is an error of magpie's own told to a caller that doesn't
+// keep magpie's words: its text unbrand'd, what it is (errors.Is, As) as
+// it was.
+type unbrandedErr struct{ err error }
+
+func (e unbrandedErr) Error() string { return unbrand(e.err.Error()) }
+func (e unbrandedErr) Unwrap() error { return e.err }
 
 // madeID is the id of a reply magpie makes itself, kind its prefix
 // ("resp", "msg"): kind_magpie_<now> to a caller that keeps magpie's

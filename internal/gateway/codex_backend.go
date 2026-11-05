@@ -3758,7 +3758,7 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 	lateSummary := func() string {
 		why := fmt.Sprintf("no summary came in %s, and Codex stops waiting at 5 minutes", compactWithin)
 		log.Printf("codex compaction: %s: %s; compacting locally", model, why)
-		return localSummary(body, why)
+		return localSummary(r.Context(), body, why)
 	}
 	r = r.WithContext(budget)
 	r = askWhole(r)
@@ -3801,7 +3801,7 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 				_, again = compactFailure(body, rec)
 			}
 			log.Printf("codex compaction: %s answered %d again (%s); compacting locally", who, rec.status, again)
-			local = localSummary(body, fmt.Sprintf("%s answered %d to the summary request: %s", who, first, msg))
+			local = localSummary(r.Context(), body, fmt.Sprintf("%s answered %d to the summary request: %s", who, first, msg))
 			rec, res, err = &recorder{header: http.Header{}, status: 200}, compactResult{}, nil
 		}
 	}
@@ -3815,7 +3815,7 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 			msg = "broken off: " + err.Error()
 		}
 		log.Printf("codex compaction: %s answered %d (%s) on the model the thread is leaving; compacting locally", who, rec.status, msg)
-		local = localSummary(body, fmt.Sprintf("%s answered %d to the summary request: %s", who, rec.status, msg))
+		local = localSummary(r.Context(), body, fmt.Sprintf("%s answered %d to the summary request: %s", who, rec.status, msg))
 		rec, res, err = &recorder{header: http.Header{}, status: 200}, compactResult{}, nil
 	}
 	if local == "" && (err != nil && strings.HasSuffix(err.Error(), errEndedShort.Error()) || summaryEndedShort(rec)) {
@@ -3834,7 +3834,7 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 			why = err.Error()
 		}
 		log.Printf("codex compaction: %s: %s; compacting locally", who, why)
-		local = localSummary(body, why)
+		local = localSummary(r.Context(), body, why)
 		rec, res, err = &recorder{header: http.Header{}, status: 200}, compactResult{}, nil
 	}
 	if rec.status >= 400 {
@@ -3866,7 +3866,7 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 	if err != nil && prev {
 		who, _ := compactFailure(body, rec)
 		log.Printf("codex compaction: %s: %v on the model the thread is leaving; compacting locally", who, err)
-		local, err = localSummary(body, who+": "+err.Error()), nil
+		local, err = localSummary(r.Context(), body, who+": "+err.Error()), nil
 	}
 	if err != nil {
 		who, _ := compactFailure(body, rec)
@@ -3905,7 +3905,7 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 				again = fmt.Sprintf("%d: %s", prec.status, msg)
 			}
 			log.Printf("codex compaction: %s asked again as text: %s; compacting locally", who, again)
-			local = localSummary(body, who+" wrote no summary"+called+", asked again as text: "+again)
+			local = localSummary(r.Context(), body, who+" wrote no summary"+called+", asked again as text: "+again)
 		}
 	}
 	var sum strings.Builder
@@ -3915,7 +3915,7 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 		sum.WriteString(res.summary())
 	}
 	if strings.TrimSpace(sum.String()) == "" && prev {
-		sum.WriteString(localSummary(body, "the model wrote no summary"+answeredWith(res.Output)))
+		sum.WriteString(localSummary(r.Context(), body, "the model wrote no summary"+answeredWith(res.Output)))
 	}
 	if strings.TrimSpace(sum.String()) == "" {
 		why := "the model wrote no summary" + answeredWith(res.Output)
@@ -4127,8 +4127,9 @@ const localSummaryMax = 80_000
 
 // localSummary is a summary made without a model: what the user asked (the
 // summaries before this one with it), the latest of it kept, and the last
-// reply.
-func localSummary(body []byte, why string) string {
+// reply. Its opening is magpie's words, said as ctx's caller reads them
+// (ownWords); what the user asked and the reply are as they were.
+func localSummary(ctx context.Context, body []byte, why string) string {
 	_, items := compactItems(body)
 	var asked []string
 	last := ""
@@ -4149,11 +4150,12 @@ func localSummary(body []byte, why string) string {
 		n += len(asked[from])
 	}
 	var b strings.Builder
-	b.WriteString("magpie compacted this conversation without a model (" + why + "), so this is no summary: it is what the user asked")
+	head := "magpie compacted this conversation without a model (" + why + "), so this is no summary: it is what the user asked"
 	if from > 0 {
-		fmt.Fprintf(&b, " (the latest %d of %d messages)", len(asked)-from, len(asked))
+		head += fmt.Sprintf(" (the latest %d of %d messages)", len(asked)-from, len(asked))
 	}
-	b.WriteString(" and the last reply. Look at the workspace for where the work stands before going on.\n\n## The user's messages\n")
+	b.WriteString(ownWords(ctx, head+" and the last reply. Look at the workspace for where the work stands before going on."))
+	b.WriteString("\n\n## The user's messages\n")
 	for _, a := range asked[from:] {
 		b.WriteString("\n" + a + "\n")
 	}
