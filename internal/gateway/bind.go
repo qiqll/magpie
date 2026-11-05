@@ -139,7 +139,10 @@ type askedKeyKey struct{}
 type askedKey struct {
 	id, name, issuer string
 	// who is the turn's caller, whose key's limits hold a side ask made
-	// in a context of its own as they hold the turn's (reserveSide)
+	// in a context of its own as they hold the turn's (reserveSide): a
+	// Claude Code run's web search, a decision group classifier's. It is
+	// read for nothing else, never for the models or accounts the ask
+	// may use.
 	who access.Identity
 }
 
