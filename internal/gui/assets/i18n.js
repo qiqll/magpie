@@ -5,6 +5,9 @@
 const I18N = {
   zh: {
     "Saved…": "已存…",
+    "Pause": "暂停",
+    "Stop using": "停用",
+    "Every subscription account on one page: its state, allowances and recent requests, used, paused or signed in again there": "所有订阅账号集中在一页：状态、额度与近期请求，并可在此启用、暂停或重新登录",
     "Saved proxies": "已存代理",
     "Through: {proxy}": "经由：{proxy}",
     "Finish through": "经由此代理完成",
@@ -4658,6 +4661,9 @@ const I18N = {
   },
   "zh-TW": {
     "Saved…": "已存…",
+    "Pause": "暫停",
+    "Stop using": "停用",
+    "Every subscription account on one page: its state, allowances and recent requests, used, paused or signed in again there": "所有訂閱帳號集中在一頁：狀態、額度與近期請求，並可在此啟用、暫停或重新登入",
     "Saved proxies": "已存代理",
     "Through: {proxy}": "經由：{proxy}",
     "Finish through": "經由此代理完成",
@@ -9296,6 +9302,9 @@ const I18N = {
   },
   ja: {
     "Saved…": "保存済み…",
+    "Pause": "一時停止",
+    "Stop using": "使用をやめる",
+    "Every subscription account on one page: its state, allowances and recent requests, used, paused or signed in again there": "すべてのサブスクリプションアカウントを 1 ページに：状態、枠、最近のリクエスト。ここで使用・一時停止・再サインインも",
     "Saved proxies": "保存済みのプロキシ",
     "Through: {proxy}": "経由：{proxy}",
     "Finish through": "このプロキシ経由で完了",
@@ -13936,6 +13945,9 @@ const I18N = {
   },
   de: {
     "Saved…": "Gespeichert…",
+    "Pause": "Pausieren",
+    "Stop using": "Nicht mehr verwenden",
+    "Every subscription account on one page: its state, allowances and recent requests, used, paused or signed in again there": "Alle Abo-Konten auf einer Seite: Zustand, Kontingente und letzte Anfragen, dort verwenden, pausieren oder neu anmelden",
     "Saved proxies": "Gespeicherte Proxys",
     "Through: {proxy}": "Über: {proxy}",
     "Finish through": "Darüber abschließen",
