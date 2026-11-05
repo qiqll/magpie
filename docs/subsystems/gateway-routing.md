@@ -626,7 +626,9 @@ in as its provider on the accounts the user is on alone
 (`usersSearchAccounts` in
 [`search_signin.go`](../../internal/gateway/search_signin.go)): a search
 for no user, or for a user on none of them, is refused, and a user is not
-bound afresh for one (`TestGLMSearchOnTheUsersKeyAlone`,
+bound afresh for one (unlike `usersSearchKey`, which binds a user on none:
+a user whose first request is such a search is refused until a model
+request binds it, the safe side) (`TestGLMSearchOnTheUsersKeyAlone`,
 `TestPluginSearchSignedInOnTheUsersAccounts`, `TestPluginSearchSignsIn`).
 The route-events feed and its snapshot are narrowed the same way (T-105,
 `ownEvent` and `activitySnapshot` in

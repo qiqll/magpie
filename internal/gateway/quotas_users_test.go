@@ -229,8 +229,8 @@ func TestBoundUserToldItsOwnStatusline(t *testing.T) {
 		slices.Sort(cards)
 		return cards, out.Model
 	}
-	if cards, model := do("alice"); slices.Contains(cards, "alpha:two") || model != "alpha/m-alice" {
-		t.Errorf("alice: told %v and model %q, want none of bob's cards and her own model", cards, model)
+	if cards, model := do("alice"); !slices.Equal(cards, []string{"alpha:one"}) || model != "alpha/m-alice" {
+		t.Errorf("alice: told %v and model %q, want her own card alpha:one alone and her own model", cards, model)
 	}
 	if cards, model := do("bob"); slices.Contains(cards, "alpha:one") || slices.Contains(cards, "beta:") || model != "" {
 		t.Errorf("bob: told %v and model %q, want none of alice's cards and no model", cards, model)
