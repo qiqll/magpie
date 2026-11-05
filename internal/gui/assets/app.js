@@ -15811,9 +15811,7 @@ function renderQuotas(lazy) {
   const restoreFlash = keepQuotaFlash(subscriptions);
   const restoreRefresh = keepQuotaRefresh(subscriptions);
   subscriptions.replaceChildren();
-  // the allowances' own heading, apart from the period's cost: used or
-  // left turns their meters, and is only there when some card has one (a
-  // balance is only ever what is left)
+  // the allowances' heading; Used or Left only with a window to turn
   $("#quotaHead").hidden = !!quotas && !quotas.length;
   const pick = $("#quotaMode");
   pick.hidden = !quotas?.some((q) => !q.error && q.windows?.length);
@@ -15880,14 +15878,13 @@ function renderQuotas(lazy) {
     }
     const all = !keys && several && quotaAllOf(subs);
     if (all) card.append(all);
-    // many accounts (Linx on X: twenty-odd on one plugin, 顶成擎天柱):
-    // the same, each still a row of its own
-    const accts = !keys && several && subs.length > ACCTS_FOLD;
-    const folded = keys ? keysFolded(subs) : accts ? acctsFolded(subs) : new Set();
+    // many accounts (Linx on X), and idle ones (page.js), folded
+    const idle = !keys && several ? acctsIdle(subs) : new Set();
+    const busy = subs.filter((q) => !idle.has(q));
+    const accts = !keys && several && busy.length > ACCTS_FOLD;
+    const folded = keys ? keysFolded(subs) : accts ? acctsFolded(busy) : new Set();
     for (const sub of subs) {
-      if (folded.has(sub)) continue;
-      // "Every model" by the account, or the card's name: where the click
-      // was, whichever way the meters under it grow or shrink
+      if (folded.has(sub) || idle.has(sub)) continue;
       const brief = several && !usageAcctOpen(sub, subs);
       const history = !brief && quotaHistoryView(sub);
       const shownSub = history ? quotaHistoryCard(sub, history) : sub;
@@ -15907,8 +15904,6 @@ function renderQuotas(lazy) {
         if (several) who.append(usageAcctFold(sub, !brief));
         card.append(who);
       } else if (every) head.append(every);
-      // in brief: each window's name, figure and bar, when it resets in
-      // its tooltip; the curve and the rest only in full
       if (brief) meters.classList.add("brief");
       card.append(meters);
       // a remote magpie's gateway key: what its windows don't say (#1547)
@@ -15917,9 +15912,7 @@ function renderQuotas(lazy) {
       // how many of the period's requests to it magpie made itself (#1839)
       const own = !brief && !history && ownLine(sub);
       if (own) card.append(own);
-      // WorkBuddy's, Trae CN's or MiniMax Code's daily check-in, how this account's went,
-      // and the switch for it, on the card rather than only in Settings
-      // (#694); the switch on the first card of each vendor's
+      // a daily check-in and its switch, on the vendor's first card (#694)
       if (sub.checkins && !history) card.append(checkinRow(sub, sub === subs.find((x) => x.checkins && (x.checkinBy || "") === (sub.checkinBy || "")), subs));
       // what was left over time, against an even burn (#651)
       const curve = !brief && !sub.error && quotaCurve(sub);
@@ -15935,9 +15928,7 @@ function renderQuotas(lazy) {
       // the balance over time, and when it runs out at that pace
       const spend = !brief && !history && !sub.error && balanceCurve(sub);
       if (spend) card.append(spend);
-      // when the windows were read: "Updated 3 min ago", or the time of
-      // ones standing in for a reading that failed just now (#802; a
-      // balance alone says it in its row)
+      // when the windows were read (#802)
       const read = !brief && sub.windows?.length && !sub.error && readWhen(shownSub, true);
       if (read) card.append(read);
       if (!brief && !history && sub.resets?.count) {
@@ -15960,11 +15951,11 @@ function renderQuotas(lazy) {
       const credits = !brief && !history && creditsRow(sub, "quota-credits");
       if (credits) card.append(credits);
     }
-    // in the card's head, beside its name, of the keys in sight (the
-    // folded ones are the foot's button's)
-    if (several) head.append(usageMore(folded.size ? subs.filter((q) => !folded.has(q)) : subs, "text quota-more"));
+    if (several) head.append(usageMore(folded.size || idle.size ? subs.filter((q) => !folded.has(q) && !idle.has(q)) : subs, "text quota-more"));
     if (keys && (folded.size || usageKeysAll.has(first.provider))) card.append(keysMore(first.provider, folded.size));
     if (accts && (folded.size || usageAcctsAll.has(first.provider))) card.append(acctsMore(first.provider, folded.size));
+    const idleFoot = several && !keys && idleMore(subs, idle.size);
+    if (idleFoot) card.append(idleFoot);
     subscriptions.append(card);
   }
   markUpstream();

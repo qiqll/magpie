@@ -2,6 +2,10 @@
 // kernel adds them to i18n.js's (magpie.strings).
 magpie.strings({
   zh: {
+    "Show 1 unused account": "显示 1 个未使用账号",
+    "Show {n} unused accounts": "显示 {n} 个未使用账号",
+    "Hide unused accounts": "收起未使用账号",
+    "Accounts with nothing used in their 5-hour window": "5 小时窗口内没有用量的账号",
     "Show in Overview": "在概览中显示",
     "Show {n} Hidden": "显示已隐藏的 {n} 个",
     "Hide from Overview": "从概览中隐藏",
@@ -247,6 +251,10 @@ magpie.strings({
     "Sent upstream as {to}, as the agent spoke it": "以 {to} 协议发往上游，与 agent 所用协议相同",
   },
   "zh-TW": {
+    "Show 1 unused account": "顯示 1 個未使用帳號",
+    "Show {n} unused accounts": "顯示 {n} 個未使用帳號",
+    "Hide unused accounts": "收起未使用帳號",
+    "Accounts with nothing used in their 5-hour window": "5 小時視窗內沒有用量的帳號",
     "Show in Overview": "在概覽中顯示",
     "Show {n} Hidden": "顯示已隱藏的 {n} 個",
     "Hide from Overview": "從概覽中隱藏",
@@ -492,6 +500,10 @@ magpie.strings({
     "Sent upstream as {to}, as the agent spoke it": "以 {to} 協議發往上游，與 agent 所用協議相同",
   },
   ja: {
+    "Show 1 unused account": "未使用のアカウントを 1 件表示",
+    "Show {n} unused accounts": "未使用のアカウントを {n} 件表示",
+    "Hide unused accounts": "未使用のアカウントを隠す",
+    "Accounts with nothing used in their 5-hour window": "5 時間枠で使用量のないアカウント",
     "Show in Overview": "概要に表示",
     "Show {n} Hidden": "非表示の {n} 件を表示",
     "Hide from Overview": "概要から隠す",
@@ -737,6 +749,10 @@ magpie.strings({
     "Sent upstream as {to}, as the agent spoke it": "エージェントと同じ {to} で上流へ送信",
   },
   de: {
+    "Show 1 unused account": "1 ungenutztes Konto zeigen",
+    "Show {n} unused accounts": "{n} ungenutzte Konten zeigen",
+    "Hide unused accounts": "Ungenutzte Konten ausblenden",
+    "Accounts with nothing used in their 5-hour window": "Konten ohne Verbrauch in ihrem 5-Stunden-Fenster",
     "Show in Overview": "In der Übersicht einblenden",
     "Show {n} Hidden": "{n} ausgeblendete anzeigen",
     "Hide from Overview": "In der Übersicht ausblenden",

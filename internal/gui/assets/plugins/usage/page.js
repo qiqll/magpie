@@ -1040,6 +1040,41 @@ function quotaCardMenu(target, card, subs) {
     ...(others ? [{ name: t("Show {n} Hidden", { n: others }), literal: true, icon: EYE, sep: true, run: (e) => openHidden(e, "quotaHid", () => { quotaHidOpen = true; renderQuotaHid(); }) }] : []),
   ]);
 }
+// A card of several accounts folds the ones with nothing used in their
+// vendor's 5-hour window (需求方 2026-11-04: 默认只展示 5 小时有使用的账号，
+// 未使用的账号默认折叠) behind "Show N unused accounts" at its foot (renderQuotas, app.js);
+// remembered by provider (magpie.usageIdleAll). An account with no 5-hour
+// window (a balance, most plugins') can't tell, and stays in sight, as
+// does the one carrying a check-in switch.
+const FIVE_HOURS = /(^|[^\d.])5\s*-?\s*(h|hrs?|hours?)\b|5\s*小时|5\s*小時|5\s*時間/i;
+const usageIdleAll = new Set(kept("usageIdleAll", []));
+function idle5h(q) {
+  if (q.error) return false;
+  const now = Date.now();
+  const fives = (q.windows || []).filter((w) => !w.text && !w.unlimited && FIVE_HOURS.test(w.name || ""));
+  // one renewed since it was read has nothing used in this one
+  return fives.length > 0 && fives.every((w) => !(w.used > 0) || (w.resetsAt && Date.parse(w.resetsAt) <= now));
+}
+function acctsIdle(subs) {
+  if (usageIdleAll.has(subs[0].provider)) return new Set();
+  return new Set(subs.filter((q) => idle5h(q) && !(q.checkins && q === subs.find((x) => x.checkins && (x.checkinBy || "") === (q.checkinBy || "")))));
+}
+// idleMore: the card's button for them, while it has any to fold or unfold
+function idleMore(subs, n) {
+  const provider = subs[0].provider;
+  if (!n && !(usageIdleAll.has(provider) && subs.some(idle5h))) return null;
+  const b = el("button", "text quota-keys-more quota-idle-more", n ? t(n === 1 ? "Show 1 unused account" : "Show {n} unused accounts", { n }) : t("Hide unused accounts"));
+  b.type = "button";
+  b.title = t("Accounts with nothing used in their 5-hour window");
+  b.setAttribute("aria-expanded", String(!n));
+  b.onclick = () => {
+    if (n) usageIdleAll.add(provider); else usageIdleAll.delete(provider);
+    keep("usageIdleAll", [...usageIdleAll]);
+    renderQuotas();
+    backToReader($("#view-usage"));
+  };
+  return b;
+}
 // hiddenQuotas: the cards the Overview leaves out, those the line lists
 function hiddenQuotas() {
   const hid = hiddenCards();
