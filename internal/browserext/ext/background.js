@@ -141,8 +141,10 @@ function tabArg(v) {
   return Number(m[1]);
 }
 
-// the tab a call works in: the one it names, else the session's, else the
-// tab the user is looking at
+// the tab a call works in: the one it names, else the session's, else a
+// new one of the session's own. The user's tabs are theirs: an agent never
+// starts in the one they are looking at (it navigated it away under them),
+// and works in one of theirs only when it names it.
 async function tabFor(session, args) {
   await loadSessions();
   const named = tabArg(args.tab);
@@ -157,20 +159,24 @@ async function tabFor(session, args) {
     const ok = await chrome.tabs.get(had).then(() => true, () => false);
     if (ok) return had;
   }
-  const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!active) throw fault("BAD_ARGS", "no browser window is open: open one, or call browser_tabs with action new");
-  if (heldByOther(session, active.id)) {
-    // another agent works in the tab the user is looking at: this one is
-    // given a tab of its own, behind it, in its own group
-    const tab = await chrome.tabs.create({ url: "about:blank", active: false, windowId: active.windowId });
-    await group(session, tab.id, tab.windowId);
-    sessions.set(session, tab.id);
-    saveSessions();
-    return tab.id;
+  return (await open(session, "about:blank", false)).id;
+}
+
+// open is a new tab of the session's, in its tab group, behind the tab the
+// user is looking at unless front: in the window they used last, or a
+// window of its own, not brought forward, when none is open.
+async function open(session, url, front) {
+  let w = await chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => null);
+  let tab;
+  if (w) tab = await chrome.tabs.create({ url, active: !!front, windowId: w.id });
+  else {
+    w = await chrome.windows.create({ url, focused: !!front });
+    tab = w.tabs[0];
   }
-  sessions.set(session, active.id);
+  await group(session, tab.id, tab.windowId);
+  sessions.set(session, tab.id);
   saveSessions();
-  return active.id;
+  return tab;
 }
 
 // group puts a tab the session opened in the session's tab group in that
@@ -218,6 +224,7 @@ const AFTER = {
   SITE_REFUSED: "The site turned the browser away. Don't try again at once: tell the user, who may need to sign in or wait.",
   LOAD_FAILED: "The address didn't load: check it, or the user's connection.",
   PAGE_BLOCKED: "Nothing works in this tab until that changes: use another tab.",
+  SCREENSHOT_FAILED: "Go on without the picture: take a snapshot to read the page.",
   OUTCOME_UNKNOWN: "It may or may not have happened: take a snapshot to see before doing it again, since a form or a purchase could go twice.",
 };
 const GONE = /Execution context was destroyed|Cannot find context|Inspected target navigated or closed|Target closed|No node with given id|Could not find node|Node with given id does not belong/i;
@@ -297,11 +304,23 @@ async function look(t, el) {
 // page; it is reported rather than waited on.
 async function act(t, what, fn, el = null, press = false) {
   if (t.dialog) return dialogOpen(t);
-  const before = new Set((await chrome.tabs.query({})).map((x) => x.id));
+  const all = await chrome.tabs.query({});
+  const before = new Set(all.map((x) => x.id));
+  // the tab the user has in front in this tab's window: a tab a link opens
+  // from a tab behind it is shown, with that one named as its opener
+  const mine = all.find((x) => x.id === t.tabId);
+  const shown = mine && all.find((x) => x.active && x.windowId === mine.windowId);
+  const behind = shown && shown.id !== t.tabId ? shown : null;
   const was = press ? await look(t, el) : null;
   t.sentInput = false;
   let opened = null;
-  const onCreated = (tab) => { if (!before.has(tab.id) && (tab.openerTabId === t.tabId || !opened)) opened = tab; };
+  // a tab the link opens comes up in front of the user's: their tab is
+  // given back at once, not after the new page has loaded
+  const onCreated = (tab) => {
+    if (before.has(tab.id) || !(tab.openerTabId === t.tabId || (behind && tab.openerTabId === behind.id) || !opened)) return;
+    opened = tab;
+    if (behind && (tab.openerTabId === t.tabId || tab.openerTabId === behind.id)) chrome.tabs.update(behind.id, { active: true }).catch(() => {});
+  };
   chrome.tabs.onCreated.addListener(onCreated);
   let said;
   try {
@@ -325,8 +344,13 @@ async function act(t, what, fn, el = null, press = false) {
   else out.push(what);
   out.push(...notices(t));
   if (t.dialog) return { content: [text(out.join("\n"))] };
-  if (opened && opened.openerTabId === t.tabId) {
-    // a link that opens a new tab: the agent goes on in it
+  if (opened && (opened.openerTabId === t.tabId || (behind && opened.openerTabId === behind.id))) {
+    // a link that opens a new tab: the agent goes on in it, in its group,
+    // and the user keeps the tab they had in front
+    if (behind) {
+      await chrome.tabs.update(behind.id, { active: true }).catch(() => {});
+      if (t.by) await group(t.by, opened.id, opened.windowId).catch(() => {});
+    }
     if (t.by) { sessions.set(t.by, opened.id); saveSessions(); }
     const nt = state(opened.id);
     await attach(opened.id);
@@ -436,6 +460,15 @@ async function mouse(t, x, y, opts = {}) {
   }
 }
 
+// opensATab is whether el is, or is in, a link that opens in a new tab
+async function opensATab(t, el) {
+  return await call(t, el, `function () {
+    const a = this.closest && this.closest("a[href], area[href]");
+    const to = a && (a.getAttribute("target") || (document.querySelector("base[target]") || {}).target || "").toLowerCase();
+    return !!to && !["_self", "_parent", "_top"].includes(to) && !/^(javascript|mailto|tel):/i.test(a.getAttribute("href"));
+  }`).catch(() => false);
+}
+
 async function call(t, el, fn, args = []) {
   const r = await send(t.tabId, "Runtime.callFunctionOn", {
     objectId: el.objectId, functionDeclaration: fn, arguments: args.map((value) => ({ value })),
@@ -463,11 +496,8 @@ const TOOLS = {
     await loadSessions();
     const action = args.action || "list";
     if (action === "new") {
-      const [w] = await chrome.windows.getAll({ windowTypes: ["normal"] }).then((ws) => ws.filter((x) => x.focused).concat(ws));
-      const tab = await chrome.tabs.create({ url: args.url ? withScheme(args.url) : "about:blank", active: args.background ? false : true, ...(w ? { windowId: w.id } : {}) });
-      await group(session, tab.id, tab.windowId);
-      sessions.set(session, tab.id);
-      saveSessions();
+      // behind the user's tab; front shows it, when the user asked to see it
+      const tab = await open(session, args.url ? withScheme(args.url) : "about:blank", args.front === true);
       const t = state(tab.id);
       await attach(tab.id);
       if (args.url) { await waitLoad(t); await settle(t); }
@@ -536,9 +566,16 @@ const TOOLS = {
     need(args, "ref");
     const t = await ready(session, args);
     const el = await find(t, args.ref);
+    let how = args;
+    if (!args.button && !args.double && !(args.modifiers || []).length && await opensATab(t, el) && !(await chrome.tabs.get(t.tabId)).active) {
+      // a link that opens a tab, clicked in a tab behind the user's: with
+      // Cmd (Ctrl) held, as a person opens one in the background, so the
+      // new tab never comes up in front of the user's for a moment
+      how = { ...args, modifiers: [/Mac/.test(navigator.userAgent) ? "Meta" : "Control"] };
+    }
     return act(t, `Clicked ${el.ref} (${el.role} "${el.name}").`, async () => {
       const p = await point(t, el);
-      await mouse(t, p.x, p.y, args);
+      await mouse(t, p.x, p.y, how);
     }, el, PRESSES.has(el.role) && !args.button && !args.double);
   },
 
@@ -754,13 +791,11 @@ const TOOLS = {
       params.captureBeyondViewport = true;
     }
     const shot = () => send(t.tabId, "Page.captureScreenshot", params);
-    let r = await Promise.race([shot(), sleep(8000).then(() => null)]);
-    if (!r) {
-      // a tab in the background isn't drawn: show it, then take it
-      await chrome.tabs.update(t.tabId, { active: true });
-      await sleep(300);
-      r = await shot();
-    }
+    // Chrome draws a tab behind the user's for the picture (the first one
+    // can take a few seconds); the tab is never brought forward for it,
+    // which took the user's tab from under them for a moment each time
+    const r = await Promise.race([shot(), sleep(20000).then(() => null)]);
+    if (!r) throw fault("SCREENSHOT_FAILED", "the tab, behind the one the user is looking at, wasn't drawn in 20s; it is left behind rather than brought in front of the user");
     return { content: [{ type: "image", data: r.data, mimeType: args.png ? "image/png" : "image/jpeg" }, text(await head(t))] };
   },
 

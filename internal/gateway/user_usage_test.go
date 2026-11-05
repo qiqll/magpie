@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -62,18 +63,36 @@ func TestRecordKeepsTheCallersUser(t *testing.T) {
 // A web search's own rows keep the user they were made for too (T-020):
 // main's logSearch (a search API, a plan's search service) and
 // logNativeSearches write past appendUsage, and the merge had them name
-// none (T-050).
+// none (T-050). Since main's 73c98ebc each logSearch is a Routing route
+// too (keepSearch): it is the user's and its key's as its row is, so
+// bound by user the user is told it and another user isn't (T-099).
 func TestSearchRowsKeepTheUser(t *testing.T) {
 	fresh(t)
+	s := New()
 	ctx := context.WithValue(context.Background(), askedForKey{}, askedFor{user: "alice"})
-	logSearch(ctx, usage.Record{Requested: "search"}, "q", time.Now(), 1, nil)
+	ctx = context.WithValue(ctx, askedKeyKey{}, askedKey{id: "key-a"})
+	s.logSearch(ctx, usage.Record{Requested: "search"}, "q", time.Now(), 1, nil)
 	logNativeSearches(context.Background(), 1, time.Now(), "codex", "codex", "chatgpt.com", "gpt-5.5", "bob")
 	// unbound, the request's own user, which its search's CallFor carries
 	unbound := context.WithValue(context.Background(), searchForKey{}, &CallFor{Agent: "claude", User: "carol"})
-	logSearch(unbound, usage.Record{Requested: "search"}, "q", time.Now(), 1, nil)
+	s.logSearch(unbound, usage.Record{Requested: "search"}, "q", time.Now(), 1, nil)
 	rows, text := searchRows(t)
 	if len(rows) != 3 || rows[0].User != "alice" || rows[1].User != "bob" || rows[2].User != "carol" {
 		t.Fatalf("search rows %+v, want alice's, bob's, then carol's (%s)", rows, text)
+	}
+	var callers []routeCaller
+	for _, r := range s.trace.routes {
+		if r.Kind == "web_search" {
+			callers = append(callers, r.caller)
+		}
+	}
+	if want := []routeCaller{{user: "alice", key: "key-a"}, {user: "carol"}}; !slices.Equal(callers, want) {
+		t.Fatalf("search routes' callers %+v, want %+v", callers, want)
+	}
+	alice := &usersOwn{user: "alice", group: groupOf(nil, "key-a")}
+	bob := &usersOwn{user: "bob", group: groupOf(nil, "key-a")}
+	if !alice.owns(callers[0]) || bob.owns(callers[0]) {
+		t.Fatalf("alice's search route: alice owns %v, bob owns %v", alice.owns(callers[0]), bob.owns(callers[0]))
 	}
 }
 

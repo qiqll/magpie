@@ -61,6 +61,16 @@ this computer's values for a provider it has, and brings a new one without
 `KeepLoginAs`, an account signed in on the other computer; `hashes` blanks
 all three (`TestMirrorKeepsKeepLogin`, `TestKeepLoginIsNoChange`).
 
+A Remote magpie's **Use it anyway** (`KeepSelf`) is kept the same way. Sync
+carries a Remote magpie provider to the computer it names (hanslin1666 on
+Discord: B uses A through one, and on A it points at A), and there it is
+found to be this magpie and left out unless kept (see
+[providers and accounts](providers-accounts.md)). Whether it is this magpie
+is about one computer only, so it is kept in `remote-self.json`, which no
+backup or sync carries, and `KeepSelf` is kept by `Mirror` and `Restore`
+(false for a provider new here) and blanked by `hashes`
+(`TestMirrorKeepsKeepSelf`, `TestKeepSelfIsNoChange`).
+
 The agents part keeps a computer's own pick the same way, field by field
 (hayden4608 on Discord: two computers on one GitHub sync, each wanting its own
 Codex model, set each other's on every sync). Each field a sync changes here
@@ -332,6 +342,12 @@ has no list and keeps this computer's; an empty list takes them out. A
 library with none hashes as it did before, so upgrading syncs nothing
 (`TestSyncSubagents`, `TestNoSubagentsHashAsBefore`,
 `TestBackupFileCarriesSubagents`).
+
+The hooks go the same way (`library.Bundle.Hooks`): each computer writes
+them into its agents beside the user's own hooks and records its own
+entries, an older bundle with no list keeps this computer's, and a library
+with none hashes as before (`TestSyncHooks`, `TestNoHooksHashAsBefore`,
+`TestBackupFileCarriesHooks`).
 
 ## Verification
 

@@ -12,6 +12,7 @@ import (
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // groupsJSON is what the Routing view manages: the routing groups, the
@@ -175,11 +176,16 @@ type modelRef struct {
 	// whichever is named (a ChatGPT account's, #1865), which Settings ›
 	// Images says
 	VendorPicks bool `json:"vendorPicks,omitempty"`
+	// Free: it costs its subscription nothing (the vendor's word); Zero: its
+	// provider lists it at $0 (provider.PricedFree). The add-a-model picker
+	// says free by either (jiangguochao666 on X)
+	Free bool `json:"free,omitempty"`
+	Zero bool `json:"zero,omitempty"`
 }
 
 // servedRef is a served model as the Routing page lists it
-func servedRef(e provider.Entry) modelRef {
-	return modelRef{ID: e.ID, Name: e.Name, Provider: e.Provider.ID, PName: e.Provider.Name, Icon: e.Provider.Icon, Context: e.Context, Efforts: e.Efforts, CanFast: provider.CanFast(e.Provider, e.Model), OwnFast: provider.OwnFast(e.Provider, e.Model), Images: seesImages(e), ImagesUnknown: imagesUnknown(e), Sub: e.Provider.Account != nil}
+func servedRef(e provider.Entry, s settings.Settings) modelRef {
+	return modelRef{Free: e.Free, Zero: !e.Free && e.Provider.PricedFree(s, e.Model), ID: e.ID, Name: e.Name, Provider: e.Provider.ID, PName: e.Provider.Name, Icon: e.Provider.Icon, Context: e.Context, Efforts: e.Efforts, CanFast: provider.CanFast(e.Provider, e.Model), OwnFast: provider.OwnFast(e.Provider, e.Model), Images: seesImages(e), ImagesUnknown: imagesUnknown(e), Sub: e.Provider.Account != nil}
 }
 
 type poolJSON struct {
@@ -309,10 +315,11 @@ func groupsState() groupsJSON {
 	out.Accounts = groupAccounts(all)
 	served := provider.Served()
 	chat := map[string]bool{}
+	set := settings.Shared() // the prices the user set, for each model's free tag
 	for _, e := range served {
 		if e.Group == "" {
 			chat[e.ID] = true
-			out.Models = append(out.Models, servedRef(e))
+			out.Models = append(out.Models, servedRef(e, set))
 		}
 	}
 	// the image models, as Settings › Images lists them: each provider's
@@ -488,6 +495,9 @@ func groupRoutes(mux *http.ServeMux) {
 			Kind string `json:"kind"`
 			// import: a group shared as text (provider.ShareGroup)
 			Text string `json:"text"`
+			// Replace: the text's id, when it is a group of the user's,
+			// replaces that group (provider.ImportGroupOver)
+			Replace bool `json:"replace"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			fail(rw, err)
@@ -539,7 +549,11 @@ func groupRoutes(mux *http.ServeMux) {
 			shared, err = provider.ShareGroup(in.ID)
 		case "import":
 			var res provider.Imported
-			if res, err = provider.ImportGroup(body.Text); err == nil {
+			imp := provider.ImportGroup
+			if body.Replace {
+				imp = provider.ImportGroupOver
+			}
+			if res, err = imp(body.Text); err == nil {
 				imported = &res
 			}
 		case "template":

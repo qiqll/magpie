@@ -9,6 +9,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"sort"
@@ -50,7 +51,27 @@ const (
 	// before it that renews meanwhile doesn't take its requests back
 	// (dzxx0496 on Discord; routes.Drain).
 	Drain = "drain"
+	// FreeExpiring spends free quota before paid, the free quota that is
+	// lost soonest first: a free account (FreePlan, or a model that costs
+	// nothing there, FreeModel) at its next reset or its credits' expiry,
+	// then the paid ones as Smart orders them, and the used up last
+	// (routes.FreeExpiring; wowbbs on Discord: five check-in accounts of
+	// WorkBuddy, MiniMax, Trae and Qoder in one group). A group's only.
+	FreeExpiring = "expiring"
 )
+
+// FreePlan says whether an account's plan, as its vendor or plugin names
+// it, is a free one: "Free", "Free plan", a trial. FreeExpiring spends
+// such an account's quota before a paid one's.
+func FreePlan(plan string) bool {
+	p := strings.ToLower(plan)
+	for _, w := range []string{"free", "trial", "免费", "试用", "體驗", "体验"} {
+		if strings.Contains(p, w) {
+			return true
+		}
+	}
+	return false
+}
 
 // pluginRouting is a routing a plugin serves: "<plugin>/<name>".
 var pluginRouting = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -278,6 +299,10 @@ var usedCache struct {
 	// read: when each account's allowance was last read well, and whether
 	// the last try failed, by agent/user (UsageRead)
 	read map[string]readState
+	// heard: accounts no reading has told the windows of (it failed, was
+	// held, or named none) that a reply told them of, by agent/user
+	// (NoteCodexLimits): known from that until a reading tells them
+	heard map[string]heardOnly
 }
 
 // firstWait is how long a request waits for an agent's allowances the
@@ -439,6 +464,29 @@ func (a Allowance) For(model string, now time.Time) (used float64, renews []time
 		renews = append(renews, l.Resets)
 	}
 	return used, renews
+}
+
+// CapUsed is For's share over the windows that count model other than a
+// budget known to run a day or longer: a rate cap (the five hours), or a
+// window that doesn't say how long it runs. Smart and Use before expiry
+// hold an account back at routes.LowShare of these only: a rate cap near
+// full refuses the requests sent into it before the allowance is read
+// again, while what a week has left is lost at its reset, so a week at
+// 90% renewing today is spent first, not kept for last
+// (ysicing_01858 on Discord). A window whose reset has passed is empty.
+func (a Allowance) CapUsed(model string, now time.Time) float64 {
+	model = strings.ToLower(model)
+	used := 0.0
+	for _, l := range a {
+		if !l.applies(model) || l.Span >= budgetSpan {
+			continue
+		}
+		if !l.Resets.IsZero() && !l.Resets.After(now) {
+			continue
+		}
+		used = max(used, l.Used)
+	}
+	return used
 }
 
 // Fullest is when the window For's share is of renews: the fullest that
@@ -786,6 +834,20 @@ func Allowances(agent string) map[string]Allowance {
 					}
 				}
 				c.seen[key] = reading{a, now}
+			}
+			// an account no reading told is known from what its replies
+			// said, until one does: else Smart and Use before expiry kept
+			// it, as not known, behind every account known, its week
+			// running out unspent (peterpark8527 on Discord)
+			for key, h := range c.heard {
+				if !strings.HasPrefix(key, agent+"/") {
+					continue
+				}
+				if slices.ContainsFunc(slices.Collect(maps.Keys(all)), func(u string) bool { return strings.EqualFold(u, h.user) }) {
+					delete(c.heard, key)
+				} else {
+					all[h.user] = h.a
+				}
 			}
 			if c.stale[agent] {
 				// kept, as weigh counts an account not known unused, but

@@ -207,8 +207,12 @@ func SetAccountModels(id, ref string, models []string) error {
 	}
 	ms := normalModels(models)
 	k := accountKey(r)
+	// a key set to every model by the user is remembered as theirs, so a
+	// Fetch models doesn't tick its own list for it again
+	all := len(ms) == 0 && p.Account == nil
 	// the models as they are stored when these are set: another account's
-	// set meanwhile stays (T-094)
+	// set meanwhile stays (T-094); a change that changes nothing writes
+	// nothing (editFound)
 	return editFound(p, func(q *Provider) error {
 		am := maps.Clone(q.AccountModels)
 		if am == nil {
@@ -220,6 +224,16 @@ func SetAccountModels(id, ref string, models []string) error {
 			am[k] = ms
 		}
 		q.AccountModels = normalAccountModels(am)
+		ma := maps.Clone(q.AccountModelsAll)
+		if all {
+			if ma == nil {
+				ma = map[string]bool{}
+			}
+			ma[k] = true
+		} else {
+			delete(ma, k)
+		}
+		q.AccountModelsAll = ma
 		return nil
 	})
 }
@@ -262,6 +276,23 @@ func normalModels(ms []string) []string {
 		if m = strings.TrimSpace(m); m != "" && !slices.Contains(out, m) {
 			out = append(out, m)
 		}
+	}
+	return out
+}
+
+// normalModelsAll is the keys set back to every model as they are kept:
+// in lower case, and only those with no models of their own in am.
+func normalModelsAll(m map[string]bool, am map[string][]string) map[string]bool {
+	var out map[string]bool
+	for u, on := range m {
+		u = accountKey(u)
+		if !on || u == "" || am[u] != nil {
+			continue
+		}
+		if out == nil {
+			out = map[string]bool{}
+		}
+		out[u] = true
 	}
 	return out
 }

@@ -304,7 +304,13 @@ func (p Provider) refetch(ctx context.Context) ([]catalog.Model, []string, map[s
 		return ms, nil, nil, err
 	}
 	before := liveIDs(p.ID)
+	marks := keyMarks(p.ID)
 	ms, err := p.fetch(ctx)
+	if err == nil {
+		// each key's own models follow what its list gained and lost
+		// (key_models_refresh.go)
+		refreshKeyModels(p.ID, marks, keyMarks(p.ID))
+	}
 	if err == nil && p.listsDecisions() {
 		// OpenRouter's decision models, listed apart from its chat ones
 		if _, derr := p.fetchDecide(p.Via(ctx)); derr != nil {
@@ -421,8 +427,17 @@ func relistPicks(q *Provider, now map[string]bool) bool {
 	return true
 }
 
-// fetch is Fetch without the picks looked after.
+// fetch is Fetch without the picks looked after. A Remote magpie's list
+// also tells whether it is this magpie (noteSelf).
 func (p Provider) fetch(ctx context.Context) ([]catalog.Model, error) {
+	ms, err := p.fetchList(ctx)
+	if err == nil {
+		noteSelf(p, ms)
+	}
+	return ms, err
+}
+
+func (p Provider) fetchList(ctx context.Context) ([]catalog.Model, error) {
 	ctx = p.ownRequests(p.Via(ctx), probelog.KindList)
 	if p.DecideOnly() {
 		return p.fetchDecide(ctx)
@@ -1913,6 +1928,72 @@ func (p Provider) FreeModel(model string) bool {
 	return ok && pr.Input == 0 && pr.Output == 0 && pr.CacheRead == 0 && pr.CacheWrite == 0
 }
 
+// PricedFree says model is listed at $0 on p (ListPrice) on every count
+// and at every size: a free model a catalog prices at 0 there, as
+// OpenRouter's foo:free, OpenCode Zen's -free ones or NVIDIA NIM's. The
+// pickers say free beside it (jiangguochao666 on X), where catalog.Model's
+// Free has only the vendor's own word. It is p's price alone: the same id
+// on another provider is that one's, and its maker's (makerListPrice) or
+// a plan's catalog's says nothing of p's. A model nothing prices is not free,
+// nor one the user set a price for that isn't 0: their word is the price
+// Usage counts.
+func (p Provider) PricedFree(s settings.Settings, model string) bool {
+	if pr, ok := userPrice(s, p, model); ok {
+		return zeroPrice(pr)
+	}
+	pr, ok, from := p.listPrice(model)
+	switch {
+	case !ok || !zeroPrice(pr):
+		return false
+	case from == pricedMaker:
+		// its maker gives it away (Zhipu's glm-4.7-flash): a relay that
+		// serves it may not
+		return false
+	case from == pricedCatalog:
+		// a plan's catalog (zai-coding-plan) lists what its members pay
+		// per token, nothing, not what the model costs: only a catalog
+		// that is no plan's says it is free
+		plain := slices.DeleteFunc(priceCatalogs(p.priceCatalogsOf()), func(c string) bool { return strings.Contains(c, "-plan") })
+		for _, m := range p.priceNames(model) {
+			if pr, ok := catalog.PricedBy(plain, m); ok {
+				return zeroPrice(pr)
+			}
+		}
+		return false
+	}
+	return true
+}
+
+// userPrice is the price the user set for p's model (settings'
+// ModelPrices): for that model, for every model of p, then for the model
+// from any provider (*/model), still the user's word, so before any list
+// price.
+func userPrice(s settings.Settings, p Provider, model string) (catalog.Price, bool) {
+	for _, key := range [...]string{p.ID + "/" + model, p.ID + "/*", AnyPriceKey(model)} {
+		if m, ok := s.ModelPrices[key]; ok {
+			if pr, bad := m.Price(); bad == "" {
+				// a Claude model's 1-hour cache write left out: 2× input
+				catalog.OneHourFor(model, &pr)
+				return pr, true
+			}
+		}
+	}
+	return catalog.Price{}, false
+}
+
+// zeroPrice is a price of nothing on every count and every tier.
+func zeroPrice(pr catalog.Price) bool {
+	if pr.Input != 0 || pr.Output != 0 || pr.CacheRead != 0 || pr.CacheWrite != 0 || pr.CacheWrite1h != 0 {
+		return false
+	}
+	for _, t := range pr.Tiers {
+		if t.Input != 0 || t.Output != 0 || t.CacheRead != 0 || t.CacheWrite != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // Known are the model's own reasoning levels, when known.
 func (p Provider) Known(model string) []string {
 	for _, m := range p.Available() {
@@ -2031,64 +2112,91 @@ var makerCatalogs = sync.OnceValue(func() []string {
 // auto-review through the Codex subscription costs nothing too, as OpenAI
 // serves it a ChatGPT sign-in (codexReviewFree).
 func (p Provider) ListPrice(model string) (catalog.Price, bool) {
+	pr, ok, _ := p.listPrice(model)
+	return pr, ok
+}
+
+// Where ListPrice found a price: p's own word (its catalog, its plugin,
+// its vendor's code), the catalog p names, or the model's maker's
+// catalog, which says nothing of what p charges.
+const (
+	pricedOwn = iota
+	pricedCatalog
+	pricedMaker
+)
+
+// listPrice is ListPrice, and where it found the price.
+func (p Provider) listPrice(model string) (catalog.Price, bool, int) {
 	if own := p.OwnModelID(model); own != model {
 		// a model listed by an id the user gave it is priced as the
 		// provider's own id of it first, then as the id it is listed by
-		if pr, ok := p.ListPrice(own); ok {
-			return pr, true
+		if pr, ok, from := p.listPrice(own); ok {
+			return pr, true, from
 		}
 	}
 	if pr, ok := p.remotePrice(model); ok {
-		return pr, true
+		return pr, true, pricedOwn
 	}
 	if p.clineFreeModel(model) || p.kiloFreeModel(model) || p.codexReviewFree(model) {
 		// served at no cost: not at the price of the model it is free of
-		return catalog.Price{}, true
+		return catalog.Price{}, true, pricedOwn
 	}
 	if pr, ok := p.cursorFastPrice(model); ok {
-		return pr, true
+		return pr, true, pricedOwn
 	}
 	if pr, ok := p.factoryFastPrice(model); ok {
-		return pr, true
+		return pr, true, pricedOwn
 	}
 	if pr, ok := p.grokFastPrice(model); ok {
-		return pr, true
+		return pr, true, pricedOwn
 	}
-	names := pricedNames(model)
-	if p.kimiCodeMember() {
-		if id, ok := kimiCodeAPI[strings.ToLower(strings.TrimSpace(model))]; ok {
-			names = append(names, id)
-		}
-	}
-	cats := p.Catalogs()
-	if c := p.EndpointCatalog(); c != "" {
-		cats = []string{c}
-	}
+	names := p.priceNames(model)
+	cats := p.priceCatalogsOf()
 	for _, m := range names {
 		if pr, ok := catalog.PricedBy(priceCatalogs(cats), m); ok {
-			return pr, true
+			return pr, true, pricedCatalog
 		}
 		if pr, ok := makerListPrice(m); ok {
-			return pr, true
+			return pr, true, pricedMaker
 		}
 	}
 	if slices.Contains(cats, "anthropic") {
 		// a gated Claude model models.dev prices nowhere (Claude Mythos
 		// 5.1): Anthropic's price, as it told Claude Code
 		if pr, ok := claudeCodePrice(model); ok {
-			return pr, true
+			return pr, true, pricedMaker
 		}
 	}
 	if pr, ok := p.vendorListPrice(model); ok {
-		return pr, true
+		return pr, true, pricedOwn
 	}
 	if pr, ok := p.pluginListPrice(model); ok {
-		return pr, true
+		return pr, true, pricedOwn
 	}
 	if p.pluginFree(model) {
-		return catalog.Price{}, true
+		return catalog.Price{}, true, pricedOwn
 	}
-	return catalog.Price{}, false
+	return catalog.Price{}, false, pricedOwn
+}
+
+// priceNames are the ids ListPrice looks model up by in a catalog.
+func (p Provider) priceNames(model string) []string {
+	names := pricedNames(model)
+	if p.kimiCodeMember() {
+		if id, ok := kimiCodeAPI[strings.ToLower(strings.TrimSpace(model))]; ok {
+			names = append(names, id)
+		}
+	}
+	return names
+}
+
+// priceCatalogsOf are the catalogs ListPrice prices p's models from: the
+// ones it names, else the one at its endpoint (EndpointCatalog).
+func (p Provider) priceCatalogsOf() []string {
+	if c := p.EndpointCatalog(); c != "" {
+		return []string{c}
+	}
+	return p.Catalogs()
 }
 
 // vendorCatalogs are the models.dev catalogs of the vendors a moved
@@ -2504,21 +2612,12 @@ func (p Provider) PriceAt(s settings.Settings, model string, at time.Time) (cata
 // a vendor that bills by the hour (PeakOf).
 func tariffOf(s settings.Settings, p Provider, known bool, model string) (catalog.Price, bool) {
 	id := p.ID
-	// then what they said the model costs from any provider (*/model):
-	// still the user's word, so before any list price
-	for _, key := range [...]string{id + "/" + model, id + "/*", AnyPriceKey(model)} {
-		if m, ok := s.ModelPrices[key]; ok {
-			if pr, bad := m.Price(); bad == "" {
-				// a Claude model's 1-hour cache write left out: 2× input
-				catalog.OneHourFor(model, &pr)
-				// a vendor that bills by the hour doubles any price in its
-				// peak hours: the user's is the off-peak one, as its list
-				// price is, so setting one keeps the split (treeman on
-				// Discord)
-				pr.Peak = p.PeakOf(model)
-				return pr, true
-			}
-		}
+	if pr, ok := userPrice(s, p, model); ok {
+		// a vendor that bills by the hour doubles any price in its peak
+		// hours: the user's is the off-peak one, as its list price is, so
+		// setting one keeps the split (treeman on Discord)
+		pr.Peak = p.PeakOf(model)
+		return pr, true
 	}
 	if !known {
 		if p.codexReviewFree(model) { // signed out since: still a ChatGPT sign-in's
@@ -2669,10 +2768,21 @@ var grokEffort = regexp.MustCompile(`^((?:.*/)?grok-[0-9][^/]*?)-(?:minimal|low|
 // k.
 var grokWindow = regexp.MustCompile(`^((?:.*/)?grok-[0-9][^/@]*)@[0-9]+k?$`)
 
+// modelWindow is an id a plugin offers a model by at one context window
+// of its own, the window in thousands or millions of tokens after an @:
+// the Cursor plugin's claude-opus-5-5@300k, claude-opus-5-5@1m,
+// gpt-5.5@272k (one entry per size Cursor's picker has), the grok
+// plugin's grok-4.7@500k. It is the same model asked for at that window,
+// at the same price per token; a long prompt's own rate is the price's
+// tier (Price.At), read from the call's tokens, not from the window.
+var modelWindow = regexp.MustCompile(`^([^@]+)@[0-9]+[km]$`)
+
 // pricedNames are the ids a model is priced by, in order: its own, then,
-// for a Grok id named at an effort, the model it is that effort of — the
-// same model, at the same price (#224) — or at a window (grok-4.7@500k),
-// the model it is that window of. Codex Auto Review uses GPT-5.6 Luna
+// for an id at a window (claude-opus-5-5@300k, grok-4.7@500k), the model
+// it is that window of (modelWindow), so a Cursor account's sized ids are
+// priced as their model and not left without a cost (RyuJeXu on X); for a
+// Grok id named at an effort, the model it is that effort of — the same
+// model, at the same price (#224). Codex Auto Review uses GPT-5.6 Luna
 // according to OpenAI's rate card (2026-09-30):
 // https://help.openai.com/en/articles/11481834-chatgpt-rate-card-business-enterpriseedu-credit-based-pricing
 // This is a list-price estimate, not evidence of a response's served model.
@@ -2685,13 +2795,20 @@ func pricedNames(model string) []string {
 	if model == "codex-auto-review" {
 		out = append(out, "gpt-5.6-luna")
 	}
-	// both patterns name grok-: every other model of every provider's list
-	// went through two regexps on each Providers poll
 	l := strings.ToLower(strings.TrimSpace(model))
+	// a regexp only for an id with an @: every model of every provider's
+	// list is priced on each Providers poll
+	if strings.Contains(l, "@") {
+		if m := modelWindow.FindStringSubmatch(l); m != nil {
+			out = append(out, m[1])
+		}
+	}
+	// both patterns name grok-, for the same reason
 	if !strings.Contains(l, "grok-") {
 		return out
 	}
-	if m := grokWindow.FindStringSubmatch(l); m != nil {
+	// a Grok window the id names without a k (grok-4.7@131072)
+	if m := grokWindow.FindStringSubmatch(l); m != nil && !slices.Contains(out, m[1]) {
 		out = append(out, m[1])
 	}
 	if m := grokEffort.FindStringSubmatch(l); m != nil {
@@ -3140,7 +3257,7 @@ func entryIn(entries []Entry, id string) (Entry, bool) {
 func Resolve(id string) (Provider, string, bool) {
 	// Claude Code's mark for a model with a 1M window; it drops it before
 	// asking, but a value in its settings still has it
-	id = strings.TrimSuffix(strings.TrimSpace(id), "[1m]")
+	id = ThroughSelf(strings.TrimSuffix(strings.TrimSpace(id), "[1m]"))
 	if IsGroupRef(id) {
 		// the groups' entries first: Catalog copies every entry, and was
 		// built for each group an agent's settings name (the window's drift

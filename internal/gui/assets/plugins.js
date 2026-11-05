@@ -94,11 +94,7 @@
     openProtoMenu(b, outs.map((x) => ({ v: x.id, name: subName(x), literalName: true, note: "" })), "",
       (id, e) => pluginSignIn(id, e), "Sign in to which subscription", "", "right");
   };
-  // whether version a comes after b, in semver's order, the same as
-  // update.Newer, which puts the dot on Plugins: a pre-release before its
-  // release, numbers in it as numbers ("beta.10" after "beta.9"), a number
-  // before a word, a shorter list first; build metadata ("+…") ignored. A
-  // version that isn't x.y.z is never newer.
+  // whether version a comes after b in semver's order, as update.Newer
   const newer = (a, b) => {
     const p = (v) => {
       const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([^+]*))?(?:\+.*)?$/.exec(String(v || "").trim());
@@ -120,14 +116,7 @@
   };
 
   function glyph(d, size = 14, stroke = 1.5) { return svg(d, size, stroke); }
-  // kindChip says what a plugin is: a provider ("pv") signs in to a
-  // subscription and serves its models; middleware ("mw") runs in the
-  // gateway on every agent's requests and replies, whatever serves them;
-  // an agent ("ag") is one magpie has no wiring of its own for, which it
-  // then connects as it does its own; tools ("tl") are given to every
-  // agent through magpie's plugin tools MCP server; a page ("pg") is a
-  // page of its own in the window's sidebar (pluginpages.js); panels
-  // ("pn") are its parts in magpie's own pages
+  // kindChip says what a plugin is, as KINDS' words say
   const KINDS = {
     pv: [PLUG, "Provider", "Signs in to a subscription and serves its models"],
     mw: [PIPE, "Middleware", "Runs in magpie's gateway on the requests your agents send and on the replies"],
@@ -172,11 +161,12 @@
   }
   // a repository tagged magpie-plugin as the market's cards read a
   // listing: its owner as the publisher, its version, and installed by its
-  // spec (its npm name when its author published it there from the
-  // repository, else github:owner/repo)
+  // spec (its npm name when published there from the repository, else
+  // github:owner/repo); its name and summary its package.json's own (#3608)
   const ghListing = (r) => ({
-    package: r.spec, name: r.repo.split("/")[1], kind: r.kind, github: r, icon: r.icon || undefined,
-    summary: r.description ? { en: r.description } : undefined,
+    package: r.spec, name: r.name || r.repo.split("/")[1], kind: r.kind, github: r, icon: r.icon || undefined,
+    summary: r.summary || r.description ? { ...(r.description && { en: r.description }), ...r.summary } : undefined,
+    own: !!(r.name || r.summary),
     npm: { version: r.version || "", publisher: r.owner, repository: r.url, license: r.license, weekly: 0 },
   });
   // A failed ask is said, with why, whether or not a list was had before:
@@ -585,6 +575,11 @@
     const sum = el("p", "pm-sum", summary(l));
     const meta = el("div", "pm-meta");
     meta.append(kindChip(kindOf(l), l.kind === "hooks" && "Request hook"));
+    if (l.own) {
+      const o = el("span", "pm-chip", t("Its own words"));
+      o.title = t("Its name and summary are what the package says of itself in its package.json: nobody reviewed them");
+      meta.append(o);
+    }
     if (l.github) meta.append(stars(l.github.stars));
     if (l.npm?.weekly) {
       const d = el("span", "pm-dl");
@@ -1230,7 +1225,7 @@
     if (e.tools?.length) nm.append(kindChip("tl"));
     if (e.page) nm.append(kindChip("pg"));
     if (e.panels?.length) nm.append(kindChip("pn"));
-    if (e.providers?.length || !(e.gatewayOnly || e.middlewareOnly || e.inMagpieOnly || toolsOnly || (mw && !e.isMiddleware) || (ag && !e.isAgent))) nm.append(kindChip("pv"));
+    if (e.providers?.length || !(e.gatewayOnly || e.middlewareOnly || e.inMagpieOnly || e.isAgent || toolsOnly || (mw && !e.isMiddleware) || (ag && !e.isAgent))) nm.append(kindChip("pv"));
     who.append(nm);
     const subs = subsOf(pkg);
     const sub = el("div", "sub");
@@ -1285,7 +1280,7 @@
     if ((mw || e.isGateway || ownOpts) && !e.off && !ask && editing?.pkg === pkg) who.append(optionsEditor(e));
     // the plugin's own picture (package.json's magpie.icon) before its
     // first provider's, which a plugin of several gives each its own (#1775)
-    r.append(logo(l?.icon || l?.npm?.icon || e.icon || subs[0]?.icon || ag?.icon, false, e.middlewareOnly ? "mw" : e.inMagpieOnly && e.isAgent && !e.isMiddleware ? "ag" : e.inMagpieOnly && (e.page || e.panels?.length) && !e.isAgent && !e.isMiddleware ? "pg" : toolsOnly && !e.page && !mw && !ag ? "tl" : ""), who);
+    r.append(logo(l?.icon || l?.npm?.icon || e.icon || subs[0]?.icon || ag?.icon, false, e.middlewareOnly ? "mw" : e.isAgent && !e.isMiddleware && !e.providers.length ? "ag" : e.inMagpieOnly && (e.page || e.panels?.length) && !e.isAgent && !e.isMiddleware ? "pg" : toolsOnly && !e.page && !mw && !ag ? "tl" : ""), who);
     const val = el("div", "val");
     const b = busy.get(pkg) || busy.get(e.spec);
     // npm's newer version, or a git one's repository at a newer commit
@@ -1467,6 +1462,12 @@
       d.textContent = t("Agent didn't load: {error}", { error: a.error });
       d.classList.add("bad");
       d.title = a.error;
+      return d;
+    }
+    // not found here, so Agents has no row (zzZ): say so, and the plugin's notice
+    if (a.missing) {
+      d.classList.add("pm-clash");
+      d.textContent = d.title = [t("{name} isn't in Agents: magpie doesn't find it in {path}", { name: a.name, path: a.looks || "~" }), a.notice].filter(Boolean).join(" ");
       return d;
     }
     d.textContent = d.title = t("Adds {name} to Agents", { name: a.name });

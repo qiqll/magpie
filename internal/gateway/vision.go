@@ -350,6 +350,10 @@ type sight struct {
 	text string
 	by   string // the model that described it: model, or one in its place
 	err  error
+	// answered means the model call is over, even while a successful inline
+	// description is still being saved. Cancellation must not stop that save.
+	answered   bool
+	persistent bool // inline bytes, never a URL whose contents can change
 	// waiting is how many requests wait on it now, and stop ends the
 	// work of describing it: the last of them to go stops it (sightMu)
 	waiting int
@@ -443,9 +447,18 @@ func (s *Server) describeKeyed(ctx context.Context, model, src, key string) (tex
 		}
 	} else {
 		work, stop := context.WithCancel(context.WithoutCancel(ctx))
-		e = &sight{done: make(chan struct{}), stop: stop}
+		_, persistent := dataURLBytes(src)
+		e = &sight{done: make(chan struct{}), stop: stop, persistent: persistent}
 		s.keepSightLocked(key, e)
-		go s.see(work, e, model, src, key)
+		if persistent {
+			s.beginSightSave()
+		}
+		go func() {
+			if persistent {
+				defer s.endSightSave()
+			}
+			s.see(work, e, model, src, key)
+		}()
 	}
 	e.waiting++
 	s.sightMu.Unlock()
@@ -466,12 +479,14 @@ func (s *Server) describeKeyed(ctx context.Context, model, src, key string) (tex
 		return e.text, e.by, e.err
 	case <-ctx.Done():
 		s.sightMu.Lock()
-		if e.waiting--; e.waiting == 0 {
+		e.waiting--
+		answered := e.answered
+		if e.waiting == 0 && !answered {
 			select {
 			case <-e.done:
 			default:
-				// no one waits for it now: it stops, and the next to send
-				// the image asks again
+				// no one waits for work still in the model: it stops, and the
+				// next to send the image asks again
 				s.forgetSightLocked(key, e)
 				if e.stop != nil {
 					e.stop()
@@ -479,6 +494,12 @@ func (s *Server) describeKeyed(ctx context.Context, model, src, key string) (tex
 			}
 		}
 		s.sightMu.Unlock()
+		if answered {
+			// The model has answered: let its successful description finish
+			// saving before the request returns, so an immediate restart or
+			// handover can't read an older cache.
+			<-e.done
+		}
 		return "", model, ctx.Err()
 	}
 }
@@ -488,12 +509,23 @@ func (s *Server) see(work context.Context, e *sight, model, src, key string) {
 	text, by, err := s.describeWith(work, model, src, visionSystem, "Describe this image.")
 	s.sightMu.Lock()
 	e.text, e.by, e.err = text, by, err
-	switch {
-	case err != nil:
+	e.answered = true
+	if err != nil {
 		// a failure isn't kept: the next request asks again
 		s.forgetSightLocked(key, e)
-	case s.sights[key] == nil:
-		// answered as the last to wait went: kept for the next
+	}
+	s.sightMu.Unlock()
+
+	if err == nil && e.persistent {
+		// Persist before releasing the waiters: an immediate restart must
+		// find this description. A write failure only loses that saving.
+		s.saveSight(key, text, by)
+	}
+
+	s.sightMu.Lock()
+	if err == nil && s.sights[key] == nil {
+		// answered as the last to wait went (or while it was being saved):
+		// kept for the next, as before
 		s.keepSightLocked(key, e)
 	}
 	close(e.done)

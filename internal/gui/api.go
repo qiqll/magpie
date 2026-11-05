@@ -240,6 +240,11 @@ type agentJSON struct {
 	// signed in to is used up (agent.Agent.AppOut), which turns the Codex
 	// app's ChatGPT side off until the reset
 	AppOut *appOutJSON `json:"appOut,omitempty"`
+	// AppBack: magpie gave Codex back its ChatGPT account at the reset
+	// and left the Codex app on the app-server it started while magpie
+	// was its provider, which shows no account or usage till it restarts
+	// (provider.CodexAppBack), for the row's Restart
+	AppBack bool `json:"appBack,omitempty"`
 	// Failover: not connected, yet its requests go through magpie for
 	// account failover alone (agent.Agent.FailingOver, #1385)
 	Failover bool `json:"failover,omitempty"`
@@ -615,6 +620,17 @@ type searchVendorJSON struct {
 	KeyOptional bool `json:"keyOptional,omitempty"`
 	// its own address, the one used while no base URL is set (#1580)
 	Base string `json:"base,omitempty"`
+	// Auth: a plugin's API that signs in as the plugin's provider, taking
+	// no key (provider.SearchVendor.Auth)
+	Auth *searchAuthJSON `json:"auth,omitempty"`
+}
+
+// searchAuthJSON is the provider a search API signs in as: its name, and
+// how many of its accounts are on (0 with none signed in).
+type searchAuthJSON struct {
+	Name     string `json:"name"`
+	SignedIn bool   `json:"signedIn"`
+	On       int    `json:"on"`
 }
 
 func searchState(s *settingsJSON) {
@@ -630,8 +646,17 @@ func searchState(s *settingsJSON) {
 		}
 		s.SearchAPIs = append(s.SearchAPIs, j)
 	}
-	for _, v := range provider.SearchVendors {
-		s.SearchVendors = append(s.SearchVendors, searchVendorJSON{ID: v.ID, Name: v.Name, KeysURL: v.KeysURL, NeedURL: v.Base == "", KeyOptional: v.KeyOptional, Base: v.Base})
+	for _, v := range provider.AllSearchVendors() {
+		j := searchVendorJSON{ID: v.ID, Name: v.Name, KeysURL: v.KeysURL, NeedURL: v.WantsURL(), KeyOptional: v.KeyOptional, Base: v.Base}
+		if v.Auth != "" {
+			name, p := provider.SearchSignIn(v)
+			j.Auth = &searchAuthJSON{Name: name}
+			if p != nil {
+				j.Auth.SignedIn = true
+				j.Auth.On = gateway.SearchAccountsOn(*p)
+			}
+		}
+		s.SearchVendors = append(s.SearchVendors, j)
 	}
 	s.SearchProvider = gateway.Searcher()
 	s.SearchAuto, s.SearchUnused = gateway.AutoSearcher(), gateway.SearcherUnused()
@@ -786,7 +811,7 @@ func settingsState() settingsJSON {
 	s.CodexUsers, s.ClaudeUsers = loginUsers("codex"), loginUsers("claude")
 	s.CodexAsyncHeld = agent.CodexAsyncHeld()
 	s.CodexCompactKeys = codexKeysText(agent.CodexCompactHeld(""))
-	s.CodexWindow = codexWindowUnder(s.Settings, agent.CodexModel(""))
+	s.CodexWindow = codexWindowUnder(s.Settings.ForAgent("codex"), agent.CodexModel(""))
 	s.WorkBuddy, s.WorkBuddyCheckins = provider.HasWorkBuddy(), provider.WorkBuddyCheckins()
 	s.Trae, s.TraeCheckins = provider.HasTrae(), provider.TraeCheckins()
 	s.MiniMax, s.MiniMaxCheckins = provider.HasMiniMax(), provider.MiniMaxCheckins()
@@ -997,6 +1022,10 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		// and the text size, which the Mac's header measures against the
 		// traffic lights
 		boot := map[string]any{"lang": s.Lang, "theme": s.Theme, "textSize": s.TextSize, "web": isWeb(w)}
+		// and the version that served the page: a browser's page reloads
+		// once another answers in its place (visamzh on X), as after its
+		// own restart to update (backAsNew)
+		boot["version"] = Version
 		if s.Colorblind {
 			boot["colorblind"] = true
 		}
@@ -1704,6 +1733,28 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			err = provider.SetCompactAt(*in.At)
 		}
 		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
+	// an agent's own Long conversations (settings.AgentCompacts): Own
+	// false follows the one for every agent again
+	mux.HandleFunc("POST /api/settings/agent-compact", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Agent     string
+			Own, Full bool
+			At        int
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		var c *settings.AgentCompact
+		if in.Own {
+			c = &settings.AgentCompact{At: in.At, Full: in.Full}
+		}
+		if err := provider.SetAgentCompact(in.Agent, c); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -2765,6 +2816,8 @@ func state() stateJSON {
 			aj.Joined = a.Joined != nil && a.Joined()
 			if a.AppOut != nil && a.AppOut() {
 				aj.AppOut = codexAppOut()
+			} else if a.ID == "codex" && a.WSL == "" {
+				aj.AppBack = provider.CodexAppBack()
 			}
 		} else {
 			aj.Source = a.Source()

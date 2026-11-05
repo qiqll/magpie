@@ -267,6 +267,7 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.AllowIPs = cur.AllowIPs                         // set on its own (allowips)
 	in.FetchPrivate = cur.FetchPrivate                 // in settings.json only
 	in.RouterNote = cur.RouterNote                     // set on its own (the Library's servers/hub-note)
+	in.RouterAllTools = cur.RouterAllTools             // set on its own (the Library's servers/hub-tools)
 	in.GitHubToken = cur.GitHubToken                   // set on its own (github-token), never sent to the page
 	in.ProxyCustom = cur.ProxyCustom                   // set by settings.Save from the proxy, never by the page
 	in.Proxies = cur.Proxies                           // set on their own (proxies, T-110)
@@ -309,8 +310,9 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.BusyLoad = cur.BusyLoad         // and so is this (busy-load)
 	in.Growth = cur.Growth             // and the growth policy (growth)
 	in.CodexAgentsV1 = cur.CodexAgentsV1
-	in.FullContext = cur.FullContext // set on its own (full-context)
-	in.CompactAt = cur.CompactAt     // and so is the threshold
+	in.FullContext = cur.FullContext     // set on its own (full-context)
+	in.CompactAt = cur.CompactAt         // and so is the threshold
+	in.AgentCompacts = cur.AgentCompacts // and each agent's own (agent-compact)
 	// Codex's background compaction, set on its own (codex-async-compact)
 	in.CodexAsyncCompact, in.CodexAsyncCompactPercent = cur.CodexAsyncCompact, cur.CodexAsyncCompactPercent
 	// Claude Desktop's list, set in its row on the Agents page

@@ -54,6 +54,7 @@
     <a class="toc-only" href="/docs/ja/privacy">プライバシー</a>
     <a class="toc-only" href="/docs/ja/masking">プライバシーマスキング</a>
     <a class="toc-only" href="/docs/ja/mcp-router">MCP ルーター</a>
+    <a class="toc-only" href="/docs/ja/library">ライブラリ</a>
     <a href="/docs/ja/import">magpie に追加</a>
     <a href="/docs/integrate">アプリ連携</a>
     <a href="https://github.com/yetone/magpie-releases/releases">リリース</a>
@@ -128,7 +129,7 @@ docker logs magpie</pre>
 
     <h2 id="web"><a class="anchor" href="#web">ブラウザ UI</a></h2>
     <p>ログのリンクを開きます。リンクのキーは cookie に置き換わり、アドレスから消えます。キーなしで開いたページは拒否されます（401）。<code>MAGPIE_WEB_KEY</code>（英数字か <code>- . _ ~</code> で 16 文字以上。<code>openssl rand -hex 16</code> で作れます）を設定すると、再起動してもキーは変わらず、ブラウザは 400 日サインインしたままです。設定しなければ起動のたびに新しいキーができ、cookie はそのブラウザセッションの間だけ有効です。</p>
-    <p>ページは<b>ゲートウェイモード</b>で開きます：<span class="ui">プロバイダ</span>、<span class="ui">ゲートウェイ</span>、<span class="ui">ルーティング</span>、<span class="ui">使用量</span>、<span class="ui">プラグイン</span>、<span class="ui">設定</span>だけで、コンテナにはエージェントがないのでエージェント、セッション、ライブラリはありません。<span class="ui">設定</span> → <span class="ui">一般</span> → <span class="ui">ゲートウェイモード</span>でオフにできます。</p>
+    <p>ページは<b>ゲートウェイモード</b>で開きます：<span class="ui">プロバイダ</span>、<span class="ui">ゲートウェイ</span>、<span class="ui">ルーティング</span>、<span class="ui">使用量</span>、<span class="ui">セッション</span>、<span class="ui">プラグイン</span>、<span class="ui">設定</span>だけで、コンテナにはエージェントがないのでエージェントとライブラリはありません。<span class="ui">セッション</span>には、このゲートウェイを通った他のコンピュータのエージェントのセッションだけが並び、このマシンのエージェントのセッションファイルは読みません。<span class="ui">設定</span> → <span class="ui">一般</span> → <span class="ui">ゲートウェイモード</span>でオフにできます。</p>
     <p>NAS や SSH で入るサーバーでは、3430 を公開せずにトンネル経由でページを開きます：<code>ssh -L 3430:127.0.0.1:3430 you@nas</code> を実行してから、自分のコンピューターでログのリンクを開きます。</p>
     <div class="callout"><b>リンクを持つ人は誰でも magpie を変更し、そのキーを見られます。</b>3430 はループバックか VPN 上に置いてください。ネットワーク越しなら HTTPS で：<code>MAGPIE_TLS_CERT</code> と <code>MAGPIE_TLS_KEY</code> で magpie に証明書を渡すか、Caddy のような TLS 付きのリバースプロキシの後ろに置きます。</div>
 
@@ -183,6 +184,8 @@ docker logs magpie</pre>
     <p id="allow"><b>許可するアドレス。</b>公開ホストでは <code>-e MAGPIE_ALLOW_IPS=203.0.113.7,10.0.0.0/8</code> にクライアントのアドレスを書きます。ほかのアドレスからのリクエストはキーを見る前に 403 で拒否されるので、漏れたキーもよそからは使えません。拒否のメッセージとコンテナのログには、リクエスト元のアドレスが出ます。magpie が見るのは接続そのもののアドレスで、<code>X-Forwarded-For</code> ヘッダーは信用しません。書き間違えた項目は、すべてを通すのではなく、何も通しません。Docker 既定の bridge ネットワークはクライアント自身のアドレスをコンテナに渡しますが、ホスト自身からのリクエストは bridge のゲートウェイ（<code>172.17.0.1</code>）から届き、Docker Desktop や rootless Docker ではすべてのクライアントがそれ自身のひとつのアドレスに見えます。それを追加するか、403 に書かれたアドレスを確かめてください。リバースプロキシやトンネルの後ろでは、すべてのリクエストがプロキシのアドレスから届くので、接続できる人はプロキシで制限してください。デスクトップ版では同じリストが <span class="ui">設定</span> → <span class="ui">ネットワークと共有</span> → <span class="ui">許可するアドレス</span> にあります。</p>
     <div class="callout"><b>インターネット越しなら VPN を</b>（Tailscale や WireGuard など）。3425 を開けるより安全です。コンテナの前に置くリバースプロキシやトンネルもネットワークです。そのクライアントにも、ほかのマシンと同じくゲートウェイキーが必要です。</div>
 
+    <p id="statusline"><b>Claude Code がコンテナの外にあるときのステータスライン。</b>ステータスラインのスイッチは別のマシンの <code>~/.claude/settings.json</code> に書けず、書かれるコマンドもコンテナ内のプログラムを指します。ゲートウェイが同じ行を返します。Claude Code が動くマシンで、<code>~/.claude/settings.json</code> の <code>statusLine</code> を <code>{"type": "command", "command": "curl -fsS -m 1 -H 'Authorization: Bearer sk-magpie-key-…' --data-binary @- http://&lt;host&gt;:3425/v1/magpie/statusline || true"}</code> に設定し、アドレスをコンテナに届くホストに替え、ゲートウェイキー（読み取り専用で可）を付けます。予算、モデル、アカウントで制限されたキーは、持ち主がそのキーの<span class="ui">残量</span>をオンにすると、使えるアカウントだけの行を受け取ります。<code>?format=json</code> を付けると同じ内容を JSON で返します（行、モデル、各アカウントの窓ごとの <code>used</code> と <code>resetsAt</code>）。自前で描くステータスラインに使えます。Claude Code は毎回これを実行し、stdin でセッションを渡すので、そのセッションが向かったモデルも付きます。ブラウザ UI の<span class="ui">設定</span> → <span class="ui">概要</span>にも同じコマンドが表示されます。</p>
+
     <h2 id="compose"><a class="anchor" href="#compose">NAS で Docker Compose</a></h2>
     <div class="code">
       <span class="lang">compose.yaml</span>
@@ -228,6 +231,7 @@ docker logs magpie</pre>
     <a href="/docs/ja/privacy">プライバシー</a>
     <a href="/docs/ja/masking">プライバシーマスキング</a>
     <a href="/docs/ja/mcp-router">MCP ルーター</a>
+    <a href="/docs/ja/library">ライブラリ</a>
     <a href="/docs/ja/import">magpie に追加</a>
     <a href="/docs/integrate">アプリ連携</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>

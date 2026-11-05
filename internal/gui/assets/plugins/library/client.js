@@ -30,6 +30,7 @@ magpie.plugin("library", (ctx) => {
   let autoChecked = false; // the page checked by itself, as the server said it was due (#1449)
   let regrouping = false; // the skills' repositories fetched to group them again
   let modal = null;      // what the library has open in the dialog
+  const hid = new Set(); // the write failures the reader hid, by agent and what (#3745)
 
   const GLYPH = {
     cmd: "M3 4.5h10v7H3z M5.5 7l1.5 1.2-1.5 1.3 M8.5 9.5h2",
@@ -445,6 +446,14 @@ magpie.plugin("library", (ctx) => {
   // removed or renamed changes what the market calls added (#300): one gone
   // from the library loses its mark at once, and the market is asked again.
   function take(v) {
+    // What the reader hid stays hidden while it still fails and nothing
+    // else does: every change writes every agent again, so a file magpie
+    // can't stat fails at each one (#3745). A failure not hidden brings the
+    // card back whole, and an item written meanwhile is new when it fails
+    // again. v.problems is everything that stands, whatever answered.
+    const failing = new Set((v.problems || []).filter(failure).map(problemKey));
+    for (const k of hid) if (!failing.has(k)) hid.delete(k);
+    if ([...failing].some((k) => !hid.has(k))) hid.clear();
     const was = lib && shelf();
     lib = v;
     taken++;
@@ -606,7 +615,11 @@ magpie.plugin("library", (ctx) => {
   // the agent, settled together, not a write that failed: Try again, which
   // can't change them, is offered only beside a write that did fail.
   function problemsCard() {
-    const list = lib.problems || [];
+    // the write failures the reader hid are left out while they are all
+    // that fails; an agent's own skills, still to settle, stay
+    const all = lib.problems || [];
+    const quiet = all.some(failure) && all.filter(failure).every((p) => hid.has(problemKey(p)));
+    const list = quiet ? all.filter((p) => !failure(p)) : all;
     if (!list.length) return null;
     const here = list.filter((p) => !problemTab(p.what) || problemTab(p.what) === tab);
     const away = {};
@@ -614,7 +627,7 @@ magpie.plugin("library", (ctx) => {
     const owns = new Map(); // agent → its own skills by the library's names
     const rest = [];
     for (const p of here) {
-      if (p.own && p.what.startsWith("skill:") && p.agent) {
+      if (!failure(p)) {
         if (!owns.has(p.agent)) owns.set(p.agent, []);
         owns.get(p.agent).push(p.what.slice("skill:".length));
       } else rest.push(p);
@@ -622,12 +635,18 @@ magpie.plugin("library", (ctx) => {
     const card = el("div", "lib-problems");
     card.setAttribute("role", "status");
     const ttl = el("div", "lib-problems-head");
-    const failed = rest.length || list.some((p) => !here.includes(p) && !p.own);
-    ttl.append(el("span", "lib-problems-dot"), el("b", "", failed ? t("Some of the Library couldn't be written") : t("Some agents have skills of their own by the library's names")), el("span", "grow"));
+    const failed = rest.length || list.some((p) => !here.includes(p) && failure(p));
+    ttl.append(el("span", "lib-problems-dot"), el("b", "", failed ? t("Some of the Library couldn't be written") : t("Some agents have skills of their own by the library's names")));
     if (failed) {
       const again = button(t("Try again"), "action", () => change("all/sync", {}));
       again.title = t("Writes the library into every agent again");
-      ttl.append(again);
+      // the reader who can't mend it here, or won't now, puts it away; a
+      // change's toast still says what failed, and something new that
+      // can't be written brings it back (#3745)
+      const hide = button("", "lib-x", () => hideFailed(card));
+      hide.append(svg("M4.5 4.5l7 7M11.5 4.5l-7 7", 11, 1.6));
+      hide.title = t("Hide until something new can't be written");
+      ttl.append(again, hide);
     }
     card.append(ttl);
     const ul = el("ul");
@@ -677,6 +696,27 @@ magpie.plugin("library", (ctx) => {
       card.append(more);
     }
     return card;
+  }
+  // a write that failed, as against an agent's own skill in the library's
+  // way, which is the agent's to settle
+  function failure(p) {
+    return !(p.own && p.what.startsWith("skill:") && p.agent);
+  }
+  // a failure is the same from one sync to the next by its agent and its
+  // item: the error can name a temp file new at each write (edit.WriteAtomic)
+  function problemKey(p) {
+    return p.agent + "\n" + p.what;
+  }
+  function hideFailed(card) {
+    const focused = card.contains(document.activeElement);
+    for (const p of lib.problems || []) if (failure(p)) hid.add(problemKey(p));
+    // the view keeps its scroll, as render keeps it for Try again:
+    // Chromium's scroll anchoring would move it as the card goes
+    const top = page.scrollTop;
+    syncProblems();
+    page.scrollTop = top;
+    // the keyboard's place: the card's next button, or the tab open
+    if (focused) (page.querySelector(":scope > .lib-problems button") || page.querySelector(".lib-tabs .opt.on"))?.focus({ preventScroll: true });
   }
   // the tab a problem is about; "" is one shown on every tab
   function problemTab(what) {
@@ -1701,7 +1741,7 @@ magpie.plugin("library", (ctx) => {
     connect.classList.add("lib-hubconnect");
     at.append(glyph(GLYPH.web), aw, copyBtn(hubURL(), t("Address")), connect);
     list.append(at);
-    list.append(hubNoteRow());
+    list.append(hubNoteRow(), hubToolsRow());
     const names = (why) => hubAgents().filter((a) => a.hub === why).map((a) => a.name).join(", ");
     const why = [
       ["no-remote", "{agents} reaches no MCP server over HTTP, so it keeps each server's own entry."],
@@ -1761,6 +1801,25 @@ magpie.plugin("library", (ctx) => {
     };
     f.onblur = save;
     row.append(glyph(GLYPH.doc), who, f);
+    return row;
+  }
+  // Tools on demand (ArvinCharl on X: the router's tools filled the
+  // context): on, the default, an agent that doesn't search its MCP tools
+  // itself and is given more than a few is given two in their place, one
+  // finding a tool and one running it (gateway.hubOnDemand). Off gives
+  // every agent every tool whole (settings' routerAllTools).
+  function hubToolsRow() {
+    const row = el("div", "row lib-row lib-hubtoolsrow");
+    const who = el("div", "who");
+    who.append(el("div", "name", t("Tools on demand")));
+    who.append(el("div", "sub wraps", t("An agent given more than 10 tools gets two in their place, one that finds a tool and one that runs it, so their definitions stay out of every request. Claude Code, Claude Desktop, Codex and Pi find tools themselves and are given every one.")));
+    const on = !lib.hubAllTools;
+    row.append(glyph(GLYPH.search), who, toggle(on, t("Tools on demand"), (v) =>
+      change("servers/hub-tools", { on: !v }).then((ok) => {
+        if (ok) status(v
+          ? t("Agents are given the router's tools on demand — restart them to use it")
+          : t("Agents are given every tool of the router — restart them to use it"), "ok");
+      })));
     return row;
   }
   // every server is behind the hub, magpie's own image server too, but one
@@ -2036,6 +2095,17 @@ magpie.plugin("library", (ctx) => {
     openLib(ed);
   }
 
+  // a row's line under its name: the user's note when there is one, in
+  // the place of what it would say (a skill's description, a server's
+  // command), which its tooltip then gives after the note. A row keeps its
+  // height either way
+  function noteSub(note, sub, said) {
+    if (!note) return sub;
+    const n = el("div", "sub lib-subnote", note);
+    n.title = said ? note + "\n\n" + said : note;
+    return n;
+  }
+
   function serverRow(s, all) {
     const row = el("div", "row lib-row click lib-server");
     const who = el("div", "who");
@@ -2051,7 +2121,7 @@ magpie.plugin("library", (ctx) => {
     who.append(nm, healthEl(s.name));
     const sub = el("div", "sub mono", serverLine(s));
     sub.title = serverLine(s);
-    who.append(sub, toolsEl(s.name));
+    who.append(noteSub(s.note, sub, serverLine(s)), toolsEl(s.name));
     row.append(mark(s.icon, s.transport === "stdio" ? GLYPH.cmd : GLYPH.web), who, ...removeAct(() => confirmRemoveServer(s)),
       agentChips(withGone(all, s.agents), s.agents, chipsChange("servers/agents", s.name, "servers", (x) => serverRow(x, all)), { problems: s.problems, blocked: sseBlocked(s), all: true }));
     if (picking) return pickRow(row, s.name);
@@ -2685,6 +2755,42 @@ magpie.plugin("library", (ctx) => {
     return i;
   }
 
+  // lineBox is a command line in a box that wraps, so a long one (npx
+  // with a database's host, user, password and name, hema_17384 on
+  // Discord) is read and edited whole. It is still one line: Enter saves,
+  // and a line break is a space between words, a shell's \ before it too.
+  function lineBox(value, placeholder, onInput) {
+    const ta = el("textarea", "lib-text small mono lib-cmd");
+    ta.rows = 1;
+    ta.value = value || "";
+    ta.placeholder = placeholder || "";
+    ta.spellcheck = false;
+    ta.setAttribute("autocapitalize", "off");
+    ta.setAttribute("autocorrect", "off");
+    ta.oninput = () => onInput(WIN_LINE ? ta.value : ta.value.replace(/\\\r?\n/g, " "));
+    ta.onkeydown = (e) => { e.stopPropagation(); if (e.isComposing || e.keyCode === 229) return; if (e.key === "Escape") closeLibModal(); else if (e.key === "Enter" && modal?.save) { e.preventDefault(); modal.save(); } };
+    autosize(ta, 27);
+    return ta;
+  }
+
+  // noteBox is the user's note on a server or a skill (youyo.p on Discord:
+  // with many, which is which and when to use it). One line of at most 200
+  // characters, as a hook's description (#2011); the library alone keeps
+  // it, and no agent is given it.
+  const NOTE_MAX = 200;
+  function noteBox(value, placeholder, onInput) {
+    const ta = el("textarea", "lib-text small lib-notein");
+    ta.rows = 1;
+    ta.value = value || "";
+    ta.placeholder = placeholder;
+    ta.maxLength = NOTE_MAX;
+    ta.oninput = () => onInput(ta.value);
+    ta.onkeydown = (e) => { e.stopPropagation(); if (e.isComposing || e.keyCode === 229) return; if (e.key === "Escape") closeLibModal(); else if (e.key === "Enter" && modal?.save) { e.preventDefault(); modal.save(); } };
+    autosize(ta, 27);
+    return ta;
+  }
+  const noteHint = () => t("Optional: what it's for and when to use it, in any language. Only the library keeps it; no agent is given it");
+
   // refHint: how a value is read from a variable (#1250)
   const refHint = () => t("A value can name a variable, as {ref}: each agent is given it in its own way, so the token stays out of its settings", { ref: "${NAME}" });
 
@@ -2699,10 +2805,26 @@ magpie.plugin("library", (ctx) => {
     if (!d.env) d.env = {};
     if (!d.headers) d.headers = {};
     d.local = !!d.local;
+    d.note = d.note || "";
     const ed = el("div", "editor lib-editor");
-    const head = el("div", "ehead");
+    const head = el("div", "ehead lib-serverhead");
     head.append(mark(s?.icon, d.transport === "stdio" ? GLYPH.cmd : GLYPH.web), el("b", "", s ? s.name : t("New MCP server")));
     if (!s) head.append(el("span", "note", t("or paste its JSON anywhere here")));
+    // the form, or the server as JSON (hema_17384 on Discord), in Claude
+    // Code's .mcp.json shape, as Copy config gives it: read whole, edited,
+    // pasted over. The note, the agents and sync are the library's own and
+    // stay in the form below it
+    let view = "form", jsonBad = "";
+    const viewBox = el("div", "lib-viewpick");
+    const viewSegs = () => segs([["form", t("Form")], ["json", "JSON"]], view, (v) => {
+      if (v === "form" && jsonBad) { err.textContent = jsonBad; viewBox.replaceChildren(viewSegs()); return; }
+      view = v;
+      err.textContent = "";
+      draw();
+      (view === "json" ? top.querySelector(".lib-json") : name).focus();
+    });
+    viewBox.append(viewSegs());
+    head.append(viewBox);
     ed.append(head);
     const err = el("div", "editor-error");
 
@@ -2750,11 +2872,14 @@ magpie.plugin("library", (ctx) => {
     }
     const callback = () => t("Made with its vendor (GitHub's under Settings › Developer settings › OAuth Apps), with {url} as its callback URL", { url: "http://localhost" + (d.oauth?.callbackPort ? ":" + d.oauth.callbackPort : "") + "/callback" });
     const name = field2(d.name, t("e.g. github"), (v) => { d.name = v.trim(); signBox?.redraw(); });
-    ed.append(...field(t("Name"), name, t("Letters, digits, - and _ — what the agents call it")));
     const kindOf = () => segs([["stdio", t("Command")], ["http", "HTTP"], ["sse", "SSE"]], d.transport, (v) => { d.transport = v; draw(); });
     const kindBox = el("div");
     kindBox.append(kindOf());
-    ed.append(...field(t("Runs as"), kindBox));
+    const nameF = field(t("Name"), name, t("Letters, digits, - and _ — what the agents call it")), kindF = field(t("Runs as"), kindBox);
+    const top = el("div", "lib-slot");
+    ed.append(top);
+    const note = noteBox(d.note, t("e.g. The shop's database, read only"), (v) => { d.note = v; });
+    ed.append(...field(t("Note"), note, noteHint()));
     const slot = el("div", "lib-slot");
     ed.append(slot);
     const agentsBox = el("div");
@@ -2783,12 +2908,59 @@ magpie.plugin("library", (ctx) => {
     function drawAgents() {
       agentsBox.replaceChildren(agentChips(all, d.agents, (next) => { d.agents = next; drawAgents(); }, { names: true, blocked: sseBlocked(d), all: true }));
     }
+    // the server as Copy config's Claude Code entry has it (fmtClaude)
+    function jsonOf() {
+      const e = d.transport === "stdio"
+        ? { type: "stdio", command: d.command || "", args: d.args || [], env: d.env || {} }
+        : { type: d.transport, url: d.url || "", ...(Object.keys(d.headers || {}).length ? { headers: d.headers } : {}) };
+      return JSON.stringify({ mcpServers: { [d.name]: e } }, null, 2);
+    }
+    // what is typed is read as a paste is (serversIn): each valid edit is
+    // the form's at once; one that isn't keeps the dialog from saving or
+    // going back to the form until it is
+    function jsonBox() {
+      const ta = el("textarea", "lib-text small mono lib-json");
+      ta.value = jsonOf();
+      ta.spellcheck = false;
+      ta.setAttribute("autocapitalize", "off");
+      ta.setAttribute("autocorrect", "off");
+      ta.oninput = () => {
+        const found = serversIn(ta.value);
+        jsonBad = !found?.length ? t("This isn't an MCP server's JSON") : found.length > 1 ? t("Only one server here; paste several outside this box to add them") : "";
+        ta.setAttribute("aria-invalid", String(!!jsonBad));
+        err.textContent = jsonBad;
+        if (jsonBad) return;
+        const f = found[0];
+        Object.assign(d, { transport: f.transport, command: f.command || "", args: f.args || [], env: f.env || {}, url: f.url || "", headers: f.headers || {} });
+        if (f.name) d.name = f.name;
+        name.value = d.name;
+        kindBox.replaceChildren(kindOf());
+        drawAgents();
+      };
+      // a newline is the box's; ⌘/Ctrl-Enter saves, Escape closes
+      ta.onkeydown = (e) => {
+        e.stopPropagation();
+        if (e.isComposing || e.keyCode === 229) return;
+        if (e.key === "Escape") closeLibModal();
+        else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && modal?.save) { e.preventDefault(); modal.save(); }
+      };
+      autosize(ta, 160);
+      return ta;
+    }
     function draw() {
       slot.replaceChildren();
+      if (view === "json") {
+        signBox = appBox = null;
+        top.replaceChildren(...field("JSON", jsonBox(), t("As Claude Code's .mcp.json has it. A value naming a variable, as {ref}, stays a name here", { ref: "${NAME}" })));
+        head.firstChild.replaceWith(mark(s && d.transport === s.transport ? s.icon : "", d.transport === "stdio" ? GLYPH.cmd : GLYPH.web));
+        drawAgents();
+        return;
+      }
+      top.replaceChildren(...nameF);
+      slot.append(...kindF);
       const g = el("div", "lib-grid");
       if (d.transport === "stdio") {
-        const line = field2([d.command, ...(d.args || [])].filter((x, i) => i > 0 || x).map(quote).join(" "), "npx -y @modelcontextprotocol/server-github", (v) => { const w = words(v); d.command = w[0] || ""; d.args = w.slice(1); });
-        line.classList.add("mono");
+        const line = lineBox([d.command, ...(d.args || [])].filter((x, i) => i > 0 || x).map(quote).join(" "), "npx -y @modelcontextprotocol/server-github", (v) => { const w = words(v); d.command = w[0] || ""; d.args = w.slice(1); });
         g.append(...field(t("Command"), line, t("The command and its arguments, as you'd type them")));
         g.append(...field(t("Environment"), pairs(d.env, "GITHUB_TOKEN", t("value"), (v) => { d.env = v; drawAgents(); }), refHint()));
       } else {
@@ -2839,7 +3011,7 @@ magpie.plugin("library", (ctx) => {
     // send saves the form; s is then the server as saved, for a save after
     // a sign-in's to be of it
     const send = async () => {
-      const body = { old: s ? s.name : "", server: { name: d.name, transport: d.transport, agents: d.agents, startupTimeout: d.startupTimeout || 0, local: !!d.local, hub: d.hub || "" } };
+      const body = { old: s ? s.name : "", server: { name: d.name, transport: d.transport, agents: d.agents, startupTimeout: d.startupTimeout || 0, local: !!d.local, hub: d.hub || "", note: d.note || "" } };
       if (d.transport === "stdio") Object.assign(body.server, { command: d.command, args: d.args, env: d.env });
       else Object.assign(body.server, { url: d.url, headers: d.headers, oauth: d.transport === "http" && d.oauth?.clientId ? d.oauth : null });
       take(await api("library/servers/save", body));
@@ -2848,6 +3020,7 @@ magpie.plugin("library", (ctx) => {
       return was;
     };
     const save = async () => {
+      if (jsonBad) { err.textContent = jsonBad; return; }
       err.textContent = "";
       try {
         const was = await send();
@@ -2878,6 +3051,7 @@ magpie.plugin("library", (ctx) => {
 
     // a README's JSON pasted anywhere in the dialog fills it in
     ed.addEventListener("paste", (e) => {
+      if (e.target.closest?.(".lib-json")) return; // the JSON box's own
       const text = e.clipboardData?.getData("text") || "";
       if (!/[{]/.test(text)) return;
       const found = serversIn(text);
@@ -2894,7 +3068,7 @@ magpie.plugin("library", (ctx) => {
       } else pasteMany(found, d.agents);
     });
     let original = JSON.stringify(d);
-    modal = { save, dirty: () => JSON.stringify(d) !== original };
+    modal = { save, dirty: () => !!jsonBad || JSON.stringify(d) !== original };
     openLib(ed);
     if (!s) requestAnimationFrame(() => name.focus());
   }
@@ -3176,6 +3350,8 @@ magpie.plugin("library", (ctx) => {
   // shape (subagents.go). Its skills and MCP servers go only into the
   // files that can name them: skills into Claude Code's, servers into
   // Claude Code's and Droid's. Every other agent gets its prompt alone.
+  // Its model goes only into Codex's role file (luckymanjc on Discord: a
+  // routing group named for a subagent, which ran on its lead's model).
   const subagentAgentOf = (id) => (lib.subagentAgents || []).find((x) => x.id === id);
   const subagentAgents = () => shownAgents().filter((a) => subagentAgentOf(a.id));
   // why a can't be given a subagent, or ""
@@ -3186,8 +3362,11 @@ magpie.plugin("library", (ctx) => {
   };
   // the agents of all that take what s binds, by kind: who can't bind them
   const unbound = (all, ids, kind) => all.filter((a) => ids.includes(a.id) && !subagentBlocked(a) && !subagentAgentOf(a.id)[kind]);
+  // the name of a model a subagent may run on, its id when it is no longer one
+  const subagentModelName = (id) => (lib.subagentModels || []).find((m) => m.id === id)?.name || id;
   function subagentLine(s) {
     const parts = [];
+    if (s.model) parts.push(t("Model: {name}", { name: subagentModelName(s.model) }));
     if (s.skills?.length) parts.push(t("Skills: {names}", { names: s.skills.join(", ") }));
     if (s.mcp?.length) parts.push(t("MCP servers: {names}", { names: s.mcp.join(", ") }));
     return parts.join(" · ");
@@ -3212,8 +3391,10 @@ magpie.plugin("library", (ctx) => {
     // binds something that an agent it is given to can't
     const given = (kind) => [...new Set(subs.filter((s) => s[kind]?.length).flatMap((s) => unbound(all, s.agents || [], kind)))];
     const noSkills = given("skills"), noMCP = given("mcp");
+    const noModel = [...new Set(subs.filter((s) => s.model).flatMap((s) => unbound(all, s.agents || [], "model")))];
     if (noSkills.length) body.append(el("p", "lib-aside lib-subagents-noskills", t("{agents} can't bind skills to a subagent: theirs gets its prompt, and every skill the agent has.", { agents: noSkills.map((a) => a.name).join(", ") })));
     if (noMCP.length) body.append(el("p", "lib-aside lib-subagents-nomcp", t("{agents} can't bind MCP servers to a subagent: theirs gets its prompt, and every server the agent has.", { agents: noMCP.map((a) => a.name).join(", ") })));
+    if (noModel.length) body.append(el("p", "lib-aside lib-subagents-nomodel", t("{agents} can't be given a subagent's model: theirs runs on the model the agent picks.", { agents: noModel.map((a) => a.name).join(", ") })));
     // Cursor's app reads ~/.cursor/agents; its cursor-agent CLI reads
     // only a project's .cursor/agents
     if (subs.some((s) => s.agents?.includes("cursor"))) body.append(el("p", "lib-aside lib-subagents-cursor", t("The Cursor app has these subagents; its cursor-agent command reads only a project's own .cursor/agents.")));
@@ -3253,10 +3434,32 @@ magpie.plugin("library", (ctx) => {
     return b;
   }
 
+  // the model a subagent runs on, from the app menu: the agent's pick ("")
+  // or one of the models and routing groups Codex lists, the one agent
+  // whose subagent file takes a model
+  function modelPick(d, changed) {
+    const b = el("button", "sess-pick lib-menu lib-subagentmodel");
+    b.type = "button";
+    b.setAttribute("aria-haspopup", "menu");
+    b.setAttribute("aria-expanded", "false");
+    const draw = () => b.replaceChildren(el("span", "", d.model ? subagentModelName(d.model) : t("Picked by the agent")), svg(CHEV, 11, 1.6));
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const models = lib.subagentModels || [];
+      const opts = [{ v: "", name: t("Picked by the agent"), literalName: true, note: "", always: true },
+        ...models.map((m) => ({ v: m.id, name: m.name, literalName: true, note: m.group ? t("routing group") : m.note || "" }))];
+      // a model set before that Codex no longer lists stays pickable
+      if (d.model && !models.some((m) => m.id === d.model)) opts.push({ v: d.model, name: d.model, literalName: true, note: "" });
+      openProtoMenu(b, opts, d.model, (v) => { d.model = v; draw(); changed(); }, "Model", "", "left", false, opts.length > 8 ? "Find a model…" : "");
+    };
+    draw();
+    return b;
+  }
+
   function editSubagent(s) {
     const all = subagentAgents();
-    const d = s ? { name: s.name, description: s.description, prompt: s.prompt, skills: [...(s.skills || [])], mcp: [...(s.mcp || [])], agents: [...(s.agents || [])] }
-      : { name: "", description: "", prompt: "", skills: [], mcp: [], agents: all.filter((a) => !subagentBlocked(a)).map((a) => a.id) };
+    const d = s ? { name: s.name, description: s.description, prompt: s.prompt, model: s.model || "", skills: [...(s.skills || [])], mcp: [...(s.mcp || [])], agents: [...(s.agents || [])] }
+      : { name: "", description: "", prompt: "", model: "", skills: [], mcp: [], agents: all.filter((a) => !subagentBlocked(a)).map((a) => a.id) };
     const ed = el("div", "editor lib-editor lib-subagentedit");
     const head = el("div", "ehead");
     head.append(glyph(GLYPH.subagent), el("b", "", s ? s.name : t("New subagent")));
@@ -3287,10 +3490,11 @@ magpie.plugin("library", (ctx) => {
 
     // what the skills and servers reach, said under each: the agents
     // picked that can't bind them
-    const skillsHint = el("div", "hint lib-subagenthint-skills"), mcpHint = el("div", "hint lib-subagenthint-mcp");
+    const skillsHint = el("div", "hint lib-subagenthint-skills"), mcpHint = el("div", "hint lib-subagenthint-mcp"), modelHint = el("div", "hint lib-subagenthint-model");
     const skills = namesPick("lib-subagentskills", lib.skills.map((x) => x.name), d, "skills", "Skills", "Find a skill");
     const servers = namesPick("lib-subagentmcp", lib.servers.map((x) => x.name), d, "mcp", "MCP servers", "Find a server");
     const withHint = ([l, w], h) => { w.append(h); return [l, w]; };
+    ed.append(...withHint(field(t("Model"), modelPick(d, () => drawHints())), modelHint));
     ed.append(...withHint(field(t("Skills"), skills), skillsHint));
     ed.append(...withHint(field(t("MCP servers"), servers), mcpHint));
     const agentsBox = el("div");
@@ -3300,6 +3504,13 @@ magpie.plugin("library", (ctx) => {
       const sk = unbound(all, d.agents, "skills"), mc = unbound(all, d.agents, "mcp");
       skillsHint.textContent = !lib.skills.length ? t("The library has no skills yet") : sk.length ? t("Not bound for {agents}: theirs uses every skill the agent has", { agents: sk.map((a) => a.name).join(", ") }) : "";
       mcpHint.textContent = !lib.servers.length ? t("The library has no MCP servers yet") : mc.length ? t("Not bound for {agents}: theirs uses every server the agent has", { agents: mc.map((a) => a.name).join(", ") }) : "";
+      // who runs it on the model set, and who doesn't: Codex's subagent
+      // model on the Agents page takes the place of every subagent's
+      const mo = unbound(all, d.agents, "model");
+      const held = d.model && lib.codexSubagentModel && d.agents.includes("codex");
+      modelHint.textContent = !d.model ? t("Each agent runs it on the model it picks for a subagent") : [
+        mo.length ? t("Not set for {agents}: theirs runs on the model the agent picks", { agents: mo.map((a) => a.name).join(", ") }) : "",
+        held ? t("Codex's subagent model on the Agents page is set, and takes the place of this one") : ""].filter(Boolean).join(" · ");
     }
     function drawAgents() {
       agentsBox.replaceChildren(agentChips(all, d.agents, (next) => { d.agents = next; drawAgents(); }, { names: true, blocked: subagentBlocked, all: true }));
@@ -3316,7 +3527,7 @@ magpie.plugin("library", (ctx) => {
     const save = async () => {
       err.textContent = "";
       try {
-        const subagent = { name: d.name, description: d.description.trim(), prompt: d.prompt, skills: d.skills, mcp: d.mcp, agents: d.agents.filter((id) => !subagentBlocked(agentOf(id) || { id })) };
+        const subagent = { name: d.name, description: d.description.trim(), prompt: d.prompt, model: d.model, skills: d.skills, mcp: d.mcp, agents: d.agents.filter((id) => !subagentBlocked(agentOf(id) || { id })) };
         take(await api("library/subagents/save", { old: s ? s.name : "", subagent }));
         report(lib.result, s ? t("{name} saved", { name: d.name }) : "");
         closeLibModal(true);
@@ -3577,7 +3788,7 @@ magpie.plugin("library", (ctx) => {
     if (pick !== "source") {
       const skills = [...lib.skills].sort(byName(pick));
       const g = { key: "flat", repo: "", skills, parts: null,
-        text: new Map(skills.map((s) => [s, (s.name + " " + (s.description || "") + " " + skillRepo(s)).toLowerCase()])) };
+        text: new Map(skills.map((s) => [s, (s.name + " " + (s.note || "") + " " + (s.description || "") + " " + skillRepo(s)).toLowerCase()])) };
       grouped = { lib, pick, groups: [g] };
       return grouped.groups;
     }
@@ -3625,7 +3836,7 @@ magpie.plugin("library", (ctx) => {
       ...mine.filter((g) => g.skills.length && mineHere(g)), ...down.sort(byRepo), ...(by.has("local") ? [by.get("local")] : [])];
     for (const g of groups) {
       g.skills.sort((a, b) => a.name.localeCompare(b.name));
-      g.text = new Map(g.skills.map((s) => [s, (s.name + " " + (s.description || "") + " " + (g.mine || (g.owner ? skillRepo(s) : g.repo))).toLowerCase()]));
+      g.text = new Map(g.skills.map((s) => [s, (s.name + " " + (s.note || "") + " " + (s.description || "") + " " + (g.mine || (g.owner ? skillRepo(s) : g.repo))).toLowerCase()]));
       g.parts = g.mine ? null : partsOf(g);
     }
     grouped = { lib, pick, groups };
@@ -4744,7 +4955,7 @@ magpie.plugin("library", (ctx) => {
     const by = button(own ? t("By agent ({n})", { n: own }) : t("By agent"), "action lib-updall lib-howagent", () => openSkillHow());
     by.title = t("Give an agent its skills its own way");
     bar.append(by, el("span", "note", how === "copy"
-      ? t("Each agent gets a folder of its own, made again when the library's skill changes; edits made in a copy are replaced.")
+      ? t("Each agent gets a folder of its own, made again when the library's skill changes. An edit made in a copy goes into the library and to the other agents.")
       : t("Links follow the library's skill: an update reaches the agents at once.")));
     return bar;
   }
@@ -5318,7 +5529,7 @@ magpie.plugin("library", (ctx) => {
     if (hereLine) who.append(hereLine);
     const sub = el("div", "sub", s.missing ? t("Its folder is gone from the library") : s.description || "");
     sub.title = s.description || "";
-    who.append(sub);
+    who.append(s.missing ? sub : noteSub(s.note, sub, s.description || ""));
     if (s.source) {
       const src = el("div", "lib-src");
       if (s.kind === "github") {
@@ -5573,10 +5784,28 @@ magpie.plugin("library", (ctx) => {
     head.append(mark(s.icon, GLYPH.skill), el("b", "", s.name), pick, el("span", "grow"));
     const body = el("div", "lib-skillbody");
     const bar = el("div", "bar");
-    ed.append(head, body, bar);
+    // the user's note on it (youyo.p_10001 on Discord), over its files:
+    // the library's own, never in a file an agent reads. Save shows once
+    // it's changed, and saves the file being edited with it
+    let was = s.note || "", note = was;
+    const noteDirty = () => note.trim() !== was;
+    const keep = button(t("Save"), "primary", () => save());
+    keep.hidden = true;
+    const noteIn = noteBox(was, t("e.g. For the weekly report; the other PDF skill is for forms"), (v) => { note = v; keep.hidden = !!ta || !noteDirty(); });
+    const noteRow = el("div", "lib-skillnote");
+    noteRow.append(...field(t("Note"), noteIn, noteHint()));
+    ed.append(head, noteRow, body, bar);
     let cur = null, ta = null;
     const lf = (x) => x.replace(/\r\n?/g, "\n");
-    modal = { dirty: () => !!(ta && cur && ta.value !== lf(cur.text)) };
+    const fileDirty = () => !!(ta && cur && ta.value !== lf(cur.text));
+    modal = { save: () => save(), dirty: () => fileDirty() || noteDirty() };
+    const saveNote = async () => {
+      if (!noteDirty()) return true;
+      if (!(await change("skills/note", { name: s.name, note }, t("{name} saved", { name: s.name })))) return false;
+      was = note = note.trim();
+      keep.hidden = true;
+      return true;
+    };
     const read = async (f) => {
       body.replaceChildren(el("pre", "lib-md", "…"));
       try {
@@ -5588,7 +5817,7 @@ magpie.plugin("library", (ctx) => {
       }
     };
     const swap = async (f) => {
-      if (f === cur?.file || modal.dirty() && !(await confirmDiscard())) return;
+      if (f === cur?.file || fileDirty() && !(await confirmDiscard())) return;
       ta = null;
       read(f);
     };
@@ -5603,7 +5832,8 @@ magpie.plugin("library", (ctx) => {
       body.replaceChildren(rendered(cur));
       const where = el("span", "note");
       where.append(pathLink(cur.path));
-      bar.replaceChildren(where, el("span", "grow"), button(t("Edit"), "", edit), button(t("Close"), "", closeLibModal));
+      keep.hidden = !noteDirty();
+      bar.replaceChildren(where, el("span", "grow"), button(t("Edit"), "", edit), button(t("Close"), "", closeLibModal), keep);
     };
     const edit = () => {
       ta = el("textarea", "lib-text lib-skilltext");
@@ -5617,13 +5847,13 @@ magpie.plugin("library", (ctx) => {
       };
       body.replaceChildren(ta);
       const note = el("span", "note lib-reaches", t("Saved in the library: every agent given {name} gets it", { name: s.name }) + " · " + (/^Mac/.test(navigator.platform) ? "⌘S" : "Ctrl+S"));
-      bar.replaceChildren(note, el("span", "grow"), button(t("Cancel"), "", async () => { if (!modal.dirty() || await confirmDiscard()) show(); }), button(t("Save"), "primary", save));
+      bar.replaceChildren(note, el("span", "grow"), button(t("Cancel"), "", async () => { if (!fileDirty() || await confirmDiscard()) show(); }), button(t("Save"), "primary", save));
       ta.focus({ preventScroll: true });
       ta.setSelectionRange(0, 0);
     };
     const save = async () => {
-      if (!ta) return;
-      if (!modal.dirty()) return show();
+      if (!(await saveNote()) || !ta) return;
+      if (!fileDirty()) return show();
       const f = cur.file;
       if (await change("skills/save", { name: s.name, file: f, text: ta.value, was: cur.text }, t("{name} saved", { name: f }))) {
         ta = null;

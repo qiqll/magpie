@@ -240,13 +240,27 @@ func TestBrowserToolsInARealBrowser(t *testing.T) {
 // for it to connect; site serves browserFixture (and /two).
 func realBrowser(t *testing.T) (srv, site *httptest.Server) {
 	t.Helper()
+	srv, site, _ = realBrowserFrom(t, func(srv *httptest.Server) string {
+		ext := t.TempDir()
+		if err := browserext.Write(ext, srv.URL); err != nil {
+			t.Fatal(err)
+		}
+		return ext
+	})
+	return srv, site
+}
+
+// realBrowserFrom is realBrowser with the extension loaded from the folder
+// ext writes, and the gateway's Server too.
+func realBrowserFrom(t *testing.T, ext func(*httptest.Server) string) (srv, site *httptest.Server, s *Server) {
+	t.Helper()
 	chrome := os.Getenv("MAGPIE_BROWSER_CHROME")
 	if chrome == "" {
 		t.Skip("MAGPIE_BROWSER_CHROME names no Chromium")
 	}
 	fresh(t)
 
-	s := New()
+	s = New()
 	srv = httptest.NewServer(lanGuard(s.Handler()))
 	t.Cleanup(srv.Close)
 	site = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -258,6 +272,11 @@ func realBrowser(t *testing.T) (srv, site *httptest.Server) {
 		case "/frames":
 			io.WriteString(w, strings.Replace(framesFixture, "SRC", html.EscapeString(r.URL.Query().Get("src")), 1))
 			return
+		case "/watch":
+			// the user's own page: its title counts the times it was put
+			// behind another tab
+			io.WriteString(w, `<!doctype html><title>Watch 0</title><h1>The user's page</h1><script>let hid = 0; document.addEventListener("visibilitychange", () => { if (document.hidden) document.title = "Watch " + ++hid; });</script>`)
+			return
 		case "/refused":
 			w.WriteHeader(http.StatusForbidden)
 			io.WriteString(w, "<!doctype html><title>Denied</title><h1>Access denied</h1>")
@@ -267,18 +286,23 @@ func realBrowser(t *testing.T) (srv, site *httptest.Server) {
 	}))
 	t.Cleanup(site.Close)
 
-	ext := t.TempDir()
-	if err := browserext.Write(ext, srv.URL); err != nil {
-		t.Fatal(err)
-	}
+	dir := ext(srv)
 	profile := t.TempDir()
-	cmd := exec.Command(chrome, "--headless=new", "--user-data-dir="+profile,
-		"--disable-extensions-except="+ext, "--load-extension="+ext,
+	head := "--headless=new"
+	if os.Getenv("MAGPIE_BROWSER_HEADFUL") != "" {
+		// a window on the screen: only then does Chrome put a tab behind
+		// another one out of sight (headless, every tab is visible)
+		head = "--window-size=1000,700"
+	}
+	cmd := exec.Command(chrome, head, "--user-data-dir="+profile,
+		"--disable-extensions-except="+dir, "--load-extension="+dir,
 		"--no-first-run", "--no-default-browser-check", "--disable-gpu", "--remote-debugging-port=0",
 		// with the test's own HOME there is no keychain (macOS) or keyring
 		// (Linux), and Chrome waits on it before the extension's storage
 		// answers
-		"--use-mock-keychain", "--password-store=basic", "about:blank")
+		"--use-mock-keychain", "--password-store=basic",
+		// the user's own page, which the extension never attaches to
+		site.URL+"/watch")
 	var logs bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &logs, &logs
 	if err := cmd.Start(); err != nil {
@@ -305,7 +329,7 @@ func realBrowser(t *testing.T) (srv, site *httptest.Server) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return srv, site
+	return srv, site, s
 }
 
 // browserCaller calls the browser's tools as the agent session session:
@@ -352,9 +376,8 @@ func browserCaller(t *testing.T, srv *httptest.Server, session string) (call fun
 }
 
 // Two agent sessions at once in a real Chromium (packinggoodsllc_07668 on
-// Discord: two agents behind one router took one tab): the first works in
-// the tab the user is looking at, the second, finding that tab another's,
-// in a new tab of its own; each opens its tabs in a group of its own
+// Discord: two agents behind one router took one tab): each works in a
+// new tab of its own; each opens its tabs in a group of its own
 // ("Magpie", "Magpie 2"), and each sees the other's tab marked ~.
 func TestBrowserSessionsApartInARealBrowser(t *testing.T) {
 	srv, site := realBrowser(t)
@@ -432,4 +455,93 @@ func TestBrowserToolActionsInARealBrowser(t *testing.T) {
 		t.Fatalf("an answer names the eighteen:\n%s", out)
 	}
 	ok("browser", map[string]any{"action": "tab_close"}, "Closed t")
+}
+
+// Agents leave the user's tab alone (the owner, 11-03: Magpie Browser
+// "老是会代替掉用户正在浏览的网页"; 11-04: "你到底彻底修复了没啊"): a call
+// that names no tab works in a new one, behind the tab the user is looking
+// at, in the session's Magpie group; a link that opens a tab, tab_new,
+// screenshots and a recording all happen behind it too. The user's page
+// counts each time it is put behind another tab, so a tab brought forward
+// for a moment and given back fails as well as one left in front.
+func TestBrowserLeavesTheUsersTabAlone(t *testing.T) {
+	srv, site := realBrowser(t)
+	call, ok := browserCaller(t, srv, "quiet")
+	users := regexp.MustCompile(`(?m)^\+ (t\d+) "Watch 0" .*/watch$`).FindStringSubmatch(ok("browser_tabs", nil))
+	if users == nil {
+		t.Fatal("no shown user's page to start with")
+	}
+	shown := func(when string) {
+		t.Helper()
+		list := ok("browser_tabs", nil)
+		if !regexp.MustCompile(`(?m)^\+ ` + users[1] + ` "Watch 0" .*/watch$`).MatchString(list) {
+			t.Fatalf("%s, the user's tab %s isn't shown, unchanged and never put behind (Watch N counts the times):\n%s", when, users[1], list)
+		}
+	}
+	shown("to start with")
+	if os.Getenv("MAGPIE_BROWSER_HEADFUL") == "" {
+		// headless, every tab is visible, so a tab brought forward for a
+		// moment and given back can't be told
+		t.Log("headless: only where the user's tab ends up is checked; MAGPIE_BROWSER_HEADFUL=1 catches a tab brought forward for a moment too")
+	}
+	page := ok("browser_navigate", map[string]any{"url": site.URL}, "Magpie fixture")
+	if strings.Contains(page, users[1]+":") {
+		t.Fatalf("navigated the user's tab:\n%s", page)
+	}
+	shown("after a navigate")
+	if list := ok("browser_tabs", nil); !regexp.MustCompile(`(?m)^\* t\d+ \[Magpie\] "Fixture"`).MatchString(list) {
+		t.Fatalf("the agent's tab isn't in its Magpie group:\n%s", list)
+	}
+	link := regexp.MustCompile(`- link "Open two"(?: \[[a-z=, ]+\])? \[ref=(e\d+)\]`).FindStringSubmatch(page)
+	if link == nil {
+		t.Fatalf("no link Open two in:\n%s", page)
+	}
+	ok("browser_click", map[string]any{"ref": link[1]}, "opened a new tab", "Page two")
+	shown("after a link opened a tab")
+	if list := ok("browser_tabs", nil); !regexp.MustCompile(`(?m)^\* t\d+ \[Magpie\] "Two"`).MatchString(list) {
+		t.Fatalf("the tab the link opened isn't the agent's, in its group:\n%s", list)
+	}
+	ok("browser_tabs", map[string]any{"action": "new", "url": site.URL + "/two"}, "Page two")
+	shown("after tab new")
+	if m := call("browser_screenshot", nil); m.Result.IsError || m.Result.Content[0].Type != "image" {
+		t.Fatalf("screenshot: %+v", m.Result.Content)
+	}
+	shown("after a screenshot")
+	ok("browser", map[string]any{"action": "record_start"}, "Recording")
+	ok("browser", map[string]any{"action": "tab_new", "url": site.URL}, "Opened t")
+	ok("browser", map[string]any{"action": "navigate", "url": site.URL + "/two", "screenshot": true}, "Page two")
+	ok("browser", map[string]any{"action": "record_stop"}, "Recorded 2 frames")
+	shown("after a recording")
+}
+
+// An older extension, loaded from the folder magpie writes, has the folder
+// written with this magpie's when it connects, for the browser to read
+// when it starts again.
+func TestBrowserOlderExtensionsFolderWritten(t *testing.T) {
+	var man string
+	realBrowserFrom(t, func(srv *httptest.Server) string {
+		t.Setenv("MAGPIE_ADDR", srv.Listener.Addr().String())
+		dir := browserext.Dir()
+		if err := browserext.Write(dir, srv.URL); err != nil {
+			t.Fatal(err)
+		}
+		man = filepath.Join(dir, "manifest.json")
+		b, _ := os.ReadFile(man)
+		old := bytes.Replace(b, []byte(`"version": "`+browserext.Version()+`"`), []byte(`"version": "0.0.1"`), 1)
+		if bytes.Equal(old, b) {
+			t.Fatalf("no version in %s", b)
+		}
+		os.WriteFile(man, old, 0o644)
+		return dir
+	})
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if b, _ := os.ReadFile(man); bytes.Contains(b, []byte(`"version": "`+browserext.Version()+`"`)) {
+			break
+		}
+		if time.Now().After(deadline) {
+			b, _ := os.ReadFile(man)
+			t.Fatalf("the folder still has:\n%s", b)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }

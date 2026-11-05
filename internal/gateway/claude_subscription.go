@@ -213,8 +213,11 @@ type subscriptionRun struct {
 	settingsMu    sync.Mutex
 	safeguards    json.RawMessage
 	safeguardBeta string
-	clientMarks   bool
-	lean          bool // started with leanSystem as its system prompt
+	// guard is the file the interactive mode's tap reads its safeguards
+	// from on each request (claudetui.GuardEnv); "" with none
+	guard       string
+	clientMarks bool
+	lean        bool // started with leanSystem as its system prompt
 	// appended: started with the caller's instructions after Claude
 	// Code's own system prompt (req.appendPrompt), not in its first
 	// message; its session, resumed, is given them so again
@@ -267,8 +270,11 @@ type subscriptionRun struct {
 	behindTurn string
 	// behindLine is the session line the conversation at behindKey ends
 	// at: the interactive mode, which can't be taken back, is branched
-	// off its session there (resume)
+	// off its session there (resume). behindMsg is the id of the reply
+	// that line is of: the cut goes after that reply's last line, which
+	// the interactive mode may tell after the turn ended (cutReply)
 	behindLine string
+	behindMsg  string
 	// endWhy is why magpie ended it, as the log of a turn that finds it
 	// gone says (abortFor); results are the calls whose results it was
 	// last handed (continueWith)
@@ -375,9 +381,16 @@ type subscriptionRun struct {
 	parkedSeq int
 	// lastLine is the session line of the reply it wrote last, and
 	// backLine lastLine as the turn it was resumed for began: the
-	// conversation at backKey ends there. Under mu.
+	// conversation at backKey ends there. lastMsg is the id of the reply
+	// heard last, and backMsg lastMsg as the turn began: the interactive
+	// mode streams a reply first and tells its session lines after, read
+	// from the file it writes, so a client that asks its next turn (a
+	// prompt suggestion) at once finds lastLine still a line before that
+	// reply (sleepy_shibe: the call before its result). Under mu.
 	lastLine string
 	backLine string
+	lastMsg  string
+	backMsg  string
 
 	// promptTokens is the prompt its last reply was asked with (input,
 	// cache read and written), what a /compact shrinks (compactFrom); and
@@ -517,8 +530,8 @@ func claudeWorkDir() (string, error) {
 	return dir, nil
 }
 
-// clientWorkDir is the working directory the caller names, the last one
-// it names, as Claude Code ("Primary working directory:", or just "CWD:"
+// clientWorkDir is the working directory the caller names, the first one
+// it names (clientNamedWorkPlace), as Claude Code ("Primary working directory:", or just "CWD:"
 // on a --bare run), Codex (<cwd>), OpenCode ("Working directory:") and pi
 // ("Current working directory:") write it; "" when they name none, or one
 // that isn't an absolute path to a folder on this computer (a caller
@@ -562,8 +575,26 @@ func clientNamedWorkDir(req *Request) string {
 // (Codex's <environment_context> is one of the user's, OpenCode's <env> a
 // later message), and a line quoted from Claude Code's own words — its
 // instructions or a --bare run's "CWD:" — is never one of them.
+//
+// Of the texts that name a folder, the first goes: the one the
+// conversation started in (in that text, its last line). A caller that
+// moves says so in a message after (Claude
+// Code's "# Environment update", "Primary working directory: /y (was
+// /x)"), and taking that one gave a run started again for the
+// conversation (its saved session resumed, a branch, a replay) another
+// system prompt than the conversation's first run: envTurnsNote names the
+// folder, and a run in the caller's own folder has it in Claude Code's own
+// environment and saves its session in that folder's project, so the
+// session wasn't found. The prompt differed right after Claude Code's own
+// part, and the whole conversation was written to the cache again
+// (EricWvi on X: …/frontend, then …/frontend/src). The run has no tools
+// of its own; the move reaches the model in the conversation as the
+// caller said it.
 func clientNamedWorkPlace(req *Request) (dir string, inTurns bool) {
 	look := func(t string, turn bool, re *regexp.Regexp) {
+		if dir != "" {
+			return
+		}
 		for _, m := range re.FindAllStringSubmatch(t, -1) {
 			for _, g := range m[1:] {
 				g = strings.Trim(strings.TrimSpace(g), "`'\"")
@@ -1151,16 +1182,23 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	if len(req.Safeguards) > 0 {
 		env = append(env, "ANTHROPIC_BETAS="+req.SafeguardBeta)
 	}
-	// The interactive mode's Claude Code reads CLAUDE_CODE_EXTRA_BODY once,
-	// as it starts: one handed over later (apply_flag_settings, or a
-	// --settings file rewritten) changes nothing it sends, so the run is
-	// given the safeguards here, and one whose turn changes them is
-	// started again (setSafeguards). A client's cache tail isn't added to
-	// Claude Code's own marks, which it keeps (clientCache.pasted).
-	tuiBody := ""
+	// The interactive mode's Claude Code reads CLAUDE_CODE_EXTRA_BODY from
+	// its own environment, which apply_flag_settings or a --settings file
+	// rewritten don't reach once it runs: the run is given the safeguards
+	// here, and a file (guard) its tap puts each later turn's in every
+	// request from (claudetui.GuardEnv, setSafeguards). A client's cache
+	// tail isn't added to Claude Code's own marks, which it keeps
+	// (clientCache.pasted).
+	tuiBody, guard := "", ""
 	if tui && len(req.Safeguards) > 0 {
 		tuiBody = claudeExtraBody(req.Safeguards, "")
 		env = append(env, "CLAUDE_CODE_EXTRA_BODY="+tuiBody)
+		guard = filepath.Join(tmp, "guard.json")
+		if writeGuard(guard, tuiBody) == nil {
+			env = append(env, claudetui.GuardEnv+"="+guard)
+		} else {
+			guard = ""
+		}
 	}
 	if tui && (!client || configDir != "") {
 		// a folder of magpie's, or an account folder of magpie's whose
@@ -1211,6 +1249,7 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	run.cachePrefix = prefix
 	if tuiBody != "" {
 		run.safeguards = bytes.Clone(req.Safeguards)
+		run.guard = guard
 	}
 	run.allowed = allowedTools(req)
 	if user, _ := ownerAccount(owner); user != "" {
@@ -1531,15 +1570,27 @@ func (r *subscriptionRun) setSafeguards(req *Request) error {
 		return errors.New("safety beta changed; restart Claude Code")
 	}
 	if r.tui {
-		// It read them as it started (startRun), and reads them no more.
-		// Claude Code's classifier context changes on nearly every
-		// request in parts of its own (the tool ids of the turns before,
-		// git status, system-reminder ids): restarting for those started
-		// a new run for every tool round and every turn, each one
-		// writing the whole conversation to the cache again, and one
-		// message of xybio's spent a Pro account's 5-hour window. The run
-		// goes on with what it started with unless a part that says what
-		// the user allows changed.
+		// Its tap puts the guard file's safeguards in each request it
+		// makes from now on, as Claude Code would with them in its
+		// environment, once it has seen a request to put them in
+		// (guardLive): the run goes on, its cache too, and upstream is
+		// sent this turn's classifier context whole (#4804).
+		if len(req.Safeguards) > 0 && r.guardLive() {
+			if err := writeGuard(r.guard, claudeExtraBody(req.Safeguards, "")); err != nil {
+				return fmt.Errorf("the turn's safeguards could not be handed to Claude Code (%v); restart it", err)
+			}
+			r.safeguards = bytes.Clone(req.Safeguards)
+			return nil
+		}
+		// A Claude Code without the tap read them as it started
+		// (startRun), and reads them no more. Its classifier context
+		// changes on nearly every request in parts of its own (the tool
+		// ids of the turns before, git status, system-reminder ids):
+		// restarting for those started a new run for every tool round
+		// and every turn, each one writing the whole conversation to the
+		// cache again, and one message of xybio's spent a Pro account's
+		// 5-hour window. Such a run goes on with what it started with
+		// unless a part that says what the user allows changed.
 		if bytes.Equal(safeguardsKept(r.safeguards), safeguardsKept(req.Safeguards)) {
 			return nil
 		}
@@ -1550,6 +1601,47 @@ func (r *subscriptionRun) setSafeguards(req *Request) error {
 	if err == nil {
 		r.cacheTail = tail
 		r.safeguards = bytes.Clone(req.Safeguards)
+	}
+	return err
+}
+
+// guardLive is whether the run's tap puts the guard file's safeguards in
+// Claude Code's requests: it said so (<guard>.live) at the first one.
+func (r *subscriptionRun) guardLive() bool {
+	if r.guard == "" {
+		return false
+	}
+	_, err := os.Stat(r.guard + ".live")
+	return err == nil
+}
+
+// writeGuard replaces the guard file with body whole: the tap reads it as
+// Claude Code makes a request, never half-written.
+func writeGuard(path, body string) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "guard-*.tmp")
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(body)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(f.Name())
+		return err
+	}
+	// on Windows a rename over a file being read fails a moment
+	for i := 0; ; i++ {
+		if err = os.Rename(f.Name(), path); err == nil || i == 20 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		_ = os.Remove(f.Name())
 	}
 	return err
 }
@@ -1702,14 +1794,14 @@ func (b *subscriptionBridge) resume(req *Request, owner string) (*subscriptionRu
 	}
 	b.mu.Lock()
 	run := b.idle[key]
-	back, at := "", "" // the turn the run is taken back from first, and the line before it
+	back, at, atMsg := "", "", "" // the turn the run is taken back from first, the line before it and its reply
 	if run == nil {
 		// the run went on with a turn this one doesn't follow: Claude
 		// Code's side question, asked as the conversation so far and a
 		// message more (#1638). It goes back to before that turn.
 		for _, r := range b.idle {
 			if r.behindKey == key && r.behindTurn != "" {
-				run, back, at = r, r.behindTurn, r.behindLine
+				run, back, at, atMsg = r, r.behindTurn, r.behindLine, r.behindMsg
 				break
 			}
 		}
@@ -1726,7 +1818,7 @@ func (b *subscriptionBridge) resume(req *Request, owner string) (*subscriptionRu
 	if run != nil {
 		delete(b.idle, run.idleKey)
 		run.idleKey = ""
-		run.behindKey, run.behindTurn, run.behindLine = "", "", ""
+		run.behindKey, run.behindTurn, run.behindLine, run.behindMsg = "", "", "", ""
 	}
 	b.mu.Unlock()
 	if run == nil {
@@ -1745,7 +1837,7 @@ func (b *subscriptionBridge) resume(req *Request, owner string) (*subscriptionRu
 		// a branch does, told only the turn. Let go, a new Claude Code was
 		// told the whole conversation each turn Claude Code asked its
 		// prompt suggestion after (bbfatx on X).
-		req.branch = run.branchAt(at, owner, since)
+		req.branch = run.branchAt(at, atMsg, owner, since)
 	}
 	if run.tui && (back != "" || urlImages(since) > 0) {
 		// the interactive mode can't be taken back, nor pasted an image
@@ -1796,7 +1888,7 @@ func (b *subscriptionBridge) resume(req *Request, owner string) (*subscriptionRu
 	ch := make(chan Event, 64)
 	run.segment = ch
 	run.active = time.Now()
-	run.turnUUID, run.backKey, run.backLine = turn, key, run.lastLine
+	run.turnUUID, run.backKey, run.backLine, run.backMsg = turn, key, run.lastLine, run.lastMsg
 	run.allowed = allowedTools(req)
 	run.mu.Unlock()
 	run.endIn(runTimeout)
@@ -2103,9 +2195,9 @@ func (r *subscriptionRun) ended(req *Request, said, stop string, ok bool) {
 	// the client's next request, its results sent again or the next turn,
 	// found no run and a new one was told the whole conversation.
 	r.mu.Lock()
-	turn, back, backLine := r.turnUUID, r.backKey, r.backLine
+	turn, back, backLine, backMsg := r.turnUUID, r.backKey, r.backLine, r.backMsg
 	if !ok || stop != "tool" {
-		r.turnUUID, r.backKey, r.backLine = "", "", ""
+		r.turnUUID, r.backKey, r.backLine, r.backMsg = "", "", "", ""
 	}
 	if ok && stop == "stop" {
 		r.replied = true
@@ -2150,7 +2242,7 @@ func (r *subscriptionRun) ended(req *Request, said, stop string, ok bool) {
 	// the conversation before this turn, when the run was resumed for
 	// it: a side question Claude Code asked of it is taken back from
 	// there when the conversation's own next turn comes (resume)
-	r.behindKey, r.behindTurn, r.behindLine = back, turn, backLine
+	r.behindKey, r.behindTurn, r.behindLine, r.behindMsg = back, turn, backLine, backMsg
 	// the boundary before conv's: the conversation as the client has it,
 	// when this turn was a side question of it, whose exchange the
 	// client's own next turn leaves out
@@ -2261,9 +2353,11 @@ type savedSession struct {
 	// before the side question's own message, behindTurn, that a -p run
 	// was told under magpie's uuid, or, for the interactive mode, which
 	// names its messages itself, after behindLine, the reply before it
+	// (as far as that reply's last line, behindMsg)
 	behind     string
 	behindTurn string
 	behindLine string
+	behindMsg  string
 	loose      *looseTurn
 	tools      map[string]bool // the tools its agent was told of
 	at         time.Time       // since when it waits
@@ -2300,7 +2394,7 @@ func (b *subscriptionBridge) shelve(run *subscriptionRun) {
 	key := run.idleKey
 	s := &savedSession{session: sid, sessions: sessions, owner: run.owned(), conv: run.convKey, key: key, behind: run.behindKey, loose: run.loose, tools: tools, at: run.idleAt, cachePrefix: run.cachePrefix, appended: run.appended}
 	if run.tui {
-		s.behindLine = run.behindLine
+		s.behindLine, s.behindMsg = run.behindLine, run.behindMsg
 	} else {
 		s.behindTurn = run.behindTurn
 	}
@@ -2363,7 +2457,7 @@ func (b *subscriptionBridge) unshelve(req *Request, owner string) *savedSession 
 		// where that turn put it, not where the conversation's own next
 		// turn comes by (#4914)
 		for _, e := range b.shelf {
-			if e.behind == key && (e.behindTurn != "" || e.behindLine != "") && (s == nil || e.at.After(s.at)) {
+			if e.behind == key && (e.behindTurn != "" || e.behindLine != "" || e.behindMsg != "") && (s == nil || e.at.After(s.at)) {
 				s = e
 			}
 		}
@@ -2398,8 +2492,8 @@ func (b *subscriptionBridge) unshelve(req *Request, owner string) *savedSession 
 func (s *savedSession) cutBehind() bool {
 	var cut string
 	var err error
-	if s.behindLine != "" {
-		cut, err = cutSession(s.sessions, s.session, s.behindLine)
+	if s.behindLine != "" || s.behindMsg != "" {
+		cut, err = cutReply(s.sessions, s.session, s.behindLine, s.behindMsg)
 	} else {
 		cut, err = cutSessionBefore(s.sessions, s.session, s.behindTurn)
 	}
@@ -2417,13 +2511,17 @@ func (s *savedSession) cutBehind() bool {
 // noteLines keeps where in the run's session a line calling the client's
 // tools ids was written: uuid, as Claude Code's output tells it. Claude
 // Code's own lines (<synthetic>) are no reply's.
-func (r *subscriptionRun) noteLines(uuid, model string, ids []string) {
+// msg is the line's message id, when it wasn't streamed (replyBegun says so).
+func (r *subscriptionRun) noteLines(uuid, model, msg string, ids []string) {
 	if uuid == "" || model == "<synthetic>" {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.lastLine = uuid
+	if msg != "" {
+		r.lastMsg = msg
+	}
 	if len(ids) == 0 {
 		return
 	}
@@ -2432,7 +2530,9 @@ func (r *subscriptionRun) noteLines(uuid, model string, ids []string) {
 	}
 	r.lineSeq++
 	for _, id := range ids {
-		r.lines[id] = callLine{uuid: uuid, seq: r.lineSeq}
+		// the conversation its reply answered, kept as the run parked on
+		// the call before its line was read (park)
+		r.lines[id] = callLine{uuid: uuid, seq: r.lineSeq, told: r.lines[id].told}
 	}
 	if len(r.lines) > linesMost {
 		for id, l := range r.lines {
@@ -2504,7 +2604,7 @@ func (b *subscriptionBridge) branch(req *Request, owner string) *savedSession {
 		run.mu.Lock()
 		at, seq, said := "", 0, ""
 		for _, id := range calls {
-			if l, ok := run.lines[id]; ok && l.seq > seq {
+			if l, ok := run.lines[id]; ok && l.uuid != "" && l.seq > seq {
 				at, seq, said = l.uuid, l.seq, l.told
 			}
 		}
@@ -2525,18 +2625,32 @@ func (b *subscriptionBridge) branch(req *Request, owner string) *savedSession {
 	return nil
 }
 
-// branchAt is a branch of the run's session cut after its line at, for a
-// turn of its conversation told since: the copy is made now, before the
-// run is let go with its file, and is the branch's own. nil when there is
-// no line or session, or the copy can't be made.
-func (r *subscriptionRun) branchAt(at, owner string, since []Message) *savedSession {
+// replyBegun notes a reply message as it begins: its lines in the session
+// come later (lastMsg).
+func (r *subscriptionRun) replyBegun(msg string) {
+	if msg == "" {
+		return
+	}
+	r.mu.Lock()
+	r.lastMsg = msg
+	r.mu.Unlock()
+}
+
+// branchAt is a branch of the run's session cut after its line at, as far
+// as the last line of its reply msg (cutReply), for a turn of its
+// conversation told since: the copy is made now, before the run is let go
+// with its file, and is the branch's own. A run whose reply was its first
+// may have heard no line of its own as the side question began, only the
+// reply's id, and is cut by that alone (sleepy_shibe). nil when there is
+// neither a line nor a reply, no session, or the copy can't be made.
+func (r *subscriptionRun) branchAt(at, msg, owner string, since []Message) *savedSession {
 	r.mu.Lock()
 	sid, sessions, marks := r.sessionID, slices.Clone(r.sessions), r.clientMarks
 	r.mu.Unlock()
-	if at == "" || sid == "" || len(sessions) == 0 || marks {
+	if at == "" && msg == "" || sid == "" || len(sessions) == 0 || marks {
 		return nil
 	}
-	cut, err := cutSession(sessions, sid, at)
+	cut, err := cutReply(sessions, sid, at, msg)
 	if err != nil {
 		log.Printf("claude: the interactive run's session couldn't be cut before its side question (%v)", err)
 		return nil
@@ -2561,24 +2675,95 @@ func cutSession(dirs []string, sid, uuid string) (string, error) {
 	return cutSessionAt(dirs, sid, uuid, cutAfter)
 }
 
+// cutSessionAt is cutSession as far as where at says in the session's
+// lines, uuid's line found by mark.
+func cutSessionAt(dirs []string, sid, uuid string, at func(b, mark []byte, uuid string) int) (string, error) {
+	if uuid == "" {
+		return "", errors.New("no session to cut")
+	}
+	mark := []byte(`"uuid":"` + uuid + `"`)
+	return cutSessionWhere(dirs, sid, "line "+uuid, func(b []byte, _ bool) int { return at(b, mark, uuid) })
+}
+
+// cutReply is cutSession as far as the last line of the reply msg, the
+// message whose line uuid is or one after it: the conversation as it
+// stood before the side question asked after that reply. The interactive
+// mode tells a reply's lines only after its stream ended, so the line the
+// run had heard last as the side question began may be one before the
+// reply (its tool call, before the result and the reply's words): cut
+// there, the conversation went on with a call Claude Code took as
+// interrupted (sleepy_shibe). A run's first reply may have no line heard
+// at all, uuid empty, and is cut by msg alone. Lines of msg come before
+// the side question's, which the run was told after the reply; they are
+// waited for as long as a line is (cutWait), as an earlier line found
+// first would cut the reply off. With no msg, or none of its lines in the
+// session by then, the cut is after uuid's line.
+func cutReply(dirs []string, sid, uuid, msg string) (string, error) {
+	if msg == "" {
+		return cutSession(dirs, sid, uuid)
+	}
+	mark := []byte(`"uuid":"` + uuid + `"`)
+	return cutSessionWhere(dirs, sid, "reply "+msg, func(b []byte, last bool) int {
+		if end := cutAfterReply(b, msg); end > 0 {
+			return end
+		}
+		if !last || uuid == "" {
+			return -1
+		}
+		return cutAfter(b, mark, uuid)
+	})
+}
+
+// cutAfterReply is where in a session's lines b the last whole assistant
+// line of message msg ends, -1 when none is there.
+func cutAfterReply(b []byte, msg string) int {
+	mark := []byte(`"id":"` + msg + `"`)
+	end := -1
+	for at := 0; at < len(b); {
+		nl := bytes.IndexByte(b[at:], '\n')
+		if nl < 0 {
+			break
+		}
+		line := b[at : at+nl]
+		at += nl + 1
+		if !bytes.Contains(line, mark) {
+			continue
+		}
+		var l struct {
+			Type        string `json:"type"`
+			IsSidechain bool   `json:"isSidechain"`
+			Message     struct {
+				ID string `json:"id"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &l) == nil && l.Type == "assistant" && !l.IsSidechain && l.Message.ID == msg {
+			end = at
+		}
+	}
+	return end
+}
+
 // cutSessionBefore is cutSession as far as the line before uuid's: the
 // session as it stood before that message was told.
 func cutSessionBefore(dirs []string, sid, uuid string) (string, error) {
 	return cutSessionAt(dirs, sid, uuid, cutBefore)
 }
 
-func cutSessionAt(dirs []string, sid, uuid string, at func(b, mark []byte, uuid string) int) (string, error) {
-	if sid == "" || uuid == "" || strings.ContainsAny(sid, `/\`) || strings.Contains(sid, "..") {
+// cutSessionWhere copies session sid as far as the place at finds in its
+// lines (> 0), asked again until cutWait is over; last is the final ask.
+// what is what it looks for, as an error says.
+func cutSessionWhere(dirs []string, sid, what string, at func(b []byte, last bool) int) (string, error) {
+	if sid == "" || strings.ContainsAny(sid, `/\`) || strings.Contains(sid, "..") {
 		return "", errors.New("no session to cut")
 	}
-	mark := []byte(`"uuid":"` + uuid + `"`)
 	for deadline := time.Now().Add(cutWait); ; time.Sleep(20 * time.Millisecond) {
+		last := time.Now().After(deadline)
 		for _, dir := range dirs {
 			b, err := os.ReadFile(filepath.Join(dir, sid+".jsonl"))
 			if err != nil {
 				continue
 			}
-			end := at(b, mark, uuid)
+			end := at(b, last)
 			if end <= 0 {
 				continue
 			}
@@ -2592,8 +2777,8 @@ func cutSessionAt(dirs []string, sid, uuid string, at func(b, mark []byte, uuid 
 			}
 			return id, nil
 		}
-		if time.Now().After(deadline) {
-			return "", fmt.Errorf("line %s isn't in session %s", uuid, sid)
+		if last {
+			return "", fmt.Errorf("%s isn't in session %s", what, sid)
 		}
 	}
 }
@@ -2920,6 +3105,31 @@ func (r *subscriptionRun) park() {
 		if l.seq > r.parkedSeq && l.told == "" {
 			l.told = r.told
 			r.lines[id] = l
+		}
+	}
+	// The interactive mode streams a reply first and its session lines
+	// come after, read from the file Claude Code writes (118 to 162ms
+	// after the call), so the run parks before it has the line of a call
+	// it made. The calls the client was shown are this reply's: they
+	// answer the conversation heard now, whenever their line comes
+	// (noteLines keeps it). Before, the line came with no conversation
+	// and the next park gave it the next request's, so no request that
+	// answered those calls after another did matched it (branch): Claude
+	// Code's AgentSummary, asking its sub-agent's progress with the
+	// results the sub-agent's own next turn had taken, and a fork's
+	// directive were told the whole conversation by a new Claude Code,
+	// pasted as one text, and read only the tools and system prompt from
+	// the cache, 6% of 169k twice in 35s (kay20475 on X).
+	if r.lines == nil {
+		r.lines = map[string]callLine{}
+	}
+	for _, c := range r.shown {
+		if l := r.lines[c.id]; l.told == "" {
+			if l.uuid == "" {
+				l.seq = r.lineSeq // aged as a line noted now (linesMost)
+			}
+			l.told = r.told
+			r.lines[c.id] = l
 		}
 	}
 	r.parkedSeq = r.lineSeq
@@ -3610,7 +3820,11 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 					ids = append(ids, c.ID)
 				}
 			}
-			r.noteLines(envelope.UUID, whole.Model, ids)
+			msg := ""
+			if !streamed[whole.ID] {
+				msg = whole.ID
+			}
+			r.noteLines(envelope.UUID, whole.Model, msg, ids)
 		}
 		// a message not streamed is told by its id: a streamed one's
 		// whole messages come after its stream's events, under its id;
@@ -3864,6 +4078,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 		switch e.Type {
 		case "message_start":
 			streamed[e.Message.ID] = true
+			r.replyBegun(e.Message.ID)
 			begin(e.Message.ID, e.Message.Model, e.Message.Usage)
 		case "content_block_start":
 			switch e.ContentBlock.Type {
@@ -4059,6 +4274,15 @@ func (u cliUsage) gateway() Usage {
 }
 
 func renderClaudePrompt(req *Request) ([]map[string]any, error) {
+	return renderClaudePromptAt(req, historyEnd(req.Messages))
+}
+
+// renderClaudePromptAt is renderClaudePrompt with the turn to answer
+// beginning at split. split == len(req.Messages) tells every message as
+// history, with no turn to answer: a transcript's user line before its
+// reply (replaySession), which answers the last of them, while the turn to
+// answer is typed after it.
+func renderClaudePromptAt(req *Request, split int) ([]map[string]any, error) {
 	var blocks []map[string]any
 	var text strings.Builder
 	// a lean run has them as its system prompt (leanSystem), an appending
@@ -4107,7 +4331,7 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 	// after the last reply that calls no tool, as nextTurn splits it). Told
 	// as one stretch of Human:/Assistant: text, the images of earlier turns
 	// read as just sent, and the model answered them again (#1365).
-	split := historyEnd(req.Messages)
+	whole := split > 0 && split == len(req.Messages)
 	// The history is told in chunks, each a block of its own (historyChunk).
 	// A conversation with no reply that calls no tool, as a sub-agent's
 	// loop of tool calls (Claude Code's AgentSummary asks a summary of one
@@ -4139,10 +4363,16 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 			chunk = len(blocks) - 1
 		}
 	}
+	if countImages(req.Messages[split:]) > 0 && (split == 0 || countImages(req.Messages[:split]) == 0) {
+		text.WriteString(imageNotesNote + "\n\n")
+	}
 	if slices.ContainsFunc(req.Messages, callsTool) {
 		text.WriteString(pastCallsNote + "\n\n")
 	}
-	if split > 0 {
+	switch {
+	case whole:
+		text.WriteString("</conversation_history>")
+	case split > 0:
 		text.WriteString("</current_turn>")
 	}
 	// The one mark a run's first message may have (Claude Code keeps three
@@ -4307,6 +4537,17 @@ func currentTurnOpen(msgs []Message, split int) string {
 	return "</conversation_history>\n\n<current_turn>\nThe turn to answer now. Any \"[Image: …]\" notes after it are about " +
 		"the images above in their order: the conversation history's first, then this turn's.\n\n"
 }
+
+// imageNotesNote ends a turn whose images (a tool result's among them) all
+// belong to it, where currentTurnOpen has no history to say whose the notes
+// are. Claude Code notes each image it is given ("[Image: source:
+// …/images/3.jpg]") in a note after the message, with a path in the
+// gateway's temp folder. Told nothing of them, the model took the notes for
+// the images, said it could not see them and quoted the paths as on
+// another computer (a Discord report, v0.1.2862).
+const imageNotesNote = "(The images above, those in tool results too, are attached to this message as image content you can see. " +
+	"Any \"[Image: …]\" notes after it are Claude Code's record of where it keeps them, on its own computer: " +
+	"a path in one is not something to open, and the image itself is in the message.)"
 
 // countImages is how many images msgs carry, their tool results' among them.
 func countImages(msgs []Message) int {
@@ -4538,6 +4779,9 @@ func renderClaudeTurn(msgs []Message, tools []Tool) []map[string]any {
 			text.WriteString(label + ": ")
 		}
 		blocks = renderParts(blocks, &text, m.Parts, offered)
+	}
+	if countImages(msgs) > 0 {
+		text.WriteString("\n\n" + imageNotesNote)
 	}
 	if slices.ContainsFunc(msgs, callsTool) {
 		text.WriteString("\n\n" + pastCallsNote)
@@ -5111,8 +5355,9 @@ func (r *subscriptionRun) continueWith(results []Part, said string, tools []brid
 		close(waiter)
 	}
 	if delivered == 0 {
-		r.abort()
-		return nil, fmt.Errorf("the agent is not waiting for tool results %s", callIDs(results))
+		err := fmt.Errorf("the agent is not waiting for tool results %s", callIDs(results))
+		r.abortFor(err.Error())
+		return nil, err
 	}
 	r.mu.Lock()
 	r.results = r.results[:0]
@@ -6151,10 +6396,11 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 			events, err = run.continueWith(withTaskNotices(results, req.Messages), saidWithResults(req.Messages), more)
 		}
 		if err != nil {
-			run.abort()
-			// it ended while it waited: a new one is told the whole
-			// conversation
-			run, how = nil, runExpired
+			// it ended while it waited, or can't take the results: a new
+			// one is told the whole conversation, and the log, and what a
+			// later request is told of it (whyLost), say why
+			run.abortFor(err.Error())
+			run, how = nil, runExpired+": "+err.Error()
 		}
 	}
 	// how tool results found the run waiting on them, or why a new one is

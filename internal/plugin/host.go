@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -617,6 +618,8 @@ type Loaded struct {
 	ServedBy map[string]string `json:"servedBy,omitempty"`
 	// Tools are the tools its tool hook gives (tools.go)
 	Tools []Tool `json:"tools,omitempty"`
+	// Searches are the web search APIs its search hook gives (search.go)
+	Searches []SearchDef `json:"searches,omitempty"`
 }
 
 // Clash is a provider id more than one plugin signs in to. The host runs
@@ -1138,7 +1141,7 @@ func startOn(ctx context.Context, bun string) (*host, bool, error) {
 		// a plugin that is only gateway middleware or an agent runs in
 		// magpie (internal/middleware, internal/agentplug), not here
 		if !e.Off && !InMagpieOnly(Target(e.Spec)) {
-			items = append(items, item{e.Spec, Target(e.Spec), e.Options, Gateway(Target(e.Spec))})
+			items = append(items, item{e.Spec, Target(e.Spec), hostOptions(Target(e.Spec), e.Options), Gateway(Target(e.Spec))})
 		}
 	}
 	var res struct {
@@ -1169,12 +1172,57 @@ func startOn(ctx context.Context, bun string) (*host, bool, error) {
 	}
 	h.loaded = res.Plugins
 	noteTools(res.Plugins)
+	noteSearches(res.Plugins)
 	for _, p := range res.Plugins {
 		if p.Error != "" {
 			log.Printf("plugin %s didn't load: %s", p.Spec, p.Error)
 		}
 	}
 	return h, false, nil
+}
+
+// ServePages sets whether this magpie's host runs the services plugins'
+// pages talk to (magpie.page.service), true until it is set. The app,
+// magpie web, serve, tray and tui do; a command such as magpie plugin
+// update doesn't, and its host may start while the app's host holds the
+// service's port: a plugin that waits for its port then holds the
+// command up, and goes on trying it in the background, to take it from
+// the app's host when that restarts (#5187).
+func ServePages(on bool) { noPageServices.Store(!on) }
+
+var noPageServices atomic.Bool
+
+// hostOptions are the options the host hands the plugin at target. In a
+// magpie that runs no page services, a service the plugin's option
+// moves is moved to a free port of its own, so the plugin's other parts
+// load at once beside the app's host holding the real one. One no
+// option moves is handed the plugin's options as they are.
+func hostOptions(target string, options map[string]any) map[string]any {
+	if !noPageServices.Load() {
+		return options
+	}
+	w, _ := Window(target)
+	if w == nil || w.Page == nil || w.Page.Service == nil || w.Page.Service.Option == "" {
+		return options
+	}
+	port, err := freePort()
+	if err != nil {
+		return options
+	}
+	out := make(map[string]any, len(options)+1)
+	maps.Copy(out, options)
+	out[w.Page.Service.Option] = float64(port)
+	return out
+}
+
+// freePort is a TCP port on 127.0.0.1 nothing listens on just now.
+func freePort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
 // pluginLoadWait bounds one plugin's load in the host, and

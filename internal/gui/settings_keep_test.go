@@ -130,6 +130,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		ModelOutputs:         map[string]int{"p/m": 131072},
 		ModelCompacts:        map[string]int{"p/*": 500000},
 		CompactAt:            400000,
+		AgentCompacts:        map[string]settings.AgentCompact{"claude": {At: 600000}},
 		ModelPrices:          map[string]settings.ModelPrice{"p/m": {Input: &one, Output: &two}},
 		ModelWires:           map[string]string{"p/m": "vendor-c/m"},
 		ModelAPIs:            map[string]string{"p/m": "anthropic"},
@@ -206,6 +207,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 	was.PanelShortcut = "Ctrl+Alt+K"
 	was.SearcherThen = []string{"fake/m1", "fake/m2"}                                     // set in its own row
 	was.RouterNote = "Los Angeles"                                                        // the Library's servers/hub-note
+	was.RouterAllTools = true                                                             // the Library's servers/hub-tools
 	was.BusyLoad = 150                                                                    // the Routing page's busy-load
 	was.Growth = &[]settings.GrowthStage{{From: 2, Window: settings.GrowthWeek, Cap: 70}} // its own page's
 	if err := settings.Save(was); err != nil {

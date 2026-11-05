@@ -46,9 +46,11 @@ type quotaScope struct {
 	every map[string]bool // provider id → the key may use every model of it; nil for a key held to nothing
 	refs  map[string][]provider.AccountRef
 	// bound, the request's user is told only the cards of seats, the
-	// accounts and keys it is on (usersSeats)
+	// accounts and keys it is on (usersSeats); own is that user as read
+	// for them, for a route told beside the cards (statusline)
 	bound bool
 	seats []userSeat
+	own   *usersOwn
 }
 
 // scopeQuotas is the request's quota scope. It answers a held key that
@@ -60,7 +62,7 @@ func (s *Server) scopeQuotas(w http.ResponseWriter, r *http.Request) (*quotaScop
 	var sc *quotaScope
 	if heldKey(who) {
 		if !who.Quotas {
-			refuseHeld(w, r, heldRefused)
+			refuseHeld(w, r, heldQuotasOff)
 			return nil, false
 		}
 		sc = newQuotaScope(who, provider.Catalog())
@@ -73,7 +75,7 @@ func (s *Server) scopeQuotas(w http.ResponseWriter, r *http.Request) (*quotaScop
 		if sc == nil {
 			sc = &quotaScope{who: who, refs: map[string][]provider.AccountRef{}}
 		}
-		sc.bound, sc.seats = true, own.seats
+		sc.bound, sc.seats, sc.own = true, own.seats, own
 	}
 	return sc, true
 }

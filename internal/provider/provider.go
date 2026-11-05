@@ -179,6 +179,12 @@ type Provider struct {
 	// used-up account (a switch off it, becoming its provider for it)
 	// restart it either way: the app greys Send there (8b0132b3d).
 	RestartApp bool `json:"restartApp,omitempty"`
+	// KeepSelf, on a Remote magpie that turned out to be this magpie
+	// (SelfAnswered), keeps it in routing anyway: left alone, such a
+	// provider is left out (SelfLeftOut). It is this computer's own, as
+	// sync's copy of the provider on the other computer points at a
+	// magpie that is not that one (hanslin1666 on Discord).
+	KeepSelf bool `json:"keepSelf,omitempty"`
 
 	// MaxConcurrency is how many requests may be out at the vendor at once
 	// on each of its keys or accounts (Discord, Lemon: a Codex account is
@@ -422,6 +428,11 @@ type Provider struct {
 	// an account by its name in lower case, a key by its KeyID. One not in
 	// it serves every model the provider does (see account_models.go).
 	AccountModels map[string][]string `json:"accountModels,omitempty"`
+	// AccountModelsAll is the keys, by KeyID, the user set back to every
+	// model (All models, or `accountmodels` with none): a Fetch models
+	// that ticks a key's own list for it (key_models_refresh.go) leaves
+	// these as the user set them.
+	AccountModelsAll map[string]bool `json:"accountModelsAll,omitempty"`
 	// AccountCaps is, for a subscription, the share (1–99) of its usage
 	// windows each account the user capped is used to at most, by its name
 	// in lower case: past it, routing takes the account for used up until
@@ -864,6 +875,7 @@ func (p Provider) clone() Provider {
 	p.AccountConcurrency = maps.Clone(p.AccountConcurrency)
 	p.AccountWeights = maps.Clone(p.AccountWeights)
 	p.Contexts = maps.Clone(p.Contexts)
+	p.AccountModelsAll = maps.Clone(p.AccountModelsAll)
 	if p.AccountModels != nil {
 		m := make(map[string][]string, len(p.AccountModels))
 		for k, v := range p.AccountModels {
@@ -959,7 +971,7 @@ func accountSettings(a, pk Provider) Provider {
 	// Send requests unmasked, the user's for a subscription and a
 	// plugin's provider too (isee1_1 on Discord)
 	a.Unredacted = pk.Unredacted
-	a.Proxy, a.AccountProxies, a.AccountModels = pk.Proxy, pk.AccountProxies, pk.AccountModels
+	a.Proxy, a.AccountProxies, a.AccountModels, a.AccountModelsAll = pk.Proxy, pk.AccountProxies, pk.AccountModels, pk.AccountModelsAll
 	a.AccountCaps, a.AccountWindowCaps = pk.AccountCaps, pk.AccountWindowCaps
 	a.CapStop, a.CapCareful = pk.CapStop, pk.CapCareful
 	a.AccountNames = pk.AccountNames
@@ -1793,6 +1805,7 @@ func normalize(p Provider) Provider {
 	p.Proxy = strings.TrimSpace(p.Proxy)
 	p.AccountProxies = normalAccountProxies(p.AccountProxies)
 	p.AccountModels = normalAccountModels(p.AccountModels)
+	p.AccountModelsAll = normalModelsAll(p.AccountModelsAll, p.AccountModels)
 	p.AccountCaps = normalAccountCaps(p.AccountCaps)
 	p.AccountWindowCaps = normalWindowCaps(p.AccountWindowCaps)
 	p.AccountAdded = normalAccountAdded(p.AccountAdded)
@@ -2463,9 +2476,10 @@ func (p Provider) Ready() bool {
 	return p.Account != nil || p.Key != "" || keyOptional(p)
 }
 
-// On is whether the provider takes requests: ready, not switched off and
-// not kept to its agent's own sign-in (KeptToAgent).
-func (p Provider) On() bool { return p.Ready() && !p.Off && !p.KeptToAgent() }
+// On is whether the provider takes requests: ready, not switched off,
+// not kept to its agent's own sign-in (KeptToAgent) and not a Remote
+// magpie that is this magpie (SelfLeftOut).
+func (p Provider) On() bool { return p.Ready() && !p.Off && !p.KeptToAgent() && !p.SelfLeftOut() }
 
 // KeptToAgent is whether the provider is Claude's subscription with
 // SwitchOnly on: its accounts are Claude Code's own sign-in alone, which
@@ -2497,12 +2511,12 @@ func SetOff(id string, off bool) error {
 func SwitchedOff(id string) (Provider, bool) {
 	id = strings.TrimSuffix(strings.TrimSpace(id), "[1m]")
 	if pid, _, ok := strings.Cut(id, "/"); ok {
-		if p, err := Find(pid); err == nil && (p.Off || p.KeptToAgent()) {
+		if p, err := Find(pid); err == nil && (p.Off || p.KeptToAgent() || p.SelfLeftOut()) {
 			return *p, true
 		}
 	}
 	for _, p := range All() {
-		if !p.Off && !p.KeptToAgent() || !p.Ready() {
+		if !p.Off && !p.KeptToAgent() && !p.SelfLeftOut() || !p.Ready() {
 			continue
 		}
 		if slices.ContainsFunc(p.Exposed(), func(m catalog.Model) bool { return m.ID == id }) {

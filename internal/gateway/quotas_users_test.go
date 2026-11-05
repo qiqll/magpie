@@ -182,3 +182,61 @@ func TestBoundUserToldItsOwnQuotas(t *testing.T) {
 		}
 	}
 }
+
+// main's /v1/magpie/statusline (0e1054ce) is made of the kept quotas and
+// the session's route. Bound by user, a request naming its user is told
+// the cards of its own seats alone, as the quotas are (T-090), and the
+// model of its own session's route alone, as /v1/magpie/route is
+// (T-099): another user who names the session is told no model.
+func TestBoundUserToldItsOwnStatusline(t *testing.T) {
+	fresh(t)
+	t.Setenv("MAGPIE_ADDR", "")
+	seedKeptPlans(t) // alpha's keys One and Two, beta's one key, each a plan's windows
+	now := time.Now().UTC().Truncate(time.Second)
+	keys, secrets := newCaller(t, "Full")
+	one, two := "alpha#"+provider.KeyID("alpha-one"), "alpha#"+provider.KeyID("alpha-two")
+	writeUsers(t, userFile{Keys: map[string]map[string]map[string]userBinding{
+		keys[0].ID: {"alpha": {"alice": {Who: one, Account: "One", At: now}, "bob": {Who: two, Account: "Two", At: now}}},
+	}})
+	s := byUserUpTo(t, New(), 1)
+	h := lanGuard(s.Handler())
+	tr := s.trace.begin(Route{Session: "sess-a", Model: "alpha/m-alice", caller: routeCaller{user: "alice", key: keys[0].ID}})
+	s.trace.update(tr, func(r *Route) { r.Done = true })
+	do := func(user string) (cards []string, model string) {
+		t.Helper()
+		r := httptest.NewRequest("GET", StatuslinePath+"?format=json&session=sess-a", nil)
+		r.RemoteAddr = "192.168.1.9:5000"
+		r.Header.Set("Authorization", "Bearer "+secrets[0])
+		if user != "" {
+			r.Header.Set(UserHeader, user)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("%q: %d %s", user, w.Code, w.Body)
+		}
+		var out struct {
+			Model    string
+			Accounts []struct{ Provider, User string }
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err, w.Body)
+		}
+		cards = []string{}
+		for _, q := range out.Accounts {
+			cards = append(cards, q.Provider+":"+strings.ToLower(q.User))
+		}
+		slices.Sort(cards)
+		return cards, out.Model
+	}
+	if cards, model := do("alice"); slices.Contains(cards, "alpha:two") || model != "alpha/m-alice" {
+		t.Errorf("alice: told %v and model %q, want none of bob's cards and her own model", cards, model)
+	}
+	if cards, model := do("bob"); slices.Contains(cards, "alpha:one") || slices.Contains(cards, "beta:") || model != "" {
+		t.Errorf("bob: told %v and model %q, want none of alice's cards and no model", cards, model)
+	}
+	// no user named: every card, and the session's route, as before
+	if cards, model := do(""); !slices.Contains(cards, "alpha:one") || !slices.Contains(cards, "alpha:two") || model != "alpha/m-alice" {
+		t.Errorf("no user: told %v and model %q, want every card and the route's model", cards, model)
+	}
+}

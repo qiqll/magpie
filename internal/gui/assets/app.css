@@ -212,7 +212,11 @@ body.window.mac .seg { top: calc(50% + 1px / var(--zoom, 1)); } /* 50% centres i
 .brand { display: flex; align-items: center; gap: 6px; font-weight: 600; letter-spacing: .01em; }
 body.window:not(.mac):not(.linux):not(.web) .brand { display: none; } /* Windows' title bar above already shows the icon and the name; a browser tab has no title bar of the app's */
 /* app.js removes these controls later; keep them out of the first paint too. */
-body.window :is(#open, #quit),
+body.window :is(#open, #openMain, #quit),
+/* one control opens the main window, on the panel's edge nearest the tray
+   (panelside.go): the header's icon, or the foot's button left of Quit */
+body.panel[data-open-at="foot"] .top #open,
+body:not([data-open-at="foot"]) #openMain,
 body:not(.window.linux) #winclose { display: none; }
 /* Linux: the header is the title bar, so it closes the window too — round,
    as GNOME draws its close button, and set a little apart from the icons */
@@ -2377,6 +2381,9 @@ body .foot .status.lift { white-space: normal; overflow-wrap: anywhere; text-ove
 .pop li.cur .check { display: inline-flex; }
 .pop li.group { height: 22px; padding: 6px 8px 0; font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); pointer-events: none; }
 .pop li.group:not(:first-child) { margin-top: 2px; }
+/* the agent's own sign-in, after a group of its own models' name: quiet, in the sentence's own case */
+.pop li.group.own { gap: 4px; white-space: nowrap; }
+.pop li.group .own-sign { min-width: 0; overflow: hidden; text-overflow: ellipsis; text-transform: none; letter-spacing: 0; font-weight: 500; }
 .pop li.reset { margin-bottom: 3px; }
 .pop li.reset .v { color: var(--fg); }
 .pop li.reset .ic { opacity: .75; }
@@ -2708,6 +2715,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .row.model .minfo .mi-img svg, .rt-gedit .fbrow .minfo .mi-img svg { display: block; }
 .provider .pswitch { margin-left: 8px; }
 .editor .off-note { grid-column: 1 / -1; }
+.editor .self-note label.tick { margin-top: 6px; }
 .uses { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: none; }
 .use {
   width: 26px; height: 26px; border-radius: 8px;
@@ -3062,6 +3070,8 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acc-line > .quota-refresh { width: 14px; margin: 0 0 0 -5px; opacity: 1; }
 .acc .aq-w { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .acc .aq-until { white-space: nowrap; }
+/* an account's own Check in now, at its usage line's end (xwoffice_91592) */
+.acc .aq > .ci-acct { flex: none; margin: -2px 0 -2px auto; padding: 1px 7px; font-size: 10.5px; }
 .acc .aq-track { width: 54px; height: 4px; border-radius: 2px; background: var(--pill); overflow: hidden; }
 .acc .aq-track i { display: block; height: 100%; border-radius: inherit; background: var(--fg-2); }
 /* the account's usage cap: a tick across the meter where it stands */
@@ -3345,7 +3355,9 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .editor input::placeholder, .acc input::placeholder { color: var(--faint); }
 .editor .pair { display: flex; gap: 8px; align-items: center; }
 .editor .pair input:first-child { flex: 1; }
-.editor .pair.bal-ask input { flex: 1; min-width: 0; }
+/* the method then the URL; where the column is narrow the URL takes a line of its own */
+.editor .pair.bal-ask { flex-wrap: wrap; }
+.editor .pair.bal-ask input { flex: 1 1 160px; min-width: 0; }
 .editor .pair.bal-ask .segs { flex: none; align-self: center; }
 .editor .side { display: flex; gap: 4px; align-items: center; flex: none; min-width: 52px; justify-content: flex-end; }
 .editor .side .text { padding: 3px 6px; }
@@ -3611,7 +3623,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .msuffix .no-names { flex-basis: 100%; font-size: 11px; color: var(--faint); overflow-wrap: anywhere; }
 .mname { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
 .mname .mwho { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; min-width: 0; }
-.mname .mwho input { flex: 1; min-width: 0; max-width: 220px; height: 25px; }
+.mname .mwho input { flex: 1; min-width: 96px; max-width: 220px; height: 25px; }
 .mname .mwho code { font-size: 11px; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; user-select: text; -webkit-user-select: text; cursor: text; }
 /* a model's API choice: Auto and up to four APIs, which wrap to a second
    row in a phone-wide editor (Kayphoon: a Gemini URL's beside the others),
@@ -3892,6 +3904,8 @@ input.words.compact-num { flex: none; width: 76px; font-variant-numeric: tabular
 input.words.rule-kind { flex: none; width: 110px; }
 input.words.gateway-port { flex: none; width: 110px; font-variant-numeric: tabular-nums; }input.words.rule-match { flex: 1 1 auto; width: auto; min-width: 0; }
 input.words.search-key, input.words.search-url { flex: 1 1 120px; width: auto; min-width: 0; }
+/* a search API that signs in as a plugin's provider, in the key's place */
+.search-signs { flex: 1 1 120px; min-width: 0; font-size: 12px; color: var(--fg-2); overflow-wrap: anywhere; }
 /* a search API's base URL (#1580): on a line of its own under the key */
 .prefs .row.search-add .val.rule-add { flex-wrap: wrap; row-gap: 6px; }
 .prefs .row.search-add input.words.search-url { flex: 1 1 100%; }

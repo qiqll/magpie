@@ -40,6 +40,11 @@ import (
 // auto-review on the session's own model.
 const CodexAutoReviewSession = "session"
 
+// CodexSubagentLead is CodexSubagentModel's value that puts every Codex
+// subagent on the model its lead's own turns go on, whatever the lead
+// names for it in spawn_agent.
+const CodexSubagentLead = "lead"
+
 // Settings is what the user chose. "" and "system" both mean "follow the OS".
 type Settings struct {
 	Theme string `json:"theme,omitempty"` // system | light | dark
@@ -223,6 +228,12 @@ type Settings struct {
 	// tool's description (gateway.hubWhere). "" is this computer's name, said
 	// only to an agent on another computer. This computer's own (KeepOwn).
 	RouterNote string `json:"routerNote,omitempty"`
+	// RouterAllTools gives every agent the router's tools whole. Off, an
+	// agent that doesn't search its MCP tools itself and is given more
+	// than a few is given two in their place, one that finds a tool and
+	// one that runs it (gateway.hubOnDemand; ArvinCharl on X: the tools
+	// filled the context). This computer's own (KeepOwn).
+	RouterAllTools bool `json:"routerAllTools,omitempty"`
 	// Port is the gateway's port on this computer, 0 for DefaultPort.
 	// MAGPIE_ADDR, where it is set, comes first (GatewayAddr).
 	Port int `json:"port,omitempty"`
@@ -705,7 +716,8 @@ type Settings struct {
 	// whatever model its lead asked for in spawn_agent: a model a ChatGPT
 	// account in magpie serves (provider/model), since a subagent's task
 	// is sealed for one (willz on Discord). "" leaves each on the model its
-	// lead asked for.
+	// lead asked for; CodexSubagentLead puts each on the model its lead's
+	// own turns go on, even when the lead names another.
 	CodexSubagentModel string `json:"codexSubagentModel,omitempty"`
 	// DesktopSubagentModel is the model the gateway puts Claude Desktop's
 	// subagent tool turns on. "" leaves them on the model their lead asks
@@ -737,6 +749,11 @@ type Settings struct {
 	// off, in tokens: 0 is WorkingWindow (#876: 272K was the only one).
 	// A provider's or a model's own (ModelCompacts) comes before it.
 	CompactAt int `json:"compactAt,omitempty"`
+	// AgentCompacts is Long conversations of an agent's own, by its kind
+	// (CompactAgents), over CompactAt and FullContext for that agent alone
+	// (molianyin4227 on Discord: models differ, so one size for every
+	// agent fits none). An agent with none follows those two (ForAgent).
+	AgentCompacts map[string]AgentCompact `json:"agentCompacts,omitempty"`
 	// CodexAsyncCompact has Codex (0.163 on) compact a long conversation
 	// in the background, while its turn goes on, once it is past
 	// CodexAsyncCompactPercent of the model's window (#2490, lantern2077
@@ -1329,6 +1346,29 @@ func (s Settings) Working(n int) int {
 	return n
 }
 
+// AgentCompact is one agent's Long conversations: Full its FullContext,
+// At its CompactAt (0 is WorkingWindow).
+type AgentCompact struct {
+	At   int  `json:"at,omitempty"`
+	Full bool `json:"full,omitempty"`
+}
+
+// CompactAgents are the agents whose configs magpie writes a compaction
+// window into, by the key each reads: Codex's model catalog
+// (auto_compact_token_limit), Claude Code's settings.json
+// (CLAUDE_CODE_AUTO_COMPACT_WINDOW, autoCompactWindow) and Grok Build's
+// model tables (context_window). Only these take an AgentCompact.
+var CompactAgents = []string{"codex", "claude", "grok"}
+
+// ForAgent is s as the agent of that kind reads Long conversations: its
+// own AgentCompact in CompactAt and FullContext, when it has one.
+func (s Settings) ForAgent(kind string) Settings {
+	if c, ok := s.AgentCompacts[kind]; ok {
+		s.CompactAt, s.FullContext = c.At, c.Full
+	}
+	return s
+}
+
 // Compact is where a conversation on a longer window is compacted when
 // neither its model nor its provider says (ModelCompacts): CompactAt,
 // else WorkingWindow, and 0 under FullContext, the model's whole window.
@@ -1369,7 +1409,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.QuotaReads = cur.QuotaReads
 	s.NoAccountDiscovery = cur.NoAccountDiscovery
 	s.LAN, s.AllowIPs = cur.LAN, cur.AllowIPs
-	s.RouterNote = cur.RouterNote
+	s.RouterNote, s.RouterAllTools = cur.RouterNote, cur.RouterAllTools
 	s.FetchPrivate = cur.FetchPrivate
 	s.SessionTerminal = cur.SessionTerminal
 	s.PanelShortcut = cur.PanelShortcut
@@ -1917,6 +1957,18 @@ func SetRouterNote(note string) error {
 	return save(s, true)
 }
 
+// SetRouterAllTools sets RouterAllTools alone, from what the file holds
+// now. A settings file that can't be read is left as it is, with the error.
+func SetRouterAllTools(on bool) error {
+	defer lockFile()()
+	s, err := loadChecked()
+	if err != nil {
+		return err
+	}
+	s.RouterAllTools = on
+	return save(s, true)
+}
+
 // EditCheckinOff changes CheckinOff alone, as edit returns it from what the
 // file holds now, so a save elsewhere from an older snapshot isn't undone.
 // A settings file that can't be read is left as it is, with the error.
@@ -2199,7 +2251,7 @@ func saveOwn(s Settings, recording, reads bool) error {
 		return fmt.Errorf("the model for Codex's auto-review must be a model's id such as openai/gpt-5-mini, not %q", s.CodexAutoReview)
 	}
 	s.CodexSubagentModel = strings.TrimSpace(s.CodexSubagentModel)
-	if s.CodexSubagentModel != "" && !strings.Contains(s.CodexSubagentModel, "/") {
+	if s.CodexSubagentModel != "" && s.CodexSubagentModel != CodexSubagentLead && !strings.Contains(s.CodexSubagentModel, "/") {
 		return fmt.Errorf("the model for Codex's subagents must be a model's id such as codex/gpt-5.5, not %q", s.CodexSubagentModel)
 	}
 	s.RedactRouteTo = strings.TrimSpace(s.RedactRouteTo)
