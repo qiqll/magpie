@@ -669,6 +669,13 @@ func ownWords(ctx context.Context, msg string) string {
 	return unbrand(msg)
 }
 
+// KeepsBrand is whether r's caller reads magpie's own words as they are
+// (keepsBrand), for a reply magpie answers outside Front: `magpie web`'s
+// page port when the gateway it hands a client route to doesn't answer
+// (T-121). A request the page port handed over is never local, so only
+// another magpie keeps them there.
+func KeepsBrand(r *http.Request) bool { return keepsBrand(r) }
+
 // unbrandedErr is an error of magpie's own told to a caller that doesn't
 // keep magpie's words: its text unbrand'd, what it is (errors.Is, As) as
 // it was.

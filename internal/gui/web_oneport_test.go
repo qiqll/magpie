@@ -254,3 +254,38 @@ func TestWebOnePortAgentsHereUseTheGatewayPort(t *testing.T) {
 		t.Fatalf("the page's port with a gateway key: %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// When the gateway another magpie serves doesn't answer, the page port's
+// own 502 says no magpie to a caller from another machine, a gateway
+// key's holder (T-121), as the gateway's own errors don't (T-118);
+// another magpie reads it as it was.
+func TestWebOnePortGatewayDownSaysNoMagpie(t *testing.T) {
+	onePortHome(t)
+	// a gateway that takes the connection and drops it, so the proxy's
+	// try fails without a port freed for anything else to take
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, _, err := http.NewResponseController(w).Hijack()
+		if err == nil {
+			c.Close()
+		}
+	}))
+	t.Cleanup(down.Close)
+	u, _ := url.Parse(down.URL)
+	t.Setenv("MAGPIE_ADDR", u.Host)
+	prev := served.Swap(nil)
+	t.Cleanup(func() { served.Store(prev) })
+	var reached bool
+	page := onePortPage(&reached)
+	w := onePortCall(t, page, "POST", "/v1/chat/completions", "203.0.113.7:50001", "magpie.example.net:3430", "", "Authorization", "Bearer sk-magpie-x")
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "the gateway at "+gateway.URL()+" doesn't answer") ||
+		strings.Contains(strings.ToLower(strings.ReplaceAll(w.Body.String(), gateway.URL(), "")), "magpie") {
+		t.Fatalf("a key's holder, the gateway down: %d: %q", w.Code, w.Body.String())
+	}
+	w = onePortCall(t, page, "POST", "/v1/chat/completions", "203.0.113.7:50001", "127.0.0.1:3430", "", "User-Agent", "magpie/0.1.1")
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "magpie's gateway at "+gateway.URL()+" doesn't answer") {
+		t.Fatalf("another magpie, the gateway down: %d: %q", w.Code, w.Body.String())
+	}
+	if reached {
+		t.Fatal("a client route reached the page")
+	}
+}

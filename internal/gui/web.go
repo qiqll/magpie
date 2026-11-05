@@ -472,7 +472,13 @@ var toGateway = &httputil.ReverseProxy{
 	FlushInterval: -1, // streams as they come
 	ErrorHandler: func(rw http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("magpie web: %s %s: the gateway at %s: %v", r.Method, r.URL.Path, gateway.URL(), err)
-		http.Error(rw, "magpie's gateway at "+gateway.URL()+" doesn't answer: "+err.Error(), http.StatusBadGateway)
+		// a caller other than another magpie reads no magpie in it, as in
+		// every error the gateway answers itself (T-121)
+		who := "the gateway"
+		if gateway.KeepsBrand(r) {
+			who = "magpie's gateway"
+		}
+		http.Error(rw, who+" at "+gateway.URL()+" doesn't answer: "+err.Error(), http.StatusBadGateway)
 	},
 }
 
