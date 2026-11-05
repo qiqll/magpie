@@ -2708,7 +2708,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// place: the lead or subagent it was sent to goes on where it
 			// is, and the sender's final result still reaches its lead as
 			// text (#1613)
-			if b, ok := withoutSealedMessages(body); ok {
+			if b, ok := withoutSealedMessages(r.Context(), body); ok {
 				body = b
 				sealedTask = hasSealedAgentMessage(body)
 			}

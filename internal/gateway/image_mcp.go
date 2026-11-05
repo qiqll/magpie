@@ -275,7 +275,7 @@ func (s *Server) mcpNoUser(r *http.Request) (map[string]any, bool) {
 	if !s.noUser(rec, r, provider.Chat) {
 		return nil, false
 	}
-	return toolResult(imageMCPSaid(rec.Body.Bytes()), true), true
+	return toolResult(ownWords(r.Context(), imageMCPSaid(rec.Body.Bytes())), true), true
 }
 
 // imageGenOff is the tools' answer while Settings turned image generation

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -142,8 +143,7 @@ func TestSearchFailureToModelSaysNoMagpie(t *testing.T) {
 
 // A Claude Code run's search comes back through its callback from this
 // computer, no key on it: its failure is said as the turn's caller reads
-// magpie's words, and is still the error it was. A search through magpie's
-// web search MCP fails in words said as its own caller reads them.
+// magpie's words, and is still the error it was.
 func TestRunSearchFailureSaysNoMagpie(t *testing.T) {
 	fresh(t)
 	searchSandbox(t)
@@ -162,10 +162,45 @@ func TestRunSearchFailureSaysNoMagpie(t *testing.T) {
 		if said := "search failed: " + sideSaid(err); saysMagpie(said) != keep {
 			t.Errorf("keep %v: %q", keep, said)
 		}
-		// magpie's web search MCP tells its caller the same way
-		_, err = s.searchMCPRun(brandedAs(httptest.NewRequest("POST", SearchMCPPath, nil), keep), "weather")
-		if err == nil || saysMagpie(err.Error()) != keep {
-			t.Errorf("keep %v: the MCP's search: %v", keep, err)
+	}
+}
+
+// A sealed agent message left out has a note of magpie's in its place,
+// which goes on to the model's vendor: for a caller that isn't magpie's
+// it names no magpie, the sender's name as it came. The tool servers'
+// failures are said the same way.
+func TestSealedNoteAndToolFailuresSayNoMagpie(t *testing.T) {
+	body := []byte(`{"model":"m","input":[` + strings.Replace(sealedWorkerMessage, "/root/worker", "/root/magpie", 1) + `]}`)
+	for _, keep := range []bool{true, false} {
+		r := brandedAs(httptest.NewRequest("POST", "/v1/responses", nil), keep)
+		b, ok := withoutSealedMessages(r.Context(), body)
+		got := strings.ReplaceAll(string(b), "/root/magpie", "")
+		if !ok || !strings.Contains(string(b), "this message from /root/magpie was sealed") || saysMagpie(got) != keep {
+			t.Errorf("keep %v: %s", keep, b)
+		}
+	}
+	fresh(t)
+	searchSandbox(t)
+	st := settings.Load()
+	st.Searcher = "off"
+	if err := settings.Save(st); err != nil {
+		t.Fatal(err)
+	}
+	s := New()
+	for _, keep := range []bool{true, false} {
+		r := brandedAs(httptest.NewRequest("POST", SearchMCPPath, nil), keep)
+		for _, c := range []struct {
+			call func(*http.Request, mcpMessage) (any, map[string]any)
+			args string
+		}{
+			{s.searchMCPCall, `{"name":"` + searchMCPTool + `","arguments":{"query":"weather"}}`},
+			{s.visionMCPCall, `{"name":"` + visionMCPTool + `","arguments":{"image":"data:image/png;base64,aGVsbG8="}}`},
+		} {
+			res, rpcErr := c.call(r, mcpMessage{Method: "tools/call", Params: []byte(c.args)})
+			b, _ := json.Marshal(res)
+			if rpcErr != nil || !strings.Contains(string(b), `"isError":true`) || saysMagpie(string(b)) != keep {
+				t.Errorf("keep %v: %s %v", keep, b, rpcErr)
+			}
 		}
 	}
 }

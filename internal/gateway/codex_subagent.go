@@ -116,6 +116,6 @@ func sealedTaskIn(body []byte) bool {
 	if !hasSealedAgentMessage(body) {
 		return false
 	}
-	b, _ := withoutSealedMessages(body)
+	b, _ := withoutSealedMessages(context.Background(), body)
 	return hasSealedAgentMessage(b)
 }

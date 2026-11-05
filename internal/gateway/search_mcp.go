@@ -199,7 +199,9 @@ func (s *Server) searchMCPCall(r *http.Request, m mcpMessage) (any, map[string]a
 			return nil, map[string]any{"code": -32602, "message": "unknown tool " + p.Name + ": this server has " + searchMCPTool + " and " + fetchMCPTool}
 		}
 		if err != nil {
-			return toolResult(err.Error(), true), nil
+			// a failure is magpie's words, said as the caller reads them
+			// (T-120); a page or a search's own finding never is
+			return toolResult(ownWords(r.Context(), err.Error()), true), nil
 		}
 		return toolResult(said, false), nil
 	}
@@ -249,7 +251,7 @@ func (s *Server) searchMCPRun(r *http.Request, query string) (string, error) {
 		if errors.Is(err, errNoSearcher) {
 			msg += ": add a search API in magpie's Settings → Models → Web search (or magpie search add <api> <key>), or a provider that can search"
 		}
-		return "", searchMCPError(ownWords(r.Context(), msg))
+		return "", searchMCPError(msg)
 	}
 	// what was masked on the way out (maskedQuery, or the searcher's
 	// request) is the agent's own: it gets it back

@@ -101,7 +101,7 @@ func (s *Server) visionMCPCall(r *http.Request, m mcpMessage) (any, map[string]a
 		}
 		said, err := s.visionMCPRun(r, strings.TrimSpace(p.Arguments.Image), strings.TrimSpace(p.Arguments.Prompt))
 		if err != nil {
-			return toolResult(err.Error(), true), nil
+			return toolResult(ownWords(r.Context(), err.Error()), true), nil
 		}
 		return toolResult(said, false), nil
 	}

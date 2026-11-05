@@ -638,7 +638,7 @@ func hasSealedAgentMessage(body []byte) bool {
 // sender's final result reaches its lead as text all the same (#1613). A
 // task is kept, and still turned away (serve): the subagent would have
 // nothing to do. An item whose header says neither is taken as a task.
-func withoutSealedMessages(body []byte) ([]byte, bool) {
+func withoutSealedMessages(ctx context.Context, body []byte) ([]byte, bool) {
 	var q map[string]json.RawMessage
 	if json.Unmarshal(body, &q) != nil {
 		return body, false
@@ -676,7 +676,9 @@ func withoutSealedMessages(body []byte) ([]byte, bool) {
 		if from == "" {
 			from = "another agent"
 		}
-		note := "[magpie: this message from " + from + " was sealed by the ChatGPT backend, which answered that agent on one of Codex's own models, and only it can open it; this model can't, so it was left out. An agent's final result still reaches the agent that spawned it as text.]"
+		// magpie's words go on to the vendor, said as ctx's caller reads
+		// them (ownWords); the sender's name as it came
+		note := ownWords(ctx, "[magpie: this message from ") + from + ownWords(ctx, " was sealed by the ChatGPT backend, which answered that agent on one of Codex's own models, and only it can open it; this model can't, so it was left out. An agent's final result still reaches the agent that spawned it as text.]")
 		for j, p := range parts {
 			if c, _ := p["encrypted_content"].(string); p["type"] == "encrypted_content" && nativeSealedAgentPayload.MatchString(c) {
 				parts[j] = map[string]any{"type": "input_text", "text": note}
