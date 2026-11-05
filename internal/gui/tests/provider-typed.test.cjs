@@ -16,12 +16,16 @@ const assets = path.resolve(__dirname, "../assets");
 const relay = {
   id: "relay", name: "Relay", preset: "relay", icon: "generic", chat: "https://relay.example.com/v1", responses: "", anthropic: "", catalog: "",
   models: [{ id: "gpt-5.1", name: "gpt-5.1", on: true }], agents: [], fallback: [], headers: { "X-Team": "a" },
-  key: { set: true, masked: "sk-…one" }, keyList: [{ id: "k1", name: "", masked: "sk-…one", on: true, active: true }],
+  // no key yet: the one provider whose editor has an API key box (a
+  // provider with keys changes them under Accounts, 0a9d9702)
+  key: { set: false }, keyList: [],
   balanceToken: { takes: false, set: false }, proxy: "",
 };
+// one with a key: Add a key under its Accounts
+const keyed = { ...relay, id: "keyed", name: "Keyed", key: { set: true, masked: "sk-…one" }, keyList: [{ id: "k1", name: "", masked: "sk-…one", on: true, active: true }] };
 
 function serve(lang, calls) {
-  const providers = { providers: [relay], presets: [{ id: "relay", name: "Relay", icon: "generic", chat: relay.chat, added: true }], excluded: [], gateway: { running: true, window: true } };
+  const providers = { providers: [relay, keyed], presets: [{ id: "relay", name: "Relay", icon: "generic", chat: relay.chat, added: true }], excluded: [], gateway: { running: true, window: true } };
   const state = { agents: [], profiles: [], settings: { lang, theme: "light" } };
   return async (route) => {
     const url = new URL(route.request().url());
@@ -67,7 +71,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       if (lang === "en") assert.deepEqual(missing, [], "every string has its Chinese");
       await page.locator(".row.provider", { hasText: "Relay" }).click();
       const ed = page.locator(".editor");
-      const key = ed.locator('input[type="password"]').first();
+      const key = ed.locator('input[type="password"]:not(.proxy-credential)').first();
+      assert.equal(await ed.locator('input[type="password"]:not(.proxy-credential)').count(), 1, "one API key box");
       await key.fill("sk-new-typed");
       const wait = async (n) => { for (let i = 0; i < 60 && calls.length < n; i++) await page.waitForTimeout(50); };
       const form = (b) => ({ typed: b.typed, key: b.key, chat: b.chat, headers: b.headers });
@@ -79,7 +84,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.deepEqual(form(calls[0][1]), want, "Fetch models asks with the form");
       await page.waitForTimeout(200);
       assert.ok(await ed.isVisible(), "the editor stays open");
-      assert.equal(await ed.locator('input[type="password"]').first().inputValue(), "sk-new-typed", "the key stays typed");
+      assert.equal(await ed.locator('input[type="password"]:not(.proxy-credential)').first().inputValue(), "sk-new-typed", "the key stays typed");
 
       await ed.locator(".mfoot").getByRole("button", { name: w.all, exact: true }).click();
       await wait(2);
@@ -99,6 +104,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.ok(await ed.isVisible());
 
       // a provider's new key: the key is focused, the name is optional
+      await page.goto("http://magpie.test/?view=providers");
+      await page.locator(".row.provider", { hasText: "Keyed" }).click();
       await ed.getByRole("button", { name: w.addKey }).click();
       const box = page.locator(".editor .acc.adding");
       await box.waitFor();
