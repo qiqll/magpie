@@ -7125,7 +7125,8 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	if !keepsBrandFor(w, r) {
 		// a plugin's usage fields for magpie, read already, aren't told
 		// to a caller that isn't magpie's (unbranded.go)
-		uw := &usageUnbrand{ResponseWriter: w, sse: sse}
+		// a gathered stream reaches the client as one whole reply
+		uw := &usageUnbrand{ResponseWriter: w, sse: sse && gather == nil}
 		defer uw.finish()
 		w = uw
 	}
@@ -7582,11 +7583,27 @@ func cutMidReply(name string, err error) string {
 	return name + ": connection lost mid-reply (" + err.Error() + ")"
 }
 
+// holdOf is the holdWriter w is or wraps (usageUnbrand around it), nil
+// for none.
+func holdOf(w http.ResponseWriter) *holdWriter {
+	for w != nil {
+		if h, ok := w.(*holdWriter); ok {
+			return h
+		}
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return nil
+		}
+		w = u.Unwrap()
+	}
+	return nil
+}
+
 // noteSaidStatus carries the status a relayed stream's error frame named
 // for itself onto the try's writer (#4855), for the routing loop and
 // restAfter to read (namedStatusHeader); the client never sees it.
 func noteSaidStatus(w http.ResponseWriter, status int) {
-	if h, ok := w.(*holdWriter); ok {
+	if h := holdOf(w); h != nil {
 		h.note(namedStatusHeader, strconv.Itoa(status))
 	}
 }

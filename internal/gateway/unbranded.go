@@ -163,7 +163,10 @@ func (b *brandWriter) keeps() bool {
 // turn is marked again on its own writer.
 func branded(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if brandOf(w) != nil {
+		if b := brandOf(w); b != nil {
+			if r.Context().Value(brandKey{}) == nil {
+				r = r.WithContext(context.WithValue(r.Context(), brandKey{}, b))
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -666,9 +669,9 @@ func madeID(w http.ResponseWriter, r *http.Request, kind string) string {
 // Chat, Messages or Responses reply carries. Only a usage's own keys go;
 // the model's output, a tool call's arguments among it, is left as it
 // came. A stream is gone through by its whole lines, and only a line
-// with "magpie_ in it is read; any other write, a whole reply among them
-// (the relay's filters hold one to its end), is read only when it has
-// "magpie_ in it and is whole JSON.
+// with "magpie_ in it is read; any other write is read only when it has
+// "magpie_ in it and is whole JSON: a whole reply comes in one write, as
+// the relay's filters (intTidy) hold one to its end.
 type usageUnbrand struct {
 	http.ResponseWriter
 	sse  bool
@@ -694,7 +697,9 @@ func (u *usageUnbrand) Write(p []byte) (int, error) {
 	u.part = append(u.part, p...)
 	cut := bytes.LastIndexByte(u.part, '\n') + 1
 	if len(u.part)-cut > brandLineMost {
-		cut = len(u.part) // a line too long to hold goes as it is
+		// a line too long to hold goes as it is; passthrough writes whole
+		// lines only, of any length, so this is for a writer that doesn't
+		cut = len(u.part)
 	}
 	if cut == 0 {
 		return len(p), nil

@@ -179,3 +179,34 @@ func TestWithoutMagpieUsage(t *testing.T) {
 		}
 	}
 }
+
+// A stream's error frame naming its status (#4855) fails the try at that
+// status for a key's holder too: the writer that takes magpie's usage
+// fields out of the reply doesn't hide the holdWriter it is noted on.
+func TestKeyHolderStreamErrorFrameSaysItsStatus(t *testing.T) {
+	fresh(t)
+	t.Setenv("MAGPIE_ADDR", "")
+	setup(t, provider.Chat, &fake{t: t, reply: sse(
+		`data: {"id":"c1","choices":[{"index":0,"delta":{"content":"partial text"}}]}`,
+		`data: {"error":{"message":"busy","type":"upstream_error","code":"rate_limit","status":429}}`)})
+	_, secrets := newCaller(t, "Laptop")
+	s := New()
+	code, got := brandAsk(s.Front(), brandCallers(secrets[0])[0], "POST", "/v1/chat/completions",
+		`{"model":"fake/m1","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	if code != 200 || !strings.Contains(got, `"status":429`) {
+		t.Fatalf("the frame was not relayed: %d %s", code, got)
+	}
+	state := s.Trace(context.Background(), 0, 0)
+	if len(state.Routes) != 1 {
+		t.Fatalf("routes %d", len(state.Routes))
+	}
+	var try *Try
+	for i := range state.Routes[0].Tries {
+		if state.Routes[0].Tries[i].Rest != nil {
+			try = &state.Routes[0].Tries[i]
+		}
+	}
+	if try == nil || try.Fail != failRate || try.Rest.Status != 429 {
+		t.Fatalf("the try: %+v", state.Routes[0].Tries)
+	}
+}
