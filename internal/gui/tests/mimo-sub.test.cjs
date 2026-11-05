@@ -70,6 +70,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         const top = await page.evaluate(() => window.scrollY);
         await row.click();
+        await sheet.locator(".signing .sign-start").click();
         const box = sheet.locator(".signing");
         await box.waitFor();
         assert.equal(await box.locator(".n").textContent(), w.title);

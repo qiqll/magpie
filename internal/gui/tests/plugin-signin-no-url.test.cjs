@@ -59,6 +59,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           await page.locator("#addProvider").click();
           const sheet = page.locator("#addSheet");
           await sheet.locator('.tile[data-pick="FakeCo"]').click();
+          await sheet.locator(".signing .sign-start").press("Enter");
           const box = sheet.locator(".signing");
           // pressed, not clicked: at a phone's width the sheet scrolls the
           // way under its footer, which a click in WebKit lands on

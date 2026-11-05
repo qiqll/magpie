@@ -34,6 +34,7 @@ for(const [engine,browserType] of Object.entries({chromium,webkit}))for(const la
   await page.goto('http://magpie.test/?view=providers');
   await page.locator('#addProvider').click();
   await page.locator('#addSheet .tile[data-pick="PublicFixture"]').click();
+  await page.locator('#addSheet .signing .sign-start').click();
   const choice=page.getByRole('button',{name:'Enable fixed access',exact:true});
   if(await choice.count())await choice.click();
   if(lang==='en'){await page.locator('.signing.failed').waitFor();assert.equal(await page.locator('.callback-form input').count(),0);await page.locator('.signing.failed button.primary').click();}
@@ -43,6 +44,7 @@ for(const [engine,browserType] of Object.entries({chromium,webkit}))for(const la
   assert.ok(!(await page.locator('button.acc.add .n').innerText()).includes('PublicFixture'),'single identity offers sign-in again, not another account');
   const renewed=page.waitForRequest(r=>new URL(r.url()).pathname==='/api/plugin-signin');
   await page.locator('button.acc.add').click();
+  await page.locator('.editor .signing .sign-start').click();
   if(await choice.count())await choice.click();
   await renewed;
   await page.locator('button.acc.add .n').waitFor();
@@ -50,6 +52,7 @@ for(const [engine,browserType] of Object.entries({chromium,webkit}))for(const la
   await page.keyboard.press('Escape');await page.locator('#modal').waitFor({state:'hidden'});
   await page.locator('#addProvider').click();
   await page.locator('#addSheet .tile[data-pick="OrdinaryFixture"]').click();
+  await page.locator('#addSheet .signing .sign-start').click();
   const ordinary=page.getByRole('button',{name:'Personal credential',exact:true});
   if(await ordinary.count())await ordinary.click();
   await page.getByLabel('Personal credential',{exact:true}).waitFor();

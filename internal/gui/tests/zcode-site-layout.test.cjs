@@ -62,6 +62,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const sheet = page.locator("#addSheet");
         const box = sheet.locator(".signing");
         await sheet.locator('.tile[data-pick="ZCode"]').click();
+        await sheet.locator(".signing .sign-start").click();
         await box.locator('button[data-site="bigmodel"]').waitFor();
         // in a short window the step is under the tiles: the reader scrolls to it
         // (with the wheel: magpie puts back a scroll the reader didn't make)

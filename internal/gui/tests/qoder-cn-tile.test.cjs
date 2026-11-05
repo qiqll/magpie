@@ -86,6 +86,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
       const before = await scrolls(page);
       await cn.click();
+      await sheet.locator(".signing .sign-start").click();
       const box = sheet.locator(".signing");
       await box.waitFor();
       assert.equal(await scrolls(page), before, "the click moved nothing");

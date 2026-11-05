@@ -80,6 +80,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const scrolls = () => page.evaluate(() => [window.scrollY, ...[...document.querySelectorAll("*")].filter((e) => e.scrollTop).map((e) => e.scrollTop)]);
         const before = await scrolls();
         await add.click();
+        await page.locator(".editor .signing .sign-start").click();
         const say = want[lang][c.say];
         await page.waitForFunction((s) => document.querySelector("#status").textContent.includes(s), say);
         assert.equal((await page.locator("#status").textContent()).trim(), say);

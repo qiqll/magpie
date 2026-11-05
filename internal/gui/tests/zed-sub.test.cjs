@@ -64,6 +64,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.match(logo[1], /<svg[^>]*viewBox="0 0 96 96"/);
 
         await row.click();
+        await sheet.locator(".signing .sign-start").click();
         const box = sheet.locator(".signing");
         await box.waitFor();
         assert.equal(await box.locator(".n").textContent(), w.title);

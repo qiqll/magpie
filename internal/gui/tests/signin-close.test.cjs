@@ -93,6 +93,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const begin = async () => {
         const add = await open();
         await add.click();
+        await page.locator(".editor .signing .sign-start").click();
         const box = page.locator(".editor .accts .signing");
         await box.locator(".n", { hasText: w.wait }).waitFor();
         return box;

@@ -93,6 +93,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         // the browser way: a pick, a text the plugin checks, then the code
         await row.click();
+        await sheet.locator(".signing .sign-start").click();
         const box = sheet.locator(".signing");
         await box.locator(".n", { hasText: w.how }).waitFor();
         if (process.env.ARTIFACT_DIR) await sheet.screenshot({ path: path.join(process.env.ARTIFACT_DIR, `plugin-method-${engine}-${lang}.png`) });
@@ -129,6 +130,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // the key way: the account opens once it's in
         await box.locator("button.text:not(.primary)").last().click();
         await row.click();
+        await sheet.locator(".signing .sign-start").click();
         await box.locator("button", { hasText: "API key" }).click();
         const key = box.getByLabel(w.key);
         await key.waitFor();
@@ -145,6 +147,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await add.waitFor();
         assert.match(await ed.innerText(), new RegExp(w.note));
         await add.click();
+        await ed.locator(".signing .sign-start").click();
         await ed.locator(".signing button", { hasText: "API key" }).first().click();
         await ed.getByLabel(w.key).fill("k2");
         await ed.locator(".signing button", { hasText: w.signIn }).click();

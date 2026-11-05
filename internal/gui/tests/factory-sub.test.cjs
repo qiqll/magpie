@@ -67,6 +67,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const scrolls = () => page.evaluate(() => [window.scrollY, ...[...document.querySelectorAll("#addSheet, #addSheet *")].filter((e) => e.scrollTop).map((e) => e.scrollTop)]);
         const before = await scrolls();
         await row.click();
+        await sheet.locator(".signing .sign-start").click();
         const box = sheet.locator(".signing");
         await box.waitFor();
         assert.equal(await box.locator(".n").textContent(), w.title);

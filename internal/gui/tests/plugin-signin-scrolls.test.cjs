@@ -74,6 +74,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           await page.waitForTimeout(50);
         }
         await button.click();
+        await page.locator("#addSheet .signing .sign-start").click();
         const box = page.locator("#addSheet .signing");
         await box.locator(".callback-form input").waitFor();
         const at = await page.evaluate(() => {

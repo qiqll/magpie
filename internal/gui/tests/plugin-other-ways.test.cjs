@@ -76,6 +76,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         // ZCode's site step: the two sites, then the app's sign-in and the key
         await sheet.locator('.tile[data-pick="ZCode"]').click();
+        await sheet.locator(".signing .sign-start").click();
         await box.locator('button[data-site="bigmodel"]').waitFor();
         const ways = await box.locator("button[data-site], button[data-method]").evaluateAll((bs) => bs.map((b) => b.dataset.site || "m" + b.dataset.method + ":" + b.textContent));
         assert.deepEqual(ways, ["zai", "bigmodel", "m2:" + w.app, "m3:" + w.key]);
@@ -98,6 +99,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // its other way is the key link it had, with no "Other ways" beside it
         asked.length = 0;
         await sheet.locator('.tile[data-pick="Factory"]').click();
+        await sheet.locator(".signing .sign-start").click();
         await box.locator("button", { hasText: w.anyway }).click();
         await box.locator(".devcode code", { hasText: "ABCD-EFGH" }).waitFor();
         assert.deepEqual(signins(), [{ provider: "factory", method: 0, inputs: {} }]);

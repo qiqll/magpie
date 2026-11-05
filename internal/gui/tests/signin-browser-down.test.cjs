@@ -88,6 +88,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.locator("#addProvider").click();
         const sheet = page.locator("#addSheet");
         await sheet.locator('.tile[data-pick="Factory"]').click();
+        await sheet.locator(".signing .sign-start").click();
         const box = sheet.locator(".signing");
         const anyway = box.locator("button", { hasText: w.anyway });
         await reach(page, anyway);

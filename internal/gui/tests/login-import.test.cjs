@@ -109,6 +109,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
       // from a browser sign-in under way, the file is one click away
       await adds.nth(0).click();
+      await page.locator(".editor .signing .sign-start").click();
       const instead = page.locator(".signing .acts button", { hasText: say.instead });
       await instead.waitFor();
       assert.match(await instead.getAttribute("title"), /Cockpit Tools/);

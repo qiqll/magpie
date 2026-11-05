@@ -115,6 +115,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const { page, errors } = await open(engine, size, lang, seen, "?view=providers", t);
         await page.locator(".row.provider", { hasText: "Codex" }).first().click();
         await page.locator(".editor .accts .acc.add").first().click();
+        await page.locator(".editor .signing .sign-start").click();
         const box = page.locator(".editor .signing");
         const pp = box.locator("button.paste-via");
         await pp.waitFor();
@@ -145,6 +146,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const { page, errors } = await open(engine, size, lang, seen, "?view=providers", t);
         await page.locator(".row.provider", { hasText: "Codex" }).first().click();
         await page.locator(".editor .accts .acc.add").first().click();
+        await page.locator(".editor .signing .sign-start").click();
         const box = page.locator(".editor .signing");
         const pp = box.locator("button.paste-via");
         await pp.waitFor();
@@ -166,6 +168,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.goto("http://magpie.test/?view=providers");
         await page.locator(".row.provider", { hasText: "Claude" }).first().click();
         await page.locator(".editor .accts .acc.add").first().click();
+        await page.locator(".editor .signing .sign-start").click();
         const fixed = page.locator(".editor .signing .proxy-fixed");
         await fixed.waitFor();
         assert.equal(await fixed.textContent(), w("This sign-in keeps the proxy it started through. To finish it through another, pick it from Proxy above: the sign-in starts again."));
@@ -183,6 +186,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const { page, errors } = await open(engine, size, lang, seen, "?view=providers", t);
         await page.locator(".row.provider", { hasText: "Codex" }).first().click();
         await page.locator(".editor .accts .acc.add").first().click();
+        await page.locator(".editor .signing .sign-start").click();
         const box = page.locator(".editor .signing");
         const works = w("Works: through the proxy requests leave from {where}, {ms} ms; direct ones from {direct}", { where: "203.0.113.9 (US)", ms: 312, direct: "198.51.100.7 (CN)" });
 

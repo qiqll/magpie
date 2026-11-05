@@ -99,6 +99,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
       // the built-in: the key field, hidden, beside a link to the keys page
       await sheet.locator('.tile[data-pick="Command Code"]').click();
+      await sheet.locator(".signing .sign-start").click();
       let box = sheet.locator(".signing");
       await box.locator("button", { hasText: w.anyway }).click();
       await box.getByText(w.say).waitFor();
@@ -131,6 +132,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       // a plugin's browser way: its key way offered while it waits
       if (!(await sheet.isVisible())) await page.locator("#addProvider").click();
       await sheet.locator('.tile[data-pick="CmdPlug"]').click();
+      await sheet.locator(".signing .sign-start").click();
       box = sheet.locator(".signing");
       await box.locator("button", { hasText: "CmdPlug (browser)" }).click();
       const instead = box.locator("button", { hasText: w.instead });

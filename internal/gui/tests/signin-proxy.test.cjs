@@ -183,6 +183,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.goto("http://magpie.test/?view=providers");
         await page.locator(".row.provider", { hasText: "Codex" }).first().click();
         await page.locator(".editor .accts .acc.add").first().click();
+        await page.locator(".editor .signing .sign-start").click();
         const via = page.locator(".editor .signing .acts .via");
         await via.waitFor();
         assert.deepEqual(seen.starts, [{ agent: "codex" }]);

@@ -95,6 +95,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           await page.locator("#addProvider").click();
           const sheet = page.locator("#addSheet");
           await sheet.locator('.tile[data-pick="ChatGPT"]').click();
+          await sheet.locator(".signing .sign-start").click();
           const box = sheet.locator(".signing");
           await box.getByText(w[blocked]).waitFor();
           // why the port can't be had replaces the server-or-Docker guess

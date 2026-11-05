@@ -106,6 +106,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // the same way
         const box = sheet.locator(".signing");
         await sheet.locator('.tile[data-pick="ZCode"]').click();
+        await sheet.locator(".signing .sign-start").click();
         await box.locator('button[data-site="bigmodel"]').click();
         const again = box.locator("button", { hasText: w.again });
         await again.waitFor();
@@ -117,6 +118,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // Factory: warned, its one way, the code to copy
         asked.length = 0;
         await sheet.locator('.tile[data-pick="Factory"]').click();
+        await sheet.locator(".signing .sign-start").click();
         // and its API keys, which its plugin keeps (factory_key.go)
         await box.locator("button", { hasText: w.key }).waitFor();
         await box.locator("button", { hasText: w.anyway }).click();

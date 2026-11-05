@@ -103,6 +103,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.ok(box.x >= 0 && box.x + box.width <= width, `the menu fits the window: ${JSON.stringify(box)}`);
           assert.deepEqual(asked, [], "nothing asked before one is picked");
           await menu.m.locator(".pm-item", { hasText: w.cn }).click();
+          await page.locator("#addSheet .signing .sign-start").click();
           const signing = page.locator("#addSheet .signing").first();
           await signing.waitFor();
           assert.ok((await signing.innerText()).includes(w.cn), "the sign-in is Qoder CN's");
@@ -126,6 +127,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           menu = await menuOf(page);
           assert.deepEqual(menu.names, want);
           await menu.m.locator(".pm-item", { hasText: "QwenWork 企业版" }).click();
+          await page.locator("#addSheet .signing .sign-start").click();
           await page.locator("#addSheet .signing").first().waitFor();
           for (let i = 0; i < 100 && !asked.length; i++) await page.waitForTimeout(50);
           assert.ok(asked.length && asked.every((x) => x.provider === "qwenwork-enterprise"), JSON.stringify(asked));

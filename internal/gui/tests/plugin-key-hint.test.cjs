@@ -64,6 +64,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.waitForFunction((e) => e.complete && e.naturalWidth > 0, await img.elementHandle());
 
         await row.click();
+        await sheet.locator(".signing .sign-start").click();
         const box = sheet.locator(".signing");
         await box.locator(".n", { hasText: w.how }).waitFor();
         await box.locator("button", { hasText: "Lemon API key (from lemon.example/keys)" }).click();
@@ -77,6 +78,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // a way that only says "API key": the provider's name, no hint
         await box.locator("button.text:not(.primary)").last().click();
         await row.click();
+        await sheet.locator(".signing .sign-start").click();
         await box.locator("button", { hasText: /^API key$/ }).click();
         const plain = box.getByLabel(w.generic, { exact: true });
         await plain.waitFor();

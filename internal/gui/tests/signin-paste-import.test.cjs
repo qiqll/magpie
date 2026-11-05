@@ -68,6 +68,7 @@ async function open(engine, lang, log, paste, t) {
   await page.locator("#addProvider").click();
   const sheet = page.locator("#addSheet");
   await sheet.locator('.tile[data-pick="ChatGPT"]').click();
+  await sheet.locator(".signing .sign-start").click();
   await sheet.locator(".signing").getByRole("button", { name: W[lang].instead }).click();
   await sheet.locator(".signing.import textarea").waitFor();
   return { page, sheet, errors };

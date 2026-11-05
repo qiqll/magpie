@@ -84,3 +84,28 @@ window.claudeTokenSheet = function () {
   setTimeout(() => { if (inp.isConnected) inp.focus({ preventScroll: true }); });
   return box;
 };
+
+// An account being added, before anything is asked of its vendor
+// (需求方 2026-11-04: 点击添加账号时会自动发起请求到 claude.ai，改为默认
+// 不发起): its proxy picked first, then Start sign-in (startSignIn).
+window.readySheet = function (sub) {
+  const box = el("div", "signing ready");
+  const tt = el("span", "tt");
+  tt.append(el("span", "n", t("Add a {name} account", { name: sub.name })),
+    el("span", "s", t("Nothing is sent to {name} until you start: magpie then starts the sign-in and opens its page.", { name: sub.name })));
+  tt.append(el("span", "acts", signInProxyLink(sub)));
+  if (signing.askProxy) tt.append(signInProxyForm(sub));
+  box.append(tt);
+  const go = el("button", "text primary sign-start", t("Start sign-in"));
+  const o = { proxy: signing.picked };
+  go.onclick = () => startSignIn(sub.agent, false, undefined, o);
+  const close = el("button", "text", t("Cancel"));
+  close.onclick = cancelSignIn;
+  if (sub.importable) {
+    const imp = el("button", "text", importSay(sub.agent).instead || t("Import instead…"));
+    imp.title = importSay(sub.agent).from;
+    imp.onclick = () => startImport(sub.agent);
+    box.append(close, imp, go);
+  } else box.append(close, go);
+  return box;
+};

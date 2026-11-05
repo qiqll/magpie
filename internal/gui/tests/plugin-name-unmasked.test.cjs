@@ -64,6 +64,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         await page.locator("#addProvider").click();
         await page.locator(`#addSheet .tile[data-pick="${ZEN}"]`).click();
+        await page.locator("#addSheet .signing .sign-start").click();
         const choice = page.getByRole("button", { name: "Zen free access", exact: true });
         if (await choice.count()) await choice.click();
         // the line after the sign-in names the plugin, unblurred

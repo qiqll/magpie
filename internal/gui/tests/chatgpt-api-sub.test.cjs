@@ -63,6 +63,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.doesNotMatch(await row("ChatGPT").getAttribute("title"), L[lang].hint);
         const y = await page.evaluate(() => scrollY);
         await row("ChatGPT API").click();
+        await sheet.locator(".signing .sign-start").click();
         for (let i = 0; i < 50 && !posted.length; i++) await page.waitForTimeout(20);
         assert.deepEqual(posted, [{ agent: "chatgpt-api" }]);
         assert.equal(await page.evaluate(() => scrollY), y, "the click doesn't scroll");

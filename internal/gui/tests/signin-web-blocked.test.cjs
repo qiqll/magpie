@@ -89,6 +89,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           await page.locator("#addProvider").click();
           const sheet = page.locator("#addSheet");
           await sheet.locator('.tile[data-pick="FakeCo"]').click();
+          await sheet.locator(".signing .sign-start").press("Enter");
           const box = sheet.locator(".signing");
           await box.locator("button", { hasText: "Sign in with Grok Build" }).press("Enter");
           await box.locator(".s", { hasText: blocked[lang] }).waitFor();

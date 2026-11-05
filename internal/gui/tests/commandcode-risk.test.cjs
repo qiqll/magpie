@@ -63,6 +63,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         // Cancel leaves it unasked
         await row.click();
+        await sheet.locator(".signing .sign-start").click();
         let box = sheet.locator(".signing");
         await box.waitFor();
         await box.locator("button", { hasText: w.cancel }).click();
@@ -71,6 +72,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         const before = await scrolls(page);
         await row.click();
+        await sheet.locator(".signing .sign-start").click();
         box = sheet.locator(".signing");
         await box.waitFor();
         assert.equal(await scrolls(page), before, "the click moved nothing");

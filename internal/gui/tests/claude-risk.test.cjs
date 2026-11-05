@@ -63,8 +63,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const row = sheet.locator('.tile[data-pick="Claude"]');
         await row.waitFor();
 
-        // Cancel leaves it unasked
+        // Cancel leaves it unasked; adding asks nothing of the vendor until Start sign-in
         await row.click();
+        await sheet.locator(".signing .sign-start").click();
         let box = sheet.locator(".signing");
         await box.waitFor();
         await box.locator("button", { hasText: w.cancel }).click();
@@ -73,6 +74,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         const before = await scrolls(page);
         await row.click();
+        await sheet.locator(".signing .sign-start").click();
         box = sheet.locator(".signing");
         await box.waitFor();
         assert.equal(await scrolls(page), before, "the click moved nothing");
@@ -108,6 +110,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const add = page.locator(".editor .accts .acc.add").first();
         await add.waitFor();
         await add.click();
+        await page.locator(".editor .signing .sign-start").click();
         for (let i = 0; i < 50 && !asked.length; i++) await page.waitForTimeout(50);
         assert.deepEqual(asked, [{ agent: "claude" }]);
         assert.equal(await page.locator(".editor .signing .n", { hasText: L[lang].title }).count(), 0, "no warning again");

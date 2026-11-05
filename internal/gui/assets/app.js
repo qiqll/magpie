@@ -7290,7 +7290,7 @@ async function pluginSignIn(id, e) {
   closeModal();
   adding = true; editing = null; draft = null; presetQuery = "";
   renderProviders();
-  startSignIn(id);
+  readySignIn(id);
   if (!go) return;
   $("#addSheet .signing")?.scrollIntoView({ block: "center" });
   arrived($("#view-providers"));
@@ -7366,7 +7366,7 @@ function subTile(x) {
     markAdded(b, x.single ? 1 : n);
     b.title += "\n" + (x.single ? t("Signed in") : t(n === 1 ? "1 account" : "{n} accounts", { n })) + " · " + t(x.single ? "signed in · click to switch account" : "click to add another account");
   }
-  b.onclick = () => startSignIn(x.agent);
+  b.onclick = () => readySignIn(x.agent);
   return b;
 }
 
@@ -12305,6 +12305,9 @@ async function startSignIn(agent, risky, site, o = {}) {
   }
 }
 
+// readySignIn: nothing asked of the vendor until Start sign-in (signsheets.js)
+const readySignIn = (agent) => signAsk({ agent, state: "ready", proxy: signInProxyOf(agent) });
+
 // openSignInPage: in magpie web a new tab the browser may block, then Open
 // again (treeMan); no noopener, the one way to learn it, cut at once.
 const openBlocked = "\u0000blocked";
@@ -12622,6 +12625,10 @@ function proxyName(v) {
 // signInThrough: the sign-in under way started again through proxy v.
 function signInThrough(sub, v) {
   const f = signing;
+  if (f?.state === "ready") {
+    signing = { ...f, proxy: v, picked: v, askProxy: false, customProxy: undefined };
+    return renderProviders();
+  }
   const o = { user: f?.forUser, proxy: v };
   if (!sub.plugin) return startSignIn(sub.agent, true, f?.site, o); // which ends this one
   if (f?.id && signingOpen()) api("signin/" + f.id + "/cancel", {}).catch(() => {});
@@ -12806,6 +12813,7 @@ function renderSigning(sub) {
     }
     return box;
   }
+  if (signing.state === "ready") return window.readySheet(sub);
   if (signing.state === "ghe") return window.copilotGHESheet();
   if (signing.state === "token") return window.claudeTokenSheet();
   if (signing.state === "import" || signing.state === "importing" || signing.state === "imported") return renderLoginImport(sub);
@@ -13369,7 +13377,7 @@ function renderAccounts(a, p) {
   if (pv.codexApp) list.append(renderCodexApp(pv.codexApp));
   if (signing?.agent === a.agent) list.append(renderSigning(sub));
   else {
-    list.append(addRow(t(sub.single && sub.plugin ? "Sign in again" : sub.single ? "Sign in to another {name} account" : "Add another {name} account", { name: sub.name }), () => startSignIn(a.agent)));
+    list.append(addRow(t(sub.single && sub.plugin ? "Sign in again" : sub.single ? "Sign in to another {name} account" : "Add another {name} account", { name: sub.name }), () => readySignIn(a.agent)));
     if (sub.importable) {
       const imp = addRow(importSay(a.agent).row || t("Import accounts from a file…"), () => startImport(a.agent));
       imp.title = importSay(a.agent).from;

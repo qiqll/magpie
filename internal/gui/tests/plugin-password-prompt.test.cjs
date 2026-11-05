@@ -70,6 +70,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           const tile = sheet.locator('.tile[data-pick="FakeCo"]');
           await reach(page, tile);
           await tile.click();
+          const start = sheet.locator(".signing .sign-start");
+          await reach(page, start);
+          await start.click();
           const box = sheet.locator(".signing");
           const way = box.locator("button", { hasText: "Sign in with a FakeCo PAT" });
           await reach(page, way);
