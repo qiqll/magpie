@@ -110,10 +110,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       // a second rule: its hours typed, nothing moved by a click. The
       // reader wheels Add a rule into view first: the editor runs past the
       // fold since the hints under Routing (a click's scroll is put back)
-      // a group opening into its editor moves its height and parts for
-      // ~700ms (91b0be836), and the view's scroll with it, which shuts a
-      // menu opened meanwhile: where x will be is read once that has
-      // stopped (7b007e98)
+      //
+      // settled: a group opening into its editor moves its height and
+      // parts for ~700ms (91b0be836), and the view's scroll with it, which
+      // shuts a menu opened meanwhile: where x will be is read once that
+      // has stopped (7b007e98)
       const settled = () => page.waitForFunction(() => !document.getAnimations().some((a) => a.playState === "running" && Number.isFinite(a.effect?.getComputedTiming().endTime)));
       const wheelTo = async (x) => {
         await settled();

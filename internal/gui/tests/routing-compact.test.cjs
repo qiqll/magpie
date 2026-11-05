@@ -104,10 +104,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       // a second rule, compacting alone: toggled with nothing moved
       // (wheeled down to, as the reader would: the editor runs past the
       // window and the page keeps still for any other scroll)
-      // a group opening into its editor moves its height and parts for
-      // ~700ms (91b0be836), and the view's scroll with it, which shuts a
-      // menu opened meanwhile: where add will be is read once that has
-      // stopped (7b007e98)
+      //
+      // settled: a group opening into its editor moves its height and
+      // parts for ~700ms (91b0be836), and the view's scroll with it, which
+      // shuts a menu opened meanwhile: where add will be is read once that
+      // has stopped (7b007e98)
       const settled = () => page.waitForFunction(() => !document.getAnimations().some((a) => a.playState === "running" && Number.isFinite(a.effect?.getComputedTiming().endTime)));
       await settled();
       const add = ed.locator("button", { hasText: w.add });
