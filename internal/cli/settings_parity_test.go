@@ -219,6 +219,7 @@ var notYet = map[string]string{
 	"POST /api/settings/plugin-checkin":          S2, // api.go
 	"POST /api/settings/plugin-option":           S2, // api.go
 	"POST /api/settings/port":                    S2, // api.go
+	"POST /api/settings/proxies":                 S2, // api.go: Settings › Network's saved proxies (T-110)
 	"POST /api/settings/qoder-checkin":           S2, // api.go
 	"POST /api/settings/quota-left":              S2, // api.go
 	"POST /api/settings/quota-reads":             S2, // api.go
