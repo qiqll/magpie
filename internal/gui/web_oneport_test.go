@@ -281,6 +281,13 @@ func TestWebOnePortGatewayDownSaysNoMagpie(t *testing.T) {
 		strings.Contains(strings.ToLower(strings.ReplaceAll(w.Body.String(), gateway.URL(), "")), "magpie") {
 		t.Fatalf("a key's holder, the gateway down: %d: %q", w.Code, w.Body.String())
 	}
+	// from loopback with no key (a raw forward to the page port): never
+	// the owner here, so no magpie either
+	w = onePortCall(t, page, "POST", "/v1/chat/completions", "127.0.0.1:50001", "127.0.0.1:3430", "")
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "the gateway at ") ||
+		strings.Contains(strings.ToLower(strings.ReplaceAll(w.Body.String(), gateway.URL(), "")), "magpie") {
+		t.Fatalf("from loopback on the page's port, the gateway down: %d: %q", w.Code, w.Body.String())
+	}
 	w = onePortCall(t, page, "POST", "/v1/chat/completions", "203.0.113.7:50001", "127.0.0.1:3430", "", "User-Agent", "magpie/0.1.1")
 	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "magpie's gateway at "+gateway.URL()+" doesn't answer") {
 		t.Fatalf("another magpie, the gateway down: %d: %q", w.Code, w.Body.String())
