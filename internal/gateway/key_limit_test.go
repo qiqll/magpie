@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -805,6 +807,60 @@ func TestKeyLimitHoldsTheTurnsWebSearch(t *testing.T) {
 	}
 	if got := result(); len(searched("deepseek-flash")) == 0 || !strings.Contains(got, "22/17℃") {
 		t.Fatalf("another key's turn: searched %d times, the model told %q", len(searched("deepseek-flash")), got)
+	}
+}
+
+// A Claude Code run's web search, asked back through its MCP callback,
+// which carries no key, is held to the limit of the key its turn came
+// with, as a turn's own search is, bound by session or by user: with
+// the key over its limit, no searcher is asked and the run is told the search can't
+// be made; another key's run searches. Before, the run's search was held
+// to no key, and a key over its limit still had it made and spent
+// (T-112).
+func TestKeyLimitHoldsAClaudeRunsWebSearch(t *testing.T) {
+	searched, _ := dsKeyed(t, provider.Responses)
+	binds := []struct {
+		what string
+		s    *Server
+		user string
+	}{
+		{"by session", New(), ""},
+		{"by user", byUserUpTo(t, New(), 1), "bob"},
+	}
+	keys, secrets := newCaller(t, "Capped", "Free")
+	budget.Forget()
+	at := pinLimitClock(t)
+	setLimit(t, keys[0].ID, &access.Limit{Period: "day", Tokens: 1000})
+	budget.Append(usage.Record{Time: at.Add(-time.Minute), Provider: "a", Model: "small", Input: 1000, Status: 200, CallerKeyID: keys[0].ID})
+	for _, bind := range binds {
+		search := func(secret string) error {
+			t.Helper()
+			who, ok := access.Authenticate(secret)
+			if !ok {
+				t.Fatalf("%s: the key isn't known", bind.what)
+			}
+			turn := httptest.NewRequest("POST", "/v1/messages", nil)
+			if bind.user != "" {
+				turn.Header.Set(UserHeader, bind.user)
+			}
+			turn = turn.WithContext(access.WithIdentity(turn.Context(), who))
+			_, _, err := bind.s.runSearch(turn)(context.Background(), "weather in Hangzhou")
+			return err
+		}
+		before := len(searched("deepseek-flash"))
+		err := search(secrets[0])
+		if n := len(searched("deepseek-flash")) - before; n != 0 {
+			t.Fatalf("%s: the searcher was asked %d times for a key over its limit", bind.what, n)
+		}
+		if !errors.As(err, new(sideHeld)) || sideSaid(err) != "web search is unavailable for this request" {
+			t.Fatalf("%s: the capped key's run search: %v", bind.what, err)
+		}
+		if err := search(secrets[1]); err != nil {
+			t.Fatalf("%s: another key's run search: %v", bind.what, err)
+		}
+		if len(searched("deepseek-flash")) == before {
+			t.Fatalf("%s: another key's run never searched", bind.what)
+		}
 	}
 }
 

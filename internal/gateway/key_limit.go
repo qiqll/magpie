@@ -132,9 +132,16 @@ func sideSaid(err error) string {
 // the turn's own reservation among it (its body's base64 counted a
 // quarter of a token a byte), it is let in while what the key has
 // used leaves the ask room, holding nothing: a turn's large image isn't
-// dropped on a key with most of its limit left.
+// dropped on a key with most of its limit left. An ask made in a
+// context of its own (a Claude Code run's web search, back through its
+// MCP callback, which carries no key) is held to the key of the turn it
+// was made for (forUser): before, it was held to none, and a key with
+// nothing left still had its run's searches made and spent (T-112).
 func reserveSide(ctx context.Context, size int64, model string) (func(), error) {
 	who := access.Caller(ctx)
+	if k, ok := ctx.Value(askedKeyKey{}).(askedKey); ok && who.KeyID == "" {
+		who = k.who
+	}
 	now := limitClock()
 	release, err := reserveFor(who, size, model, now)
 	if err == nil {

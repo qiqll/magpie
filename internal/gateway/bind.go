@@ -131,17 +131,23 @@ func (s *Server) forUser(ctx context.Context, r *http.Request) context.Context {
 // Code run's web search) carries no caller, and its row went to the users
 // of no key, by_use's and the user's usage counting it in the shared
 // group (T-095). It is never the ask's caller: what the ask may use
-// doesn't read it. It is apart from askedFor, whose key names the user's
-// binding, since it is carried with no askedFor too.
+// doesn't read it, only the key's limits hold it (reserveSide, T-112).
+// It is apart from askedFor, whose key names the user's binding, since
+// it is carried with no askedFor too.
 type askedKeyKey struct{}
 
-type askedKey struct{ id, name, issuer string }
+type askedKey struct {
+	id, name, issuer string
+	// who is the turn's caller, whose key's limits hold a side ask made
+	// in a context of its own as they hold the turn's (reserveSide)
+	who access.Identity
+}
 
 // askedKeyOf is the gateway key r came with, or the one r's own ask was
 // made for (userKey).
 func askedKeyOf(r *http.Request) askedKey {
 	if who := access.Caller(r.Context()); who.KeyID != "" {
-		return askedKey{who.KeyID, who.KeyName, who.IssuerID()}
+		return askedKey{who.KeyID, who.KeyName, who.IssuerID(), who}
 	}
 	k, _ := r.Context().Value(askedKeyKey{}).(askedKey)
 	return k
