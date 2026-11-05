@@ -70,7 +70,7 @@ for (const [name, engine] of [["webkit", webkit], ["chromium", chromium]]) {
         await page.waitForFunction(() => typeof locale === "string" && document.documentElement.lang);
         const got = await page.evaluate(() => ({
           locale, lang: document.documentElement.lang, sys: navigator.language,
-          nav: [...document.querySelectorAll("button[data-view]")].map((b) => b.textContent.trim()).slice(0, 5),
+          nav: [...document.querySelectorAll("button[data-view]")].map((b) => b.textContent.trim()).slice(0, 6),
           offered: LOCALES.map(([v, l]) => v + ":" + l),
           units: (chineseUnits = true, [fmtN(133000000), fmtN(68100)]),
         }));
@@ -78,7 +78,7 @@ for (const [name, engine] of [["webkit", webkit], ["chromium", chromium]]) {
         assert.ok(got.offered.includes("zh-TW:繁體中文") && got.offered.includes("zh:简体中文"), got.offered.join());
         if (want === "zh-TW") {
           assert.equal(got.lang, "zh-TW");
-          assert.deepEqual(got.nav, ["Agent", "會話", "資源庫", "供應商", "路由"]);
+          assert.deepEqual(got.nav, ["Agent", "會話", "資源庫", "供應商", "帳號", "路由"]);
           assert.deepEqual(got.units, ["1.33 億", "6.8 萬"]);
         }
         if (want === "zh") assert.deepEqual(got.units, ["1.33 亿", "6.8 万"]);

@@ -56,14 +56,14 @@ for (const [name, engine] of [["webkit", webkit], ["chromium", chromium]]) {
         await page.waitForFunction(() => typeof locale === "string" && document.documentElement.lang);
         const got = await page.evaluate(() => ({
           locale, lang: document.documentElement.lang,
-          nav: [...document.querySelectorAll("button[data-view]")].map((b) => b.textContent.trim()).slice(0, 5),
+          nav: [...document.querySelectorAll("button[data-view]")].map((b) => b.textContent.trim()).slice(0, 6),
           offered: LOCALES.map(([v, l]) => v + ":" + l),
         }));
         assert.equal(got.locale, want, `${lang} on ${sys}`);
         assert.ok(got.offered.includes("ja:日本語"));
         if (want === "ja") {
           assert.equal(got.lang, "ja-JP");
-          assert.deepEqual(got.nav, ["エージェント", "セッション", "ライブラリ", "プロバイダ", "ルーティング"]);
+          assert.deepEqual(got.nav, ["エージェント", "セッション", "ライブラリ", "プロバイダ", "アカウント", "ルーティング"]);
         }
         await page.close();
       }
