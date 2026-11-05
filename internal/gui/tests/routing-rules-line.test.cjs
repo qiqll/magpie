@@ -76,6 +76,10 @@ function serve(lang, posts) {
 // wheel to a control, as the reader would (the page keeps still for any
 // other scroll), and return where it is
 async function reach(page, loc) {
+  // a group opening into its editor moves its height and parts for ~700ms
+  // (91b0be836), and the view's scroll with it, which shuts a menu opened
+  // meanwhile: where loc will be is read once that has stopped (7b007e98)
+  await page.waitForFunction(() => !document.getAnimations().some((a) => a.playState === "running" && Number.isFinite(a.effect?.getComputedTiming().endTime)));
   const height = page.viewportSize().height;
   await page.mouse.move(Math.min(550, (page.viewportSize().width / 2) | 0), 300);
   for (let i = 0; i < 30; i++) {

@@ -103,6 +103,10 @@ async function open(t, engine, lang, width, folder) {
 // the view wheeled to a button, as the reader would (the page keeps
 // still for any other scroll), and the button clicked where it is
 async function press(page, b) {
+  // a group opening into its editor moves its height and parts for ~700ms
+  // (91b0be836), and the view's scroll with it, which shuts a menu opened
+  // meanwhile: where b will be is read once that has stopped (7b007e98)
+  await page.waitForFunction(() => !document.getAnimations().some((a) => a.playState === "running" && Number.isFinite(a.effect?.getComputedTiming().endTime)));
   await page.mouse.move(Math.min(550, page.viewportSize().width / 2), 600);
   for (let i = 0; i < 20; i++) {
     const y = (await b.boundingBox()).y;
