@@ -285,7 +285,6 @@ const CROSS = "M4.5 4.5l7 7M11.5 4.5l-7 7";
 const PLUS = "M8 3.5v9M3.5 8h9";
 const OUT = "M6.5 3.5h-3v9h9v-3M9 3.5h3.5V7M12.5 3.5 7.5 8.5";
 const COPY_ICON = "M5.5 5.5V3.5h7v7h-2M3.5 5.5h7v7h-7z";
-const DOWNLOAD = "M8 3v7M5 7.5l3 3 3-3M3.5 12.5h9";
 const PENCIL = "M3.5 12.5l.5-2.5 6.8-6.8a1.2 1.2 0 0 1 1.7 0l.3.3a1.2 1.2 0 0 1 0 1.7L6 12z M9.8 4.2l2 2";
 const PUZZLE = "M6.2 2.8h2.3a1.3 1.3 0 1 1 2.5 0h2.2V5a1.3 1.3 0 1 0 0 2.6v5.6H3V7.6a1.3 1.3 0 1 1 0-2.6V2.8z";
 
@@ -6082,13 +6081,8 @@ function providersWhileFetching() {
   }, 2500);
 }
 
-// What the vendors' own status pages say of the APIs the providers call
-// (#971, emo172): a vendor's API degraded or down is marked on its
-// providers' rows and usage cards, so its outage isn't taken for a sign-in
-// or quota problem. The gateway reads each page at most once in five
-// minutes; it is asked when the Providers or Usage page loads, and again
-// every five minutes while one stays open. A page that couldn't be read
-// marks nothing: unknown is not "all well", and not an outage either.
+// Vendors' status pages (#971): an API degraded or down marked on its
+// providers' rows and cards; a page that couldn't be read marks nothing.
 let upstream = null, upstreamAsking = null;
 function loadUpstream() {
   if (upstreamAsking) return upstreamAsking;
@@ -6373,14 +6367,8 @@ function openProviderMenu(anchor, p) {
   ]);
 }
 
-// Providers' search (#1614, ququdu: "供应商很多，然后经常需要翻找"): the
-// words typed keep the rows that say them all, on and off alike, matched on
-// the row's own text and on what it doesn't show: its id, preset, addresses,
-// each account's user and plan, and the keys' names. The words it doesn't
-// say are one model's it serves, separators aside ("opus 5.5" finds
-// claude-opus-5-5), named under the row (frankdeng, Neo). The ones turned
-// off show unfolded while searching. Escape or clearing the box brings back
-// every row, the fold as it was.
+// Providers' search (#1614): rows saying every word typed, in their text,
+// ids, addresses, accounts, keys or a model they serve (frankdeng, Neo).
 let pvQuery = "";
 function providerText(p, row) {
   const a = p.account;
@@ -6622,21 +6610,13 @@ function unmovedLine(p) {
   return card;
 }
 
-// renderLapsed: over the list, each account in use to sign in again
-// (signInLapsed), which the gateway leaves out till then, with its Sign in
-// again, which opens the editor with the sign-in under way (signagain.js)
+// renderLapsed: over the list, each account in use to sign in again (signagain.js)
 function renderLapsed() {
   const box = $("#lapsedAccounts");
-  if (!box) return;
-  const lines = [];
-  for (const p of providers.providers) {
-    if (p.off || !p.account) continue;
-    for (const l of p.account.logins || []) if (((l.active && !l.paused) || l.on) && signInLapsed(p.account.agent, l)) lines.push([p, l]);
-  }
-  if (lines.length && !window.lapsedLine) return void signAgainJS().then(renderLapsed, () => {});
-  box.replaceChildren(...lines.map(([p, l]) => lapsedLine(p, l)));
-  box.hidden = !lines.length;
+  if (window.lapsedDraw) lapsedDraw(box);
+  else if (box && providers.providers.some((p) => !p.off && p.account?.logins?.some((l) => lapsedInUse(p, l)))) signAgainJS().then(renderLapsed, () => {});
 }
+const lapsedInUse = (p, l) => ((l.active && !l.paused) || l.on) && signInLapsed(p.account.agent, l);
 // signagain.js: loaded once asked for
 function signAgainJS() { return signAgainJS.p ||= import("./signagain.js").catch((e) => { signAgainJS.p = null; throw e; }); }
 
@@ -6835,14 +6815,8 @@ function accountPlan(a) {
 // page that gets anything else connected to it: base URL, key, model ids,
 // and a snippet in whichever language the reader is holding.
 
-// copy asks magpie to put text on the clipboard, as the page's own
-// clipboard API is refused inside the app's window; a browser tab on the
-// dev UI falls back to it. A tab on `magpie web` reached over plain http
-// from another computer (a NAS's) has no clipboard API at all, so the
-// older copy command is the last try there. magpie refuses a copy it
-// couldn't read back (#1881: GTK 3 on KDE Plasma without middle-click
-// paste served it empty), and the page's ways are tried then too. When
-// none copies, the page says so and shows the text to copy by hand.
+// copy: through magpie (the window refuses the page's clipboard), else the
+// page's ways (#1881); when none copies, the text is shown to copy by hand.
 async function copy(text, what, btn, message) {
   const done = () => { status(message || t("{what} copied", { what }), "ok"); flashCopied(btn); };
   const res = await fetch("/api/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }).catch(() => null);
@@ -7693,12 +7667,8 @@ function providerDirty() {
   return !!draft && draft === providerDraftRef && (providerDraftValue() !== providerDraftBase ||
     (active?.matches(".editor .mprice input") && active.value !== active.defaultValue));
 }
-// backdropClick(el, on) says whether a click on el is one on its backdrop:
-// pressed and let go both where on(e) says the backdrop is. A press inside
-// the dialog let go out over the backdrop, a selection dragged out of a
-// field (#1373), clicks the two's nearest shared ancestor, the backdrop, so
-// the click's own target can't tell it apart. Every dialog that closes from
-// its backdrop asks this.
+// backdropClick(el, on): pressed and let go both on the backdrop, not a
+// selection dragged out of a field (#1373)
 function backdropClick(el, on = (e) => e.target === el) {
   let down = false, up = false;
   el.addEventListener("pointerdown", (e) => { down = on(e); up = false; }, true);
@@ -8116,12 +8086,8 @@ function proxyOfDraft() {
   return (draft.proxyURL || "").trim() || null;
 }
 
-// accountProxyPicker: one proxy per account of a subscription holding
-// several (gakki: one Codex account through one proxy, another through
-// another) — the provider's own (the row above), none, or its own address.
-// Each account is a line of its name over the same row as the provider's,
-// the address's room kept while it isn't asked for, so a pick moves
-// nothing. null for a subscription with one account: the row above is its.
+// accountProxyPicker: a proxy per account of a subscription with several
+// (gakki); null with one, the row above being its.
 const ACCOUNT_PROXY_HINT = "Each account can go through a proxy of its own; Provider's proxy is the one above";
 function accountProxyPicker(a, p) {
   const ls = [...(a?.logins || [])];
@@ -8135,12 +8101,8 @@ const KEY_PROXY_HINT = "Each key can go through a proxy of its own; Provider's p
 function keyProxyPicker(p) {
   return proxyLines((p?.keyList || []).map((k) => ({ k: k.id, name: k.name || k.masked, key: k.id, info: k })), KEY_PROXY_HINT, true);
 }
-// proxyLines: a line for each account or key. A provider's keys fold as
-// its Accounts list folds them (keyFold): past KEYS_FOLD, the first
-// KEYS_FIRST and those with a proxy of their own, or, opened, those the
-// filter matches, KEYS_PAGE at most. A line for each of a thousand keys
-// took the editor a minute to open, five thousand three (@NetRozee on X).
-// A key not drawn keeps the proxy it has: only a line picked in changes it.
+// proxyLines: a line for each account or key, keys folded as Accounts
+// folds them (keyFold, @NetRozee on X); one not drawn keeps its proxy.
 function proxyLines(items, hint, foldKeys) {
   if (items.length < 2) return null;
   draft.accountProxies = draft.accountProxies || {};
@@ -8230,13 +8192,8 @@ function accountProxiesOfDraft() {
   return { map: out };
 }
 
-// Custom request headers: the draft keeps them as an ordered [name, value,
-// json?] list so a half-typed row (and its open JSON editor) survives a
-// re-render; headersOf folds that back into the object the backend stores,
-// dropping rows with an empty name or value (a suggested header left unfilled
-// is not sent), keeping the last of two rows that name one header in any
-// case, and minifying any value that parses as JSON — a header value is one
-// line, so pretty-printing is display-only.
+// Custom request headers: an ordered [name, value, json?] list in the
+// draft; headersOf folds it back, dropping empty rows, JSON minified.
 function headerRows(obj) {
   return Object.entries(obj || {}).map(([k, v]) => [k, v, false]);
 }
@@ -12055,13 +12012,8 @@ function mediaChips(cls, ids, key, p) {
   return chips;
 }
 
-// renderRouting: how the gateway spreads requests over the keys or
-// accounts a provider has on, and how long a conversation stays with the
-// one that answered it. Both are staged in the editor's draft (routing,
-// affinity) and made with its Save, as the rest of the editor is: a click
-// shows the option and what it does, nothing is sent or redrawn, and
-// Cancel drops it (01huadalang on Discord: each click saved and redrew,
-// so looking through what each says lagged).
+// renderRouting: how requests spread over a provider's keys or accounts
+// and stay with one, staged in the draft until Save (01huadalang).
 const ROUTINGS = [
   ["", "Smart", "The first takes requests while it has quota to spare; when it runs low, the one with the most left takes over. One out of credit sits out half an hour, one out of quota until it resets, one rate limited as long as the vendor asks, and one that fails a minute, longer each time it fails again."],
   ["order", "In order", "Requests go to the first; the next takes over when the one before runs out of quota, hits a rate limit or fails."],
@@ -12512,26 +12464,13 @@ async function followSignIn(id) {
   }
 }
 
-// signInProxySaid: the proxy a failed sign-in's CLI was given and whose
-// it was (proxyUsed, T-103), "" when it isn't known
-const signInProxyFrom = {
-  picked: "picked for this sign-in", account: "this account's own", subscription: "this subscription's own",
-  settings: "magpie's global proxy", environment: "magpie's own environment", system: "the system's proxy",
-  direct: "magpie's global proxy is set to none", none: "no proxy is set anywhere",
-  invalid: "the proxy set can't be read, so magpie's own environment was kept",
-};
-function signInProxySaid(u) {
-  if (!u?.from) return "";
-  const from = t(signInProxyFrom[u.from] || u.from);
-  return u.proxy ? t("Proxy given to it: {proxy} ({from})", { proxy: u.proxy, from }) : t("No proxy given to it ({from})", { from });
-}
-
 // signInWhy: a failure's reason, or the i18n.js key said in place of one
 // that may hold its code or key (r.said)
 const signInWhy = (r) => r.said ? t(r.said, r) : r.error;
 
-// saySignInFailed: a failure out of sight said on the status line
-// (signagain.js), its reason alone if that won't load
+// saySignInFailed: a failure out of sight said on the status line, and the
+// proxy its CLI was given in its box (signagain.js); its reason alone if
+// that won't load
 const saySignInFailed = () => signing?.state === "failed" && signAgainJS().then(() => sayFailed(), (e) => status(signing?.error || e.message, "err"));
 
 // signingKept: a sign-in's site, way, account and proxy across updates
@@ -12989,7 +12928,7 @@ function renderSigning(sub) {
   if (signing.state === "failed") {
     box.append(el("span", "mark", "!"));
     tt.append(el("span", "n", t("Sign-in didn't finish")), el("span", "s", signing.error || ""));
-    const used = signInProxySaid(signing.proxyUsed);
+    const used = window.signInProxySaid?.(signing.proxyUsed);
     if (used) tt.append(el("span", "s proxy-used", used));
     box.append(tt);
     const again = el("button", "text primary", t("Try again"));
@@ -13120,12 +13059,8 @@ function renderSigning(sub) {
     tt.append(form, via, why);
     proxiesJs(() => pastePickFill(via, sub, flow));
   }
-  // a plugin's browser sign-in whose page can't reach magpie (Docker: the
-  // Command Code plugin's Studio posts its key to 127.0.0.1) can be left
-  // for the plugin's own API key way, without starting over; one that
-  // takes a pasted key in place already (#2468) needs no second way, and
-  // nor does a moved one whose key import goes to its plugin (Factory,
-  // factory_key.go): two "Use an API key instead" links read as one
+  // a plugin's browser sign-in whose page can't reach magpie can be left
+  // for its API key way, unless it takes a pasted key already (#2468)
   const keyWay = sub.plugin && signing.method != null && !signing.pasteCode && !signing.pasteKey && signing.state === "waiting"
     ? (sub.plugin.methods || []).findIndex((m) => m.type === "api") : -1;
   if (keyWay >= 0 && keyWay !== signing.method && !(sub.moved && sub.importable)) {
@@ -13276,19 +13211,11 @@ function loginsInOrder(a, p) {
   return ls.sort((x, y) => (y.active ? 1 : 0) - (x.active ? 1 : 0));
 }
 
-// CLIPROXY_AGENTS: the accounts CLIProxyAPI takes as auth files
-// (provider.CLIProxyAgents)
-const CLIPROXY_AGENTS = ["codex", "claude", "antigravity"];
-
-// cliproxyButton: an account's sign-in as CLIProxyAPI's auth file, asked
-// first, in cliproxy.js, loaded when pressed. An icon, not a word:
-// "Exportieren" took a line of its own beside Remove and a cap pill
+// cliproxyButton: Export, an account's sign-in as CLIProxyAPI's auth file
+// (provider.CLIProxyAgents), its icon, words and press in cliproxy.js
 function cliproxyButton(a, l) {
   const b = el("button", "key-edit acc-export");
-  b.setAttribute("aria-label", t("Export"));
-  b.append(svg(DOWNLOAD, 12, 1.5));
-  b.title = t("Download this account's sign-in as a CLIProxyAPI auth file");
-  b.onclick = () => import("./cliproxy.js").then(() => cliproxyExport(a, l, b), statusErr);
+  import("./cliproxy.js").then(() => cliproxyDress(b, a, l), () => b.remove());
   return b;
 }
 
@@ -13453,8 +13380,7 @@ function renderAccounts(a, p) {
     }
     row.append(aq);
     row.classList.add("with-aq"); // not :has(.aq), which Safari 15.0 lacks (#220)
-    // its sign-in as CLIProxyAPI's file
-    if (CLIPROXY_AGENTS.includes(a.agent) && !sub?.plugin && !unusable(l) && !(a.agent === "antigravity" && l.own)) tools.append(cliproxyButton(a, l));
+    if (["codex", "claude", "antigravity"].includes(a.agent) && !sub?.plugin && !unusable(l) && !(a.agent === "antigravity" && l.own)) tools.append(cliproxyButton(a, l));
     if (p) row.append(...accountRestLines(p, l.user)); // maxleebeta on Discord
     // Remove goes under ⋯ too, but beside Sign in again while signed out
     if (!row.classList.contains("signed-out")) tools.append(...line.querySelectorAll(":scope > .text.quiet"));
@@ -13612,14 +13538,8 @@ function codexNote(cls, n, s) {
   return box;
 }
 
-// Accounts brought in from another tool's export instead of signing in
-// again: the files' text (or what is pasted) goes to magpie, which checks
-// each account with the vendor before keeping it, and says what became of
-// each. What is read stays here only until it is sent; the box masks it.
-// A sign-in waiting for its browser's address is kept behind the import
-// rather than canceled: that address pasted into the import box finishes
-// it there (LuvLetter, magpie in Docker, pasted it into this box instead of
-// the sign-in's Callback URL field), and closing the box ends it.
+// Accounts imported from another tool's export, each checked with the
+// vendor; a sign-in waiting for its address is kept behind it (LuvLetter).
 function startImport(agent) {
   const behind = signingOpen() && signing.pasteCallback ? signing.id : signing?.behind;
   if (signingOpen() && signing.id !== behind) api("signin/" + signing.id + "/cancel", {}).catch(() => {});

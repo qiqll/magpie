@@ -1,6 +1,15 @@
-// An account's sign-in as CLIProxyAPI's auth file. app.js imports this only
-// when an account's Export is pressed (cliproxyButton), so it weighs
-// nothing on the core.
+// An account's sign-in as CLIProxyAPI's auth file. app.js imports this when
+// the provider editor draws an account's Export (cliproxyButton), so it
+// weighs nothing on the core.
+
+// cliproxyDress: Export's button b for account l of a. An icon, not a word:
+// "Exportieren" took a line of its own beside Remove and a cap pill
+window.cliproxyDress = function (b, a, l) {
+  b.setAttribute("aria-label", t("Export"));
+  b.append(svg("M8 3v7M5 7.5l3 3 3-3M3.5 12.5h9", 12, 1.5));
+  b.title = t("Download this account's sign-in as a CLIProxyAPI auth file");
+  b.onclick = () => cliproxyExport(a, l, b);
+};
 
 // cliproxyExport: account l of a, asked first: the file holds the refresh
 // token, and a ChatGPT or Claude one refreshed on one side stops working on
