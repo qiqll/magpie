@@ -138,6 +138,31 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(errors, []);
       });
 
+      // the other ways in are there before anything is sent (review M1): a
+      // Claude setup-token opens its own sheet and starts no sign-in, and
+      // ChatGPT's device code is offered beside the proxy
+      test(`${engine} ${lang} ${size.width}: the ready sheet offers the other ways in, sending nothing`, async (t) => {
+        const seen = { starts: [], opens: [] };
+        const { page, errors } = await open(engine, size, lang, seen, t);
+        await page.locator("#addProvider").click();
+        const sheet = page.locator("#addSheet");
+        await sheet.locator(".tile").first().waitFor();
+        await sheet.locator(".tile").filter({ has: page.locator(".n", { hasText: /^ChatGPT$/ }) }).click();
+        await sheet.locator(".signing.ready button.codex-way").waitFor();
+        assert.equal(await sheet.locator(".signing.ready button.codex-way").textContent(), w("Sign in with a code instead"));
+        await sheet.locator('.tile[data-pick="Claude"]').click();
+        const tok = sheet.locator(".signing.ready button.ready-token");
+        await reach(page, tok);
+        assert.equal(await tok.textContent(), w("Use a setup-token instead…"));
+        await tok.click();
+        await sheet.locator(".signing.claude-token").waitFor();
+        await settle(page);
+        assert.deepEqual(seen.starts, [], "a setup-token asks nothing of claude.ai");
+        assert.deepEqual(seen.opens, []);
+        assert.equal(await wide(page), false, "nothing wider than the window");
+        assert.deepEqual(errors, []);
+      });
+
       // its words keep their room beside the buttons: the title unclipped,
       // the proxy link wide enough to read and to click
       test(`${engine} ${lang} ${size.width}: the ready sheet keeps room for its title and proxy link`, async (t) => {

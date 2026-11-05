@@ -39,6 +39,9 @@ const quotas = () => [
   acct("workbuddy", "WorkBuddy", "w1@example.com", [five(0)], { checkins: true }),
   acct("workbuddy", "WorkBuddy", "w2@example.com", [five(0)], { checkins: true }),
   acct("workbuddy", "WorkBuddy", "w3@example.com", [five(7)], { checkins: true }),
+  // every account idle: no head button that does nothing (review M3)
+  acct("kimi", "Kimi", "k1@example.com", [five(0)]),
+  acct("kimi", "Kimi", "k2@example.com", [five(0)]),
   // one account alone: never folded
   acct("codex", "Codex", "solo@example.com", [five(0), week(5)]),
 ];
@@ -96,6 +99,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert(!has(got, "workbuddy", "w2@"));
         assert.equal(got.workbuddy.idle, tr(lang, "Show 1 unused account"));
         assert.equal(await page.locator('#subscriptionUsage > [data-key="codex"] .quota-idle-more').count(), 0, "one account alone isn't folded");
+        assert.equal(got.kimi.idle, tr(lang, "Show {n} unused accounts", { n: 2 }));
+        assert.equal(await page.locator('#subscriptionUsage > [data-key="kimi"] .quota-more').count(), 0, "every account folded: no button for the ones in sight");
 
         // opened, then remembered across a reload
         const btn = page.locator('#subscriptionUsage > [data-key="claude"] .quota-idle-more');

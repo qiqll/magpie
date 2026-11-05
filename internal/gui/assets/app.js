@@ -7290,7 +7290,7 @@ async function pluginSignIn(id, e) {
   closeModal();
   adding = true; editing = null; draft = null; presetQuery = "";
   renderProviders();
-  readySignIn(id);
+  await readySignIn(id);
   if (!go) return;
   $("#addSheet .signing")?.scrollIntoView({ block: "center" });
   arrived($("#view-providers"));
@@ -15893,7 +15893,7 @@ function renderQuotas(lazy) {
     const folded = keys ? keysFolded(subs) : accts ? acctsFolded(busy) : new Set();
     for (const sub of subs) {
       if (folded.has(sub) || idle.has(sub)) continue;
-      const brief = several && !usageAcctOpen(sub, subs);
+      const brief = several && !usageAcctOpen(sub, busy.length ? busy : subs);
       const history = !brief && quotaHistoryView(sub);
       const shownSub = history ? quotaHistoryCard(sub, history) : sub;
       const [meters, every] = history ? [quotaWindows(shownSub), null] : familyQuota(sub);
@@ -15959,7 +15959,7 @@ function renderQuotas(lazy) {
       const credits = !brief && !history && creditsRow(sub, "quota-credits");
       if (credits) card.append(credits);
     }
-    if (several) head.append(usageMore(folded.size || idle.size ? subs.filter((q) => !folded.has(q) && !idle.has(q)) : subs, "text quota-more"));
+    if (several && busy.length) head.append(usageMore(folded.size || idle.size ? subs.filter((q) => !folded.has(q) && !idle.has(q)) : subs, "text quota-more"));
     if (keys && (folded.size || usageKeysAll.has(first.provider))) card.append(keysMore(first.provider, folded.size));
     if (accts && (folded.size || usageAcctsAll.has(first.provider))) card.append(acctsMore(first.provider, folded.size));
     const idleFoot = several && !keys && idleMore(subs, idle.size);

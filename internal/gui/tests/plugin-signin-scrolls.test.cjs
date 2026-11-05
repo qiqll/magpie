@@ -74,6 +74,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           await page.waitForTimeout(50);
         }
         await button.click();
+        // in sight before Start sign-in, whose click would scroll to it itself
+        await page.locator("#addSheet .signing.ready").waitFor();
+        await page.waitForTimeout(300);
+        const ready = await page.evaluate(() => {
+          const v = document.querySelector("#view-providers"), r = document.querySelector("#addSheet .signing").getBoundingClientRect(), w = v.getBoundingClientRect();
+          return { top: v.scrollTop, inSight: r.top >= w.top && r.top < w.bottom };
+        });
+        assert(ready.top > 0 && ready.inSight, `the ready sheet is brought into sight (${JSON.stringify(ready)})`);
         await page.locator("#addSheet .signing .sign-start").click();
         const box = page.locator("#addSheet .signing");
         await box.locator(".callback-form input").waitFor();

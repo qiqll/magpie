@@ -202,7 +202,9 @@ function acxRow(r) {
       // the editor opens, the sign-in under way in it, as Providers' line does
       await openProvider(p.id);
       if (view !== "providers") return;
-      startSignIn(a.agent, false, signInAgainSite(a.agent, l.user), { user: l.user });
+      // one added from a setup-token takes a new one, as its editor row does
+      if (l.token) startClaudeToken();
+      else startSignIn(a.agent, false, signInAgainSite(a.agent, l.user), { user: l.user });
     };
     acts.append(b);
   } else if (r.act) {

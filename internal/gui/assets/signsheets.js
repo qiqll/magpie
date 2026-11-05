@@ -93,11 +93,22 @@ window.readySheet = function (sub) {
   const tt = el("span", "tt");
   tt.append(el("span", "n", t("Add a {name} account", { name: sub.name })),
     el("span", "s", t("Nothing is sent to {name} until you start: magpie then starts the sign-in and opens its page.", { name: sub.name })));
-  tt.append(el("span", "acts", signInProxyLink(sub)));
+  const o = { proxy: signing.picked };
+  // the other ways in, offered before anything is sent (review M1): a
+  // Claude setup-token, Copilot's GHE.com, ChatGPT's device code
+  const acts = el("span", "acts", signInProxyLink(sub));
+  if (sub.agent === "claude" && !sub.plugin) {
+    const tok = el("button", "link ready-token", t("Use a setup-token instead…"));
+    tok.onclick = () => startClaudeToken();
+    acts.append(tok);
+  }
+  const ghe = copilotHostSwitch(sub);
+  if (ghe) acts.append(ghe);
+  if (sub.agent === "codex" && !sub.plugin) acts.append(codexWay(sub, false, o));
+  tt.append(acts);
   if (signing.askProxy) tt.append(signInProxyForm(sub));
   box.append(tt);
   const go = el("button", "text primary sign-start", t("Start sign-in"));
-  const o = { proxy: signing.picked };
   go.onclick = () => startSignIn(sub.agent, false, undefined, o);
   const close = el("button", "text", t("Cancel"));
   close.onclick = cancelSignIn;

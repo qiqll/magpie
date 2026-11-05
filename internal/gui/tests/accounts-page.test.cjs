@@ -34,6 +34,7 @@ function providersOf(seen) {
         { user: "alice@example.com", plan: "max", active: true, on: true, paused: off("alice@example.com") },
         { user: "bob@example.com", plan: "pro", on: true },
         { user: "carol@example.com", plan: "pro", lapsed: "Its sign-in was refused (401)" },
+        { user: "Claude setup-token 3204d0", token: true, lapsed: "Its token was refused (401)" },
       ], { accountNames: { "bob@example.com": "Work" }, accountProxies: { "bob@example.com": "http://u:s3cret@10.0.0.9:3128" } }),
       prov("codex", "Codex", "codex", [
         { user: "ops@example.com", plan: "pro", active: true, on: true },
@@ -110,7 +111,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.route("**/*", serve(lang, seen));
         await page.addInitScript(() => { try { if (!sessionStorage.getItem("set")) { localStorage.clear(); sessionStorage.setItem("set", "1"); } } catch {} });
         await page.goto("http://magpie.test/?view=accounts");
-        await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 5 && document.querySelector('#acxList .row.acx[data-user="alice@example.com"] .acx-calls b')?.textContent === "128");
+        await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 6 && document.querySelector('#acxList .row.acx[data-user="alice@example.com"] .acx-calls b')?.textContent === "128");
 
         // its tab, under Models after Providers
         if (width > 600) {
@@ -120,25 +121,25 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await page.locator("#pageTitle").textContent(), x("Accounts"));
 
         let rows = await rowsOf(page);
-        assert.deepEqual(rows.map((r) => r.user), ["alice@example.com", "bob@example.com", "carol@example.com", "ops@example.com", "qa@example.com"], "every account, not the key provider");
-        assert.deepEqual(rows.map((r) => r.state), [x("In use"), x("In use"), x("Sign in again"), x("In use"), x("Not in use")]);
-        assert.deepEqual(rows.map((r) => r.calls), ["128", "0", "0", "9", "0"]);
+        assert.deepEqual(rows.map((r) => r.user), ["alice@example.com", "bob@example.com", "carol@example.com", "Claude setup-token 3204d0", "ops@example.com", "qa@example.com"], "every account, not the key provider");
+        assert.deepEqual(rows.map((r) => r.state), [x("In use"), x("In use"), x("Sign in again"), x("Sign in again"), x("In use"), x("Not in use")]);
+        assert.deepEqual(rows.map((r) => r.calls), ["128", "0", "0", "0", "9", "0"]);
         assert.deepEqual(seen.usage, ["last:5h"], "the requests are the last 5 hours'");
         const bob = rows.find((r) => r.user === "bob@example.com");
         assert.match(bob.sub, /10\.0\.0\.9:3128/);
         assert.doesNotMatch(bob.sub, /s3cret/, "the proxy's password isn't shown");
         // the editor tick's own action on each
         assert.deepEqual(rows.map((r) => r.acts), [
-          [x("Pause"), x("Open")], [x("Stop using"), x("Open")], [x("Sign in again"), x("Open")], [x("Open")], [x("Use"), x("Open")],
+          [x("Pause"), x("Open")], [x("Stop using"), x("Open")], [x("Sign in again"), x("Open")], [x("Sign in again"), x("Open")], [x("Open")], [x("Use"), x("Open")],
         ]);
-        assert.equal(await page.locator("#acxSum").textContent(), [x("{n} accounts", { n: 5 }), x("{n} in use", { n: 3 }), x("{n} to sign in again", { n: 1 })].join(" · "));
+        assert.equal(await page.locator("#acxSum").textContent(), [x("{n} accounts", { n: 6 }), x("{n} in use", { n: 3 }), x("{n} to sign in again", { n: 2 })].join(" · "));
         if (width > 600) assert.equal(new Set(rows.filter((r) => r.meters != null).map((r) => r.meters)).size, 1, "the windows line up");
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "nothing wider than the window");
 
         // found by state, by provider and by a word (its own name too)
         await page.locator("#acxState button", { hasText: x("Sign in again") }).click();
         await settle(page);
-        assert.deepEqual((await rowsOf(page)).map((r) => r.user), ["carol@example.com"]);
+        assert.deepEqual((await rowsOf(page)).map((r) => r.user), ["carol@example.com", "Claude setup-token 3204d0"]);
         await page.locator("#acxState button", { hasText: x("All") }).first().click();
         await page.locator("#acxProvider").click();
         await page.locator(".sess-menu .pm-item", { hasText: "Codex" }).click();
@@ -168,6 +169,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         for (let i = 0; i < 40 && !seen.starts.length; i++) await page.waitForTimeout(50);
         assert.deepEqual(seen.starts.map((s) => [s.agent, s.user]), [["claude", "carol@example.com"]]);
         await page.waitForFunction(() => !document.querySelector("#view-providers").hidden && !!document.querySelector(".editor"));
+
+        // a setup-token's: its token sheet, no OAuth sign-in (review M2)
+        await page.goto("http://magpie.test/?view=accounts");
+        await page.locator('#acxList .row.acx[data-user="Claude setup-token 3204d0"] .acx-again').click();
+        await page.locator(".editor .signing.claude-token").waitFor();
+        assert.equal(seen.starts.length, 1, "no sign-in started for it");
 
         // Open: the provider's editor
         await page.goto("http://magpie.test/?view=accounts");
