@@ -1,7 +1,11 @@
 package main
 
 import (
+	"cmp"
+	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -49,6 +53,20 @@ type Placements struct {
 	// Untold those whose Order was empty.
 	Unanswered int `json:"unanswered"`
 	Untold     int `json:"untold"`
+	// UnansweredWhy is those requests by why their last try failed (its
+	// Fail, else its status), "no try" when none was made, and the user's
+	// binding why (full, none) beside it when there is one.
+	UnansweredWhy map[string]int `json:"unansweredWhy"`
+	// MoveCauses is the conversations' moves from one account to another
+	// (a stint's end other than its conversation's) by what the moving
+	// request's route says: "one" or "several" accounts in its order,
+	// the user's binding why, whether the binding changed since the
+	// conversation's request before ("changed") or not ("same"), and
+	// where the account it left was then: "ready", or why not
+	// (resting, capped, lapsed, held, barred, reserve, spent, low...), in
+	// the order or "left:" out of it, or "absent" from both, and
+	// "unbound" when the user's binding no longer names it.
+	MoveCauses map[string]int `json:"moveCauses"`
 }
 
 // Pool is stints bucketed by their account's headroom as they began.
@@ -121,9 +139,101 @@ func (l routeLine) slim() routeLine {
 		default:
 			fullest = "long"
 		}
-		l.Order[i] = weighedLine{ID: w.ID, Known: w.Known, Used: w.Used, UsedRenews: w.UsedRenews, fullest: fullest, isReady: w.readyForNew()}
+		l.Order[i] = weighedLine{ID: w.ID, Who: w.Who, Known: w.Known, Used: w.Used, UsedRenews: w.UsedRenews, fullest: fullest, isReady: w.readyForNew(), state: w.status()}
+	}
+	for i, w := range l.Left {
+		l.Left[i] = weighedLine{ID: w.ID, Who: w.Who, state: w.status()}
 	}
 	return l
+}
+
+// status is why an account weighed couldn't take a new conversation, or
+// "ready".
+func (w weighedLine) status() string {
+	switch {
+	case w.Rest != nil:
+		return "resting"
+	case w.Capped != 0:
+		return "capped"
+	case w.Lapsed != "":
+		return "lapsed"
+	case w.Held:
+		return "held"
+	case w.Barred:
+		return "barred"
+	case w.Reserve != 0:
+		return "reserve"
+	case w.Aside:
+		return "aside"
+	case w.Fallback:
+		return "fallback"
+	case w.Known && w.Used >= UsedShare:
+		return "spent"
+	case w.Known && w.Used >= LowShare && !w.WeekLow:
+		return "low"
+	case !w.Known && !w.Learns:
+		return "untold"
+	}
+	return "ready"
+}
+
+// boundTo is the accounts the route's user is bound to, by name in lower
+// case; nil when it isn't bound.
+func (l routeLine) boundTo() map[string]bool {
+	if l.User == nil || l.User.User == "" {
+		return nil
+	}
+	m := map[string]bool{}
+	for _, a := range append([]string{l.User.Account}, l.User.Spares...) {
+		if a != "" {
+			m[strings.ToLower(a)] = true
+		}
+	}
+	return m
+}
+
+// whereIs is where the account id (named who) was in the route: its
+// status in the order, "left:" and its status out of it, else "absent";
+// "unbound" before it when the user's binding doesn't name it.
+func (l routeLine) whereIs(id, who string) string {
+	at := "absent"
+	if i := slices.IndexFunc(l.Order, func(w weighedLine) bool { return w.ID == id }); i >= 0 {
+		at = l.Order[i].state
+	} else if i := slices.IndexFunc(l.Left, func(w weighedLine) bool { return w.ID == id }); i >= 0 {
+		at = "left:" + l.Left[i].state
+	}
+	if b := l.boundTo(); b != nil && who != "" && !b[strings.ToLower(who)] {
+		if at == "absent" {
+			return "unbound"
+		}
+		return "unbound, " + at
+	}
+	return at
+}
+
+// unansweredWhy is why nothing answered the route.
+func (l routeLine) unansweredWhy() string {
+	why := "no try"
+	if n := len(l.Tries); n > 0 {
+		t := l.Tries[n-1]
+		why = cmp.Or(t.Fail, fmt.Sprintf("status %d", t.Status))
+	}
+	if l.User != nil && (l.User.Why == "full" || l.User.Why == "none") {
+		why += " (user " + l.User.Why + ")"
+	}
+	return why
+}
+
+func sameSet(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+	return true
 }
 
 func (l routeLine) user() string {
@@ -190,6 +300,7 @@ const (
 
 type stint struct {
 	id       string
+	who      string
 	bound    bool
 	headroom float64 // -1: not told
 	best     float64 // the best other ready account's headroom, -1: none
@@ -205,7 +316,7 @@ type stint struct {
 }
 
 func place(routes []routeLine) *Placements {
-	p := &Placements{Started: map[string]int{}}
+	p := &Placements{Started: map[string]int{}, UnansweredWhy: map[string]int{}, MoveCauses: map[string]int{}}
 	bound := map[string]int{}
 	byConv := map[string][]routeLine{}
 	for _, l := range routes {
@@ -225,13 +336,17 @@ func place(routes []routeLine) *Placements {
 	for _, rs := range byConv {
 		sort.SliceStable(rs, func(i, j int) bool { return rs[i].Time.Before(rs[j].Time) })
 		var cur *stint
-		for _, l := range rs {
+		var lastBound map[string]bool
+		for k, l := range rs {
 			if len(l.Order) == 0 {
 				p.Untold++
 			}
+			changed := k > 0 && !sameSet(lastBound, l.boundTo())
+			lastBound = l.boundTo()
 			id := l.answered()
 			if id == "" {
 				p.Unanswered++
+				p.UnansweredWhy[l.unansweredWhy()]++
 				if cur != nil && l.failedOn(cur.id) == "refused" {
 					cur.refused = true
 				}
@@ -263,8 +378,24 @@ func place(routes []routeLine) *Placements {
 						cur.ended = why
 					}
 					stints = append(stints, *cur)
+					if id != cur.id {
+						n, uw, bc := "several", "-", "same"
+						if len(l.Order) == 1 {
+							n = "one"
+						}
+						if l.User != nil && l.User.User != "" {
+							uw = cmp.Or(l.User.Why, "?")
+						}
+						if changed {
+							bc = "changed"
+						}
+						p.MoveCauses[n+" · user "+uw+" · binding "+bc+" · left "+l.whereIs(cur.id, cur.who)]++
+					}
 				}
 				cur = &stint{id: id, bound: l.User != nil && l.User.User != "", headroom: -1, best: -1, started: started}
+				if w, ok := l.weighed(id); ok {
+					cur.who = w.Who
+				}
 				if w, ok := l.weighed(id); ok && w.Known {
 					cur.from = w.Used
 					cur.headroom = min(100, max(0, 100-w.Used))

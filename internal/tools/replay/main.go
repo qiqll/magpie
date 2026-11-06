@@ -343,6 +343,8 @@ func printPlacements(out io.Writer, p *Placements) {
 	fmt.Fprintf(out, "  a stint that ended with its conversation raised its account's fullest window by %.0f / %.0f / %.0f points (50th/75th/90th, %d stints)\n",
 		p.Rise[0], p.Rise[1], p.Rise[2], p.RiseStints)
 	fmt.Fprintf(out, "  requests no try answered: %d; with nobody weighed: %d\n", p.Unanswered, p.Untold)
+	printCounts(out, "  why nothing answered them:", p.UnansweredWhy, 12)
+	printCounts(out, "  moves to another account, by the moving request's route (accounts in its order · user binding why · binding since the request before · where the account left was):", p.MoveCauses, 20)
 	for _, pl := range p.Pools {
 		n := pl.Unknown.Stints
 		for _, b := range pl.Buckets {
@@ -383,5 +385,34 @@ func printPlacements(out io.Writer, p *Placements) {
 		}
 		row("not told", pl.Unknown)
 		tw.Flush()
+	}
+}
+
+// printCounts prints counts, the most first, at most n of them.
+func printCounts(out io.Writer, title string, counts map[string]int, n int) {
+	if len(counts) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if counts[keys[i]] != counts[keys[j]] {
+			return counts[keys[i]] > counts[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	fmt.Fprintln(out, title)
+	rest := 0
+	for i, k := range keys {
+		if i >= n {
+			rest += counts[k]
+			continue
+		}
+		fmt.Fprintf(out, "    %5d  %s\n", counts[k], k)
+	}
+	if rest > 0 {
+		fmt.Fprintf(out, "    %5d  (others)\n", rest)
 	}
 }

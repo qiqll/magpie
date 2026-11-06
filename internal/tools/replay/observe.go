@@ -342,15 +342,25 @@ type routeLine struct {
 	// SubagentPick), told by its presence alone
 	Subagent json.RawMessage `json:"subagent"`
 	Pinned   string          `json:"pinned"`
-	User     *struct {
-		User   string   `json:"user"`
-		Spares []string `json:"spares"`
-	} `json:"user"`
+	User     *userLine       `json:"user"`
 	Affinity *struct {
 		Why string `json:"why"`
 	} `json:"affinity"`
 	Order []weighedLine `json:"order"`
+	// Left: accounts left out of the order, each with why (Capped,
+	// Lapsed, Held, Barred...)
+	Left  []weighedLine `json:"left"`
 	Tries []tryLine     `json:"tries"`
+}
+
+// userLine is what replay reads of a gateway.UserBound: the user, the
+// accounts it is bound to (Account first, then Spares, by name) and why
+// the binding is as it is (kept, bound, gone, added, none, full).
+type userLine struct {
+	User    string   `json:"user"`
+	Account string   `json:"account"`
+	Spares  []string `json:"spares"`
+	Why     string   `json:"why"`
 }
 
 // weighedLine is what replay reads of a gateway.Weighed.
@@ -376,6 +386,7 @@ type weighedLine struct {
 	// told; isReady: readyForNew. Set by slim, which drops the rest.
 	fullest string
 	isReady bool
+	state   string
 }
 
 // tryLine is what replay reads of a gateway.Try.

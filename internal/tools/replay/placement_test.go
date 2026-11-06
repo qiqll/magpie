@@ -233,3 +233,49 @@ func TestPackedDayReadOnce(t *testing.T) {
 		t.Errorf("read %d routes, want 1", o.Routes)
 	}
 }
+
+// A bound user's conversation on a whose binding then changes to b alone
+// (a is capped and left out of the order) moves as "one · user gone ·
+// binding changed · left unbound, left:capped"; a move off an account that rests,
+// beside another, as "several · ... · resting"; one whose binding no
+// longer names the account it was on, as "unbound". Requests nothing
+// answered are told by their last try's fail, or "no try" and the
+// user's binding why.
+func TestMoveCauses(t *testing.T) {
+	bind := func(why, first string, spares ...string) func(*gateway.Route) {
+		return func(g *gateway.Route) {
+			g.User = &gateway.UserBound{User: "u1", Account: first, Spares: spares, Why: why}
+		}
+	}
+	capped := wseat("a", 100, "week")
+	capped.Capped = 100
+	resting := wseat("b", 20, "week")
+	resting.Rest = &gateway.Rest{}
+	p := placed(t, routesOf(
+		rt{at: 0, session: "s1", why: "first", order: []gateway.Weighed{wseat("a", 50, "week"), wseat("b", 10, "week")}, tries: []gateway.Try{ok("a")}, edit: bind("bound", "a@example.com", "b@example.com")},
+		rt{at: time.Minute, session: "s1", why: "-", order: []gateway.Weighed{wseat("b", 10, "week")}, tries: []gateway.Try{ok("b")}, edit: func(g *gateway.Route) {
+			bind("gone", "b@example.com")(g)
+			g.Left = []gateway.Weighed{capped}
+		}},
+		rt{at: 2 * time.Minute, session: "s1", why: "resting", order: []gateway.Weighed{wseat("c", 10, "week"), resting}, tries: []gateway.Try{ok("c")}, edit: bind("added", "b@example.com", "c@example.com")},
+		rt{at: 3 * time.Minute, session: "s1", why: "cache", order: []gateway.Weighed{wseat("d", 10, "week")}, tries: []gateway.Try{ok("d")}, edit: bind("kept", "d@example.com")},
+		rt{at: 4 * time.Minute, session: "s1", why: "cache", order: []gateway.Weighed{wseat("d", 99, "week")}, tries: []gateway.Try{fail("d", 429, "quota")}, edit: bind("kept", "d@example.com")},
+		rt{at: 5 * time.Minute, session: "s1", why: "cache", order: []gateway.Weighed{wseat("d", 99, "week")}, edit: bind("full", "d@example.com")},
+	)...)
+	want := map[string]int{
+		"one · user gone · binding changed · left unbound, left:capped": 1,
+		"several · user added · binding changed · left resting":         1,
+		"one · user kept · binding changed · left unbound":              1,
+	}
+	for k, n := range want {
+		if p.MoveCauses[k] != n {
+			t.Errorf("move causes %v, want %q", p.MoveCauses, k)
+		}
+	}
+	if len(p.MoveCauses) != len(want) {
+		t.Errorf("move causes %v", p.MoveCauses)
+	}
+	if p.UnansweredWhy["quota"] != 1 || p.UnansweredWhy["no try (user full)"] != 1 {
+		t.Errorf("unanswered %v", p.UnansweredWhy)
+	}
+}
