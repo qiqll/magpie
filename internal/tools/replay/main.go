@@ -285,7 +285,7 @@ func observeCmd(args []string, out io.Writer) error {
 		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%.1f\t%.0fs\t%.0f\t%02d:00 (%.1f)\n", l.Provider, l.Days, l.Accounts, l.Convs, l.Turns, l.Gap, l.Tokens, busy, l.PerHour[busy])
 	}
 	tw.Flush()
-	fmt.Fprintf(out, "\nWhy routing kept or moved a turn (routing/, %d routes; a day keeps its latest 2000 only)\n", o.Routes)
+	fmt.Fprintf(out, "\nWhy routing kept or moved a turn (routing/, %d routes)\n", o.Routes)
 	whys := make([]string, 0, len(o.Why))
 	for w := range o.Why {
 		whys = append(whys, w)
@@ -327,37 +327,61 @@ func printPlacements(out io.Writer, p *Placements) {
 	if p == nil || p.Stints == 0 {
 		return
 	}
-	fmt.Fprintf(out, "\nWhere conversations were put (routing/): %d conversations, %d stints on one account (first %d, moved %d, first route cut %d)\n",
-		p.Convs, p.Stints, p.Started["first"], p.Started["moved"], p.Started["seen"])
+	fmt.Fprintf(out, "\nWhere conversations were put (routing/): %d conversations, %d stints on one account\n", p.Convs, p.Stints)
+	starts := make([]string, 0, len(p.Started))
+	for k := range p.Started {
+		starts = append(starts, k)
+	}
+	sort.Strings(starts)
+	var parts []string
+	for _, k := range starts {
+		parts = append(parts, fmt.Sprintf("%s %d", k, p.Started[k]))
+	}
+	fmt.Fprintf(out, "  stints began: %s\n", strings.Join(parts, ", "))
 	fmt.Fprintf(out, "  accounts ready for a new conversation: median %.0f, 90th %.0f; users bound %d, accounts each median %.0f, 90th %.0f\n",
 		p.Ready[0], p.Ready[1], p.Users, p.Bound[0], p.Bound[1])
 	fmt.Fprintf(out, "  a stint that ended with its conversation raised its account's fullest window by %.0f / %.0f / %.0f points (50th/75th/90th, %d stints)\n",
 		p.Rise[0], p.Rise[1], p.Rise[2], p.RiseStints)
-	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "left when put there %\tstints\tnew convs\tforced off\tforced %\tfullest is 5h\tanother had 30+ more\tmedian turns\thow they ended")
-	row := func(name string, b Bucket) {
-		if b.Stints == 0 {
-			return
+	fmt.Fprintf(out, "  requests no try answered: %d; with nobody weighed: %d\n", p.Unanswered, p.Untold)
+	for _, pl := range p.Pools {
+		n := pl.Unknown.Stints
+		for _, b := range pl.Buckets {
+			n += b.Stints
 		}
-		ends := make([]string, 0, len(b.Ended))
-		for k := range b.Ended {
-			ends = append(ends, k)
+		if n == 0 {
+			continue
 		}
-		sort.Slice(ends, func(i, j int) bool {
-			if b.Ended[ends[i]] != b.Ended[ends[j]] {
-				return b.Ended[ends[i]] > b.Ended[ends[j]]
+		about := "conversations of users not bound to accounts"
+		if pl.Name == "bound" {
+			about = "conversations of bound users: \"another\" is another of the user's own accounts"
+		}
+		fmt.Fprintf(out, "\n  %s (%d stints)\n", about, n)
+		tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "  left when put there %\tstints\tnew convs\tforced off\tforced %\tfullest 5h\tfullest week\tanother had 30+ more\tmedian requests\thow they ended")
+		row := func(name string, b Bucket) {
+			if b.Stints == 0 {
+				return
 			}
-			return ends[i] < ends[j]
-		})
-		var parts []string
-		for _, k := range ends {
-			parts = append(parts, fmt.Sprintf("%s %d", k, b.Ended[k]))
+			ends := make([]string, 0, len(b.Ended))
+			for k := range b.Ended {
+				ends = append(ends, k)
+			}
+			sort.Slice(ends, func(i, j int) bool {
+				if b.Ended[ends[i]] != b.Ended[ends[j]] {
+					return b.Ended[ends[i]] > b.Ended[ends[j]]
+				}
+				return ends[i] < ends[j]
+			})
+			var parts []string
+			for _, k := range ends {
+				parts = append(parts, fmt.Sprintf("%s %d", k, b.Ended[k]))
+			}
+			fmt.Fprintf(tw, "  %s\t%d\t%d\t%d\t%.0f\t%d\t%d\t%d\t%.0f\t%s\n", name, b.Stints, b.First, b.Forced, pct(float64(b.Forced), float64(b.Stints)), b.FiveHours, b.Week, b.Roomier, b.Requests, strings.Join(parts, ", "))
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%.0f\t%d\t%d\t%.0f\t%s\n", name, b.Stints, b.First, b.Forced, pct(float64(b.Forced), float64(b.Stints)), b.FiveHours, b.Roomier, b.Turns, strings.Join(parts, ", "))
+		for _, b := range pl.Buckets {
+			row(fmt.Sprintf("%.0f-%.0f", b.From, min(b.To, 100)), b)
+		}
+		row("not told", pl.Unknown)
+		tw.Flush()
 	}
-	for _, b := range p.Buckets {
-		row(fmt.Sprintf("%.0f-%.0f", b.From, min(b.To, 100)), b)
-	}
-	row("not told", p.Unknown)
-	tw.Flush()
 }

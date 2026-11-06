@@ -6,42 +6,56 @@ import (
 )
 
 // Placements is where routing put each conversation, read from routing/:
-// a stint is the turns a conversation had on one account, from the turn
-// routing put it there (its first, or a move) to the turn it left or its
-// last. Each says what the account had left when the stint began — the
-// share its fullest window had left, 100 less the Weighed's Used, which
-// is what the stint could spend before a window refused it — and what the
-// best other account ready then had, and how the stint ended. It tells
-// whether conversations put on an account with little left were moved
-// for it soon after, while another had room.
+// a stint is the requests a conversation had answered on one account,
+// from the request routing put it there (its first, or a move) to the
+// request it left or its last. Each says what the account had left when
+// the stint began — the share its fullest window had left, 100 less the
+// Weighed's Used, which is what the stint could spend before a window
+// refused it — and what the best other account ready then had, and how
+// the stint ended. It tells whether conversations put on an account with
+// little left were moved for it soon after while another had room.
+//
+// Under a user's binding (Route.User) a request's Order is the user's own
+// accounts alone, Smart's order among them: so for a bound user, "another
+// had more" is another of that user's accounts. Which accounts a user is
+// bound to is bindUser's pick (the one fewest users are on), not this.
 type Placements struct {
 	Convs  int `json:"convs"`
 	Stints int `json:"stints"`
-	// Started counts stints by how they began: "first" (routing's pick
-	// for a new conversation), "moved" (the conversation left another
-	// account) or "seen" (its first route was cut from the history)
+	// Started counts stints by how they began: "first" (routing's pick for
+	// a new conversation), "moved" (the conversation left another
+	// account), "evicted" (routing had forgotten the conversation, its
+	// stick dropped, and put it afresh), "seen" (its first route is before
+	// the oldest kept) or "unkept" (Stays: Off, or no affinity told).
 	Started map[string]int `json:"started"`
-	// Buckets are the stints by what their account had left as they
-	// began, the least first; Unknown those whose account's use wasn't
-	// told.
-	Buckets []Bucket `json:"buckets"`
-	Unknown Bucket   `json:"unknown"`
+	// Pools are the stints of bound users' conversations and of the rest.
+	Pools []Pool `json:"pools"`
 	// Rise is how far the account's fullest window rose over a stint that
-	// ended with its conversation and wasn't cut by a renewal, at the
-	// 50th, 75th and 90th centile: what a conversation, and whatever else
-	// the account answered meanwhile, cost it.
-	Rise [3]float64 `json:"rise"`
-	// RiseStints is how many stints Rise is of.
-	RiseStints int `json:"riseStints"`
-	// Ready is how many accounts routing could have put a new
-	// conversation on (told, not resting, held, barred, capped, a reserve
-	// or a fallback), at the 50th and 90th centile, over first stints:
-	// the pool a user's binding leaves routing.
+	// ended with its conversation and saw no renewal, at the 50th, 75th
+	// and 90th centile: what a conversation, and whatever else the account
+	// answered meanwhile, cost it up to its last request.
+	Rise       [3]float64 `json:"rise"`
+	RiseStints int        `json:"riseStints"`
+	// Ready is how many accounts routing could have put a new conversation
+	// on (readyForNew: told or about to be, not resting, held, barred,
+	// capped, a reserve, a fallback, nor past LowShare unless low on its
+	// week alone), at the 50th and 90th centile over first stints.
 	Ready [2]float64 `json:"ready"`
 	// Users is how many users were bound to accounts, and Bound how many
 	// accounts each was bound to at the 50th and 90th centile.
 	Users int        `json:"users"`
 	Bound [2]float64 `json:"bound"`
+	// Unanswered is a conversation's requests no try answered, and
+	// Untold those whose Order was empty.
+	Unanswered int `json:"unanswered"`
+	Untold     int `json:"untold"`
+}
+
+// Pool is stints bucketed by their account's headroom as they began.
+type Pool struct {
+	Name    string   `json:"name"` // "bound" or "unbound"
+	Buckets []Bucket `json:"buckets"`
+	Unknown Bucket   `json:"unknown"` // the account's use wasn't told
 }
 
 // Bucket is the stints that began with their account's headroom in
@@ -50,17 +64,24 @@ type Bucket struct {
 	From, To float64
 	Stints   int `json:"stints"`
 	First    int `json:"first"` // of them, a new conversation's
-	// Forced: it ended as its account couldn't take the next turn:
-	// "spent" (all but used up), "resting" or "refused" (a try on it was
-	// turned away for its quota or rate). Ended counts every way a stint
-	// ended, those too: "end" (the conversation's last turn), "cold",
-	// "gone" and others as Affinity.Why says.
+	// Forced: it ended as its account couldn't take the next request:
+	// "spent" (all but used up), "resting", "refused" (a try on it was
+	// turned away for quota, credit or rate, and another answered),
+	// "failed:<why>" (a try on it failed otherwise, and another answered)
+	// or "stranded" (the conversation's last requests on it were refused
+	// and nothing answered after). Ended counts every way a stint ended,
+	// those too: "end" (the conversation's last), "cold", "gone" and
+	// others as Affinity.Why says.
 	Forced int            `json:"forced"`
 	Ended  map[string]int `json:"ended"`
-	// Turns is the stints' median length; FiveHours how many began with
-	// the five hours, not the week, the fullest window.
-	Turns     float64 `json:"turns"`
-	FiveHours int     `json:"fiveHours"`
+	// Requests is the stints' median count of requests answered (tool
+	// round trips within a turn are each one).
+	Requests float64 `json:"requests"`
+	// FiveHours and Week: of those whose fullest window was told, how
+	// many had the five hours (a window shorter than the biggest), or the
+	// biggest, as the fullest.
+	FiveHours int `json:"fiveHours"`
+	Week      int `json:"week"`
 	// Roomier: another ready account had at least roomier (30) points
 	// more left when it began.
 	Roomier int `json:"roomier"`
@@ -72,23 +93,35 @@ var bucketEdges = []float64{0, 10, 25, 50, 75, 101}
 
 func forced(why string) bool {
 	switch why {
-	case "spent", "resting", "refused":
+	case "spent", "resting", "refused", "stranded":
 		return true
 	}
-	return false
+	return len(why) > 7 && why[:7] == "failed:"
 }
 
-// ofConversation: a route of a conversation's own turn, not a side
-// request (a title) nor a subagent's.
+// ofConversation: a route of a conversation's own request, routed: not a
+// side request (a title), a subagent's, nor one pinned to an account.
 func (l routeLine) ofConversation() bool {
-	return l.Session != "" && l.Kind == "" && l.Sub == "" && l.SubagentID == ""
+	return l.Session != "" && l.Kind == "" && l.Sub == "" && l.SubagentID == "" && len(l.Subagent) == 0 && l.Pinned == ""
 }
 
-// slim is the route as place reads it: nothing of a route that isn't a
-// conversation's own.
+// slim is the route as place reads it, so a long history stays small:
+// of a route not a conversation's own, only its user's binding; of each
+// account weighed, only what place reads.
 func (l routeLine) slim() routeLine {
 	if !l.ofConversation() {
 		return routeLine{User: l.User}
+	}
+	for i, w := range l.Order {
+		fullest := ""
+		switch {
+		case w.UsedRenews == nil || len(w.Renews) == 0:
+		case len(w.Renews) > 1 && !w.UsedRenews.Equal(w.Renews[0]):
+			fullest = "short"
+		default:
+			fullest = "long"
+		}
+		l.Order[i] = weighedLine{ID: w.ID, Known: w.Known, Used: w.Used, UsedRenews: w.UsedRenews, fullest: fullest, isReady: w.readyForNew()}
 	}
 	return l
 }
@@ -119,33 +152,56 @@ func (l routeLine) weighed(id string) (weighedLine, bool) {
 	return weighedLine{}, false
 }
 
-// refusedOn: a try on id was turned away for its quota, credit or rate.
-func (l routeLine) refusedOn(id string) bool {
+// failedOn is why a try on id failed in the route: "refused" for its
+// quota, credit or rate, "failed:<why>" otherwise, "" when none did.
+func (l routeLine) failedOn(id string) string {
+	why := ""
 	for _, t := range l.Tries {
-		if t.ID == id && (t.Fail == "quota" || t.Fail == "credit" || t.Fail == "rate") {
-			return true
+		if t.ID != id || t.Status >= 200 && t.Status < 300 {
+			continue
+		}
+		switch t.Fail {
+		case "quota", "credit", "rate":
+			return "refused"
+		case "", "canceled":
+		default:
+			why = "failed:" + t.Fail
 		}
 	}
-	return false
+	return why
 }
 
-// ready: routing could put a new conversation on it.
-func (w weighedLine) ready() bool {
-	return w.Known && w.Rest == nil && !w.Barred && !w.Held && w.Capped == 0 && w.Reserve == 0 && w.Lapsed == "" && !w.Fallback
+// readyForNew is the gateway's readyForNew, as a Weighed tells it.
+func (w weighedLine) readyForNew() bool {
+	if w.Rest != nil || w.Barred || w.Held || w.Capped != 0 || w.Reserve != 0 || w.Lapsed != "" || w.Fallback || w.Aside {
+		return false
+	}
+	if !w.Known {
+		return w.Learns
+	}
+	return w.Used < LowShare || w.WeekLow && w.Used < UsedShare
 }
+
+// LowShare and UsedShare are routes'.
+const (
+	LowShare  = 90
+	UsedShare = 98
+)
 
 type stint struct {
 	id       string
+	bound    bool
 	headroom float64 // -1: not told
 	best     float64 // the best other ready account's headroom, -1: none
-	fiveHour bool
+	fullest  string
 	started  string
 	ended    string
-	turns    int
-	from, to float64 // its account's Used at the stint's first and last turn
+	requests int
+	from, to float64 // its account's Used at the stint's first and last request
 	toKnown  bool
+	window   *time.Time // its fullest window's renewal, last told
 	renewed  bool
-	refused  bool
+	refused  bool // its last requests were refused on it, none answered since
 }
 
 func place(routes []routeLine) *Placements {
@@ -159,7 +215,9 @@ func place(routes []routeLine) *Placements {
 		if !l.ofConversation() {
 			continue
 		}
-		k := l.Provider + "\x00" + l.user() + "\x00" + l.Session + "\x00" + l.Model
+		// the gateway keeps a conversation by its id and user, whatever
+		// model it is on (stickKey)
+		k := l.Provider + "\x00" + l.user() + "\x00" + l.Session
 		byConv[k] = append(byConv[k], l)
 	}
 	var stints []stint
@@ -167,83 +225,111 @@ func place(routes []routeLine) *Placements {
 	for _, rs := range byConv {
 		sort.SliceStable(rs, func(i, j int) bool { return rs[i].Time.Before(rs[j].Time) })
 		var cur *stint
-		counted := false
 		for _, l := range rs {
+			if len(l.Order) == 0 {
+				p.Untold++
+			}
 			id := l.answered()
 			if id == "" {
-				if cur != nil && l.refusedOn(cur.id) {
+				p.Unanswered++
+				if cur != nil && l.failedOn(cur.id) == "refused" {
 					cur.refused = true
 				}
 				continue
 			}
-			if cur == nil || id != cur.id {
+			why := ""
+			if l.Affinity != nil {
+				why = l.Affinity.Why
+			}
+			if cur == nil || id != cur.id || why == "first" {
 				started := "seen"
-				if l.Affinity != nil && l.Affinity.Why == "first" {
+				switch {
+				case why == "first" && cur == nil:
 					started = "first"
-				} else if cur != nil {
+				case why == "first":
+					started = "evicted"
+				case cur != nil:
 					started = "moved"
+				case why == "" || why == "off":
+					started = "unkept"
 				}
 				if cur != nil {
 					cur.ended = "moved"
-					switch {
-					case cur.refused || l.refusedOn(cur.id):
+					if f := l.failedOn(cur.id); f != "" {
+						cur.ended = f
+					} else if cur.refused {
 						cur.ended = "refused"
-					case l.Affinity != nil && l.Affinity.Why != "":
-						cur.ended = l.Affinity.Why
+					} else if why != "" {
+						cur.ended = why
 					}
 					stints = append(stints, *cur)
 				}
-				cur = &stint{id: id, headroom: -1, best: -1, started: started}
+				cur = &stint{id: id, bound: l.User != nil && l.User.User != "", headroom: -1, best: -1, started: started}
 				if w, ok := l.weighed(id); ok && w.Known {
-					cur.headroom, cur.from = 100-w.Used, w.Used
-					cur.fiveHour = w.UsedRenews != nil && w.UsedRenews.Sub(l.Time) <= 5*time.Hour+time.Minute
+					cur.from = w.Used
+					cur.headroom = min(100, max(0, 100-w.Used))
+					cur.fullest = w.fullest
 				}
 				n := 0
 				for _, w := range l.Order {
-					if !w.ready() {
+					if !w.isReady {
 						continue
 					}
 					n++
-					if w.ID != id && 100-w.Used > cur.best {
+					if w.ID != id && w.Known && 100-w.Used > cur.best {
 						cur.best = 100 - w.Used
 					}
 				}
 				if started == "first" {
 					ready = append(ready, float64(n))
 				}
-				counted = true
 			}
-			cur.turns++
+			cur.requests++
+			cur.refused = false // it answered
 			if w, ok := l.weighed(cur.id); ok && w.Known {
-				if cur.toKnown && w.Used < cur.to || !cur.toKnown && w.Used < cur.from {
-					cur.renewed = true // a window renewed in the stint
+				last := cur.from
+				if cur.toKnown {
+					last = cur.to
 				}
-				cur.to, cur.toKnown = w.Used, true
+				// a window renewed in the stint: its share fell, or the
+				// fullest window's renewal moved
+				if w.Used < last || cur.window != nil && w.UsedRenews != nil && !w.UsedRenews.Equal(*cur.window) {
+					cur.renewed = true
+				}
+				cur.to, cur.toKnown, cur.window = w.Used, true, w.UsedRenews
 			}
 		}
 		if cur != nil {
 			cur.ended = "end"
+			if cur.refused {
+				cur.ended = "stranded"
+			}
 			stints = append(stints, *cur)
-		}
-		if counted {
 			p.Convs++
 		}
 	}
-	for i := 0; i+1 < len(bucketEdges); i++ {
-		p.Buckets = append(p.Buckets, Bucket{From: bucketEdges[i], To: bucketEdges[i+1], Ended: map[string]int{}})
+	newPool := func(name string) Pool {
+		pl := Pool{Name: name, Unknown: Bucket{From: -1, To: -1, Ended: map[string]int{}}}
+		for i := 0; i+1 < len(bucketEdges); i++ {
+			pl.Buckets = append(pl.Buckets, Bucket{From: bucketEdges[i], To: bucketEdges[i+1], Ended: map[string]int{}})
+		}
+		return pl
 	}
-	p.Unknown = Bucket{From: -1, To: -1, Ended: map[string]int{}}
-	turns := make([][]float64, len(p.Buckets)+1)
+	p.Pools = []Pool{newPool("bound"), newPool("unbound")}
+	reqs := map[*Bucket][]float64{}
 	var rises []float64
 	for _, s := range stints {
 		p.Stints++
 		p.Started[s.started]++
-		at := len(p.Buckets)
-		b := &p.Unknown
+		pl := &p.Pools[1]
+		if s.bound {
+			pl = &p.Pools[0]
+		}
+		b := &pl.Unknown
 		if s.headroom >= 0 {
-			for k := range p.Buckets {
-				if s.headroom >= p.Buckets[k].From && s.headroom < p.Buckets[k].To {
-					b, at = &p.Buckets[k], k
+			for k := range pl.Buckets {
+				if s.headroom >= pl.Buckets[k].From && s.headroom < pl.Buckets[k].To {
+					b = &pl.Buckets[k]
 					break
 				}
 			}
@@ -256,21 +342,27 @@ func place(routes []routeLine) *Placements {
 		if forced(s.ended) {
 			b.Forced++
 		}
-		if s.fiveHour {
+		switch s.fullest {
+		case "short":
 			b.FiveHours++
+		case "long":
+			b.Week++
 		}
 		if s.headroom >= 0 && s.best >= s.headroom+roomier {
 			b.Roomier++
 		}
-		turns[at] = append(turns[at], float64(s.turns))
+		reqs[b] = append(reqs[b], float64(s.requests))
 		if s.ended == "end" && s.headroom >= 0 && s.toKnown && !s.renewed {
 			rises = append(rises, s.to-s.from)
 		}
 	}
-	for k := range p.Buckets {
-		p.Buckets[k].Turns = centile(turns[k], 50)
+	for i := range p.Pools {
+		pl := &p.Pools[i]
+		for k := range pl.Buckets {
+			pl.Buckets[k].Requests = centile(reqs[&pl.Buckets[k]], 50)
+		}
+		pl.Unknown.Requests = centile(reqs[&pl.Unknown], 50)
 	}
-	p.Unknown.Turns = centile(turns[len(p.Buckets)], 50)
 	p.RiseStints = len(rises)
 	p.Rise = [3]float64{centile(rises, 50), centile(rises, 75), centile(rises, 90)}
 	p.Ready = [2]float64{centile(ready, 50), centile(ready, 90)}

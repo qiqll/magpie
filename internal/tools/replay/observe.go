@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -337,7 +338,11 @@ type routeLine struct {
 	Kind       string    `json:"kind"`
 	Sub        string    `json:"sub"`
 	SubagentID string    `json:"subagentId"`
-	User       *struct {
+	// Subagent: a Codex or Claude Desktop subagent's request (a
+	// SubagentPick), told by its presence alone
+	Subagent json.RawMessage `json:"subagent"`
+	Pinned   string          `json:"pinned"`
+	User     *struct {
 		User   string   `json:"user"`
 		Spares []string `json:"spares"`
 	} `json:"user"`
@@ -363,6 +368,14 @@ type weighedLine struct {
 	Reserve    int         `json:"reserve"`
 	Lapsed     string      `json:"lapsed"`
 	Fallback   bool        `json:"fallback"`
+	Learns     bool        `json:"learns"`
+	WeekLow    bool        `json:"weekLow"`
+	Aside      bool        `json:"aside"`
+	// fullest: "short" when the window Used is of renews before the
+	// biggest (the five hours), "long" when it is the biggest, "" not
+	// told; isReady: readyForNew. Set by slim, which drops the rest.
+	fullest string
+	isReady bool
 }
 
 // tryLine is what replay reads of a gateway.Try.
@@ -372,8 +385,8 @@ type tryLine struct {
 	Fail   string `json:"fail"`
 }
 
-// observeRoutes reads routing/. The gateway keeps a day's latest
-// historyMax (2000) routes only, so a busy day's counts are of a sample.
+// observeRoutes reads routing/: every finished route, a file a day, the
+// oldest dropped past 30 days or 200 MB (saveRoute, pruneHistory).
 func observeRoutes(o *Observed, dir string) error {
 	ents, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -386,6 +399,9 @@ func observeRoutes(o *Observed, dir string) error {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".jsonl") && !strings.HasSuffix(name, ".jsonl.gz") {
 			continue
+		}
+		if strings.HasSuffix(name, ".jsonl") && slices.ContainsFunc(ents, func(g os.DirEntry) bool { return g.Name() == name+".gz" }) {
+			continue // the same day, packed: read once
 		}
 		readRoutes(o, filepath.Join(dir, name))
 	}
