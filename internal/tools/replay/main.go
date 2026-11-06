@@ -425,13 +425,14 @@ func printUsers(out io.Writer, u *UserPlacements) {
 	}
 	fmt.Fprintln(out, "\n  by user (a user's conversations under every key are one user's; heavy: the busiest that asked 80% of requests)")
 	fmt.Fprintln(out, "  pick: routing chose its account, ready, among 2+ ready; tight: another had 30+ points more before its cap; sooner: the account picked renewed before that one (Smart's reason), later: it didn't")
+	fmt.Fprintln(out, "  rule fires: stints the gateway's heavy-user rule (bound to more than 3 accounts) would have moved: begun with under 20 points left while another ready one had 20")
 	fmt.Fprintln(out, "  ends: end/quota/rate/access/failed/routine/unknown; served/had/could: a tight pick that ended on quota, in requests (answered / the picked account had room for / the roomier had room for)")
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "  user\ttier\trequests\tstints\tends\tpicks\ttight (sooner/later)\tsooner→quota\tlater→quota\tloose→quota\tpoints/request\tserved\thad\tcould")
+	fmt.Fprintln(tw, "  user\ttier\taccounts\trule fires (→quota)\trequests\tstints\tends\tpicks\ttight (sooner/later)\tsooner→quota\tlater→quota\tloose→quota\tpoints/request\tserved\thad\tcould")
 	row := func(r UserUse) {
 		e := r.Ends
-		fmt.Fprintf(tw, "  %s\t%s\t%d\t%d\t%d/%d/%d/%d/%d/%d/%d\t%d\t%d (%d/%d)\t%d (%.0f%%)\t%d (%.0f%%)\t%d (%.0f%%)\t%.3f\t%.0f\t%.0f\t%.0f\n",
-			r.User, r.Tier, r.Requests, r.Stints, e["end"], e["quota"], e["rate"], e["access"], e["failed"], e["routine"], e["unknown"],
+		fmt.Fprintf(tw, "  %s\t%s\t%d\t%d (%d)\t%d\t%d\t%d/%d/%d/%d/%d/%d/%d\t%d\t%d (%d/%d)\t%d (%.0f%%)\t%d (%.0f%%)\t%d (%.0f%%)\t%.3f\t%.0f\t%.0f\t%.0f\n",
+			r.User, r.Tier, r.Accounts, r.Fires, r.FiresQuota, r.Requests, r.Stints, e["end"], e["quota"], e["rate"], e["access"], e["failed"], e["routine"], e["unknown"],
 			r.Picks, r.Tight, r.Sooner, r.Later,
 			r.SoonerQuota, pct(float64(r.SoonerQuota), float64(r.Sooner)),
 			r.LaterQuota, pct(float64(r.LaterQuota), float64(r.Later)),

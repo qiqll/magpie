@@ -51,6 +51,14 @@ type UserUse struct {
 	Ends map[string]int `json:"ends"`
 	// Picks; of them Tight, split into Sooner and Later; and of each how
 	// many ended on quota.
+	// Accounts is the most accounts the user was bound to. Fires counts
+	// the stints the gateway's rule for a heavy user (bound to more than
+	// heavyAccounts) would have moved: begun with less than sessionNeed
+	// points left while another ready account had that much; FiresQuota
+	// those of them that ended on quota.
+	Accounts    int `json:"accounts"`
+	Fires       int `json:"fires"`
+	FiresQuota  int `json:"firesQuota"`
 	Picks       int `json:"picks"`
 	Tight       int `json:"tight"`
 	Sooner      int `json:"sooner"`
@@ -70,6 +78,14 @@ type UserUse struct {
 	Had    float64 `json:"had"`
 	Could  float64 `json:"could"`
 }
+
+// heavyAccounts and sessionNeed are the gateway's (affinity.go): a user
+// bound to more accounts than heavyAccounts is heavy, and its new
+// conversation is taken to need sessionNeed points.
+const (
+	heavyAccounts = 3
+	sessionNeed   = 20.0
+)
 
 // endOf is a stint's end as UserPlacements counts it.
 func endOf(s stint) string {
@@ -124,6 +140,13 @@ func byUser(stints []stint, m masker) *UserPlacements {
 		a.u.Tokens += int64(s.tokens)
 		a.u.Stints++
 		a.u.Ends[endOf(s)]++
+		a.u.Accounts = max(a.u.Accounts, s.accounts)
+		if s.accounts > heavyAccounts && s.ready && s.headroom >= 0 && s.headroom < sessionNeed && s.best >= sessionNeed {
+			a.u.Fires++
+			if endOf(s) == "quota" {
+				a.u.FiresQuota++
+			}
+		}
 		if s.headroom >= 0 && s.toKnown && !s.renewed && s.requests >= 2 && s.to >= s.from {
 			a.rise += s.to - s.from
 			a.riseReqs += s.requests - 1
@@ -211,6 +234,9 @@ func byUser(stints []stint, m masker) *UserPlacements {
 		for k, v := range a.u.Ends {
 			t.u.Ends[k] += v
 		}
+		t.u.Accounts = max(t.u.Accounts, a.u.Accounts)
+		t.u.Fires += a.u.Fires
+		t.u.FiresQuota += a.u.FiresQuota
 		t.u.Picks += a.u.Picks
 		t.u.Tight += a.u.Tight
 		t.u.Sooner += a.u.Sooner

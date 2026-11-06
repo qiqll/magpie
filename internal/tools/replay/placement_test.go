@@ -403,3 +403,42 @@ func TestUnreadyAccountIsNoPick(t *testing.T) {
 		t.Errorf("by user %+v", p.ByUser.Users)
 	}
 }
+
+// The heavy-user rule's would-be fires: a user bound to four accounts put
+// on one with 12 points left while another had 70 fires, and ended on
+// quota; bound to three it doesn't.
+func TestHeavyRuleFires(t *testing.T) {
+	for _, tc := range []struct {
+		spares []string
+		fires  int
+	}{
+		{[]string{"b@example.com", "c@example.com", "d@example.com"}, 1},
+		{[]string{"b@example.com", "c@example.com"}, 0},
+	} {
+		bind := func(g *gateway.Route) {
+			g.User = &gateway.UserBound{User: "u", Account: "a@example.com", Spares: tc.spares, Why: "kept"}
+		}
+		capped := wseat("a", 99, "week")
+		capped.Capped = 99
+		p := placed(t, routesOf(
+			rt{at: 0, session: "s", why: "first", order: []gateway.Weighed{wseat("a", 88, "week"), wseat("b", 30, "week")}, tries: []gateway.Try{ok("a")}, edit: bind},
+			rt{at: time.Minute, session: "s", why: "-", order: []gateway.Weighed{wseat("b", 30, "week")}, tries: []gateway.Try{ok("b")}, edit: func(g *gateway.Route) { bind(g); g.Left = []gateway.Weighed{capped} }},
+		)...)
+		u := p.ByUser.Users[0]
+		if u.Fires != tc.fires || u.FiresQuota != tc.fires || u.Accounts != 1+len(tc.spares) {
+			t.Errorf("bound to %d: %+v", 1+len(tc.spares), u)
+		}
+	}
+}
+
+// The rule doesn't fire where the account picked had 20 points or more:
+// 75% used leaves 25.
+func TestHeavyRuleDoesntFireWithRoom(t *testing.T) {
+	bind := func(g *gateway.Route) {
+		g.User = &gateway.UserBound{User: "u", Account: "a@example.com", Spares: []string{"b@example.com", "c@example.com", "d@example.com"}, Why: "kept"}
+	}
+	p := placed(t, rt{at: 0, session: "s", why: "first", order: []gateway.Weighed{wseat("a", 75, "week"), wseat("b", 10, "week")}, tries: []gateway.Try{ok("a")}, edit: bind}.route())
+	if u := p.ByUser.Users[0]; u.Fires != 0 {
+		t.Errorf("fired with 25 left: %+v", u)
+	}
+}

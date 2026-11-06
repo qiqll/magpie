@@ -311,12 +311,13 @@ const (
 )
 
 type stint struct {
-	id     string
-	who    string
-	user   string
-	bound  bool
-	choice int  // accounts ready for it when it began
-	ready  bool // its own account was ready for it then: routing chose it
+	accounts int // the user's accounts bound when it began (UserBound)
+	id       string
+	who      string
+	user     string
+	bound    bool
+	choice   int  // accounts ready for it when it began
+	ready    bool // its own account was ready for it then: routing chose it
 	// renews and bestRenews: when its account's fullest window renewed,
 	// and the roomiest other ready account's, as it began
 	renews, bestRenews *time.Time
@@ -422,7 +423,7 @@ func place(routes []routeLine, m masker, caps capTable) *Placements {
 						p.MoveCauses[n+" · user "+uw+" · binding "+bc+" · left "+cur.left]++
 					}
 				}
-				cur = &stint{id: id, user: l.user(), bound: l.User != nil && l.User.User != "", headroom: -1, best: -1, started: started}
+				cur = &stint{accounts: len(l.boundTo()), id: id, user: l.user(), bound: l.User != nil && l.User.User != "", headroom: -1, best: -1, started: started}
 				if w, ok := l.weighed(id); ok {
 					cur.who, cur.ready, cur.renews = w.Who, w.isReady, w.UsedRenews
 				}
