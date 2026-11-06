@@ -432,3 +432,79 @@ func TestUnsimulatedRoutingsAreRefused(t *testing.T) {
 		}
 	}
 }
+
+// A conversation put on an account with 8% left while another had 70%
+// is turned away there two turns on and moved: a forced stint in the
+// lowest bucket, with a roomier account beside it. Another, put on the
+// roomy one, ends there. A title request and a subagent's turn on a third
+// account move nothing.
+func TestPlacements(t *testing.T) {
+	t0 := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	five := t0.Add(2 * time.Hour)
+	week := t0.Add(72 * time.Hour)
+	seat := func(id string, used float64, fullest time.Time) weighedLine {
+		return weighedLine{ID: id, Who: id, Known: true, Used: used, Renews: []time.Time{week, five}, UsedRenews: &fullest}
+	}
+	user := &struct {
+		User   string   `json:"user"`
+		Spares []string `json:"spares"`
+	}{User: "u1", Spares: []string{"b"}}
+	why := func(w string) *struct {
+		Why string `json:"why"`
+	} {
+		return &struct {
+			Why string `json:"why"`
+		}{w}
+	}
+	route := func(at time.Duration, session, kind, w string, order []weighedLine, tries ...tryLine) routeLine {
+		return routeLine{Time: t0.Add(at), Session: session, Model: "opus", Provider: "claude", Kind: kind, User: user, Affinity: why(w), Order: order, Tries: tries}
+	}
+	ok := func(id string) tryLine { return tryLine{ID: id, Status: 200} }
+	routes := []routeLine{
+		route(0, "s1", "", "first", []weighedLine{seat("a", 92, five), seat("b", 30, week)}, ok("a")),
+		route(time.Minute, "s1", "", "cache", []weighedLine{seat("a", 95, five), seat("b", 30, week)}, ok("a")),
+		route(time.Minute+time.Second, "s1", "title", "", []weighedLine{seat("c", 0, week)}, ok("c")),
+		route(2*time.Minute, "s1", "", "cache", []weighedLine{seat("a", 99, five), seat("b", 30, week)}, tryLine{ID: "a", Status: 429, Fail: "rate"}, ok("b")),
+		route(3*time.Minute, "s1", "", "cache", []weighedLine{seat("b", 32, week), seat("a", 99, five)}, ok("b")),
+		route(4*time.Minute, "s2", "", "first", []weighedLine{seat("b", 32, week), {ID: "a", Known: true, Used: 99, Rest: &struct{}{}}}, ok("b")),
+		route(5*time.Minute, "s2", "", "cache", []weighedLine{seat("b", 40, week)}, ok("b")),
+	}
+	sub := route(150*time.Second, "s1", "", "cache", []weighedLine{seat("c", 0, week)}, ok("c"))
+	sub.SubagentID = "agent-1"
+	routes = append(routes, sub)
+	p := place(routes)
+	if p.Convs != 2 || p.Stints != 3 || p.Started["first"] != 2 || p.Started["moved"] != 1 {
+		t.Fatalf("placements %+v", p)
+	}
+	low := p.Buckets[0]
+	if low.Stints != 1 || low.First != 1 || low.Forced != 1 || low.Ended["refused"] != 1 || low.FiveHours != 1 || low.Roomier != 1 || low.Turns != 2 {
+		t.Errorf("0-10 bucket %+v", low)
+	}
+	roomy := p.Buckets[3] // 50-75
+	if roomy.Stints != 2 || roomy.Forced != 0 || roomy.Ended["end"] != 2 || roomy.Roomier != 0 || roomy.FiveHours != 0 {
+		t.Errorf("50-75 bucket %+v", roomy)
+	}
+	// s1's stint on b rose 30 → 32, s2's 32 → 40
+	if p.RiseStints != 2 || p.Rise[0] != 2 || p.Rise[2] != 8 {
+		t.Errorf("rise %v of %d", p.Rise, p.RiseStints)
+	}
+	// s2 began with a resting: one ready; s1 with two
+	if p.Ready != [2]float64{1, 2} || p.Users != 1 || p.Bound != [2]float64{2, 2} {
+		t.Errorf("ready %v, users %d, bound %v", p.Ready, p.Users, p.Bound)
+	}
+}
+
+// A stint whose window renewed in it says nothing of what it cost.
+func TestPlacementRiseSkipsARenewal(t *testing.T) {
+	t0 := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	w := func(used float64) []weighedLine { return []weighedLine{{ID: "a", Known: true, Used: used}} }
+	ok := []tryLine{{ID: "a", Status: 200}}
+	p := place([]routeLine{
+		{Time: t0, Session: "s", Order: w(80), Tries: ok},
+		{Time: t0.Add(time.Hour), Session: "s", Order: w(5), Tries: ok},
+		{Time: t0.Add(2 * time.Hour), Session: "s", Order: w(20), Tries: ok},
+	})
+	if p.Stints != 1 || p.RiseStints != 0 || p.Started["seen"] != 1 {
+		t.Errorf("placements %+v", p)
+	}
+}

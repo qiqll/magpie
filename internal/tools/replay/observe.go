@@ -36,6 +36,10 @@ type Observed struct {
 	// nothing.
 	Unread map[string]int  `json:"unread,omitempty"`
 	Cut    map[string]bool `json:"cut,omitempty"`
+	// Placements is where routing put conversations, with what the
+	// account had left then and how its stint there ended (placement.go).
+	Placements *Placements `json:"placements,omitempty"`
+	routes     []routeLine
 }
 
 // WindowRecord is one account's window over the history kept.
@@ -132,6 +136,8 @@ func observe(dir string, show bool) (Observed, error) {
 	if err := observeRoutes(&o, filepath.Join(dir, "routing")); err != nil {
 		return o, err
 	}
+	o.Placements = place(o.routes)
+	o.routes = nil
 	return o, nil
 }
 
@@ -321,10 +327,49 @@ func observeUsage(o *Observed, path string) error {
 	return nil
 }
 
+// routeLine is what replay reads of a gateway.Route (trace.go): its
+// conversation, who was weighed for it and who tried it.
 type routeLine struct {
+	Time       time.Time `json:"time"`
+	Session    string    `json:"session"`
+	Model      string    `json:"model"`
+	Provider   string    `json:"provider"`
+	Kind       string    `json:"kind"`
+	Sub        string    `json:"sub"`
+	SubagentID string    `json:"subagentId"`
+	User       *struct {
+		User   string   `json:"user"`
+		Spares []string `json:"spares"`
+	} `json:"user"`
 	Affinity *struct {
 		Why string `json:"why"`
 	} `json:"affinity"`
+	Order []weighedLine `json:"order"`
+	Tries []tryLine     `json:"tries"`
+}
+
+// weighedLine is what replay reads of a gateway.Weighed.
+type weighedLine struct {
+	ID         string      `json:"id"`
+	Who        string      `json:"who"`
+	Known      bool        `json:"known"`
+	Used       float64     `json:"used"`
+	Renews     []time.Time `json:"renews"`
+	UsedRenews *time.Time  `json:"usedRenews"`
+	Rest       *struct{}   `json:"rest"`
+	Barred     bool        `json:"barred"`
+	Held       bool        `json:"held"`
+	Capped     int         `json:"capped"`
+	Reserve    int         `json:"reserve"`
+	Lapsed     string      `json:"lapsed"`
+	Fallback   bool        `json:"fallback"`
+}
+
+// tryLine is what replay reads of a gateway.Try.
+type tryLine struct {
+	ID     string `json:"id"`
+	Status int    `json:"status"`
+	Fail   string `json:"fail"`
 }
 
 // observeRoutes reads routing/. The gateway keeps a day's latest
@@ -374,6 +419,7 @@ func readRoutes(o *Observed, path string) {
 		if l.Affinity != nil && l.Affinity.Why != "" {
 			o.Why[l.Affinity.Why]++
 		}
+		o.routes = append(o.routes, l.slim())
 		return nil
 	})
 }
