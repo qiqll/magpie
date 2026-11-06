@@ -41,6 +41,7 @@ type Observed struct {
 	// account had left then and how its stint there ended (placement.go).
 	Placements *Placements `json:"placements,omitempty"`
 	routes     []routeLine
+	spans      map[string]time.Duration // provider and window name → its span
 }
 
 // WindowRecord is one account's window over the history kept.
@@ -126,7 +127,7 @@ func (m masker) mask(user string) string {
 }
 
 func observe(dir string, show bool) (Observed, error) {
-	o := Observed{Dir: dir, Why: map[string]int{}, Unread: map[string]int{}, Cut: map[string]bool{}}
+	o := Observed{Dir: dir, Why: map[string]int{}, Unread: map[string]int{}, Cut: map[string]bool{}, spans: map[string]time.Duration{}}
 	m := newMasker(show)
 	if err := observeQuotas(&o, filepath.Join(dir, "quota-history.json"), m); err != nil {
 		return o, err
@@ -137,7 +138,8 @@ func observe(dir string, show bool) (Observed, error) {
 	if err := observeRoutes(&o, filepath.Join(dir, "routing")); err != nil {
 		return o, err
 	}
-	o.Placements = place(o.routes, m)
+	caps := readCaps(filepath.Join(dir, "providers.json"), o.spans)
+	o.Placements = place(o.routes, m, caps)
 	o.routes = nil
 	return o, nil
 }
@@ -182,6 +184,9 @@ func observeQuotas(o *Observed, path string, m masker) error {
 					}
 				}
 				w.LastLeft = p.Left
+			}
+			if w.Span > 0 {
+				o.spans[prov+"\x00"+strings.ToLower(strings.TrimSpace(name))] = w.Span
 			}
 			o.Windows = append(o.Windows, w)
 		}
@@ -372,16 +377,19 @@ type weighedLine struct {
 	Used       float64     `json:"used"`
 	Renews     []time.Time `json:"renews"`
 	UsedRenews *time.Time  `json:"usedRenews"`
-	Rest       *struct{}   `json:"rest"`
-	Barred     bool        `json:"barred"`
-	Held       bool        `json:"held"`
-	Capped     int         `json:"capped"`
-	Reserve    int         `json:"reserve"`
-	Lapsed     string      `json:"lapsed"`
-	Fallback   bool        `json:"fallback"`
-	Learns     bool        `json:"learns"`
-	WeekLow    bool        `json:"weekLow"`
-	Aside      bool        `json:"aside"`
+	Rest       *struct {
+		Why string `json:"why"`
+	} `json:"rest"`
+	Provider string `json:"provider"`
+	Barred   bool   `json:"barred"`
+	Held     bool   `json:"held"`
+	Capped   int    `json:"capped"`
+	Reserve  int    `json:"reserve"`
+	Lapsed   string `json:"lapsed"`
+	Fallback bool   `json:"fallback"`
+	Learns   bool   `json:"learns"`
+	WeekLow  bool   `json:"weekLow"`
+	Aside    bool   `json:"aside"`
 	// fullest: "short" when the window Used is of renews before the
 	// biggest (the five hours), "long" when it is the biggest, "" not
 	// told; isReady: readyForNew. Set by slim, which drops the rest.

@@ -343,6 +343,7 @@ func printPlacements(out io.Writer, p *Placements) {
 	fmt.Fprintf(out, "  a stint that ended with its conversation raised its account's fullest window by %.0f / %.0f / %.0f points (50th/75th/90th, %d stints)\n",
 		p.Rise[0], p.Rise[1], p.Rise[2], p.RiseStints)
 	fmt.Fprintf(out, "  requests no try answered: %d; with nobody weighed: %d\n", p.Unanswered, p.Untold)
+	fmt.Fprintf(out, "  caps: %s\n", p.Caps)
 	printUsers(out, p.ByUser)
 	printCounts(out, "  why nothing answered them:", p.UnansweredWhy, 12)
 	printCounts(out, "  moves to another account, by the moving request's route (accounts in its order · user binding why · binding since the request before · where the account left was):", p.MoveCauses, 20)
@@ -419,18 +420,22 @@ func printCounts(out io.Writer, title string, counts map[string]int, n int) {
 }
 
 func printUsers(out io.Writer, u *UserPlacements) {
-	if u == nil || len(u.Users) == 0 {
+	if u == nil || len(u.Users)+len(u.Tiers) == 0 && u.Unbound == nil {
 		return
 	}
 	fmt.Fprintln(out, "\n  by user (a user's conversations under every key are one user's; heavy: the busiest that asked 80% of requests)")
-	fmt.Fprintln(out, "  pick: routing chose among 2+ ready accounts; tight: another had 30+ points more before its cap; ends: how stints ended (quota: out of what it had; access: no longer the user's to use)")
+	fmt.Fprintln(out, "  pick: routing chose its account, ready, among 2+ ready; tight: another had 30+ points more before its cap; sooner: the account picked renewed before that one (Smart's reason), later: it didn't")
+	fmt.Fprintln(out, "  ends: end/quota/rate/access/failed/routine/unknown; served/had/could: a tight pick that ended on quota, in requests (answered / the picked account had room for / the roomier had room for)")
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "  user\ttier\trequests\tstints\tends end/quota/access/routine/failed\tpicks\ttight\ttight→quota\tloose→quota\tpoints/request\ttight→quota: served\thad room for\troomier had room for")
+	fmt.Fprintln(tw, "  user\ttier\trequests\tstints\tends\tpicks\ttight (sooner/later)\tsooner→quota\tlater→quota\tloose→quota\tpoints/request\tserved\thad\tcould")
 	row := func(r UserUse) {
 		e := r.Ends
-		fmt.Fprintf(tw, "  %s\t%s\t%d\t%d\t%d/%d/%d/%d/%d\t%d\t%d\t%d (%.0f%%)\t%d (%.0f%%)\t%.3f\t%.0f\t%.0f\t%.0f\n",
-			r.User, r.Tier, r.Requests, r.Stints, e["end"], e["quota"], e["access"], e["routine"], e["failed"],
-			r.Picks, r.Tight, r.TightQuota, pct(float64(r.TightQuota), float64(r.Tight)), r.LooseQuota, pct(float64(r.LooseQuota), float64(r.Picks-r.Tight)),
+		fmt.Fprintf(tw, "  %s\t%s\t%d\t%d\t%d/%d/%d/%d/%d/%d/%d\t%d\t%d (%d/%d)\t%d (%.0f%%)\t%d (%.0f%%)\t%d (%.0f%%)\t%.3f\t%.0f\t%.0f\t%.0f\n",
+			r.User, r.Tier, r.Requests, r.Stints, e["end"], e["quota"], e["rate"], e["access"], e["failed"], e["routine"], e["unknown"],
+			r.Picks, r.Tight, r.Sooner, r.Later,
+			r.SoonerQuota, pct(float64(r.SoonerQuota), float64(r.Sooner)),
+			r.LaterQuota, pct(float64(r.LaterQuota), float64(r.Later)),
+			r.LooseQuota, pct(float64(r.LooseQuota), float64(r.Picks-r.Tight)),
 			r.PerRequest, r.Served, r.Had, r.Could)
 	}
 	for _, r := range u.Users {
@@ -438,6 +443,9 @@ func printUsers(out io.Writer, u *UserPlacements) {
 	}
 	for _, r := range u.Tiers {
 		row(r)
+	}
+	if u.Unbound != nil {
+		row(*u.Unbound)
 	}
 	tw.Flush()
 }

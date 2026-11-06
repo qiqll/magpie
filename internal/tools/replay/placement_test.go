@@ -20,7 +20,19 @@ var t0 = time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
 // fails here.
 func placed(t *testing.T, routes ...gateway.Route) *Placements {
 	t.Helper()
+	return placedWith(t, nil, routes...)
+}
+
+// placedWith is placed beside other files of magpie's folder (files: name
+// → body), providers.json and quota-history.json among them.
+func placedWith(t *testing.T, files map[string]string, routes ...gateway.Route) *Placements {
+	t.Helper()
 	dir := t.TempDir()
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "routing"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +61,7 @@ func wseat(id string, used float64, fullest string) gateway.Weighed {
 	if fullest == "5h" {
 		at = five
 	}
-	return gateway.Weighed{ID: id, Who: id + "@example.com", Kind: "account", Known: true, Used: used, Renews: []time.Time{week, five}, UsedRenews: &at}
+	return gateway.Weighed{ID: id, Provider: "claude", Who: id + "@example.com", Kind: "account", Known: true, Used: used, Renews: []time.Time{week, five}, UsedRenews: &at}
 }
 
 func ok(id string) gateway.Try { return gateway.Try{ID: id, Status: 200} }
@@ -104,7 +116,7 @@ func bucket(p *Placements, pool string, headroom float64) Bucket {
 }
 
 // A bound user's conversation put on an account with 12% of its five hours
-// left while the user's other had 70% is refused there two requests on
+// left while the user's other had 70% is rate limited there two requests on
 // and moved: a forced stint in the bound pool's lowest bucket, with a
 // roomier account beside it. A model switch, a title, a subagent's and a
 // pinned request move nothing. An unbound conversation put on the roomy
@@ -126,7 +138,7 @@ func TestPlacements(t *testing.T) {
 		t.Fatalf("placements %+v", p)
 	}
 	low := bucket(p, "bound", 12)
-	if low.Stints != 1 || low.First != 1 || low.Forced != 1 || low.Ended["refused"] != 1 || low.FiveHours != 1 || low.Week != 0 || low.Roomier != 1 || low.Requests != 2 {
+	if low.Stints != 1 || low.First != 1 || low.Forced != 1 || low.Ended["rate"] != 1 || low.FiveHours != 1 || low.Week != 0 || low.Roomier != 1 || low.Requests != 2 {
 		t.Errorf("bound 10-25 %+v", low)
 	}
 	if b := bucket(p, "bound", 70); b.Stints != 1 || b.Ended["end"] != 1 || b.Week != 1 || b.Roomier != 0 {
@@ -238,7 +250,7 @@ func TestPackedDayReadOnce(t *testing.T) {
 // A bound user's conversation on a whose binding then changes to b alone
 // (a is capped and left out of the order) moves as "one · user gone ·
 // binding changed · left unbound, left:capped"; a move off an account that rests,
-// beside another, as "several · ... · resting"; one whose binding no
+// beside another, as "several · ... · resting:other"; one whose binding no
 // longer names the account it was on, as "unbound". Requests nothing
 // answered are told by their last try's fail, or "no try" and the
 // user's binding why.
@@ -265,7 +277,7 @@ func TestMoveCauses(t *testing.T) {
 	)...)
 	want := map[string]int{
 		"one · user gone · binding changed · left unbound, left:capped": 1,
-		"several · user added · binding changed · left resting":         1,
+		"several · user added · binding changed · left resting:other":   1,
 		"one · user kept · binding changed · left unbound":              1,
 	}
 	for k, n := range want {
@@ -281,12 +293,19 @@ func TestMoveCauses(t *testing.T) {
 	}
 }
 
-// u1, the heavy user, has a conversation put on a (60% used, capped at
-// 80: 20 left) while b had 90 left: a tight pick. a reaches its cap
-// three requests on and the conversation moves to b: a quota end. u1's
-// other conversation has b alone ready: no pick, and b renews in it. u2, light, is put on c
-// with d as roomy beside it (a loose pick), then the key holds c and it
-// moves: an access end, not a quota one.
+// u1, the heavy user:
+//   - s1 is put on a (60% used, capped at 80 in providers.json: 20 left)
+//     while b had 90: tight, and a's week renews with b's, so later. a
+//     reaches its cap, the user's binding drops it, and s1 moves to b
+//     ("unbound, left:capped"): a quota end, though the binding moved.
+//   - s2 is put on b (88 left) beside c, 10% used but capped at 50 in
+//     providers.json though it never got there (40 left): loose.
+//   - s4 is put on d, 30% of five hours capped at 40 there (10 left),
+//     beside b's 86: tight, and d's five hours renew before b's week:
+//     sooner. d is rate limited and s4 moves: a rate end, not quota.
+//
+// u2, light, is put on e beside f (loose), then the key holds e: access.
+// A request with no user is kept out of the ranking.
 func TestUserPlacements(t *testing.T) {
 	as := func(user string, tokens int, first string, spares ...string) func(*gateway.Route) {
 		return func(g *gateway.Route) {
@@ -294,53 +313,93 @@ func TestUserPlacements(t *testing.T) {
 			g.Tokens = tokens
 		}
 	}
-	u1 := as("u1@example.com", 100, "a@example.com", "b@example.com")
+	u1 := as("u1@example.com", 100, "a@example.com", "b@example.com", "c@example.com", "d@example.com")
 	capped := wseat("a", 80, "week")
 	capped.Capped = 80
-	held := wseat("c", 10, "week")
+	ratey := wseat("d", 31, "5h")
+	ratey.Rest = &gateway.Rest{Why: "rate"}
+	held := wseat("e", 10, "week")
 	held.Held = true
 	two := func(a, b float64) []gateway.Weighed {
 		return []gateway.Weighed{wseat("a", a, "week"), wseat("b", b, "week")}
 	}
 	b := func(used float64) []gateway.Weighed { return []gateway.Weighed{wseat("b", used, "week")} }
-	p := placed(t, routesOf(
+	files := map[string]string{
+		"providers.json":     `{"providers":[{"id":"claude","accountCaps":{"a@example.com":80,"c@example.com":50},"accountWindowCaps":{"d@example.com":{"5 Hours":40}}}]}`,
+		"quota-history.json": `{"claude|d@example.com":{"5 hours":[{"at":"2026-11-03T09:00:00Z","left":90,"start":"2026-11-03T08:00:00Z","resetsAt":"2026-11-03T13:00:00Z"}]}}`,
+	}
+	p := placedWith(t, files, routesOf(
 		rt{at: 0, session: "s1", why: "first", order: two(60, 10), tries: []gateway.Try{ok("a")}, edit: u1},
 		rt{at: time.Minute, session: "s1", why: "cache", order: two(70, 10), tries: []gateway.Try{ok("a")}, edit: u1},
 		rt{at: 2 * time.Minute, session: "s1", why: "cache", order: two(75, 10), tries: []gateway.Try{ok("a")}, edit: u1},
-		rt{at: 3 * time.Minute, session: "s1", why: "-", order: b(10), tries: []gateway.Try{ok("b")}, edit: func(g *gateway.Route) { u1(g); g.Left = []gateway.Weighed{capped} }},
+		rt{at: 3 * time.Minute, session: "s1", why: "-", order: b(10), tries: []gateway.Try{ok("b")}, edit: func(g *gateway.Route) {
+			as("u1@example.com", 100, "b@example.com", "c@example.com", "d@example.com")(g)
+			g.Left = []gateway.Weighed{capped}
+		}},
 		rt{at: 4 * time.Minute, session: "s1", why: "cache", order: b(12), tries: []gateway.Try{ok("b")}, edit: u1},
-		rt{at: 5 * time.Minute, session: "s2", why: "first", order: b(12), tries: []gateway.Try{ok("b")}, edit: func(g *gateway.Route) { u1(g); g.Left = []gateway.Weighed{capped} }},
+		rt{at: 5 * time.Minute, session: "s2", why: "first", order: []gateway.Weighed{wseat("b", 12, "week"), wseat("c", 10, "week")}, tries: []gateway.Try{ok("b")}, edit: u1},
 		rt{at: 6 * time.Minute, session: "s2", why: "cache", order: b(13), tries: []gateway.Try{ok("b")}, edit: u1},
 		rt{at: 7 * time.Minute, session: "s2", why: "cache", order: b(3), tries: []gateway.Try{ok("b")}, edit: u1}, // b renewed: s2 tells no cost
-		rt{at: 0, session: "s3", why: "first", order: []gateway.Weighed{wseat("c", 10, "week"), wseat("d", 10, "week")}, tries: []gateway.Try{ok("c")}, edit: as("u2", 5, "c@example.com", "d@example.com")},
-		rt{at: time.Minute, session: "s3", why: "-", order: []gateway.Weighed{wseat("d", 10, "week")}, tries: []gateway.Try{ok("d")}, edit: func(g *gateway.Route) {
-			as("u2", 5, "c@example.com", "d@example.com")(g)
+		rt{at: 8 * time.Minute, session: "s4", why: "first", order: []gateway.Weighed{wseat("d", 30, "5h"), wseat("b", 14, "week")}, tries: []gateway.Try{ok("d")}, edit: u1},
+		rt{at: 9 * time.Minute, session: "s4", why: "resting", order: []gateway.Weighed{wseat("b", 14, "week"), ratey}, tries: []gateway.Try{ok("b")}, edit: u1},
+		rt{at: 0, session: "s3", why: "first", order: []gateway.Weighed{wseat("e", 10, "week"), wseat("f", 10, "week")}, tries: []gateway.Try{ok("e")}, edit: as("u2", 5, "e@example.com", "f@example.com")},
+		rt{at: time.Minute, session: "s3", why: "-", order: []gateway.Weighed{wseat("f", 10, "week")}, tries: []gateway.Try{ok("f")}, edit: func(g *gateway.Route) {
+			as("u2", 5, "e@example.com", "f@example.com")(g)
 			g.Left = []gateway.Weighed{held}
 		}},
+		rt{at: 0, session: "s5", why: "first", order: b(1), tries: []gateway.Try{ok("b")}},
 	)...)
-	// a's stint is told to its cap: 20 left, not 40
-	if b := bucket(p, "bound", 20); b.Stints != 1 || b.Roomier != 1 {
+	if !strings.Contains(p.Caps, "3 account caps") {
+		t.Errorf("caps %q", p.Caps)
+	}
+	// a's stint is told to its cap (20 left), d's to its five hours' (10)
+	if b := bucket(p, "bound", 15); b.Stints != 2 {
 		t.Errorf("bound 10-25 %+v", b)
 	}
 	u := p.ByUser
-	if u == nil || len(u.Users) != 2 {
+	if u == nil || len(u.Users) != 2 || u.Unbound == nil || u.Unbound.Requests != 1 || u.Unbound.Tier != "-" {
 		t.Fatalf("by user %+v", u)
 	}
 	h, l := u.Users[0], u.Users[1]
-	if h.Tier != "heavy" || h.Requests != 8 || h.Tokens != 800 || h.Picks != 1 || h.Tight != 1 || h.TightQuota != 1 || h.Ends["quota"] != 1 || h.Ends["end"] != 2 || h.Served != 3 {
+	if h.Tier != "heavy" || h.Requests != 10 || h.Tokens != 1000 || h.Picks != 3 || h.Tight != 2 || h.Sooner != 1 || h.Later != 1 ||
+		h.LaterQuota != 1 || h.SoonerQuota != 0 || h.LooseQuota != 0 || h.Ends["quota"] != 1 || h.Ends["rate"] != 1 || h.Ends["end"] != 3 || h.Ends["access"] != 0 || h.Served != 3 {
 		t.Errorf("heavy %+v", h)
 	}
-	// 15 + 2 points over 5 requests; s2 saw a renewal
-	if near := func(x, y float64) bool { return x-y < 0.01 && y-x < 0.01 }; !near(h.PerRequest, 17.0/5) || !near(h.Had, 20/(17.0/5)) || !near(h.Could, 90/(17.0/5)) {
+	// 15 points over a's 2 requests after its first, 2 over b's 1 in s1;
+	// s2 renewed, s4's stints are one request each
+	per := 17.0 / 3
+	if near := func(x, y float64) bool { return x-y < 0.01 && y-x < 0.01 }; !near(h.PerRequest, per) || !near(h.Had, 20/per) || !near(h.Could, 90/per) {
 		t.Errorf("heavy per request %v, had %v, could %v", h.PerRequest, h.Had, h.Could)
 	}
 	if strings.Contains(h.User, "u1") || !strings.HasPrefix(h.User, "acct-") {
 		t.Errorf("user named %q, want a hash", h.User)
 	}
-	if l.Tier != "light" || l.Ends["access"] != 1 || l.Ends["quota"] != 0 || l.Picks != 1 || l.Tight != 0 || l.LooseQuota != 0 {
+	if l.Tier != "light" || l.Ends["access"] != 1 || l.Ends["quota"] != 0 || l.Picks != 1 || l.Tight != 0 {
 		t.Errorf("light %+v", l)
 	}
-	if len(u.Tiers) != 2 || u.Tiers[0].Requests != 8 || u.Tiers[1].Requests != 2 || u.Tiers[0].TightQuota != 1 {
+	if len(u.Tiers) != 2 || u.Tiers[0].Requests != 10 || u.Tiers[1].Requests != 2 || u.Tiers[0].LaterQuota != 1 {
 		t.Errorf("tiers %+v", u.Tiers)
+	}
+}
+
+// Without providers.json no account has a cap, and the report says so.
+func TestNoCapsFile(t *testing.T) {
+	p := placed(t, rt{session: "s", why: "first", order: []gateway.Weighed{wseat("a", 60, "week")}, tries: []gateway.Try{ok("a")}}.route())
+	if !strings.Contains(p.Caps, "not found") {
+		t.Errorf("caps %q", p.Caps)
+	}
+	if b := bucket(p, "unbound", 40); b.Stints != 1 {
+		t.Errorf("a at 60 with no cap: %+v", p.Pools)
+	}
+}
+
+// A conversation that went to an account routing wouldn't put a new one
+// on (95% used) wasn't routing's pick, however many others were ready.
+func TestUnreadyAccountIsNoPick(t *testing.T) {
+	g := rt{session: "s", why: "first", order: []gateway.Weighed{wseat("x", 95, "week"), wseat("y", 10, "week"), wseat("z", 10, "week")}, tries: []gateway.Try{ok("x")}}.route()
+	g.User = &gateway.UserBound{User: "u", Account: "x@example.com"}
+	p := placed(t, g)
+	if len(p.ByUser.Users) != 1 || p.ByUser.Users[0].Picks != 0 {
+		t.Errorf("by user %+v", p.ByUser.Users)
 	}
 }
