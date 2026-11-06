@@ -137,7 +137,7 @@ func observe(dir string, show bool) (Observed, error) {
 	if err := observeRoutes(&o, filepath.Join(dir, "routing")); err != nil {
 		return o, err
 	}
-	o.Placements = place(o.routes)
+	o.Placements = place(o.routes, m)
 	o.routes = nil
 	return o, nil
 }
@@ -346,7 +346,8 @@ type routeLine struct {
 	Affinity *struct {
 		Why string `json:"why"`
 	} `json:"affinity"`
-	Order []weighedLine `json:"order"`
+	Tokens int           `json:"tokens"`
+	Order  []weighedLine `json:"order"`
 	// Left: accounts left out of the order, each with why (Capped,
 	// Lapsed, Held, Barred...)
 	Left  []weighedLine `json:"left"`

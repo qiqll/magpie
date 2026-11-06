@@ -67,6 +67,9 @@ type Placements struct {
 	// the order or "left:" out of it, or "absent" from both, and
 	// "unbound" when the user's binding no longer names it.
 	MoveCauses map[string]int `json:"moveCauses"`
+	// ByUser is each user's placements, the heaviest first, and the
+	// tiers they make (userplace.go).
+	ByUser *UserPlacements `json:"byUser"`
 }
 
 // Pool is stints bucketed by their account's headroom as they began.
@@ -139,10 +142,10 @@ func (l routeLine) slim() routeLine {
 		default:
 			fullest = "long"
 		}
-		l.Order[i] = weighedLine{ID: w.ID, Who: w.Who, Known: w.Known, Used: w.Used, UsedRenews: w.UsedRenews, fullest: fullest, isReady: w.readyForNew(), state: w.status()}
+		l.Order[i] = weighedLine{ID: w.ID, Who: w.Who, Known: w.Known, Used: w.Used, Capped: w.Capped, UsedRenews: w.UsedRenews, fullest: fullest, isReady: w.readyForNew(), state: w.status()}
 	}
 	for i, w := range l.Left {
-		l.Left[i] = weighedLine{ID: w.ID, Who: w.Who, state: w.status()}
+		l.Left[i] = weighedLine{ID: w.ID, Who: w.Who, Capped: w.Capped, state: w.status()}
 	}
 	return l
 }
@@ -301,7 +304,11 @@ const (
 type stint struct {
 	id       string
 	who      string
+	user     string
 	bound    bool
+	choice   int    // accounts ready for it when it began
+	left     string // where its account was in the route that moved it (whereIs)
+	tokens   int
 	headroom float64 // -1: not told
 	best     float64 // the best other ready account's headroom, -1: none
 	fullest  string
@@ -315,10 +322,29 @@ type stint struct {
 	refused  bool // its last requests were refused on it, none answered since
 }
 
-func place(routes []routeLine) *Placements {
+func place(routes []routeLine, m masker) *Placements {
 	p := &Placements{Started: map[string]int{}, UnansweredWhy: map[string]int{}, MoveCauses: map[string]int{}}
 	bound := map[string]int{}
 	byConv := map[string][]routeLine{}
+	// caps: each account's usage cap as a route held it at one (Capped), so
+	// what it has left is told to its cap, not to 100: an account at 75%
+	// capped at 80 has 5 left, not 25. One never held at its cap is taken
+	// to have none.
+	caps := map[string]int{}
+	for _, l := range routes {
+		for _, w := range slices.Concat(l.Order, l.Left) {
+			if w.Capped > 0 {
+				caps[w.ID] = w.Capped
+			}
+		}
+	}
+	room := func(w weighedLine) float64 {
+		limit := 100.0
+		if c := caps[w.ID]; c > 0 {
+			limit = float64(c)
+		}
+		return min(100, max(0, limit-w.Used))
+	}
 	for _, l := range routes {
 		if l.User != nil && l.User.User != "" {
 			bound[l.User.User] = max(bound[l.User.User], 1+len(l.User.Spares))
@@ -377,6 +403,9 @@ func place(routes []routeLine) *Placements {
 					} else if why != "" {
 						cur.ended = why
 					}
+					if id != cur.id {
+						cur.left = l.whereIs(cur.id, cur.who)
+					}
 					stints = append(stints, *cur)
 					if id != cur.id {
 						n, uw, bc := "several", "-", "same"
@@ -389,16 +418,16 @@ func place(routes []routeLine) *Placements {
 						if changed {
 							bc = "changed"
 						}
-						p.MoveCauses[n+" · user "+uw+" · binding "+bc+" · left "+l.whereIs(cur.id, cur.who)]++
+						p.MoveCauses[n+" · user "+uw+" · binding "+bc+" · left "+cur.left]++
 					}
 				}
-				cur = &stint{id: id, bound: l.User != nil && l.User.User != "", headroom: -1, best: -1, started: started}
+				cur = &stint{id: id, user: l.user(), bound: l.User != nil && l.User.User != "", headroom: -1, best: -1, started: started}
 				if w, ok := l.weighed(id); ok {
 					cur.who = w.Who
 				}
 				if w, ok := l.weighed(id); ok && w.Known {
 					cur.from = w.Used
-					cur.headroom = min(100, max(0, 100-w.Used))
+					cur.headroom = room(w)
 					cur.fullest = w.fullest
 				}
 				n := 0
@@ -407,15 +436,17 @@ func place(routes []routeLine) *Placements {
 						continue
 					}
 					n++
-					if w.ID != id && w.Known && 100-w.Used > cur.best {
-						cur.best = 100 - w.Used
+					if w.ID != id && w.Known && room(w) > cur.best {
+						cur.best = room(w)
 					}
 				}
+				cur.choice = n
 				if started == "first" {
 					ready = append(ready, float64(n))
 				}
 			}
 			cur.requests++
+			cur.tokens += l.Tokens
 			cur.refused = false // it answered
 			if w, ok := l.weighed(cur.id); ok && w.Known {
 				last := cur.from
@@ -494,6 +525,7 @@ func place(routes []routeLine) *Placements {
 		}
 		pl.Unknown.Requests = centile(reqs[&pl.Unknown], 50)
 	}
+	p.ByUser = byUser(stints, m)
 	p.RiseStints = len(rises)
 	p.Rise = [3]float64{centile(rises, 50), centile(rises, 75), centile(rises, 90)}
 	p.Ready = [2]float64{centile(ready, 50), centile(ready, 90)}

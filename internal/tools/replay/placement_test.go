@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -277,5 +278,69 @@ func TestMoveCauses(t *testing.T) {
 	}
 	if p.UnansweredWhy["quota"] != 1 || p.UnansweredWhy["no try (user full)"] != 1 {
 		t.Errorf("unanswered %v", p.UnansweredWhy)
+	}
+}
+
+// u1, the heavy user, has a conversation put on a (60% used, capped at
+// 80: 20 left) while b had 90 left: a tight pick. a reaches its cap
+// three requests on and the conversation moves to b: a quota end. u1's
+// other conversation has b alone ready: no pick, and b renews in it. u2, light, is put on c
+// with d as roomy beside it (a loose pick), then the key holds c and it
+// moves: an access end, not a quota one.
+func TestUserPlacements(t *testing.T) {
+	as := func(user string, tokens int, first string, spares ...string) func(*gateway.Route) {
+		return func(g *gateway.Route) {
+			g.User = &gateway.UserBound{User: user, Account: first, Spares: spares, Why: "kept"}
+			g.Tokens = tokens
+		}
+	}
+	u1 := as("u1@example.com", 100, "a@example.com", "b@example.com")
+	capped := wseat("a", 80, "week")
+	capped.Capped = 80
+	held := wseat("c", 10, "week")
+	held.Held = true
+	two := func(a, b float64) []gateway.Weighed {
+		return []gateway.Weighed{wseat("a", a, "week"), wseat("b", b, "week")}
+	}
+	b := func(used float64) []gateway.Weighed { return []gateway.Weighed{wseat("b", used, "week")} }
+	p := placed(t, routesOf(
+		rt{at: 0, session: "s1", why: "first", order: two(60, 10), tries: []gateway.Try{ok("a")}, edit: u1},
+		rt{at: time.Minute, session: "s1", why: "cache", order: two(70, 10), tries: []gateway.Try{ok("a")}, edit: u1},
+		rt{at: 2 * time.Minute, session: "s1", why: "cache", order: two(75, 10), tries: []gateway.Try{ok("a")}, edit: u1},
+		rt{at: 3 * time.Minute, session: "s1", why: "-", order: b(10), tries: []gateway.Try{ok("b")}, edit: func(g *gateway.Route) { u1(g); g.Left = []gateway.Weighed{capped} }},
+		rt{at: 4 * time.Minute, session: "s1", why: "cache", order: b(12), tries: []gateway.Try{ok("b")}, edit: u1},
+		rt{at: 5 * time.Minute, session: "s2", why: "first", order: b(12), tries: []gateway.Try{ok("b")}, edit: func(g *gateway.Route) { u1(g); g.Left = []gateway.Weighed{capped} }},
+		rt{at: 6 * time.Minute, session: "s2", why: "cache", order: b(13), tries: []gateway.Try{ok("b")}, edit: u1},
+		rt{at: 7 * time.Minute, session: "s2", why: "cache", order: b(3), tries: []gateway.Try{ok("b")}, edit: u1}, // b renewed: s2 tells no cost
+		rt{at: 0, session: "s3", why: "first", order: []gateway.Weighed{wseat("c", 10, "week"), wseat("d", 10, "week")}, tries: []gateway.Try{ok("c")}, edit: as("u2", 5, "c@example.com", "d@example.com")},
+		rt{at: time.Minute, session: "s3", why: "-", order: []gateway.Weighed{wseat("d", 10, "week")}, tries: []gateway.Try{ok("d")}, edit: func(g *gateway.Route) {
+			as("u2", 5, "c@example.com", "d@example.com")(g)
+			g.Left = []gateway.Weighed{held}
+		}},
+	)...)
+	// a's stint is told to its cap: 20 left, not 40
+	if b := bucket(p, "bound", 20); b.Stints != 1 || b.Roomier != 1 {
+		t.Errorf("bound 10-25 %+v", b)
+	}
+	u := p.ByUser
+	if u == nil || len(u.Users) != 2 {
+		t.Fatalf("by user %+v", u)
+	}
+	h, l := u.Users[0], u.Users[1]
+	if h.Tier != "heavy" || h.Requests != 8 || h.Tokens != 800 || h.Picks != 1 || h.Tight != 1 || h.TightQuota != 1 || h.Ends["quota"] != 1 || h.Ends["end"] != 2 || h.Served != 3 {
+		t.Errorf("heavy %+v", h)
+	}
+	// 15 + 2 points over 5 requests; s2 saw a renewal
+	if near := func(x, y float64) bool { return x-y < 0.01 && y-x < 0.01 }; !near(h.PerRequest, 17.0/5) || !near(h.Had, 20/(17.0/5)) || !near(h.Could, 90/(17.0/5)) {
+		t.Errorf("heavy per request %v, had %v, could %v", h.PerRequest, h.Had, h.Could)
+	}
+	if strings.Contains(h.User, "u1") || !strings.HasPrefix(h.User, "acct-") {
+		t.Errorf("user named %q, want a hash", h.User)
+	}
+	if l.Tier != "light" || l.Ends["access"] != 1 || l.Ends["quota"] != 0 || l.Picks != 1 || l.Tight != 0 || l.LooseQuota != 0 {
+		t.Errorf("light %+v", l)
+	}
+	if len(u.Tiers) != 2 || u.Tiers[0].Requests != 8 || u.Tiers[1].Requests != 2 || u.Tiers[0].TightQuota != 1 {
+		t.Errorf("tiers %+v", u.Tiers)
 	}
 }
