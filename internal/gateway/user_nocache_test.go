@@ -158,7 +158,7 @@ func TestLeastHeldKeepsWhereItWasOnlyWhenReady(t *testing.T) {
 		{"unbound", Weighed{}, false, a},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, _ := leastHeld("t049", "t049|x", []candidate{a, b}, planned{order: []Weighed{{}, tc.second}}, tc.spentLast, false)
+			got, _ := leastHeld("t049", "t049|x", []candidate{a, b}, planned{order: []Weighed{{}, tc.second}}, tc.spentLast, false, 0)
 			if got[0].who() != tc.want.who() {
 				t.Fatalf("went to %s, want %s", got[0].who(), tc.want.who())
 			}

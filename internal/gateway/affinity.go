@@ -767,13 +767,13 @@ func affine(scope, owner, mode string, rotate, spread, inOrder bool, in http.Hea
 	case "first":
 		switch {
 		case rotate:
-			cs, pl = leastHeld(scope, key, cs, pl, false, false)
+			cs, pl = leastHeld(scope, key, cs, pl, false, false, 0)
 		case spread && strings.Contains(key, "|agent:"):
 			// a subagent goes with its session's account, not to another
 			// as a session of its own
 			cs, pl = withLead(key, cs, pl)
 		case spread:
-			cs, pl = leastHeld(scope, key, cs, pl, false, true)
+			cs, pl = leastHeld(scope, key, cs, pl, false, true, 0)
 		}
 	}
 	return cs, pl, a, key
@@ -792,15 +792,57 @@ func affine(scope, owner, mode string, rotate, spread, inOrder bool, in http.Hea
 // one account goes there. One affine doesn't keep (cold, no-cache, gone,
 // resting, spent: afresh) is put the same way, not back on the user's
 // first (T-042).
-func ownLeastHeld(scope, key string, cs []candidate, pl planned) ([]candidate, planned) {
-	return leastHeld(scope, key, cs, pl, true, false)
+//
+// A heavy user's (UserBound.heavy: bound to more than heavyAccounts) is
+// put on one with room for a conversation, sessionNeed points before
+// something holds it (accountRoom), when the one picked so hasn't and another
+// has: a heavy user's conversation put on an account with little left
+// was moved off it once that ran out, its whole prompt written again on
+// the next, while another of its accounts had room for it (a server's
+// records: a median 45 requests answered where the roomier account had
+// room for 388).
+func ownLeastHeld(scope, key string, cs []candidate, pl planned, heavy bool) ([]candidate, planned) {
+	need := 0.0
+	if heavy {
+		need = sessionNeed
+	}
+	return leastHeld(scope, key, cs, pl, true, false, need)
+}
+
+// heavyAccounts: a user bound to more accounts than this is heavy, and
+// sessionNeed is the points of an account's allowance its new
+// conversation is taken to need: the 90th centile of what a conversation
+// raised its account's fullest window by on a server's records.
+const (
+	heavyAccounts = 3
+	sessionNeed   = 20.0
+)
+
+// heavy says whether u is bound to more than heavyAccounts accounts.
+func (u *UserBound) heavy() bool {
+	return u != nil && u.Account != "" && 1+len(u.Spares) > heavyAccounts
+}
+
+// accountRoom is the points c's account has before something holds it, its
+// usage cap or the vendor (Allowance.Room); false when it isn't an
+// account or its allowance isn't known.
+func accountRoom(c candidate) (float64, bool) {
+	a := c.p.Account
+	if a == nil {
+		return 0, false
+	}
+	al, ok := allowances(a.UsageAgent())[a.User]
+	if !ok {
+		return 0, false
+	}
+	return al.Room(c.model, provider.HoldCaps(c.p, a.Agent, a.User), time.Now()), true
 }
 
 // ownWithLead is ownLeastHeld, but a subagent's first request under a
 // routing that spreads sessions (lead, spreadsSessions) goes with its
 // lead (withLead) when the lead is on one of the user's own, cs: the
 // session keeps one account, its subagents included, as unbound.
-func ownWithLead(scope, key string, cs []candidate, pl planned, lead bool) ([]candidate, planned) {
+func ownWithLead(scope, key string, cs []candidate, pl planned, lead, heavy bool) ([]candidate, planned) {
 	if lead && strings.Contains(key, "|agent:") {
 		at, _, _ := strings.Cut(key, "|agent:")
 		sticks.Lock()
@@ -816,7 +858,7 @@ func ownWithLead(scope, key string, cs []candidate, pl planned, lead bool) ([]ca
 			}
 		}
 	}
-	return ownLeastHeld(scope, key, cs, pl)
+	return ownLeastHeld(scope, key, cs, pl, heavy)
 }
 
 // backToMain says whether the one that answered last, order[at], is a
@@ -921,7 +963,7 @@ const heldFor = 30 * time.Minute
 // not a fallback while the provider's own model leads, nor one used past
 // lowShare, which Smart puts behind for new conversations — and routing's
 // order is otherwise as it was, its turn marks too.
-func leastHeld(scope, key string, cs []candidate, pl planned, spentLast, ready bool) ([]candidate, planned) {
+func leastHeld(scope, key string, cs []candidate, pl planned, spentLast, ready bool, need float64) ([]candidate, planned) {
 	if len(cs) < 2 || len(pl.order) < len(cs) {
 		return cs, pl
 	}
@@ -940,6 +982,17 @@ func leastHeld(scope, key string, cs []candidate, pl planned, spentLast, ready b
 		}
 	}
 	now := time.Now()
+	// what each has before something holds it, for a heavy user's (need):
+	// read before sticks is locked, as a first read of an agent's usage
+	// may wait for it (provider.Allowances)
+	var rooms []float64
+	var known []bool
+	if need > 0 {
+		rooms, known = make([]float64, len(cs)), make([]bool, len(cs))
+		for i, c := range cs {
+			rooms[i], known[i] = accountRoom(c)
+		}
+	}
 	held := map[string]int{}
 	sticks.Lock()
 	defer sticks.Unlock()
@@ -971,6 +1024,7 @@ func leastHeld(scope, key string, cs []candidate, pl planned, spentLast, ready b
 		was = st.who + "/" + provider.WithMemberEffort(st.model, st.effort)
 	}
 	best := -1
+	var open []int // those a new conversation may go to
 	for i, c := range cs {
 		if pl.order[i].Rest != nil || pl.order[i].Aside || standsIn(pl.order, i) || lastBehind(pl.order, i) || busyBehind(pl.order, i) || ready && i > 0 && !readyForNew(pl.order, i) {
 			continue
@@ -981,6 +1035,7 @@ func leastHeld(scope, key string, cs []candidate, pl planned, spentLast, ready b
 			// user's, not Smart's, which puts it behind (T-052)
 			continue
 		}
+		open = append(open, i)
 		if own < 0 && seat(c) == was {
 			own = i
 		}
@@ -990,6 +1045,26 @@ func leastHeld(scope, key string, cs []candidate, pl planned, spentLast, ready b
 	}
 	if own >= 0 && held[seat(cs[own])] == held[seat(cs[best])] {
 		best = own
+	}
+	if need > 0 && best >= 0 && known[best] && rooms[best] < need {
+		// a heavy user's new conversation isn't put where it won't fit
+		// while another of the user's has room for it: of those that
+		// have, the one the fewest are held on, where it was answered on
+		// a tie (as own above: T-049); one picked whose allowance isn't
+		// known stays
+		fits := func(i int) bool { return known[i] && rooms[i] >= need }
+		fit := -1
+		if own >= 0 && fits(own) {
+			fit = own
+		}
+		for _, i := range open {
+			if fits(i) && (fit < 0 || held[seat(cs[i])] < held[seat(cs[fit])]) {
+				fit = i
+			}
+		}
+		if fit >= 0 {
+			best = fit
+		}
 	}
 	if best <= 0 {
 		return cs, pl

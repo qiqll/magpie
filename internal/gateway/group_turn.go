@@ -359,7 +359,7 @@ func (g *groupTurn) spreadOwn(cs []candidate, i int) (_ []candidate, picked int)
 		}
 		at, sub, pl.order = append(at, j), append(sub, c), append(pl.order, g.plans[c.p.ID][k])
 	}
-	got, _ := ownWithLead(g.scope, g.key, sub, pl, g.lead)
+	got, _ := ownWithLead(g.scope, g.key, sub, pl, g.lead, g.heavyAt(first.p.ID))
 	if len(got) == 0 || ownRow(got[0]) == ownRow(first) {
 		return cs, 0
 	}
@@ -425,6 +425,18 @@ func (g *groupTurn) boundOn(pid string) bool {
 }
 
 // user is the first binding narrowed, for the routing log; nil for none.
+// heavyAt says whether the user is heavy (UserBound.heavy) by its binding
+// at provider pid, a member's: not the first one narrowed (ub, the
+// routing log's), as a user may be bound to many of one member's
+// accounts and few of another's.
+func (g *groupTurn) heavyAt(pid string) bool {
+	if g == nil {
+		return false
+	}
+	ut := g.us[pid]
+	return ut != nil && ut.ub.heavy()
+}
+
 func (g *groupTurn) user() *UserBound {
 	if g == nil {
 		return nil

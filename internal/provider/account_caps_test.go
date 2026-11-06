@@ -396,3 +396,43 @@ func TestSetWindowCaps(t *testing.T) {
 		t.Fatalf("cleared, still %+v", c)
 	}
 }
+
+// Room is the least, over the windows counting the model, of each one's
+// cap (100 with none) less its use; a window renewed since is empty, a
+// pool's window holds at a cap only, and a model's own window counts only
+// that model.
+func TestAllowanceRoom(t *testing.T) {
+	now := time.Now()
+	al := Allowance{
+		{Name: "5 hours", Used: 30, Resets: now.Add(time.Hour), Span: 5 * time.Hour},
+		{Name: "7 days", Used: 60, Resets: now.Add(72 * time.Hour), Span: 7 * 24 * time.Hour},
+		{Name: "opus", Model: "opus", Used: 95, Resets: now.Add(72 * time.Hour)},
+	}
+	for _, tc := range []struct {
+		name  string
+		model string
+		caps  WindowCaps
+		want  float64
+	}{
+		{"no caps: the week", "sonnet", WindowCaps{}, 40},
+		{"a cap on every window", "sonnet", WindowCaps{All: 70}, 10},
+		{"a cap on the five hours", "sonnet", WindowCaps{Windows: map[string]int{"5 hours": 35}}, 5},
+		{"a model's own window", "opus", WindowCaps{}, 5},
+		{"past its cap", "sonnet", WindowCaps{All: 50}, 0},
+	} {
+		if got := al.Room(tc.model, tc.caps, now); got != tc.want {
+			t.Errorf("%s: room %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	renewed := Allowance{{Name: "7 days", Used: 90, Resets: now.Add(-time.Minute), Span: 7 * 24 * time.Hour}}
+	if got := renewed.Room("m", WindowCaps{}, now); got != 100 {
+		t.Errorf("renewed: room %v, want 100", got)
+	}
+	pooled := Allowance{{Name: "all", Used: 10, pool: []Limit{{Name: "pool", Used: 50}}}}
+	if got := pooled.Room("m", WindowCaps{}, now); got != 90 {
+		t.Errorf("a pool with no cap: room %v, want 90", got)
+	}
+	if got := pooled.Room("m", WindowCaps{Windows: map[string]int{"pool": 60}}, now); got != 10 {
+		t.Errorf("a pool capped at 60: room %v, want 10", got)
+	}
+}

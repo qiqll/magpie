@@ -242,11 +242,11 @@ func TestOwnLeastHeldLowShareAsReadyForNew(t *testing.T) {
 		sticks.Unlock()
 	})
 	low := Weighed{Known: true, Used: 92}
-	if got, _ := ownLeastHeld("t052", "t052|s1", []candidate{a, b}, planned{order: []Weighed{low, {Known: true, Used: 10}}}); got[0].who() != b.who() {
+	if got, _ := ownLeastHeld("t052", "t052|s1", []candidate{a, b}, planned{order: []Weighed{low, {Known: true, Used: 10}}}, false); got[0].who() != b.who() {
 		t.Fatalf("past lowShare, the first took a new session: %s", got[0].who())
 	}
 	credits := Weighed{Known: true, Used: 92, CreditsFirst: true}
-	if got, _ := ownLeastHeld("t052", "t052|s2", []candidate{a, b}, planned{order: []Weighed{credits, {Known: true, Used: 10}}}); got[0].who() != a.who() {
+	if got, _ := ownLeastHeld("t052", "t052|s2", []candidate{a, b}, planned{order: []Weighed{credits, {Known: true, Used: 10}}}, false); got[0].who() != a.who() {
 		t.Fatalf("spending its credits first, the first was passed: %s", got[0].who())
 	}
 	sticks.Lock()
@@ -257,7 +257,7 @@ func TestOwnLeastHeldLowShareAsReadyForNew(t *testing.T) {
 	}
 	sticks.m["t052|x|agent:sub"] = stick{rest: b.rest, who: b.who(), model: "m", at: time.Now()}
 	sticks.Unlock()
-	if got, _ := ownLeastHeld("t052", "t052|s1", []candidate{b, d, a}, planned{order: []Weighed{{}, {}, low}}); got[0].who() != d.who() {
+	if got, _ := ownLeastHeld("t052", "t052|s1", []candidate{b, d, a}, planned{order: []Weighed{{}, {}, low}}, false); got[0].who() != d.who() {
 		t.Fatalf("a subagent's stick not counted: went to %s, want %s", got[0].who(), d.who())
 	}
 	// with nobody held, a first aside (a key for another protocol) is
@@ -267,7 +267,7 @@ func TestOwnLeastHeldLowShareAsReadyForNew(t *testing.T) {
 		delete(sticks.opening, "t052b|s")
 		sticks.Unlock()
 	})
-	if got, _ := ownLeastHeld("t052b", "t052b|s", []candidate{a, b}, planned{order: []Weighed{{Aside: true}, {}}}); got[0].who() != b.who() {
+	if got, _ := ownLeastHeld("t052b", "t052b|s", []candidate{a, b}, planned{order: []Weighed{{Aside: true}, {}}}, false); got[0].who() != b.who() {
 		t.Fatalf("with nobody held, an aside first took a new session: %s", got[0].who())
 	}
 }
@@ -329,11 +329,11 @@ func TestUserSubagentSpreadWhileItsLeadRests(t *testing.T) {
 	})
 	cs := []candidate{a, b, l}
 	ready := planned{order: []Weighed{{}, {}, {}}}
-	if got, _ := ownWithLead("t050", "t050|s|agent:sub", cs, ready, true); got[0].who() != l.who() {
+	if got, _ := ownWithLead("t050", "t050|s|agent:sub", cs, ready, true, false); got[0].who() != l.who() {
 		t.Fatalf("with its lead ready, the subagent went to %s, want %s", got[0].who(), l.who())
 	}
 	resting := planned{order: []Weighed{{}, {}, {Rest: &Rest{Why: failQuota, Until: now.Add(time.Hour)}}}}
-	if got, _ := ownWithLead("t050", "t050|s|agent:sub", cs, resting, true); got[0].who() != b.who() {
+	if got, _ := ownWithLead("t050", "t050|s|agent:sub", cs, resting, true, false); got[0].who() != b.who() {
 		t.Fatalf("with its lead resting, the subagent went to %s, want %s (a holds one, kb none)", got[0].who(), b.who())
 	}
 }

@@ -160,7 +160,7 @@ func TestWholeSessionSpreadLeavesTheNearlyUsedAndFallbacks(t *testing.T) {
 				sticks.Unlock()
 			})
 			pl := planned{order: []Weighed{{}, {}, c.last}}
-			got, _ := leastHeld(scope, scope+"|c", cs, pl, false, true)
+			got, _ := leastHeld(scope, scope+"|c", cs, pl, false, true, 0)
 			if got[0].who() != cs[0].who() {
 				t.Errorf("a new session went to %s, %s", got[0].who(), c.name)
 			}
@@ -172,7 +172,7 @@ func TestWholeSessionSpreadLeavesTheNearlyUsedAndFallbacks(t *testing.T) {
 			if c.last.Fallback {
 				want = cs[1]
 			}
-			got, _ = leastHeld(scope, scope+"|d", cs, planned{order: []Weighed{{}, {}, c.last}}, false, false)
+			got, _ = leastHeld(scope, scope+"|d", cs, planned{order: []Weighed{{}, {}, c.last}}, false, false, 0)
 			if got[0].who() != want.who() {
 				t.Errorf("in turn, a new conversation went to %s, want %s", got[0].who(), want.who())
 			}

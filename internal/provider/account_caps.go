@@ -344,6 +344,40 @@ func (a Allowance) CapHeld(model string, caps WindowCaps, now time.Time) *CapHol
 	return h
 }
 
+// Room is how many points of its allowance, as last known, an account has
+// for model at now before something holds it: of every window that
+// counts model, its own share of caps (WindowCaps.Of), else 100, less
+// what it has used, the least of those; a pool's window holds at a cap
+// only. A window whose reset has passed is empty again.
+func (a Allowance) Room(model string, caps WindowCaps, now time.Time) float64 {
+	model = strings.ToLower(model)
+	room := 100.0
+	at := func(l Limit, pool bool) {
+		share, _ := caps.Of(l.Name)
+		limit := 100.0
+		if share > 0 {
+			limit = float64(share)
+		} else if pool {
+			return
+		}
+		used := l.Used
+		if !l.Resets.IsZero() && !l.Resets.After(now) {
+			used = 0
+		}
+		room = min(room, limit-used)
+	}
+	for _, l := range a {
+		if !l.applies(model) {
+			continue
+		}
+		at(l, false)
+		for _, q := range l.pool {
+			at(q, true)
+		}
+	}
+	return max(room, 0)
+}
+
 // NearCap says whether an allowance, as last known, has some window
 // counting model within points of its own share of caps (or past it) at
 // now, not renewed since: a careful provider reads such an account again

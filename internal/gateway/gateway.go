@@ -3303,7 +3303,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// owner's choice A of 2026-11-02), and a pin is to its one alone.
 		// Within a turn only, its next turn goes to the first as a new one
 		// does, so its first turn spread there would only move it
-		cands, pl = ownWithLead(scope, stuck, cands, pl, leadOn)
+		cands, pl = ownWithLead(scope, stuck, cands, pl, leadOn, userBound.heavy())
 	}
 	if gt != nil && aff.afresh() && mode != provider.AffinityTurn && pin == "" {
 		// a group's the same, on each member's provider as the tries
