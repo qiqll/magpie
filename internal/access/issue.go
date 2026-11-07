@@ -254,6 +254,30 @@ func Check(secret string) (Identity, error) {
 	return identityOf(k, keys, now)
 }
 
+// Identities are the keys that work now, each as a request sending it is
+// held (identityOf): one turned off, expired or whose issuer no longer
+// lets it in is left out. For the Accounts page to tell which accounts a
+// key may use by the gateway's own rule.
+func Identities() ([]Identity, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	keys, err := load()
+	if err != nil {
+		return nil, err
+	}
+	now := Now()
+	var out []Identity
+	for _, k := range keys {
+		if k.Off || k.Secret == "" || k.expired(now) {
+			continue
+		}
+		if who, err := identityOf(k, keys, now); err == nil {
+			out = append(out, who)
+		}
+	}
+	return out, nil
+}
+
 // identityOf is who k is, folded into its issuer when it has one.
 func identityOf(k Key, keys []Key, now time.Time) (Identity, error) {
 	who := Identity{KeyID: k.ID, KeyName: k.Name, Limit: k.Limit, More: k.More, Models: HeldModels(k.Models, k.Accounts), AccountModels: len(k.Models) == 0 && len(k.Accounts) > 0, Accounts: k.Accounts, Quotas: k.Quotas, ReadOnly: k.ReadOnly, Expires: k.Expires, Issues: k.Issues && k.Issuer == ""}

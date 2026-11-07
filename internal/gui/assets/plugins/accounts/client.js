@@ -18,8 +18,13 @@ magpie.plugin("accounts", (ctx) => {
   <div class="sess-tools acx-tools">
     <input class="sess-filter acx-q" id="acxQ" type="search" spellcheck="false" autocomplete="off" placeholder="Search accounts" aria-label="Search accounts" data-tp>
     <button class="sess-pick" id="acxProvider" type="button"></button>
+    <button class="sess-pick" id="acxKey" type="button"></button>
+    <button class="sess-pick" id="acxAdded" type="button"></button>
+    <button class="sess-pick" id="acx5h" type="button"></button>
+    <button class="sess-pick" id="acx7d" type="button"></button>
     <span class="grow"></span>
     <div id="acxState"></div>
+    <div id="acxView"></div>
   </div>
   <p class="acx-sum" id="acxSum" role="status"></p>
   <div class="list acx-list" id="acxList"></div>

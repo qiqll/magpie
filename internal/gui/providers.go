@@ -172,6 +172,10 @@ type providerJSON struct {
 	// masked phone for an IAM id, the name the account goes by until the
 	// user gives it one
 	AccountUsers map[string]string `json:"accountUsers,omitempty"`
+	// when each account was added to magpie, by its name in lower case
+	// (provider.AccountAddedOf): one from before magpie kept it has none.
+	// Shown only: the editor's Save keeps the file's (provider.go)
+	AccountAdded map[string]time.Time `json:"accountAdded,omitempty"`
 	// where a custom provider's balance is asked (see provider.Balance)
 	BalanceURL    string `json:"balanceURL,omitempty"`
 	BalancePath   string `json:"balancePath,omitempty"`
@@ -727,6 +731,12 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 					out.AccountUsers = map[string]string{}
 				}
 				out.AccountUsers[strings.ToLower(strings.TrimSpace(r))] = u
+			}
+			if at := provider.AccountAddedOf(p.ID, r); !at.IsZero() {
+				if out.AccountAdded == nil {
+					out.AccountAdded = map[string]time.Time{}
+				}
+				out.AccountAdded[strings.ToLower(strings.TrimSpace(r))] = at
 			}
 		}
 	}
