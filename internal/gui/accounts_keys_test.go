@@ -13,18 +13,34 @@ import (
 )
 
 // Models › Accounts filters by a gateway key by the gateway's own rule
-// (access.AllowsAccount, HeldModels): a key held to none reaches every
-// account; one naming an account of a provider reaches that one alone of
-// it, and the rest of the providers its models reach; one held to models
-// reaches only those models' providers.
+// (access.AllowsAccount, HeldModels, heldByGroup): a key held to none
+// reaches every account; one naming an account of a provider reaches that
+// one alone of it, and the rest of the providers its models reach; a model
+// glob reaches only providers with such a model; a routing group the key
+// may use ("group/<id>", "group/*") reaches its members' providers, held
+// to the group's own accounts there; a group gone reaches nothing; a
+// provider not in the catalog (turned off) by its id.
 func TestAccountsKeysFollowTheGatewaysRule(t *testing.T) {
 	sandboxHome(t)
 	ps := []provider.Provider{
 		{ID: "claude", Name: "Claude", Account: &provider.Account{Agent: "claude", User: "Alice@Example.com"}},
 		{ID: "codex", Name: "Codex", Account: &provider.Account{Agent: "codex", User: "ops@example.com"}},
+		{ID: "sleepy", Name: "Sleepy", Account: &provider.Account{Agent: "sleepy", User: "s@example.com"}},
 		{ID: "relay", Name: "Relay", Key: "k", Chat: "http://127.0.0.1:1/v1"},
 	}
 	alice := provider.LoginID("claude", "Alice@Example.com")
+	member := func(pid, model string) provider.Member {
+		return provider.Member{Provider: provider.Provider{ID: pid}, Model: model}
+	}
+	// sleepy is in no catalog: a provider turned off
+	c := accountsCatalog{
+		models: map[string][]string{"claude": {"claude/claude-opus"}, "codex": {"codex/gpt-5"}},
+		groups: []provider.Group{
+			{ID: "team", Name: "Team", Accounts: []string{"claude/nobody"}},
+			{ID: "open", Name: "Open"},
+		},
+		members: map[string][]provider.Member{"team": {member("claude", "claude-opus")}, "open": {member("codex", "gpt-5")}},
+	}
 	keys := []access.Identity{
 		{KeyID: "all", KeyName: "All"},
 		// an account and no model: that account's provider alone
@@ -35,9 +51,19 @@ func TestAccountsKeysFollowTheGatewaysRule(t *testing.T) {
 		{KeyID: "mixed", KeyName: "Mixed", Models: []string{"*/*"}, Accounts: []string{"claude/" + alice}},
 		// an account of Claude that isn't Alice: none of Claude's
 		{KeyID: "none", KeyName: "None", Models: []string{"*"}, Accounts: []string{"claude/nobody"}},
+		// any provider's claude models: Claude's, not Codex's
+		{KeyID: "glob", KeyName: "Glob", Models: []string{"*/claude-*"}},
+		// a group held to an account Claude hasn't: none of Claude's
+		{KeyID: "team", KeyName: "Team", Models: []string{"group/team"}},
+		// every group: Open's Codex, and Team's Claude held to nobody
+		{KeyID: "groups", KeyName: "Groups", Models: []string{"group/*"}},
+		// a group removed reaches nothing
+		{KeyID: "gone", KeyName: "Gone", Models: []string{"group/gone"}},
+		// a provider turned off, by its id
+		{KeyID: "sleepy", KeyName: "Sleepy", Models: []string{"sleepy/*"}},
 	}
 	got := map[string][]string{}
-	for _, k := range accountsKeysOf(keys, ps) {
+	for _, k := range accountsKeysOf(keys, ps, c) {
 		if k.All {
 			got[k.ID] = []string{"*"}
 			continue
@@ -45,11 +71,16 @@ func TestAccountsKeysFollowTheGatewaysRule(t *testing.T) {
 		got[k.ID] = k.Accounts
 	}
 	want := map[string][]string{
-		"all":   {"*"},
-		"one":   {"claude/alice@example.com"},
-		"codex": {"codex/ops@example.com"},
-		"mixed": {"claude/alice@example.com", "codex/ops@example.com"},
-		"none":  {"codex/ops@example.com"},
+		"all":    {"*"},
+		"one":    {"claude/alice@example.com"},
+		"codex":  {"codex/ops@example.com"},
+		"mixed":  {"claude/alice@example.com", "codex/ops@example.com", "sleepy/s@example.com"},
+		"none":   {"codex/ops@example.com", "sleepy/s@example.com"},
+		"glob":   {"claude/alice@example.com", "sleepy/s@example.com"},
+		"team":   {},
+		"groups": {"codex/ops@example.com"},
+		"gone":   {},
+		"sleepy": {"sleepy/s@example.com"},
 	}
 	for id, w := range want {
 		if !slices.Equal(got[id], w) {

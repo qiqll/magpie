@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"cmp"
 	"net/http"
 	"strings"
 
@@ -19,35 +20,97 @@ type accountsKeyJSON struct {
 	Accounts []string `json:"accounts"`
 }
 
-// reachesProvider says a key's models reach provider pid at all: none
-// listed, a pattern of pid's or a glob in its provider part, or a routing
-// group with a member of pid's. The accounts it names hold it further
-// (AllowsAccount).
-func reachesProvider(who access.Identity, pid string) bool {
-	if len(who.Models) == 0 {
+// keyReach is how one key reaches a provider: by its own models (direct),
+// and through each routing group it may use that has a member of the
+// provider's, held there to the group's accounts too (gateway heldByGroup).
+type keyReach struct {
+	direct bool
+	via    []access.Identity
+}
+
+// allows says the provider's account ref may serve the key along one of
+// its ways: the key's accounts on a direct one, the key's and the group's
+// (access.HeldToGroup) through a group.
+func (r keyReach) allows(who access.Identity, pid, ref string) bool {
+	if r.direct && who.AllowsAccount(pid, ref) {
 		return true
 	}
-	for _, m := range who.Models {
-		if _, ok := provider.GroupIDOf(m); ok {
-			if _, ms, ok := provider.FindGroup(m); ok {
-				for _, x := range ms {
-					if strings.EqualFold(x.Provider.ID, pid) {
-						return true
-					}
-				}
-			}
-			continue
-		}
-		head, _, _ := strings.Cut(m, "/")
-		if strings.EqualFold(head, pid) || strings.Contains(head, "*") {
+	for _, held := range r.via {
+		if held.AllowsAccount(pid, ref) {
 			return true
 		}
 	}
 	return false
 }
 
+// accountsCatalog is what reachOf reads, once a request: the catalog's
+// models by provider, and the routing groups with their members.
+type accountsCatalog struct {
+	models  map[string][]string // provider id in lower case → "<provider>/<model>" ids
+	groups  []provider.Group
+	members map[string][]provider.Member // group id → members ready now
+}
+
+func readAccountsCatalog() accountsCatalog {
+	c := accountsCatalog{models: map[string][]string{}, members: map[string][]provider.Member{}}
+	for _, e := range provider.Catalog() {
+		if e.Group != "" || e.Provider.ID == "" {
+			continue
+		}
+		pid := strings.ToLower(e.Provider.ID)
+		c.models[pid] = append(c.models[pid], e.ID, e.Provider.ID+"/"+e.Model)
+	}
+	find := provider.GroupFinder()
+	for _, g := range provider.Groups() {
+		if g.ID == "" {
+			continue
+		}
+		if _, ms, ok := find(provider.GroupPrefix + g.ID); ok {
+			c.groups = append(c.groups, g)
+			c.members[g.ID] = ms
+		}
+	}
+	return c
+}
+
+// reachOf is how the key reaches provider pid. Directly: one of the
+// provider's catalog models is among its models (access.Allows, globs
+// included: "*/claude-*" reaches no provider without such a model); a
+// provider not in the catalog (turned off) by its id against each
+// pattern's provider part. Through a group: a group the key may use
+// ("group/<id>", "group/*") with a member of the provider's.
+func (c accountsCatalog) reachOf(who access.Identity, pid string) keyReach {
+	var r keyReach
+	if ms, ok := c.models[strings.ToLower(pid)]; ok {
+		r.direct = who.Allows(ms...)
+	} else {
+		for _, m := range who.Models {
+			if _, group := provider.GroupIDOf(m); group {
+				continue
+			}
+			head, _, _ := strings.Cut(m, "/")
+			if access.ModelAllowed([]string{head}, pid) {
+				r.direct = true
+				break
+			}
+		}
+	}
+	for _, g := range c.groups {
+		if !who.Allows(provider.GroupPrefix + g.ID) {
+			continue
+		}
+		for _, m := range c.members[g.ID] {
+			if strings.EqualFold(m.Provider.ID, pid) {
+				r.via = append(r.via, who.HeldToGroup(cmp.Or(g.Name, g.ID), g.Accounts))
+				break
+			}
+		}
+	}
+	return r
+}
+
 // accountsKeysOf are keys' accounts among those of providers ps.
-func accountsKeysOf(keys []access.Identity, ps []provider.Provider) []accountsKeyJSON {
+func accountsKeysOf(keys []access.Identity, ps []provider.Provider, c accountsCatalog) []accountsKeyJSON {
 	out := make([]accountsKeyJSON, 0, len(keys))
 	for _, who := range keys {
 		k := accountsKeyJSON{ID: who.KeyID, Name: who.KeyName, All: !who.Restricted(), Accounts: []string{}}
@@ -55,11 +118,15 @@ func accountsKeysOf(keys []access.Identity, ps []provider.Provider) []accountsKe
 			for _, p := range ps {
 				// a provider turned off is listed on the page too: a key
 				// reaches its accounts once it is on again
-				if p.Account == nil || !reachesProvider(who, p.ID) {
+				if p.Account == nil {
+					continue
+				}
+				r := c.reachOf(who, p.ID)
+				if !r.direct && len(r.via) == 0 {
 					continue
 				}
 				for _, a := range p.AccountIDs() {
-					if !a.Key && who.AllowsAccount(p.ID, a.ID) {
+					if !a.Key && r.allows(who, p.ID, a.ID) {
 						k.Accounts = append(k.Accounts, strings.ToLower(p.ID+"/"+strings.TrimSpace(a.User)))
 					}
 				}
@@ -80,6 +147,6 @@ func accountsKeyRoutes(mux *http.ServeMux) {
 			fail(w, err)
 			return
 		}
-		writeJSON(w, map[string]any{"keys": accountsKeysOf(keys, provider.All())})
+		writeJSON(w, map[string]any{"keys": accountsKeysOf(keys, provider.All(), readAccountsCatalog())})
 	})
 }

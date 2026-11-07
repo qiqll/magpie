@@ -63,7 +63,9 @@ const quotas = [
   { provider: "claude", name: "Claude", user: "bob@example.com", windows: [w("5 hours", 100, "5h"), w("7 days", 64, "7d")] },
   { provider: "claude", name: "Claude", user: "carol@example.com", error: "401" },
   { provider: "codex", name: "Codex", user: "ops@example.com", windows: [w("5 hours", 73, "5h"), w("Weekly", 100, "7d")] },
-  { provider: "codex", name: "Codex", user: "qa@example.com", windows: [w("5 hours", 0, "5h"), w("Weekly", 7, "7d")] },
+  // two weeks of one span, as Antigravity's pools: the menu bar's kinds
+  // are "7d:<name>" (trayChoices); one used up, one with room
+  { provider: "codex", name: "Codex", user: "qa@example.com", windows: [w("5 hours", 0, "5h"), w("Gemini · 7 days", 100, "7d:gemini · 7 days"), w("Claude · 7 days", 7, "7d:claude · 7 days")] },
 ];
 // an account's usage as /api/usage groups it: its tokens are in and out
 const usage = { accounts: [
@@ -281,7 +283,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await pick("#acxAdded", x("Added in the last 7 days"));
         assert.deepEqual(await users(), ["alice@example.com"]);
         await pick("#acxAdded", x("Added in the last 30 days"));
-        assert.deepEqual(await users(), ["bob@example.com"]);
+        assert.deepEqual(await users(), ["alice@example.com", "bob@example.com"], "the last 30 days hold the last 7");
         await pick("#acxAdded", x("Added over 30 days ago"));
         assert.deepEqual(await users(), ["ops@example.com"]);
         await pick("#acxAdded", x("Added before magpie kept it"));
@@ -294,7 +296,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await pick("#acx7d", x("7 days: used up"));
         assert.deepEqual(await users(), ["ops@example.com"], "Codex's Weekly is its week");
         await pick("#acx7d", x("7 days: room left"));
-        assert.deepEqual(await users(), ["alice@example.com", "qa@example.com"]);
+        assert.deepEqual(await users(), ["alice@example.com", "qa@example.com"], "a pool with room is room: qa's Claude week");
         // the filters are kept as the page opens again, the list's view too
         await page.locator("#acxView button", { hasText: x("List view") }).click();
         await page.goto("http://magpie.test/?view=accounts");

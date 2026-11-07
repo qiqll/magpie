@@ -13,6 +13,8 @@ const acxKeep = () => { try { localStorage.setItem("magpie.acxFilter", JSON.stri
 // the gateway keys that work, each with the accounts it may use, as the
 // gateway holds it (/api/accounts/keys), and when read
 let acxKeys = null, acxKeysAt = 0;
+// the last read of them failed: a key picked stays in sight to be cleared
+let acxKeysFailed = false;
 // the last 5 hours' requests by account (usage's accounts), and when read
 let acxUsage = null, acxUsageAt = 0;
 // what the list was drawn from, so a change elsewhere draws it again
@@ -39,7 +41,7 @@ async function acxLoad(again) {
     (!acxUsage || again || Date.now() - acxUsageAt > 30e3 ? api("usage?period=" + encodeURIComponent("last:5h") + (typeof usageZoneQ === "function" ? usageZoneQ() : ""))
       .then((u) => { acxUsage = u; acxUsageAt = Date.now(); }, () => {}) : Promise.resolve()),
     (!acxKeys || again || Date.now() - acxKeysAt > 30e3 ? api("accounts/keys")
-      .then((k) => { acxKeys = k?.keys || []; acxKeysAt = Date.now(); }, () => {}) : Promise.resolve()),
+      .then((k) => { acxKeys = k?.keys || []; acxKeysAt = Date.now(); acxKeysFailed = false; }, () => { acxKeysFailed = true; }) : Promise.resolve()),
   ];
   for (const r of reads) r.then(() => { if (view === "accounts") acxDraw(); });
   await Promise.all(reads);
@@ -115,27 +117,33 @@ const ACX_ROOM = { "5h": [["room", "5 hours: room left"], ["out", "5 hours: used
 
 // acxWindows: an account's windows as bars, a failed reading's none
 const acxWindows = (q) => (q && !q.error ? q.windows || [] : []).filter((w) => !w.text);
-// acxWindowOf: its 5 hours ("5h") or its week ("7d"), as the menu bar
-// tells them (trayKind), else by name; a per-model one only when there
-// is no window of the whole
-function acxWindowOf(q, kind) {
+// acxWindowsOf: an account's 5 hours ("5h") or its weeks ("7d"), as the
+// menu bar tells them (trayKind: "7d", or "7d:<name>" where an account
+// has two of one span, Antigravity's pools), else by name; the windows
+// the menu bar shows only when picked (trayExtra: one model's) only when
+// there is none of the whole
+function acxWindowsOf(q, kind) {
   const named = kind === "5h" ? /^5 ?h(ours?)?$/i : /^(7 days|weekly|week)$/i;
-  const ws = acxWindows(q).filter((w) => w.trayKind ? w.trayKind === kind : named.test(String(w.name || "").trim()));
-  return ws.find((w) => !w.trayExtra) || ws[0] || null;
+  const ws = acxWindows(q).filter((w) => w.trayKind && !w.trayKind.startsWith("name:")
+    ? w.trayKind === kind || w.trayKind.startsWith(kind + ":")
+    : named.test(String(w.name || "").trim()));
+  const whole = ws.filter((w) => !w.trayExtra);
+  return whole.length ? whole : ws;
 }
-// acxRoom: whether the window has room ("room"), is used up ("out"), or
-// the account has none of it read ("")
+// acxRoom: whether the account has room in one of those windows ("room"),
+// has each used up ("out"), or has none of them read ("")
 function acxRoom(q, kind) {
-  const w = acxWindowOf(q, kind);
-  if (!w) return "";
-  return w.unlimited || (w.used || 0) < 100 ? "room" : "out";
+  const ws = acxWindowsOf(q, kind);
+  if (!ws.length) return "";
+  return ws.some((w) => w.unlimited || (w.used || 0) < 100) ? "room" : "out";
 }
-// acxAddedIn: which of ACX_ADDED an account added at added is in
-function acxAddedIn(added) {
+// acxAddedMatches: an account added at added is in ACX_ADDED's v: the
+// last 7 or 30 days (the 30 holding the 7), over 30 days ago, or not kept
+function acxAddedMatches(added, v) {
   const at = added ? new Date(added).getTime() : NaN;
-  if (!(at > 0)) return "unknown";
+  if (!(at > 0)) return v === "unknown";
   const days = (Date.now() - at) / 864e5;
-  return days <= 7 ? "7" : days <= 30 ? "30" : "old";
+  return v === "7" ? days <= 7 : v === "30" ? days <= 30 : v === "old" ? days > 30 : false;
 }
 // acxKeyAllows: the gateway key k may use the account (all, for a key held
 // to none): accountsKeyRoutes' list, by provider and name in lower case
@@ -163,7 +171,10 @@ function acxDraw() {
   sessPick($("#acxKey"), "Any gateway key", acxKey,
     keys.map((k) => ({ v: k.id, name: k.name, note: k.all ? t("Not held to accounts") : t(k.accounts.length === 1 ? "1 account" : "{n} accounts", { n: k.accounts.length }) })),
     "Gateway key", (v) => { acxKey = v; acxKeep(); acxDraw(); });
-  $("#acxKey").hidden = !keys.length;
+  // a key picked whose list didn't read stays in sight, to be cleared;
+  // its filter waits for the list
+  $("#acxKey").hidden = !keys.length && !acxKey;
+  if (acxKey && !key && acxKeysFailed) $("#acxKey").title = t("Couldn't read the gateway keys");
   const fixed = (id, all, xs, value, head, set) => {
     const b = $(id);
     sessPick(b, all, value, acxPickOpts(xs), head, (v) => { set(v); acxKeep(); acxDraw(); });
@@ -188,7 +199,7 @@ function acxDraw() {
   const rows = all.filter((r) => (!acxProv || r.p.id === acxProv)
     && (acxState === "all" || r.state === acxState || (acxState === "on" && r.state === "paused"))
     && acxKeyAllows(key, r)
-    && (!acxAdded || acxAddedIn(r.added) === acxAdded)
+    && (!acxAdded || acxAddedMatches(r.added, acxAdded))
     && (!acx5h || acxRoom(r.q, "5h") === acx5h)
     && (!acx7d || acxRoom(r.q, "7d") === acx7d)
     && (!words || [r.l.user, accountNameOf(r.p, r.l.user), r.p.name, r.l.plan].some((s) => acxLow(s).includes(words))));

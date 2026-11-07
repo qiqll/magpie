@@ -30,6 +30,7 @@ magpie.strings({
     "Not held to accounts": "不限账号",
     "Plan ends": "套餐到期",
     "Any gateway key": "任意网关 key",
+    "Couldn't read the gateway keys": "读取网关 key 失败",
   },
   "zh-TW": {
     "Search accounts": "搜尋帳號",
@@ -60,6 +61,7 @@ magpie.strings({
     "Not held to accounts": "不限帳號",
     "Plan ends": "方案到期",
     "Any gateway key": "任意閘道 key",
+    "Couldn't read the gateway keys": "讀取閘道 key 失敗",
   },
   ja: {
     "Search accounts": "アカウントを検索",
@@ -90,6 +92,7 @@ magpie.strings({
     "Not held to accounts": "アカウント制限なし",
     "Plan ends": "プラン終了",
     "Any gateway key": "すべてのゲートウェイキー",
+    "Couldn't read the gateway keys": "ゲートウェイキーを読み取れませんでした",
   },
   de: {
     "Search accounts": "Konten durchsuchen",
@@ -120,5 +123,6 @@ magpie.strings({
     "Not held to accounts": "Nicht auf Konten beschränkt",
     "Plan ends": "Tarif endet",
     "Any gateway key": "Beliebiger Gateway-Schlüssel",
+    "Couldn't read the gateway keys": "Gateway-Schlüssel konnten nicht gelesen werden",
   },
 });
