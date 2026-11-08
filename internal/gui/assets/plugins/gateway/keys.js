@@ -461,6 +461,17 @@ function gatewayModelsBadge(k) {
       const head = m.split("/")[0].toLowerCase();
       return head === pid || head.includes("*");
     });
+    // the other keys each account is picked for, so one picked here is
+    // seen to be shared before it is
+    const pickedFor = new Map();
+    for (const o of gatewayKeys || []) {
+      if (o.id === k.id) continue;
+      for (const v of o.accounts || []) pickedFor.set(v, [...(pickedFor.get(v) || []), o.name || o.id]);
+    }
+    const alsoOf = (v) => {
+      const names = pickedFor.get(v);
+      return names ? t("Picked for {keys}", { keys: names.join(/^(zh|ja)/.test(locale) ? "、" : ", ") }) : "";
+    };
     for (const a of accounts || []) {
       accountsSet.add(a.id);
       const pid = String(a.provider).toLowerCase();
@@ -469,7 +480,8 @@ function gatewayModelsBadge(k) {
           ? t("Used: no {provider} account is picked", { provider: a.providerName })
           : t("Not used: no {provider} model or account is picked", { provider: a.providerName }))
         : a.plan ? a.providerName + " · " + a.plan : a.providerName;
-      const o = { v: a.id, name: a.name, note, literalName: true };
+      const also = alsoOf(a.id);
+      const o = { v: a.id, name: a.name, note, also, title: also, literalName: true };
       ofProvider.set(a.provider, [...(ofProvider.get(a.provider) || []), o]);
     }
     let listed = "";  // the provider whose models the list is in
@@ -512,7 +524,7 @@ function gatewayModelsBadge(k) {
     // an account signed out: behind every live entry, a model gone
     // before an account signed out
     for (const v of ms) if (!opts.some((o) => o.v === v)) opts.push({ v, name: v, note: "Not served now", literalName: true });
-    for (const v of as) if (!accountsSet.has(v)) { accountsSet.add(v); opts.push({ v, name: v, note: "Not signed in now", literalName: true }); }
+    for (const v of as) if (!accountsSet.has(v)) { accountsSet.add(v); opts.push({ v, name: v, note: "Not signed in now", also: alsoOf(v), title: alsoOf(v), literalName: true }); }
     openProtoMenu(b, opts, [...ms, ...as], (picked) => {
       // one action at a time: gatewayKeyAction is busy while one is sent.
       // The accounts are sent only when they changed: a model picked says

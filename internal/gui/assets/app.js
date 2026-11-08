@@ -15166,6 +15166,9 @@ function openProtoMenu(anchor, opts, value, choose, head = "Protocol this key sp
     b.setAttribute("role", multi && o.v && o.v !== "\x00" || typeof o.ticked === "boolean" ? "menuitemcheckbox" : "menuitemradio");
     const words = el("span", "pm-words");
     words.append(el("span", "pm-name", o.literalName ? o.name : t(o.name)), el("span", "pm-note", t(o.note)));
+    // a line under the note, said as given (a gateway key's account says
+    // which other keys it is picked for)
+    if (o.also) words.append(el("span", "pm-note pm-also", o.also));
     b.append(el("span", "pm-tick"), words);
     tick(b, o);
     b.onclick = (e) => {

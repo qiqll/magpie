@@ -21,8 +21,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.route("**/*", fixture(lang, "light", events, { lan: true, keyHolds: { server: { accounts: ["relay/me@example.com"] }, laptop: { models: ["relay/gone", "openai/gpt-5"], accounts: ["relay/nobody@example.com"] } } }));
       const zh = lang === "zh";
       const w = zh
-        ? { label: "此密钥可用的模型", all: "全部模型", gone: "当前未提供", off: "当前未登录", used: "会被使用：OpenAI 没有勾选任何账号", unused: "不会被使用：OpenAI 没有勾选任何模型或账号", hint: "没勾选任何账号的供应商", only: "此密钥只能使用所勾选账号所属供应商的模型", told: "Server 仅可使用所选账号的模型" }
-        : { label: "Models this key may use", all: "All models", gone: "Not served now", off: "Not signed in now", used: "Used: no OpenAI account is picked", unused: "Not used: no OpenAI model or account is picked", hint: "A provider with no account picked is used on every account", only: "this key may use only the picked accounts' providers' models", told: "Server may use only the picked accounts' models" };
+        ? { label: "此密钥可用的模型", all: "全部模型", gone: "当前未提供", off: "当前未登录", used: "会被使用：OpenAI 没有勾选任何账号", unused: "不会被使用：OpenAI 没有勾选任何模型或账号", hint: "没勾选任何账号的供应商", only: "此密钥只能使用所勾选账号所属供应商的模型", told: "Server 仅可使用所选账号的模型", also: "已配置：Server", work: "已配置：Work" }
+        : { label: "Models this key may use", all: "All models", gone: "Not served now", off: "Not signed in now", used: "Used: no OpenAI account is picked", unused: "Not used: no OpenAI model or account is picked", hint: "A provider with no account picked is used on every account", only: "this key may use only the picked accounts' providers' models", told: "Server may use only the picked accounts' models", also: "Picked for Server", work: "Picked for Work" };
       await page.goto("http://magpie.test/?view=gateway");
       await page.locator("#gatewayKeys .acc[data-key]").last().waitFor();
       const row = (id) => page.locator(`#gatewayKeys .acc[data-key="${id}"]`);
@@ -47,7 +47,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       // with their plan in the note, a key by its fingerprint
       const names = (await menu.locator(".pm-item").allTextContents()).map((s) => s.trim());
       assert(!(await badge("work").getAttribute("title")).includes(w.hint), "a key held to no account names the rule");
-      assert.equal((await menu.locator(".pm-item", { hasText: "k-1a2b3c" }).locator(".pm-note").textContent()).trim(), "OpenAI");
+      assert.equal((await menu.locator(".pm-item", { hasText: "k-1a2b3c" }).locator(".pm-note:not(.pm-also)").textContent()).trim(), "OpenAI");
       const at = (s) => names.findIndex((n) => n.includes(s));
       assert(at("me@example.com") > at("Model mini"), names.join(" | "));
       assert(at("me@example.com") < at("GPT-5"), names.join(" | "));
@@ -56,6 +56,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert(at("spare@example.com") < at("GPT-5"), names.join(" | "));
       assert(at("k-1a2b3c") === at("GPT-5") + 1, names.join(" | "));
       assert(at("k-1a2b3c") > at("GPT-5"), names.join(" | "));
+      // an account another key is held to says which, under its note: one
+      // picked here is seen to be shared before it is
+      const alsoOf = (s) => menu.locator(".pm-item", { hasText: s }).locator(".pm-also");
+      assert.equal((await alsoOf("me@example.com").textContent()).trim(), w.also);
+      assert.equal(await alsoOf("me@example.com").evaluate((e) => e.closest(".pm-item").title), w.also);
+      assert.equal(await alsoOf("spare@example.com").count(), 0, "an account no other key has says one does");
       await menu.locator(".pm-item", { hasText: "spare@example.com" }).click();
       await page.keyboard.press("Escape");
       await menu.waitFor({ state: "detached" });
@@ -82,9 +88,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       // OpenAI's picked, is not used, and says so (it said "Used" when
       // the key could use every other provider); Relay's unpicked account
       // is not either, and says its provider
-      const noteOf = async (s) => (await menu.locator(".pm-item", { hasText: s }).locator(".pm-note").textContent()).trim();
+      const noteOf = async (s) => (await menu.locator(".pm-item", { hasText: s }).locator(".pm-note:not(.pm-also)").textContent()).trim();
       assert.equal(await noteOf("k-1a2b3c"), w.unused);
       assert.equal(await noteOf("spare@example.com"), "Relay");
+      // what Work was just given says so in another key's menu
+      assert.equal((await alsoOf("spare@example.com").textContent()).trim(), w.work);
       const serverTitle = String(await badge("server").getAttribute("title"));
       assert(serverTitle.includes(w.only) && !serverTitle.includes(w.hint), serverTitle);
       await menu.locator(".pm-item", { hasText: "me@example.com" }).click();
