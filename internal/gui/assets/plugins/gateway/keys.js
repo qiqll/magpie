@@ -462,14 +462,17 @@ function gatewayModelsBadge(k) {
       return head === pid || head.includes("*");
     });
     // the other keys each account is picked for, so one picked here is
-    // seen to be shared before it is
+    // seen to be shared before it is: an issued key gone by its expiry
+    // is none, a key turned off says so; matched as the gateway matches
+    // them, in any case (access.AllowsAccount)
     const pickedFor = new Map();
     for (const o of gatewayKeys || []) {
-      if (o.id === k.id) continue;
-      for (const v of o.accounts || []) pickedFor.set(v, [...(pickedFor.get(v) || []), o.name || o.id]);
+      if (o.id === k.id || o.expires && Date.parse(o.expires) <= Date.now()) continue;
+      const name = o.off ? t("{name} (off)", { name: o.name || o.id }) : o.name || o.id;
+      for (const v of o.accounts || []) pickedFor.set(v.toLowerCase(), [...(pickedFor.get(v.toLowerCase()) || []), name]);
     }
     const alsoOf = (v) => {
-      const names = pickedFor.get(v);
+      const names = pickedFor.get(v.toLowerCase());
       return names ? t("Picked for {keys}", { keys: names.join(/^(zh|ja)/.test(locale) ? "、" : ", ") }) : "";
     };
     for (const a of accounts || []) {
@@ -549,7 +552,9 @@ function gatewayModelsBadge(k) {
     if (b.classList.contains("open")) return closeProtoMenu();
     const loading = keyModelsLoading = { id: k.id, open };
     let models = [], accounts = [];
-    try { ({ models, accounts } = await api("caller-keys/models")); } catch (err) {
+    // the keys read again with the list: which other key holds an account
+    // may have changed outside this window (the CLI, another window)
+    try { [{ models, accounts }] = await Promise.all([api("caller-keys/models"), refreshGatewayKeys()]); } catch (err) {
       if (keyModelsLoading === loading) keyModelsLoading = null;
       status(t(err.message), "err");
       return;

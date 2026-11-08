@@ -139,3 +139,46 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     });
   }
 }
+
+// Which other keys hold an account: a key turned off says so, an issued key
+// past its expiry holds none, and an entry kept in another case is the same
+// account, as the gateway matches it; and a change made outside this window
+// is seen as the menu opens
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  for (const lang of ["en", "zh"]) {
+    test(`${engine} ${lang}: an account's other keys leave out an expired one and mark one off`, async (t) => {
+      const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+      t.after(() => browser.close());
+      const page = await (await browser.newContext({ viewport: { width: 1000, height: 600 }, reducedMotion: "reduce" })).newPage();
+      page.setDefaultTimeout(6000);
+      page.setDefaultNavigationTimeout(60000);
+      const errors = [];
+      page.on("pageerror", (e) => errors.push(e.message));
+      const keys = [
+        { id: "work", name: "Work", masked: "sk-magpie-key-…333333" },
+        { id: "server", name: "Server", masked: "sk-magpie-key-…222222", accounts: ["relay/me@example.com"] },
+        { id: "old", name: "Old", masked: "sk-magpie-key-…444444", off: true, accounts: ["RELAY/Spare@Example.com"] },
+        { id: "gone", name: "Gone", masked: "sk-magpie-key-…555555", issuer: "server", expires: new Date(Date.now() - 60e3).toISOString(), accounts: ["relay/me@example.com"] },
+      ];
+      await page.route("**/*", fixture(lang, "light", [], { lan: true, keys }));
+      const w = lang === "zh"
+        ? { label: "此密钥可用的模型", me: "已配置：Server", spare: "已配置：Old（已停用）" }
+        : { label: "Models this key may use", me: "Picked for Server", spare: "Picked for Old (off)" };
+      await page.goto("http://magpie.test/?view=gateway");
+      const row = page.locator('#gatewayKeys .acc[data-key="work"]');
+      await row.waitFor();
+      // Server is given OpenAI's key outside this window (the CLI): the
+      // menu reads the keys again as it opens
+      keys[1].accounts = [...keys[1].accounts, "openai/k-1a2b3c"];
+      await row.hover();
+      await row.getByRole("button", { name: w.label, exact: true }).click();
+      const menu = page.locator(".proto-menu");
+      await menu.waitFor();
+      const alsoOf = (s) => menu.locator(".pm-item", { hasText: s }).locator(".pm-also");
+      assert.equal((await alsoOf("me@example.com").textContent()).trim(), w.me);
+      assert.equal((await alsoOf("spare@example.com").textContent()).trim(), w.spare);
+      assert.equal((await alsoOf("k-1a2b3c").textContent()).trim(), w.me);
+      assert.deepEqual(errors, []);
+    });
+  }
+}
