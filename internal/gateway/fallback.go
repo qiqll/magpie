@@ -2076,6 +2076,27 @@ func riskRefused(c candidate, status int, header http.Header, body []byte) bool 
 	return failureOf(c, status, body) == failRestricted && !remoteModelRest(c, failRestricted, header)
 }
 
+// claudeAuthFailed is Claude Code's kind for a turn Anthropic refused the
+// account's sign-in on (Claude Code 2.1.291's error mapping): its OAuth
+// token revoked (403 "OAuth token has been revoked", 401 "OAuth access
+// token has been revoked"), which is how a banned account answers, and
+// any other 401 or 403 of Anthropic's first-party API ("Please run
+// /login"), which an ordinary refused sign-in answers too. The bridge
+// carries it as the try's ErrType (claude_subscription.go).
+const claudeAuthFailed = "authentication_failed"
+
+// claudeAuthWalled says c is a Claude subscription account whose try
+// Anthropic answered authentication_failed (errType, the try's ErrType):
+// none of the provider's other accounts is asked the request, now or in a
+// later round of it, as riskRefused's aren't (需求方 2026-11-09: a banned
+// account's request went on to the next account in the same minute, and
+// that one was banned 19 minutes later). Whatever the request's content
+// or the user did that Anthropic acted on goes with the request to every
+// account it reaches. Another provider left is still asked.
+func claudeAuthWalled(c candidate, errType string) bool {
+	return errType == claudeAuthFailed && c.p.Account != nil && c.p.Account.Agent == "claude"
+}
+
 // elsewhereWeighed is elsewhere on a list of candidates beside their
 // weights (roomy's left out as too small), the two kept paired: weights
 // that don't pair with the list are kept as they are.

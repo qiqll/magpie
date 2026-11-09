@@ -4750,7 +4750,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			skipped = append(skipped, c.label()+": "+call.Error)
 			continue
 		}
-		if gt != nil && pin == "" && hw.failed() && failureOf(c, hw.code(), hw.errBody()) == failAuth {
+		// Anthropic answered the Claude account authentication_failed
+		// (claudeAuthWalled): as riskRefused's, none of the provider's
+		// other accounts is sent the request, now or in a later round,
+		// nor a spare of its added for a group or a bound user below,
+		// before the sign-in's lapse passes it on. Another provider left
+		// is asked, else the agent is told
+		walled := !hw.passing && !hw.refused && hw.failed() && claudeAuthWalled(c, call.Usage.ErrType)
+		if walled {
+			cands = append(cands[:i+1:i+1], elsewhere(cands[i+1:], c)...)
+			busyNow = slices.DeleteFunc(busyNow, func(b busyTry) bool { return b.c.p.ID == c.p.ID })
+			small, smallW = elsewhereWeighed(small, smallW, c)
+			last = i == len(cands)-1
+		}
+		if gt != nil && pin == "" && !walled && hw.failed() && failureOf(c, hw.code(), hw.errBody()) == failAuth {
 			// one of a group's user's accounts has to be signed in again,
 			// the last of its own of its provider: a spare of that
 			// provider's goes next to it, before another member's
@@ -4790,7 +4803,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			noteTryLapsed(c)
 			authFailed = append(authFailed, c.who())
 			var refused userRefusal
-			if !grew && pin == "" { // a pin to one of its own is that one alone
+			if !grew && pin == "" && !walled { // a pin to one of its own is that one alone
 				var next []candidate
 				var nextPl planned
 				// this account counts as lapsed for the spare though its
