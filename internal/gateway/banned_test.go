@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/yetone/magpie/internal/provider"
@@ -161,5 +162,23 @@ func TestDisabledAccountLeftOutAsBanned(t *testing.T) {
 		if c.p.Account.User != "third@example.com" {
 			t.Fatalf("seat %s", c.p.Account.User)
 		}
+	}
+}
+
+// Relayed as it came, a request on Codex's own sign-in that the user
+// disabled is answered 403 in the disabled mark's words, and nobody is asked.
+func TestDisabledOwnSignInNotRelayed(t *testing.T) {
+	codexSignedIn(t)
+	asked, _ := usersUpstream(t, nil)
+	if err := provider.SetLoginDisabled("codex", "me@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	provider.ForgetAccounts()
+	rec := codexPostTo(New(), `{"model":"gpt-5.5","stream":true,"input":"ping"}`)
+	if got := asked(true); len(got) != 0 {
+		t.Fatalf("asked %v", got)
+	}
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "disabled") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 }

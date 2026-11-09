@@ -85,7 +85,8 @@ function acxRows() {
     if (!a?.logins?.length) continue;
     const sub = subOf(a.agent);
     const ls = loginsInOrder(a, p);
-    const unusable = (l) => a.agent === "claude" && !!l.lapsed;
+    // a Claude sign-in refused, or one the user marked banned or disabled
+    const unusable = (l) => a.agent === "claude" && !!l.lapsed || l.banned || l.disabled;
     const isOn = (l) => !unusable(l) && !l.paused && (l.active || l.on);
     const several = ls.filter((l) => !unusable(l) && ((l.active && !l.paused) || l.on)).length > 1;
     const pausable = (a.agent === "claude" || a.agent === "codex") && ls.some((l) => !unusable(l) && !l.active && l.on);
@@ -221,10 +222,11 @@ function acxDraw() {
   if (all.length) {
     const parts = [t(all.length === 1 ? "1 account" : "{n} accounts", { n: all.length }), t("{n} in use", { n: n("on") })];
     if (n("paused")) parts.push(t("{n} paused", { n: n("paused") }));
-    if (n("again")) parts.push(t("{n} to sign in again", { n: n("again") }));
     const nb = all.filter((r) => r.banned).length, nd = all.filter((r) => r.disabled).length;
     if (nb) parts.push(t("{n} banned", { n: nb }));
     if (nd) parts.push(t("{n} disabled", { n: nd }));
+    // the line to act on is the warning's, said last
+    if (n("again")) parts.push(t("{n} to sign in again", { n: n("again") }));
     sum.append(...parts.flatMap((s, i) => (i ? [" · ", el("span", "", s)] : [el("span", "", s)])));
     if (n("again")) sum.lastChild.classList.add("acx-warn");
   }

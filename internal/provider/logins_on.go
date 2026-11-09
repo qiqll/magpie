@@ -56,8 +56,11 @@ func SetLoginOn(agent, user string, on bool) error {
 		// the account the agent is signed in to stays so: off, it is
 		// paused, passed over while another is on (#263) — the user's
 		// own ChatGPT sign-in kept for Codex's remote control, a shared
-		// Pro account doing the work
-		if !on && !slices.ContainsFunc(ls, func(l savedLogin) bool { return l.Agent == agent && l.On && !strings.EqualFold(l.User, user) }) {
+		// Pro account doing the work. One on but banned or disabled takes
+		// nothing (AlsoOn), so it doesn't count
+		if !on && !slices.ContainsFunc(ls, func(l savedLogin) bool {
+			return l.Agent == agent && l.On && !l.unusable() && !strings.EqualFold(l.User, user)
+		}) {
 			return fmt.Errorf("%s is the only %s account in use; turn another on first to pause it", user, agent)
 		}
 		for i := range ls {

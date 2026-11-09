@@ -315,7 +315,7 @@ func savedOf(t *testing.T, user string) savedLogin {
 	t.Helper()
 	var out []savedLogin
 	for _, l := range readLogins() {
-		if l.Agent == "codex" && strings.HasPrefix(l.User, user) {
+		if l.Agent == "codex" && strings.EqualFold(l.User, user) {
 			out = append(out, l)
 		}
 	}
@@ -323,4 +323,29 @@ func savedOf(t *testing.T, user string) savedLogin {
 		t.Fatalf("%d entries for %s: %+v", len(out), user, out)
 	}
 	return out[0]
+}
+
+// The account the agent is signed in to can't be paused while the only
+// other one on is disabled: it would take nothing, and pausing would go
+// quiet, the gateway using the paused one all the same.
+func TestPauseRefusedWhenTheOtherOnIsDisabled(t *testing.T) {
+	home := signIn(t)
+	rememberLogins(true)
+	codexSignIn(t, home, "work@example.com", "r-work")
+	rememberLogins(true)
+	if err := SetLoginOn("codex", "me@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetLoginDisabled("codex", "me@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetLoginOn("codex", "work@example.com", false); err == nil || !strings.Contains(err.Error(), "only") {
+		t.Fatalf("paused: %v", err)
+	}
+	if err := SetLoginDisabled("codex", "me@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetLoginOn("codex", "work@example.com", false); err != nil {
+		t.Fatalf("enabled again, still refused: %v", err)
+	}
 }
