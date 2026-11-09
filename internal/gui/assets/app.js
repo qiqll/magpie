@@ -13277,13 +13277,13 @@ function renderAccounts(a, p) {
       dot.title = l.paused ? t("Resume: the gateway uses this account first again") : t("Pause: the gateway uses the other accounts, {agent} stays signed in to this one", { agent: a.agentName });
       dot.onclick = () => accountAction("login/" + (l.paused ? "on" : "off"), { agent: a.agent, user: l.user });
     } else if (l.active && sub?.own && several) {
-      dot.title = t("Stop using this account; the next ticked one is used first");
+      dot.title = t("Take it out of rotation; the next ticked one is used first");
       dot.onclick = () => accountAction("login/off", { agent: a.agent, user: l.user });
     } else if (l.active) {
       dot.title = sub?.own ? t("The gateway uses this account first; tick another to stop using it") : t("{agent} is signed in to this account", { agent: a.agentName });
       dot.classList.add("fixed");
     } else {
-      dot.title = on ? t("Stop using this account") : t("Use this account too");
+      dot.title = on ? t("Take it out of rotation") : t("Add it to rotation");
       dot.onclick = () => accountAction("login/" + (on ? "off" : "on"), { agent: a.agent, user: l.user });
     }
     // one line, First or Make first at its right end (the owner, 10-29)

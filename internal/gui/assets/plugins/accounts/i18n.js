@@ -77,7 +77,7 @@ magpie.strings({
     "Search accounts": "アカウントを検索",
     "Take it out of the gateway's rotation: it stays signed in and its usage is still read, unlike Disable": "ゲートウェイのローテーションから外します：「停止」と違い、サインインは保たれ利用枠も読み取られます",
     "Not in rotation: still kept signed in and its usage read": "ローテーション外：サインインは保たれ、利用枠も読み取られます",
-    "{n} in rotation": "ローテーション中 {n} 件",
+    "{n} in rotation": "{n} 件ローテーション中",
     "In rotation": "ローテーション中",
     "Add to rotation": "ローテーションに加える",
     "Take out of rotation": "ローテーションから外す",

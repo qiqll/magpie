@@ -47,7 +47,7 @@ function serve(lang, list, posts) {
 }
 
 const fixedTitle = "The gateway uses this account first; tick another to stop using it";
-const offTitle = "Stop using this account; the next ticked one is used first";
+const offTitle = "Take it out of rotation; the next ticked one is used first";
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   for (const lang of ["en", "zh", "zh-TW", "ja", "de"]) {

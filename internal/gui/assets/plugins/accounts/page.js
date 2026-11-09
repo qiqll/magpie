@@ -209,7 +209,7 @@ function acxDraw() {
   const words = acxLow(acxQuery);
   const rows = all.filter((r) => (!acxProv || r.p.id === acxProv)
     && (acxBanned === "any" || (acxBanned ? r[acxBanned] : !r.off))
-    && (acxState === "all" || r.state === acxState || (acxState === "on" && r.state === "paused"))
+    && (acxState === "all" || r.state === acxState)
     && acxKeyAllows(key, r)
     && (!acxAdded || acxAddedMatches(r.added, acxAdded))
     && (!acx5h || acxRoom(r.q, "5h") === acx5h)
@@ -274,7 +274,7 @@ function acxActs(r) {
     const b = el("button", "text acx-use", t(said));
     b.type = "button";
     // the On toggle's words, told from Disable: out of rotation it stays signed in and read
-    if (to === "off") b.title = t("Take it out of the gateway's rotation: it stays signed in and its usage is still read, unlike Disable");
+    if (said === "Take out of rotation") b.title = t("Take it out of the gateway's rotation: it stays signed in and its usage is still read, unlike Disable");
     b.onclick = () => {
       b.classList.add("busy");
       accountAction("login/" + to, { agent: a.agent, user: l.user }).then(() => acxDraw());

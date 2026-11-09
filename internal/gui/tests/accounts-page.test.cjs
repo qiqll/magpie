@@ -180,6 +180,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(rows.map((r) => r.acts), [
           [x("Pause"), x("Mark banned"), x("Disable"), x("Open")], [x("Take out of rotation"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Mark banned"), x("Disable"), x("Open")], [x("Add to rotation"), x("Mark banned"), x("Disable"), x("Open")],
         ]);
+        // Take out of rotation says it stays signed in and read, unlike Disable;
+        // Pause says nothing of it; Not in rotation's badge says it is still read
+        const tip = (u, sel) => page.locator(`#acxList .row.acx[data-user="${u}"] ${sel}`).getAttribute("title");
+        assert.equal(await tip("bob@example.com", ".acx-use"), x("Take it out of the gateway's rotation: it stays signed in and its usage is still read, unlike Disable"));
+        assert.equal(await tip("alice@example.com", ".acx-use"), null, "Pause keeps no rotation tooltip");
+        assert.equal(await tip("qa@example.com", ".acx-state"), x("Not in rotation: still kept signed in and its usage read"));
+        assert.equal(await tip("ops@example.com", ".acx-state"), null);
         assert.equal(await page.locator("#acxSum").textContent(), [x("{n} accounts", { n: 6 }), x("{n} in rotation", { n: 3 }), x("{n} to sign in again", { n: 2 })].join(" · "));
         if (width > 600) assert.equal(new Set(rows.filter((r) => r.meters != null).map((r) => r.meters)).size, 1, "the windows line up");
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "nothing wider than the window");
@@ -204,7 +211,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.locator("#acxQ").fill("");
         await settle(page);
 
-        // Use and Pause post the tick's call, and the row says so
+        // Add to rotation and Pause post the tick's call, and the row says so
         await page.locator('#acxList .row.acx[data-user="qa@example.com"] .acx-use').click();
         await page.waitForFunction((s) => document.querySelector('#acxList .row.acx[data-user="qa@example.com"] .acx-state')?.textContent === s, x("In rotation"));
         await page.locator('#acxList .row.acx[data-user="alice@example.com"] .acx-use').click();
@@ -334,7 +341,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await pick("#acx7d", x("7 days: any"));
         assert.equal(await page.locator("#acxList .row.acx").count(), 6);
 
-        // Use on a card posts the tick's call
+        // Add to rotation on a card posts the tick's call
         await page.locator("#acxView button", { hasText: x("Card view") }).click();
         await page.locator('#acxList .acx-card[data-user="qa@example.com"] .acx-use').click();
         await page.waitForFunction((s) => document.querySelector('#acxList .acx-card[data-user="qa@example.com"] .acx-state')?.textContent === s, x("In rotation"));
