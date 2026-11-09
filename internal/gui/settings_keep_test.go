@@ -210,6 +210,8 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 	was.RouterAllTools = true                                                             // the Library's servers/hub-tools
 	was.BusyLoad = 150                                                                    // the Routing page's busy-load
 	was.Growth = &[]settings.GrowthStage{{From: 2, Window: settings.GrowthWeek, Cap: 70}} // its own page's
+	six := 6
+	was.AuthHoldHours = &six // Models › Accounts' auth-holds/hours
 	if err := settings.Save(was); err != nil {
 		t.Fatal(err)
 	}

@@ -69,3 +69,11 @@
   .acx-tools .acx-q { flex: 1 1 160px; width: auto; }
   .acx-list.acx-cards { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* the callers held after authentication_failed, over the list (acxHeldDraw) */
+.acx-held { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; font-size: 12px; }
+.acx-held-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--muted); }
+.acx-held-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.acx-held-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acx-held-until { color: var(--muted); white-space: nowrap; }
+.acx-state.authfail { color: var(--amber); background: var(--amber-soft); }

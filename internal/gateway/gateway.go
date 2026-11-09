@@ -432,6 +432,10 @@ type Call struct {
 	// Kind: what the agent made the call for, when it isn't its turn —
 	// a Codex subagent's (callKind) — "" for a turn
 	Kind string `json:"kind,omitempty"`
+	// Told: what the client was told when it isn't what the vendor
+	// answered (Status, Error): "429 held until …" for a caller held after
+	// authentication_failed (auth_hold.go)
+	Told string `json:"told,omitempty"`
 	// For: the request a call of magpie's own (a web search) was made for
 	For *CallFor `json:"for,omitempty"`
 	// Masked: what masking swapped in it, nil for nothing
@@ -945,7 +949,7 @@ func (s *Server) Handler() http.Handler {
 	// the goroutine dump first, ahead of every lock the rest can be stuck
 	// on (dumpFirst)
 	// a socket's turns go through all of it again (socketEntry)
-	return socketEntry(s.dumpFirst(s.counted(headerLogged(holdCatalog(corsGuard(callerGuard(readOnlyGuard(mux, withCaller(keyLimited(mux))))))))))
+	return socketEntry(s.dumpFirst(s.counted(headerLogged(holdCatalog(corsGuard(callerGuard(readOnlyGuard(mux, withCaller(authHeld(keyLimited(mux)))))))))))
 }
 
 // routes are the client APIs, each by its pattern: readOnlyGuard reads
@@ -2297,6 +2301,9 @@ func estimate(req *Request) int {
 
 // serve routes one parsed-enough request to its provider.
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Protocol, body []byte) {
+	// the hold a begun stream was told, for the row (auth_hold.go)
+	var toldInStream string
+	r = r.WithContext(context.WithValue(r.Context(), toldHeldKey{}, &toldInStream))
 	start := time.Now()
 	// a client's "off" is magpie's none, for every route and check below
 	// that reads the body's effort (plugins#334)
@@ -4762,6 +4769,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			busyNow = slices.DeleteFunc(busyNow, func(b busyTry) bool { return b.c.p.ID == c.p.ID })
 			small, smallW = elsewhereWeighed(small, smallW, c)
 			last = i == len(cands)-1
+			// and its caller is held (auth_hold.go): this request is told
+			// the hold's 429 now, as every one after it is, nothing more
+			// asked; its row keeps what the vendor answered
+			if h, held := startAuthHold(r, c.p.ID, c.p.Account.User, c.p.Account.Agent); held {
+				try.Fail = failAuth
+				s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+				call.Told = "429 held until " + h.Until.UTC().Format(time.RFC3339)
+				now := authHoldClock()
+				if kept == nil || !kept.sent {
+					authHeldHeaders(w.Header(), h, now)
+				}
+				failTo(w, kept, from, http.StatusTooManyRequests, authHeldSaid(h))
+				break
+			}
 		}
 		if gt != nil && pin == "" && !walled && hw.failed() && failureOf(c, hw.code(), hw.errBody()) == failAuth {
 			// one of a group's user's accounts has to be signed in again,
@@ -5591,6 +5612,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	})
 	call.Route = tr.ID
 	call.Masked = s.trace.maskedOf(tr)
+	if call.Told == "" {
+		call.Told = toldInStream // the hold a begun stream was told
+	}
 	s.record(call)
 	if call.To == "" && ranOutFirst {
 		// a group's turn none of whose user's own was left before any
@@ -5615,6 +5639,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			rec.UpBytes, rec.PlainBytes = up.wire, up.plain
 		}
 		failedWith(&rec, call.Status, call.Error, call.Usage.ErrType)
+		rec.Told = call.Told
 		withBodies(&rec, &call)
 		appendUsage(r, rec)
 		if call.Status < 400 {

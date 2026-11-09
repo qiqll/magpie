@@ -1614,6 +1614,11 @@ func (e *chatEncoder) event(ev Event) {
 			// the same type a 413 JSON body carries (writeErrorSaid)
 			typ = "request_too_large"
 		}
+		if ev.Status == http.StatusTooManyRequests {
+			// a limit, as a 429 JSON body says it (writeErrorSaid): an
+			// agent waits on it rather than taking the reply for failed
+			typ = "rate_limit_error"
+		}
 		failed := map[string]any{"message": hideAccounts(ev.Text), "type": typ}
 		if ev.Code != "" {
 			failed["code"] = ev.Code // preserve the upstream error type, including refusals

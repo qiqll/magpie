@@ -61,6 +61,7 @@ function providersOf(seen) {
         accountAdded: { "alice@example.com": daysAgo(3), "bob@example.com": daysAgo(20) }, accountFirstUsed: { "alice@example.com": daysAgo(2) }, firstUsedKnown: true }),
       prov("codex", "Codex", "codex", [
         { user: "ops@example.com", plan: "pro", active: true, on: true },
+        ...(seen.holds ? [{ user: "gus@example.com", plan: "pro", on: true, authFailed: !seen.lifted }] : []),
         { user: "qa@example.com", plan: "plus", on: seen.on.has("qa@example.com"), banned: seen.banned?.has("qa@example.com"), disabled: seen.disabled?.has("qa@example.com") },
         ...(seen.banned ? [
           { user: "dave@example.com", plan: "pro", on: true, banned: seen.banned.has("dave@example.com"), disabled: seen.disabled.has("dave@example.com") },
@@ -105,6 +106,16 @@ function serve(lang, seen) {
     if (url.pathname === "/api/providers") return json(providersOf(seen));
     if (url.pathname === "/api/usage/quotas") return json(quotas);
     if (url.pathname === "/api/usage") { seen.usage.push(url.searchParams.get("period")); return json(usage); }
+    if (url.pathname === "/api/auth-holds" || url.pathname.startsWith("/api/auth-holds/")) {
+      if (url.pathname.endsWith("/release")) { seen.posts.push([url.pathname, req.postDataJSON()]); seen.holds = []; }
+      if (url.pathname.endsWith("/hours")) { seen.posts.push([url.pathname, req.postDataJSON()]); seen.hours = req.postDataJSON().hours; }
+      return json({ holds: seen.holds || [], hours: seen.hours ?? 12 });
+    }
+    if (url.pathname === "/api/login/lift") {
+      seen.posts.push([url.pathname, req.postDataJSON()]);
+      seen.lifted = true;
+      return json(providersOf(seen));
+    }
     if (url.pathname === "/api/accounts/keys") { seen.keys = (seen.keys || 0) + 1; return json(keys); }
     if (url.pathname === "/api/login/on" || url.pathname === "/api/login/off") {
       const b = req.postDataJSON();
@@ -467,6 +478,52 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           return names;
         });
         assert.ok(offered.includes("ops@example.com") && offered.includes("dave@example.com") && !offered.includes("qa@example.com") && !offered.includes("frank@example.com"), "offered " + offered);
+        assert.deepEqual(errors, []);
+      });
+    }
+  }
+}
+
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  for (const lang of LANGS) {
+    const x = (s, a) => tr(lang, s, a);
+    for (const width of [1000, 380]) {
+      test(`${engine} ${lang} ${width}: callers held after authentication_failed are listed and released, and the account it came from says so`, async (t) => {
+        const until = new Date(Date.now() + 12 * 3600e3).toISOString();
+        const seen = { posts: [], starts: [], usage: [], on: new Set(), off: new Set(),
+          holds: [{ kind: "user", who: "bob", holder: "user:bob", at: new Date().toISOString(), until, provider: "codex", account: "gus@example.com" }] };
+        const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+        t.after(() => browser.close());
+        const page = await (await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: "reduce" })).newPage();
+        page.setDefaultTimeout(5000);
+        page.setDefaultNavigationTimeout(60000);
+        const errors = [];
+        page.on("pageerror", (e) => errors.push(e.message));
+        await page.route("**/*", serve(lang, seen));
+        await page.addInitScript(() => { try { if (!sessionStorage.getItem("set")) { localStorage.clear(); sessionStorage.setItem("set", "1"); } } catch {} });
+        await page.goto("http://magpie.test/?view=accounts");
+        await page.locator("#acxHeld .acx-held-row").waitFor();
+        // the held caller, its end, and the hold's length
+        assert.equal(await page.locator("#acxHeld .acx-held-head > span").first().textContent(), x("1 caller held after authentication_failed"));
+        assert.equal(await page.locator("#acxHeld .acx-held-who").textContent(), "bob");
+        assert.equal(await page.locator("#acxHeld .acx-hold-hours").textContent(), x("Held {n} hours", { n: 12 }));
+        // the account it came from is shown, said to be refused, with Use again and Mark banned
+        const row = page.locator('#acxList .row.acx[data-user="gus@example.com"]');
+        await row.waitFor();
+        assert.equal(await row.locator(".acx-state").textContent(), x("Sign-in refused · may be banned"));
+        assert.deepEqual(await row.locator(".acts .text").allTextContents(), [x("Use again"), x("Mark banned"), x("Disable"), x("Open")]);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "nothing wider than the window");
+        // the hold's length picked: posted
+        await page.locator("#acxHeld .acx-hold-hours").click();
+        await page.locator(".sess-menu .pm-item").filter({ has: page.locator(".pm-name").getByText(x("Hold nobody"), { exact: true }) }).click();
+        await page.waitForFunction((s) => document.querySelector("#acxHeld .acx-hold-hours")?.textContent === s, x("Hold nobody"));
+        // released: gone from the line
+        await page.locator("#acxHeld .acx-release").click();
+        await page.waitForFunction(() => !document.querySelector("#acxHeld .acx-held-row"));
+        // used again: in rotation once more
+        await row.locator(".acx-lift").click();
+        await page.waitForFunction((s) => document.querySelector('#acxList .row.acx[data-user="gus@example.com"] .acx-state')?.textContent === s, x("In rotation"));
+        assert.deepEqual(seen.posts, [["/api/auth-holds/hours", { hours: 0 }], ["/api/auth-holds/release", { holder: "user:bob" }], ["/api/login/lift", { agent: "codex", user: "gus@example.com" }]]);
         assert.deepEqual(errors, []);
       });
     }

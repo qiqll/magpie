@@ -162,8 +162,12 @@ type Record struct {
 	// usage_limit_reached); RequestID the id the vendor gave the call; and
 	// Endpoint the path the agent called, with the one it was sent to when
 	// it went out in another protocol (/v1/messages → /v1/chat/completions)
-	Error     string `json:"err,omitempty"`
-	ErrType   string `json:"err_type,omitempty"`
+	Error   string `json:"err,omitempty"`
+	ErrType string `json:"err_type,omitempty"`
+	// Told is what the client was told when it isn't what the vendor
+	// answered (Status, Error, ErrType are the vendor's): "429 held until
+	// <time>" for a caller held after authentication_failed
+	Told      string `json:"told,omitempty"`
 	RequestID string `json:"rid,omitempty"`
 	// ResponseID is the response object ID actually sent to the client.
 	ResponseID string `json:"response_id,omitempty"`

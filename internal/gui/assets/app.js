@@ -13220,7 +13220,7 @@ function loginsInOrder(a, p) {
   return ls.sort((x, y) => (y.active ? 1 : 0) - (x.active ? 1 : 0));
 }
 
-// banJS: e drawn by banned.js
+// banJS: banned.js draws e
 const banJS = (e, f, ...x) => (import("./banned.js").then(() => window[f](e, ...x), () => e.remove()), e);
 // cliproxyButton: Export, an account's sign-in as CLIProxyAPI's auth file
 // (provider.CLIProxyAgents), its icon, words and press in cliproxy.js
@@ -13233,7 +13233,7 @@ function cliproxyButton(a, l) {
 function renderAccounts(a, p) {
   const sub = subOf(a.agent);
   const list = el("div", "accts");
-  const off = (l) => l.banned || l.disabled, ls = loginsInOrder(a, p).filter((l) => !off(l)), banned = loginsInOrder(a, p).filter(off);
+  const off = (l) => l.banned || l.disabled || l.authFailed, ls = loginsInOrder(a, p).filter((l) => !off(l)), banned = loginsInOrder(a, p).filter(off);
   if (p) list.dataset.provider = p.id, list.classList.toggle("weighted", (draft?.routing ?? (p.routing || "")) === "weight");
   // a Claude account refused or with no sign-in waits to sign in again
   const unusable = (l) => a.agent === "claude" && !!l.lapsed;

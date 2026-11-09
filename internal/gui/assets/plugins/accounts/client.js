@@ -27,6 +27,7 @@ magpie.plugin("accounts", (ctx) => {
     <div id="acxState"></div>
     <div id="acxView"></div>
   </div>
+  <div class="acx-held" id="acxHeld" hidden></div>
   <p class="acx-sum" id="acxSum" role="status"></p>
   <div class="list acx-list" id="acxList"></div>
   <p class="usage-note acx-note" id="acxNote"></p>

@@ -6178,6 +6178,15 @@ func (s *Server) serveClaudeSubscription(w http.ResponseWriter, r *http.Request,
 		// the user lists it by (SetModelID): no wire name reaches its run
 		return s.subscription.start(ctx, req, p.OwnModelID(model), dir, owner, from)
 	}
+	if p.Account != nil {
+		// a stream begun (kept alive) that Anthropic then answers
+		// authentication_failed holds its caller as one refused before it
+		// began does (auth_hold.go); the stream's error is the hold's
+		acct := *p.Account
+		r = r.WithContext(context.WithValue(r.Context(), streamHoldKey{}, func() (AuthHold, bool) {
+			return startAuthHold(r, p.ID, acct.User, acct.Agent)
+		}))
+	}
 	return s.serveSubscription(w, r, from, "Claude Code", model, owner, body, usage, start)
 }
 
@@ -6711,6 +6720,17 @@ func relay(w http.ResponseWriter, r *http.Request, from provider.Protocol, name 
 				}
 				return
 			case KError:
+				if ev.Code == claudeAuthFailed {
+					// the vendor's kind stays the row's; the client is told
+					// the hold, its 200 sent already (auth_hold.go)
+					usage.add(Usage{ErrType: ev.Code, RequestID: ev.RequestID})
+					if hold, ok := r.Context().Value(streamHoldKey{}).(func() (AuthHold, bool)); ok {
+						if h, held := hold(); held {
+							toldHeld(r, h)
+							ev.Text, ev.Status, ev.Code = authHeldSaid(h), http.StatusTooManyRequests, "rate_limit_exceeded"
+						}
+					}
+				}
 				failed = ev.Text
 			case KStart, KUsage:
 				usage.add(ev.Usage)

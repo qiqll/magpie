@@ -27,6 +27,7 @@ import (
 // `magpie accounts switch-only <codex|claude> [on|off]`
 // `magpie accounts ban|unban|disable|enable <agent> <email>`
 // `magpie accounts keys [--json]`
+// `magpie accounts lift <agent> <email>`
 // — the subscriptions magpie remembers, how much of each one's allowance is
 // used, and switching the agent between them.
 func accountsCmd(args []string) error {
@@ -36,7 +37,7 @@ func accountsCmd(args []string) error {
 	if len(args) > 1 && args[1] == "keys" {
 		return accountsKeysTo(os.Stdout, args[2:])
 	}
-	const usage = "usage: magpie accounts [claude|codex|grok|copilot|gemini|antigravity|zed|factory|mimo|<plugin>] [--json] | magpie accounts add <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> | magpie accounts add copilot [--host <name>.ghe.com] | magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes] | magpie accounts refresh [--json] | magpie accounts checkin [--json] | magpie accounts switch|forget <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> <email> | magpie accounts switch <claude|codex> next | magpie accounts switch|forget copilot <login>[@<name>.ghe.com] [--host <name>.ghe.com] | magpie accounts project <gemini|antigravity> <email> <gcp-project-id> | magpie accounts alias <agent|<plugin>> <email> [<name>|--clear] | magpie accounts switch-only <codex|claude> [on|off] | magpie accounts ban|unban|disable|enable <agent|<plugin>> <email> | magpie accounts keys [--json]"
+	const usage = "usage: magpie accounts [claude|codex|grok|copilot|gemini|antigravity|zed|factory|mimo|<plugin>] [--json] | magpie accounts add <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> | magpie accounts add copilot [--host <name>.ghe.com] | magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes] | magpie accounts refresh [--json] | magpie accounts checkin [--json] | magpie accounts switch|forget <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> <email> | magpie accounts switch <claude|codex> next | magpie accounts switch|forget copilot <login>[@<name>.ghe.com] [--host <name>.ghe.com] | magpie accounts project <gemini|antigravity> <email> <gcp-project-id> | magpie accounts alias <agent|<plugin>> <email> [<name>|--clear] | magpie accounts switch-only <codex|claude> [on|off] | magpie accounts ban|unban|disable|enable <agent|<plugin>> <email> | magpie accounts keys [--json] | magpie accounts lift <agent|<plugin>> <email>"
 	agentID := func(s string) (string, error) {
 		switch strings.ToLower(s) {
 		case "claude", "cc":
@@ -161,6 +162,24 @@ func accountsCmd(args []string) error {
 			return err
 		}
 		return addAccount(id)
+	}
+	if len(args) > 1 && args[1] == "lift" {
+		// the rest after authentication_failed (gateway/auth_hold.go), lifted
+		if len(args) != 4 {
+			return fmt.Errorf("%s", usage)
+		}
+		id, err := agentID(args[2])
+		if err != nil {
+			return err
+		}
+		if args[3], err = accountNamed(id, args[3]); err != nil {
+			return err
+		}
+		if err := provider.SetLoginAuthFailed(id, args[3], time.Time{}); err != nil {
+			return err
+		}
+		fmt.Println(green.Render("✓"), args[3], "no longer rests: magpie routes to it again")
+		return nil
 	}
 	if len(args) > 1 && (args[1] == "ban" || args[1] == "unban" || args[1] == "disable" || args[1] == "enable") {
 		// the user's mark that the vendor banned the account, or that

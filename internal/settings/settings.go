@@ -418,6 +418,12 @@ type Settings struct {
 	// 100 MiB of its own, and a 512 MiB service was OOM-killed (#2956).
 	// It is this machine's, not taken from another's settings.
 	ClaudeRunsMost int `json:"claudeRunsMost,omitempty"`
+	// AuthHoldHours is how long a caller is held, every request of theirs
+	// answered 429, once Anthropic answers one of their requests on a
+	// Claude account authentication_failed (gateway/auth_hold.go): nil is
+	// DefaultAuthHoldHours, 0 holds nobody (the request's other Claude
+	// accounts are still never asked it).
+	AuthHoldHours *int `json:"authHoldHours,omitempty"`
 	// RefusalRetries is how many more times a request the vendor's safety
 	// filter refused, with nothing said, is asked of another account or
 	// routing group member (#248), unset for every one left. 0 hands the
@@ -2690,4 +2696,22 @@ func ClientAgentsNow() map[string]string {
 		return clientAgents(load().ClientAgents)
 	}
 	return m
+}
+
+// DefaultAuthHoldHours is how long a caller is held after authentication_failed
+// when the user set nothing (需求方 2026-11-09): a ban may follow the user
+// or what they send, so they are held long enough not to take the next
+// account down with them. AuthHoldMost is the most it can be set to.
+const (
+	DefaultAuthHoldHours = 12
+	AuthHoldMost         = 24 * 7
+)
+
+// AuthHold is how long a caller is held after authentication_failed, 0 for
+// nobody: s's own, else DefaultAuthHoldHours.
+func (s Settings) AuthHold() time.Duration {
+	if s.AuthHoldHours == nil {
+		return DefaultAuthHoldHours * time.Hour
+	}
+	return time.Duration(max(0, min(*s.AuthHoldHours, AuthHoldMost))) * time.Hour
 }

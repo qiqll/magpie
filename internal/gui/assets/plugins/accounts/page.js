@@ -17,6 +17,9 @@ const acxKeep = () => { try { localStorage.setItem("magpie.acxFilter", JSON.stri
 let acxKeys = null, acxKeysAt = 0;
 // the last read of them failed: a key picked stays in sight to be cleared
 let acxKeysFailed = false;
+// the callers held after authentication_failed and the hold's hours
+// (/api/auth-holds), and when read
+let acxHolds = null, acxHoldHours = 12, acxHoldsAt = 0;
 // the last 5 hours' requests by account (usage's accounts), and when read
 let acxUsage = null, acxUsageAt = 0;
 // what the list was drawn from, so a change elsewhere draws it again
@@ -44,6 +47,7 @@ async function acxLoad(again) {
       .then((u) => { acxUsage = u; acxUsageAt = Date.now(); }, () => {}) : Promise.resolve()),
     (!acxKeys || again || Date.now() - acxKeysAt > 30e3 ? api("accounts/keys")
       .then((k) => { acxKeys = k?.keys || []; acxKeysAt = Date.now(); acxKeysFailed = false; }, () => { acxKeysFailed = true; }) : Promise.resolve()),
+    (!acxHolds || again || Date.now() - acxHoldsAt > 30e3 ? api("auth-holds").then(acxHoldsRead, () => {}) : Promise.resolve()),
   ];
   for (const r of reads) r.then(() => { if (view === "accounts") acxDraw(); });
   await Promise.all(reads);
@@ -94,11 +98,14 @@ function acxRows() {
       // marked banned or disabled by the user: no sign-in to make again,
       // nothing to use
       const banned = !!l.banned, disabled = !!l.disabled, off = banned || disabled;
-      const again = !off && (unusable(l) || signInLapsed(a.agent, l));
-      const state = banned ? "banned" : disabled ? "disabled" : again ? "again" : l.paused ? "paused" : isOn(l) ? "on" : "off";
+      // resting after authentication_failed: it may be banned, shown with
+      // the others (the user is to act on it), and used by nothing till then
+      const authFailed = !off && !!l.authFailed;
+      const again = !off && !authFailed && (unusable(l) || signInLapsed(a.agent, l));
+      const state = banned ? "banned" : disabled ? "disabled" : authFailed ? "authfail" : again ? "again" : l.paused ? "paused" : isOn(l) ? "on" : "off";
       // the tick's own action, or none (the agent's own account, fixed)
       let act = null;
-      if (off || unusable(l)) act = null;
+      if (off || authFailed || unusable(l)) act = null;
       else if (l.active && (pausable || l.paused)) act = l.paused ? ["on", "Resume"] : ["off", "Pause"];
       else if (l.active && sub?.own && several) act = ["off", "Take out of rotation"];
       else if (!l.active) act = isOn(l) ? ["off", "Take out of rotation"] : ["on", "Add to rotation"];
@@ -108,14 +115,14 @@ function acxRows() {
       // usage has no tokens of its own
       const sum = (k) => used.reduce((n, g) => n + (g[k] || 0), 0);
       const added = p.accountAdded?.[acxLow(l.user)] || "", firstUsed = p.accountFirstUsed?.[acxLow(l.user)] || "";
-      out.push({ p, a, l, sub, state, banned, disabled, off, again, act, q, added, firstUsed, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
+      out.push({ p, a, l, sub, state, banned, disabled, off, authFailed, again, act, q, added, firstUsed, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
     }
   }
   return out;
 }
 
 const ACX_STATES = [["all", "All"], ["on", "In rotation"], ["again", "Sign in again"], ["off", "Not in rotation"]];
-const ACX_SAID = { on: "In rotation", paused: "Paused", again: "Sign in again", off: "Not in rotation", banned: "Banned", disabled: "Disabled" };
+const ACX_SAID = { on: "In rotation", paused: "Paused", again: "Sign in again", off: "Not in rotation", banned: "Banned", disabled: "Disabled", authfail: "Sign-in refused · may be banned" };
 const ACX_VIEWS = [["list", "List view"], ["cards", "Card view"]];
 const ACX_ADDED = [["7", "Added in the last 7 days"], ["30", "Added in the last 30 days"], ["old", "Added over 30 days ago"], ["unknown", "Added before magpie kept it"]];
 // a window's room: "room" left in it, "out" used up
@@ -160,11 +167,56 @@ const acxKeyAllows = (k, r) => !k || k.all || (k.accounts || []).includes(acxLow
 // acxPickOpts: a fixed menu's options, translated
 const acxPickOpts = (xs) => xs.map(([v, n]) => ({ v, name: t(n), note: "" }));
 
+// acxHoldsRead keeps /api/auth-holds' answer
+function acxHoldsRead(h) {
+  acxHolds = h?.holds || [];
+  acxHoldHours = h?.hours ?? 12;
+  acxHoldsAt = Date.now();
+}
+
+// the hold's lengths offered, in hours: 0 holds nobody
+const ACX_HOLD_HOURS = [0, 1, 6, 12, 24, 72, 168];
+
+// acxHeldDraw: who is held after authentication_failed, each with Release,
+// and how long a caller is held
+function acxHeldDraw() {
+  const box = $("#acxHeld");
+  if (!box) return;
+  box.replaceChildren();
+  const holds = acxHolds || [];
+  box.hidden = !acxHolds;
+  const head = el("div", "acx-held-head");
+  head.append(el("span", "", t(holds.length === 1 ? "1 caller held after authentication_failed" : "{n} callers held after authentication_failed", { n: holds.length })));
+  const pick = el("button", "sess-pick acx-hold-hours");
+  pick.type = "button";
+  const hours = (n) => (n === 0 ? t("Hold nobody") : t(n === 1 ? "Held 1 hour" : "Held {n} hours", { n }));
+  sessPick(pick, hours(12), String(acxHoldHours), ACX_HOLD_HOURS.map((n) => ({ v: String(n), name: hours(n), note: "" })), "After authentication_failed", (v) => {
+    api("auth-holds/hours", { hours: Number(v) }).then((h) => { acxHoldsRead(h); acxHeldDraw(); }, statusErr);
+  });
+  pick.title = t("How long a caller is told their usage limit is reached after Anthropic answers one of their requests authentication_failed. It may be a ban, which may follow the caller to their next account");
+  head.append(pick);
+  box.append(head);
+  for (const h of holds) {
+    const row = el("div", "acx-held-row");
+    row.dataset.holder = h.holder;
+    const who = h.kind === "key" ? t("Gateway key {name}", { name: h.name || h.who }) : h.kind === "session" ? t("Session {id}", { id: h.who }) : h.who;
+    row.append(el("span", "acx-held-who", who), el("span", "acx-held-until", t("held until {time}", { time: new Date(h.until).toLocaleString(intlLang()) })));
+    row.lastChild.title = t("After {account} answered authentication_failed", { account: h.provider + " · " + h.account });
+    row.append(el("span", "grow"));
+    const rel = el("button", "text acx-release", t("Release hold"));
+    rel.type = "button";
+    rel.onclick = () => { rel.classList.add("busy"); api("auth-holds/release", { holder: h.holder }).then((x) => { acxHoldsRead(x); acxHeldDraw(); }, statusErr); };
+    row.append(rel);
+    box.append(row);
+  }
+}
+
 function acxDraw() {
   const page = $("#view-accounts");
   if (!page || !providers) return;
   acxSeen = { providers, quotas: quotasAt };
   const all = acxRows();
+  acxHeldDraw();
   // the provider filter offers those with accounts; one gone is dropped
   const provs = [...new Map(all.map((r) => [r.p.id, r.p])).values()];
   if (acxProv && !provs.some((p) => p.id === acxProv)) acxProv = "";
@@ -282,7 +334,15 @@ function acxActs(r) {
     acts.append(b);
   }
   // a banned or disabled one's allowance isn't read (provider/banned.go)
-  if (q && !r.off) acts.append(quotaRefresh(q, () => acxDraw()));
+  if (q && !r.off && !r.authFailed) acts.append(quotaRefresh(q, () => acxDraw()));
+  if (r.authFailed) {
+    // its rest after authentication_failed, lifted: routed to again
+    const b = el("button", "text acx-lift", t("Use again"));
+    b.type = "button";
+    b.title = t("Anthropic answered it authentication_failed: it may be banned. Use it again only if it isn't: the gateway routes to it once more");
+    b.onclick = () => { b.classList.add("busy"); accountAction("login/lift", { agent: a.agent, user: l.user }).then(() => acxDraw()); };
+    acts.append(b);
+  }
   // the user's marks, banned by its vendor or disabled by them, or their lifting
   for (const [on, set, unset, cls, word, unword, tip, untip] of [
     [r.banned, "ban", "unban", "acx-ban", "Mark banned", "Lift ban", "Its vendor banned it: the gateway never sends it a request, and its usage history stays", "Use it again: the gateway routes to it and its allowance is read"],
@@ -315,6 +375,7 @@ function acxWho(r) {
   const badge = el("span", "acx-state " + r.state, t(ACX_SAID[r.state]));
   if (r.state === "off") badge.title = t("Not in rotation: still kept signed in and its usage read");
   if (r.again && l.lapsed) badge.title = t(l.lapsed);
+  if (r.authFailed) badge.title = t("Anthropic answered a request of it authentication_failed. Nothing is sent it until you sign it in again, mark it banned or use it again");
   name.append(badge);
   // both marks: both said
   if (r.banned && r.disabled) name.append(el("span", "acx-state disabled", t("Disabled")));

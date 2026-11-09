@@ -397,3 +397,69 @@ func TestDisablingKeepsTheLapse(t *testing.T) {
 		t.Fatalf("enabled: lapse %q", got)
 	}
 }
+
+// An account Anthropic answered authentication_failed rests: unusable,
+// nothing signed, listed as AuthFailed; a rewrite with the same credential
+// keeps it, a sign-in anew (another credential) lifts it, as do marking it
+// banned and the user's Use again.
+func TestAuthFailedRestsUntilTheUserActs(t *testing.T) {
+	home := signIn(t)
+	rememberLogins(true)
+	codexSignIn(t, home, "work@example.com", "r-work")
+	rememberLogins(true)
+	resting := func() bool {
+		ForgetAccounts()
+		for _, l := range Logins("codex") {
+			if l.User == "me@example.com" {
+				return l.AuthFailed
+			}
+		}
+		t.Fatal("me@ isn't listed")
+		return false
+	}
+	if err := SetLoginAuthFailed("codex", "me@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	p := Provider{ID: "codex", Account: &Account{Agent: "codex", User: "me@example.com"}}
+	if !resting() || !AccountUnusable(p.Account) {
+		t.Fatal("not resting")
+	}
+	if err := p.Sign(context.Background(), httptest.NewRequest("POST", "https://chatgpt.com/backend-api/codex/responses", nil), Responses, nil); err != ErrAccountAuthFailed {
+		t.Fatalf("signed: %v", err)
+	}
+	// rewritten with the same credential (a rememberLogins look): kept
+	loginsMu.Lock()
+	ls := readLogins()
+	for _, l := range ls {
+		if l.User == "me@example.com" {
+			fresh := l
+			fresh.AuthFailedAt = time.Time{}
+			ls = upsertLogin(ls, fresh)
+		}
+	}
+	writeLogins(ls)
+	loginsMu.Unlock()
+	if !resting() {
+		t.Fatal("a rewrite with the same credential lifted the rest")
+	}
+	// signed in anew: lifted
+	signInAgainAs(t, home, "me@example.com", "r-anew")
+	rememberLogins(true)
+	if resting() {
+		t.Fatal("a sign-in anew kept the rest")
+	}
+	// marked banned: the rest goes, the ban stays
+	SetLoginAuthFailed("codex", "me@example.com", time.Now())
+	if err := SetLoginBanned("codex", "me@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	if l := savedOf(t, "me@example.com"); !l.AuthFailedAt.IsZero() || !l.Banned {
+		t.Fatalf("banned: %+v", l)
+	}
+	SetLoginBanned("codex", "me@example.com", false)
+	// Use again: lifted
+	SetLoginAuthFailed("codex", "me@example.com", time.Now())
+	if err := SetLoginAuthFailed("codex", "me@example.com", time.Time{}); err != nil || resting() {
+		t.Fatalf("lifted: %v", err)
+	}
+}

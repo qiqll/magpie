@@ -126,6 +126,9 @@ const (
 var cliForRoute = map[string]string{
 	"GET /api/agent-models/{id}":           "magpie models",
 	"GET /api/accounts/keys":               "magpie accounts keys",
+	"GET /api/auth-holds":                  "magpie users held",
+	"POST /api/auth-holds/release":         "magpie users release",
+	"POST /api/auth-holds/hours":           "magpie users hours",
 	"GET /api/settings":                    "magpie settings list",
 	"POST /api/settings":                   "magpie settings set",
 	"POST /api/settings/account-discovery": "magpie accounts discovery",

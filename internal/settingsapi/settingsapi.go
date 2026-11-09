@@ -179,6 +179,7 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	if _, sent := fields["refusalRetries"]; !sent {
 		in.RefusalRetries = cur.RefusalRetries
 	}
+
 	// nor whether updates download by themselves (#2296)
 	if _, sent := fields["noAutoDownload"]; !sent {
 		in.NoAutoDownload = cur.NoAutoDownload
@@ -306,9 +307,10 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.ClientAgents = cur.ClientAgents
 	// how agents' lists name models, set on its own for the agents to be told
 	in.PlainNames, in.PlainOwnNames = cur.PlainNames, cur.PlainOwnNames
-	in.BareModelIDs = cur.BareModelIDs // set on its own (bare-ids)
-	in.BusyLoad = cur.BusyLoad         // and so is this (busy-load)
-	in.Growth = cur.Growth             // and the growth policy (growth)
+	in.BareModelIDs = cur.BareModelIDs   // set on its own (bare-ids)
+	in.BusyLoad = cur.BusyLoad           // and so is this (busy-load)
+	in.Growth = cur.Growth               // and the growth policy (growth)
+	in.AuthHoldHours = cur.AuthHoldHours // and the hold after authentication_failed (auth-holds/hours)
 	in.CodexAgentsV1 = cur.CodexAgentsV1
 	in.FullContext = cur.FullContext     // set on its own (full-context)
 	in.CompactAt = cur.CompactAt         // and so is the threshold

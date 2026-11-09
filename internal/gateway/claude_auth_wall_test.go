@@ -73,6 +73,8 @@ func TestClaudeAuthFailedGroupGoesToItsOtherProvider(t *testing.T) {
     echo '{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"Please run /login · API Error: 401"}'
 `
 	log := claudeSubscriptionFirstSays(t, refused)
+	zero := 0
+	holdHours(t, &zero) // the wall alone: the hold is auth_hold_test.go's
 	if err := provider.SetRouting("claude", provider.Ordered); err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +128,8 @@ func TestClaudeAuthFailedGrowsNoSpare(t *testing.T) {
 			claudeMadeFirst(t, false)
 			calls := filepath.Join(t.TempDir(), "calls")
 			claudeAuthFails(t, calls)
+			zero := 0
+			holdHours(t, &zero) // the wall alone: the hold is auth_hold_test.go's
 			writeUsers(t, userFile{Users: map[string]map[string]userBinding{"claude": {
 				"bob": {Who: "claude@a@example.com", Account: "a@example.com", At: time.Now().UTC(), Tier: "pro"},
 			}}})

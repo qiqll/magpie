@@ -70,6 +70,9 @@ type Login struct {
 	// to, switched to or read.
 	Banned   bool `json:"banned,omitempty"`
 	Disabled bool `json:"disabled,omitempty"`
+	// AuthFailed: Anthropic answered it authentication_failed, and it
+	// rests until the user acts (savedLogin.AuthFailedAt); it may be banned
+	AuthFailed bool `json:"authFailed,omitempty"`
 
 	// first is the saved Claude account served in the place of Claude
 	// Code's own while it is signed out (claudeStandIn).
@@ -147,6 +150,12 @@ type savedLogin struct {
 	BannedAt   time.Time `json:"bannedAt,omitzero"`
 	Disabled   bool      `json:"disabled,omitempty"`
 	DisabledAt time.Time `json:"disabledAt,omitzero"`
+	// AuthFailedAt is when Anthropic answered a request of the account
+	// authentication_failed (banned.go, gateway/auth_hold.go): it rests,
+	// as one banned does, until the user signs it in again (another
+	// credential), marks it banned or lifts this. magpie sets it, never
+	// clears it.
+	AuthFailedAt time.Time `json:"authFailedAt,omitzero"`
 	// was is the name a Copilot account read under a new one had in the
 	// file (#1220): its per-account settings are still kept by it, and
 	// move to the new one before the new name is written (renameSettled).
@@ -1246,8 +1255,9 @@ func loginsNow(agent string) []Login {
 			lg.Returns = l.On && strings.EqualFold(back[l.Agent], l.User)
 		}
 		if l.unusable() {
-			// banned or disabled, it is no sign-in to make again: no bar asks for one
-			lg.Banned, lg.Disabled, lg.Lapsed, lg.Returns = l.Banned, l.Disabled, "", false
+			// banned, disabled or resting after authentication_failed, it is
+			// no sign-in to make again: no bar asks for one
+			lg.Banned, lg.Disabled, lg.AuthFailed, lg.Lapsed, lg.Returns = l.Banned, l.Disabled, l.authFailed(), "", false
 		}
 		out = append(out, lg)
 	}

@@ -26,7 +26,8 @@ const bannedOpen = new Set();
 window.bannedFill = function (box, a, p, off) {
   const key = p?.id || a.agent, n = off.length;
   const banned = off.every((l) => l.banned), disabled = off.every((l) => l.disabled && !l.banned);
-  const words = banned ? ["1 banned account", "{n} banned accounts"] : disabled ? ["1 disabled account", "{n} disabled accounts"] : ["1 banned or disabled account", "{n} banned or disabled accounts"];
+  const resting = off.every((l) => l.authFailed && !l.banned && !l.disabled);
+  const words = resting ? ["1 account to look at", "{n} accounts to look at"] : banned ? ["1 banned account", "{n} banned accounts"] : disabled ? ["1 disabled account", "{n} disabled accounts"] : ["1 banned or disabled account", "{n} banned or disabled accounts"];
   box.replaceChildren();
   const head = el("button", "link acc-banned-head", t(n === 1 ? words[0] : words[1], { n }) + " · " + t(bannedOpen.has(key) ? "Hide" : "Show"));
   head.type = "button";
@@ -43,10 +44,21 @@ window.bannedFill = function (box, a, p, off) {
     const marks = el("span", "acc-marks");
     banDress(marks, a, l);
     // only the buttons that lift a mark it has
-    for (const b of [...marks.children]) if (b.classList.contains("acc-ban") ? !l.banned : !l.disabled) b.remove();
+    // and Mark banned for one resting after authentication_failed
+    for (const b of [...marks.children]) if (b.classList.contains("acc-ban") ? !l.banned && !l.authFailed : !l.disabled) b.remove();
     row.append(accountNameButton(p, l.user));
     if (l.banned) row.append(el("span", "using banned", t("Banned")));
     if (l.disabled) row.append(el("span", "using disabled", t("Disabled")));
+    if (l.authFailed && !l.banned) {
+      // Anthropic answered it authentication_failed: it may be banned
+      const why = el("span", "using banned", t("Sign-in refused · may be banned"));
+      why.title = t("Anthropic answered a request of it authentication_failed. Nothing is sent it until you sign it in again, mark it banned or use it again");
+      row.append(why);
+      const lift = el("button", "text acc-lift", t("Use again"));
+      lift.type = "button";
+      lift.onclick = () => { lift.classList.add("busy"); accountAction("login/lift", { agent: a.agent, user: l.user }); };
+      marks.append(lift);
+    }
     row.append(el("span", "grow"), marks, forget);
     box.append(row);
   }

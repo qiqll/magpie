@@ -250,19 +250,23 @@ type rowChunk struct {
 // rowMsg is the Text of a row's Claude message id, after rowText's, and
 // rowError its error's
 const (
-	rowMsg   = 36
+	rowMsg   = 37
 	rowError = 9
+	// rowTold is the Text of what the client was told (Record.Told): it
+	// differs row by row, as the error does
+	rowTold = 36
 	// rowClient is the Text of the client's own name, when the user counts
 	// it as another agent (Row.Client, #1958)
 	rowClient = 33
 	// rowTexts is how many strings a row has: rowText's and the message id
-	rowTexts = 37
+	rowTexts = 38
 )
 
 // rowVaried are the strings that differ call by call: the error, the
-// request and response ids, the archive and the message id. A row keeps
+// request and response ids, the archive, the message id and what the
+// client was told. A row keeps
 // them itself; every other string is the same for most of a chunk's rows.
-var rowVaried = [...]int{rowError, 11, 22, 25, rowMsg}
+var rowVaried = [...]int{rowError, 11, 22, 25, rowMsg, rowTold}
 
 // rowVariedAt is each Text slot's place in Varied, or -1
 var rowVariedAt = func() (at [rowTexts]int8) {
@@ -323,8 +327,8 @@ func (c *rowChunk) shape(t [rowTexts]uint32) uint32 {
 // the caller's user (T-020) among them: a string left out comes back empty
 // from the cache, in the page and in /v1/magpie/usage/requests
 // (TestRowTextHoldsEveryString)
-func rowText(r *Row) [36]*string {
-	return [36]*string{&r.Agent, &r.Provider, &r.Host, &r.SessionProvider, &r.SessionAccount, &r.Model, &r.Requested, &r.Served, &r.Effort, &r.Error, &r.ErrType, &r.RequestID, &r.Endpoint, &r.Session, &r.NativeSession, &r.Kind, &r.Source, &r.Via, &r.ProviderKeyID, &r.ProviderKeyName, &r.CallerKeyID, &r.CallerKeyName, &r.Archive, &r.Operation, &r.ProviderAccount, &r.ResponseID, &r.Upstream, &r.Subagent, &r.ParentAgent, &r.Stop, &r.TierAsked, &r.TierSent, &r.TierServed, &r.Client, &r.CallerIssuerID, &r.User}
+func rowText(r *Row) [37]*string {
+	return [37]*string{&r.Agent, &r.Provider, &r.Host, &r.SessionProvider, &r.SessionAccount, &r.Model, &r.Requested, &r.Served, &r.Effort, &r.Error, &r.ErrType, &r.RequestID, &r.Endpoint, &r.Session, &r.NativeSession, &r.Kind, &r.Source, &r.Via, &r.ProviderKeyID, &r.ProviderKeyName, &r.CallerKeyID, &r.CallerKeyName, &r.Archive, &r.Operation, &r.ProviderAccount, &r.ResponseID, &r.Upstream, &r.Subagent, &r.ParentAgent, &r.Stop, &r.TierAsked, &r.TierSent, &r.TierServed, &r.Client, &r.CallerIssuerID, &r.User, &r.Told}
 }
 func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 	if c.dict == nil {

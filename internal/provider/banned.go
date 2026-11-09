@@ -39,17 +39,24 @@ import (
 )
 
 // ErrAccountBanned and ErrAccountDisabled are a request asked of an account
-// the user marked so: it is never sent.
+// the user marked so, and ErrAccountAuthFailed one of an account resting
+// after Anthropic answered it authentication_failed: it is never sent.
 var (
-	ErrAccountBanned   = errors.New("this account is marked banned in magpie; lift the mark in Models › Accounts to use it again")
-	ErrAccountDisabled = errors.New("this account is disabled in magpie; enable it in Models › Accounts to use it again")
+	ErrAccountBanned     = errors.New("this account is marked banned in magpie; lift the mark in Models › Accounts to use it again")
+	ErrAccountDisabled   = errors.New("this account is disabled in magpie; enable it in Models › Accounts to use it again")
+	ErrAccountAuthFailed = errors.New("this account rests after Anthropic answered it authentication_failed, and may be banned; sign it in again, mark it banned, or lift the rest in Models › Accounts")
 )
 
-// unusable says the user marked l banned or disabled.
-func (l savedLogin) unusable() bool { return l.Banned || l.Disabled }
+// authFailed says l rests after Anthropic answered it authentication_failed.
+func (l savedLogin) authFailed() bool { return !l.AuthFailedAt.IsZero() }
 
-// Unusable says the user marked the account banned or disabled.
-func (l Login) Unusable() bool { return l.Banned || l.Disabled }
+// unusable says the user marked l banned or disabled, or it rests after
+// authentication_failed.
+func (l savedLogin) unusable() bool { return l.Banned || l.Disabled || l.authFailed() }
+
+// Unusable says the user marked the account banned or disabled, or it
+// rests after authentication_failed.
+func (l Login) Unusable() bool { return l.Banned || l.Disabled || l.AuthFailed }
 
 // AccountUnusable says the user marked account a banned or disabled.
 func AccountUnusable(a *Account) bool {
@@ -145,6 +152,9 @@ func withoutUnusable(ps []Provider) []Provider {
 func SetLoginBanned(agent, user string, banned bool) error {
 	return setLoginMark(agent, user, func(l *savedLogin) {
 		l.Banned, l.BannedAt = banned, markedAt(banned)
+		if banned {
+			l.AuthFailedAt = time.Time{} // the user acted on it: banned now
+		}
 	})
 }
 
@@ -207,10 +217,27 @@ func setLoginMark(agent, user string, set func(*savedLogin)) error {
 	return writeLogins(ls)
 }
 
+// SetLoginAuthFailed marks the account of agent named user as resting
+// after Anthropic answered it authentication_failed (at, when), or lifts
+// the rest (zero at): the gateway sets it, the user lifts it.
+func SetLoginAuthFailed(agent, user string, at time.Time) error {
+	return setLoginMark(agent, user, func(l *savedLogin) {
+		l.AuthFailedAt = at.UTC().Truncate(time.Second)
+		if at.IsZero() {
+			l.AuthFailedAt = time.Time{}
+		}
+	})
+}
+
 // keepMarks is l with the user's banned and disabled marks of was carried
 // over: a sign-in again or a refresh writes the account's entry anew, and
-// the marks are the user's to lift.
+// the marks are the user's to lift. The rest after authentication_failed
+// is carried while the credential is the same: signed in anew, it is
+// lifted.
 func keepMarks(l, was savedLogin) savedLogin {
+	if was.authFailed() && !l.authFailed() && sameAuth(l.Auth, was.Auth) {
+		l.AuthFailedAt = was.AuthFailedAt
+	}
 	if was.Banned && !l.Banned {
 		l.Banned, l.BannedAt = true, was.BannedAt
 	}
@@ -228,6 +255,8 @@ func unusableErr(l savedLogin) error {
 		return ErrAccountBanned
 	case l.Disabled:
 		return ErrAccountDisabled
+	case l.authFailed():
+		return ErrAccountAuthFailed
 	}
 	return nil
 }

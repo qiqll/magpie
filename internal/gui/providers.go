@@ -2578,6 +2578,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		case "disable", "enable":
 			// the user's own: the account turned off, as banned is
 			change = func() error { return provider.SetLoginDisabled(in.Agent, in.User, r.PathValue("action") == "disable") }
+		case "lift":
+			// the rest after authentication_failed, lifted by the user
+			change = func() error { return provider.SetLoginAuthFailed(in.Agent, in.User, time.Time{}) }
 		default:
 			http.NotFound(rw, r)
 			return
@@ -2596,6 +2599,63 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		st.Moved = moved
 		writeJSON(rw, st)
 		keepProviders(st) // as a provider action's: the panel's switch draws it
+	})
+	// the callers held after authentication_failed (gateway/auth_hold.go),
+	// for Models › Accounts, and releasing one
+	mux.HandleFunc("GET /api/auth-holds", func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Cache-Control", "no-store")
+		holds, err := gateway.AuthHolds()
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, map[string]any{"holds": holdsJSON(holds), "hours": settings.Shared().AuthHold().Hours()})
+	})
+	// how long a caller is held, in hours (0 for nobody, null for the
+	// default), as `magpie settings set authHoldHours` sets it
+	mux.HandleFunc("POST /api/auth-holds/hours", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ Hours *int }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if in.Hours != nil && (*in.Hours < 0 || *in.Hours > settings.AuthHoldMost) {
+			fail(rw, fmt.Errorf("a caller is held 0 to %d hours after authentication_failed, not %d", settings.AuthHoldMost, *in.Hours))
+			return
+		}
+		s, err := settings.LoadChecked()
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		s.AuthHoldHours = in.Hours
+		if err := settings.Save(s); err != nil {
+			fail(rw, err)
+			return
+		}
+		holds, err := gateway.AuthHolds()
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, map[string]any{"holds": holdsJSON(holds), "hours": s.AuthHold().Hours()})
+	})
+	mux.HandleFunc("POST /api/auth-holds/release", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ Holder string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if err := gateway.ReleaseAuthHold(in.Holder); err != nil {
+			fail(rw, err)
+			return
+		}
+		holds, err := gateway.AuthHolds()
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, map[string]any{"holds": holdsJSON(holds), "hours": settings.Shared().AuthHold().Hours()})
 	})
 	// whether a Claude subscription's runs are Claude Code's interactive
 	// mode or -p, and why -p, for the Claude Code provider page; read when
@@ -3103,4 +3163,19 @@ func fetchedCount(p provider.Provider, ids int) int {
 		return n
 	}
 	return ids
+}
+
+// authHoldJSON is a held caller as Models › Accounts lists it: holder is
+// what releases it ("kind:who").
+type authHoldJSON struct {
+	gateway.AuthHold
+	Holder string `json:"holder"`
+}
+
+func holdsJSON(hs []gateway.AuthHold) []authHoldJSON {
+	out := make([]authHoldJSON, 0, len(hs))
+	for _, h := range hs {
+		out = append(out, authHoldJSON{h, h.Kind + ":" + h.Who})
+	}
+	return out
 }
