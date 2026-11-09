@@ -39,7 +39,8 @@ func accountsKeysTo(out io.Writer, args []string) error {
 		return nil
 	}
 	if len(keys) == 0 {
-		fmt.Fprintln(out, muted.Render("no gateway key works now ·"), "add one: magpie gateway-key add <name>")
+		// none, or each one off or expired: either is mended from the list
+		fmt.Fprintln(out, muted.Render("no gateway key works now ·"), "see them: magpie gateway-key list · add one: magpie gateway-key add <name>")
 		return nil
 	}
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)

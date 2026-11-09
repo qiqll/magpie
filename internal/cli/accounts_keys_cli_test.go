@@ -41,7 +41,7 @@ func TestAccountsKeysListsEachKeysAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := call()
-	if !strings.Contains(got, "Laptop") || !strings.Contains(got, "all") {
+	if line := strings.TrimSpace(strings.Split(strings.TrimSpace(got), "\n")[1]); !strings.Contains(line, "Laptop") || !strings.HasSuffix(line, "all") {
 		t.Fatalf("a key held to none: %q", got)
 	}
 
@@ -91,7 +91,8 @@ func TestAccountsKeysRefusesABadValue(t *testing.T) {
 		}
 	}
 	// as typed: magpie accounts keys reaches it, not an agent's list
-	if err := run([]string{"accounts", "keys", "--jsn"}); err == nil || !strings.Contains(err.Error(), "takes only --json") {
+	// (accountsCmd, which run hands every accounts command)
+	if err := accountsCmd([]string{"accounts", "keys", "--jsn"}); err == nil || !strings.Contains(err.Error(), "takes only --json") {
 		t.Errorf("magpie accounts keys --jsn: %v", err)
 	}
 	if read != 0 {
