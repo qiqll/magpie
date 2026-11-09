@@ -349,3 +349,51 @@ func TestPauseRefusedWhenTheOtherOnIsDisabled(t *testing.T) {
 		t.Fatalf("enabled again, still refused: %v", err)
 	}
 }
+
+// An account that has to be signed in again can be disabled: the mark
+// leaves its lapse in logins.json, the row says no lapse while disabled,
+// and enabled again it says Sign-in required as before.
+func TestDisablingKeepsTheLapse(t *testing.T) {
+	home := signIn(t)
+	rememberLogins(true)
+	codexSignIn(t, home, "work@example.com", "r-work")
+	rememberLogins(true)
+	why := "me@example.com's sign-in has expired — add the account again to use it"
+	loginsMu.Lock()
+	ls := readLogins()
+	for i := range ls {
+		if ls[i].User == "me@example.com" {
+			ls[i].Lapsed = why
+		}
+	}
+	writeLogins(ls)
+	loginsMu.Unlock()
+	lapse := func() (string, bool) {
+		ForgetAccounts()
+		for _, l := range Logins("codex") {
+			if l.User == "me@example.com" {
+				return l.Lapsed, l.Disabled
+			}
+		}
+		t.Fatal("me@ isn't listed")
+		return "", false
+	}
+	if got, _ := lapse(); got != why {
+		t.Fatalf("lapse before %q", got)
+	}
+	if err := SetLoginDisabled("codex", "me@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	if got, off := lapse(); got != "" || !off {
+		t.Fatalf("disabled: lapse %q, disabled %v", got, off)
+	}
+	if l := savedOf(t, "me@example.com"); l.Lapsed != why {
+		t.Fatalf("the mark took the lapse away: %+v", l)
+	}
+	if err := SetLoginDisabled("codex", "me@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := lapse(); got != why {
+		t.Fatalf("enabled: lapse %q", got)
+	}
+}

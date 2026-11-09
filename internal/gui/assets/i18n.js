@@ -6,7 +6,6 @@ const I18N = {
   zh: {
     "Add a {name} account": "添加 {name} 账号",
     "Pause": "暂停",
-    "Stop using": "停用",
     "Every subscription account on one page: its state, allowances and recent requests, used, paused or signed in again there": "所有订阅账号集中在一页：状态、额度与近期请求，并可在此启用、暂停或重新登录",
     "Nothing is sent to {name} until you start: magpie then starts the sign-in and opens its page.": "开始前不会向 {name} 发送任何请求：点击开始后 magpie 才发起登录并打开它的页面。",
     "Start sign-in": "开始登录",
@@ -4749,7 +4748,6 @@ const I18N = {
   "zh-TW": {
     "Add a {name} account": "新增 {name} 帳號",
     "Pause": "暫停",
-    "Stop using": "停用",
     "Every subscription account on one page: its state, allowances and recent requests, used, paused or signed in again there": "所有訂閱帳號集中在一頁：狀態、額度與近期請求，並可在此啟用、暫停或重新登入",
     "Nothing is sent to {name} until you start: magpie then starts the sign-in and opens its page.": "開始前不會向 {name} 發送任何請求：點擊開始後 magpie 才發起登入並開啟它的頁面。",
     "Start sign-in": "開始登入",
@@ -9477,7 +9475,6 @@ const I18N = {
   ja: {
     "Add a {name} account": "{name} アカウントを追加",
     "Pause": "一時停止",
-    "Stop using": "使用をやめる",
     "Every subscription account on one page: its state, allowances and recent requests, used, paused or signed in again there": "すべてのサブスクリプションアカウントを 1 ページに：状態、枠、最近のリクエスト。ここで使用・一時停止・再サインインも",
     "Nothing is sent to {name} until you start: magpie then starts the sign-in and opens its page.": "開始するまで {name} には何も送信しません。開始すると magpie がサインインを始め、そのページを開きます。",
     "Start sign-in": "サインインを開始",
@@ -14207,7 +14204,6 @@ const I18N = {
   de: {
     "Add a {name} account": "{name}-Konto hinzufügen",
     "Pause": "Pausieren",
-    "Stop using": "Nicht mehr verwenden",
     "Every subscription account on one page: its state, allowances and recent requests, used, paused or signed in again there": "Alle Abo-Konten auf einer Seite: Zustand, Kontingente und letzte Anfragen, dort verwenden, pausieren oder neu anmelden",
     "Nothing is sent to {name} until you start: magpie then starts the sign-in and opens its page.": "Bis zum Start wird nichts an {name} gesendet: Erst dann beginnt magpie die Anmeldung und öffnet die Seite.",
     "Start sign-in": "Anmeldung starten",

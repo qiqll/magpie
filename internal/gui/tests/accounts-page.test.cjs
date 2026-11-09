@@ -4,7 +4,8 @@
 // every provider, each with its state, its windows, its last 5 hours'
 // requests and its proxy (no password), and:
 // - finds them by state, provider and a word (an account's own name too);
-// - Use, Pause and Stop using post the editor tick's own call
+// - Add to rotation, Pause and Take out of rotation post the editor tick's
+//   own call (2026-11-09: renamed from Use and Stop using, apart from Disable)
 //   (login/on, login/off) and the row says the new state;
 // - Sign in again opens the provider's editor with that account's sign-in
 //   under way; Open opens the editor;
@@ -169,7 +170,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         let rows = await rowsOf(page);
         assert.deepEqual(rows.map((r) => r.user), ["alice@example.com", "bob@example.com", "carol@example.com", "Claude setup-token 3204d0", "ops@example.com", "qa@example.com"], "every account, not the key provider");
-        assert.deepEqual(rows.map((r) => r.state), [x("In use"), x("In use"), x("Sign in again"), x("Sign in again"), x("In use"), x("Not in use")]);
+        assert.deepEqual(rows.map((r) => r.state), [x("In rotation"), x("In rotation"), x("Sign in again"), x("Sign in again"), x("In rotation"), x("Not in rotation")]);
         assert.deepEqual(rows.map((r) => r.calls), ["128", "0", "0", "0", "9", "0"]);
         assert.deepEqual(seen.usage, ["last:5h"], "the requests are the last 5 hours'");
         const bob = rows.find((r) => r.user === "bob@example.com");
@@ -177,9 +178,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.doesNotMatch(bob.sub, /s3cret/, "the proxy's password isn't shown");
         // the editor tick's own action on each
         assert.deepEqual(rows.map((r) => r.acts), [
-          [x("Pause"), x("Mark banned"), x("Disable"), x("Open")], [x("Stop using"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Mark banned"), x("Disable"), x("Open")], [x("Use"), x("Mark banned"), x("Disable"), x("Open")],
+          [x("Pause"), x("Mark banned"), x("Disable"), x("Open")], [x("Take out of rotation"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Mark banned"), x("Disable"), x("Open")], [x("Add to rotation"), x("Mark banned"), x("Disable"), x("Open")],
         ]);
-        assert.equal(await page.locator("#acxSum").textContent(), [x("{n} accounts", { n: 6 }), x("{n} in use", { n: 3 }), x("{n} to sign in again", { n: 2 })].join(" · "));
+        assert.equal(await page.locator("#acxSum").textContent(), [x("{n} accounts", { n: 6 }), x("{n} in rotation", { n: 3 }), x("{n} to sign in again", { n: 2 })].join(" · "));
         if (width > 600) assert.equal(new Set(rows.filter((r) => r.meters != null).map((r) => r.meters)).size, 1, "the windows line up");
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "nothing wider than the window");
 
@@ -205,7 +206,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         // Use and Pause post the tick's call, and the row says so
         await page.locator('#acxList .row.acx[data-user="qa@example.com"] .acx-use').click();
-        await page.waitForFunction((s) => document.querySelector('#acxList .row.acx[data-user="qa@example.com"] .acx-state')?.textContent === s, x("In use"));
+        await page.waitForFunction((s) => document.querySelector('#acxList .row.acx[data-user="qa@example.com"] .acx-state')?.textContent === s, x("In rotation"));
         await page.locator('#acxList .row.acx[data-user="alice@example.com"] .acx-use').click();
         await page.waitForFunction((s) => document.querySelector('#acxList .row.acx[data-user="alice@example.com"] .acx-state')?.textContent === s, x("Paused"));
         assert.deepEqual(seen.posts, [["/api/login/on", { agent: "codex", user: "qa@example.com" }], ["/api/login/off", { agent: "claude", user: "alice@example.com" }]]);
@@ -291,7 +292,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(card("qa@example.com").stats.slice(0, 2), ["0", "0"]);
         // the same actions as a row's
         assert.deepEqual(cards.map((c) => c.acts), [
-          [x("Pause"), x("Mark banned"), x("Disable"), x("Open")], [x("Stop using"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Mark banned"), x("Disable"), x("Open")], [x("Use"), x("Mark banned"), x("Disable"), x("Open")],
+          [x("Pause"), x("Mark banned"), x("Disable"), x("Open")], [x("Take out of rotation"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Mark banned"), x("Disable"), x("Open")], [x("Add to rotation"), x("Mark banned"), x("Disable"), x("Open")],
         ]);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "nothing wider than the window");
 
@@ -336,7 +337,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // Use on a card posts the tick's call
         await page.locator("#acxView button", { hasText: x("Card view") }).click();
         await page.locator('#acxList .acx-card[data-user="qa@example.com"] .acx-use').click();
-        await page.waitForFunction((s) => document.querySelector('#acxList .acx-card[data-user="qa@example.com"] .acx-state')?.textContent === s, x("In use"));
+        await page.waitForFunction((s) => document.querySelector('#acxList .acx-card[data-user="qa@example.com"] .acx-state')?.textContent === s, x("In rotation"));
         assert.deepEqual(seen.posts, [["/api/login/on", { agent: "codex", user: "qa@example.com" }]]);
         assert.deepEqual(errors, []);
       });
@@ -403,10 +404,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.locator('#acxList .row.acx[data-user="qa@example.com"] .acx-ban').click();
         await page.waitForFunction((s) => document.querySelector('#acxList .row.acx[data-user="qa@example.com"] .acx-state')?.textContent === s, x("Banned"));
         await page.locator('#acxList .row.acx[data-user="dave@example.com"] .acx-ban').click();
-        await page.waitForFunction((s) => document.querySelector('#acxList .row.acx[data-user="dave@example.com"] .acx-state')?.textContent === s, x("In use"));
+        await page.waitForFunction((s) => document.querySelector('#acxList .row.acx[data-user="dave@example.com"] .acx-state')?.textContent === s, x("In rotation"));
         // Enable on one disabled, and on one with both: that one stays out, banned
         await page.locator('#acxList .row.acx[data-user="erin@example.com"] .acx-disable').click();
-        await page.waitForFunction((s) => document.querySelector('#acxList .row.acx[data-user="erin@example.com"] .acx-state')?.textContent === s, x("In use"));
+        await page.waitForFunction((s) => document.querySelector('#acxList .row.acx[data-user="erin@example.com"] .acx-state')?.textContent === s, x("In rotation"));
         await page.locator('#acxList .row.acx[data-user="frank@example.com"] .acx-disable').click();
         await page.waitForFunction((s) => document.querySelectorAll('#acxList .row.acx[data-user="frank@example.com"] .acx-state').length === 1 && document.querySelector('#acxList .row.acx[data-user="frank@example.com"] .acx-state').textContent === s, x("Banned"));
         assert.deepEqual(seen.posts, [["/api/login/ban", { agent: "codex", user: "qa@example.com" }], ["/api/login/unban", { agent: "codex", user: "dave@example.com" }],

@@ -100,8 +100,8 @@ function acxRows() {
       let act = null;
       if (off || unusable(l)) act = null;
       else if (l.active && (pausable || l.paused)) act = l.paused ? ["on", "Resume"] : ["off", "Pause"];
-      else if (l.active && sub?.own && several) act = ["off", "Stop using"];
-      else if (!l.active) act = isOn(l) ? ["off", "Stop using"] : ["on", "Use"];
+      else if (l.active && sub?.own && several) act = ["off", "Take out of rotation"];
+      else if (!l.active) act = isOn(l) ? ["off", "Take out of rotation"] : ["on", "Add to rotation"];
       const q = (quotas || []).find((x) => x.provider === p.id && acxLow(x.user) === acxLow(l.user));
       const used = (acxUsage?.accounts || []).filter((g) => g.provider === p.id && acxLow(g.account) === acxLow(l.user));
       // tokens are in and out, as tokensOf counts them: an account's
@@ -114,8 +114,8 @@ function acxRows() {
   return out;
 }
 
-const ACX_STATES = [["all", "All"], ["on", "In use"], ["again", "Sign in again"], ["off", "Not in use"]];
-const ACX_SAID = { on: "In use", paused: "Paused", again: "Sign in again", off: "Not in use", banned: "Banned", disabled: "Disabled" };
+const ACX_STATES = [["all", "All"], ["on", "In rotation"], ["again", "Sign in again"], ["off", "Not in rotation"]];
+const ACX_SAID = { on: "In rotation", paused: "Paused", again: "Sign in again", off: "Not in rotation", banned: "Banned", disabled: "Disabled" };
 const ACX_VIEWS = [["list", "List view"], ["cards", "Card view"]];
 const ACX_ADDED = [["7", "Added in the last 7 days"], ["30", "Added in the last 30 days"], ["old", "Added over 30 days ago"], ["unknown", "Added before magpie kept it"]];
 // a window's room: "room" left in it, "out" used up
@@ -220,7 +220,7 @@ function acxDraw() {
   const sum = $("#acxSum");
   sum.replaceChildren();
   if (all.length) {
-    const parts = [t(all.length === 1 ? "1 account" : "{n} accounts", { n: all.length }), t("{n} in use", { n: n("on") })];
+    const parts = [t(all.length === 1 ? "1 account" : "{n} accounts", { n: all.length }), t("{n} in rotation", { n: n("on") })];
     if (n("paused")) parts.push(t("{n} paused", { n: n("paused") }));
     const nb = all.filter((r) => r.banned).length, nd = all.filter((r) => r.disabled).length;
     if (nb) parts.push(t("{n} banned", { n: nb }));
@@ -273,6 +273,8 @@ function acxActs(r) {
     const [to, said] = r.act;
     const b = el("button", "text acx-use", t(said));
     b.type = "button";
+    // the On toggle's words, told from Disable: out of rotation it stays signed in and read
+    if (to === "off") b.title = t("Take it out of the gateway's rotation: it stays signed in and its usage is still read, unlike Disable");
     b.onclick = () => {
       b.classList.add("busy");
       accountAction("login/" + to, { agent: a.agent, user: l.user }).then(() => acxDraw());
@@ -311,6 +313,7 @@ function acxWho(r) {
   const name = el("div", "name");
   name.append(el("span", "acx-name", alias || l.user));
   const badge = el("span", "acx-state " + r.state, t(ACX_SAID[r.state]));
+  if (r.state === "off") badge.title = t("Not in rotation: still kept signed in and its usage read");
   if (r.again && l.lapsed) badge.title = t(l.lapsed);
   name.append(badge);
   // both marks: both said
