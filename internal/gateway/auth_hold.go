@@ -120,12 +120,10 @@ func readAuthHolds(now time.Time) ([]AuthHold, error) {
 		stamp = strconv.FormatInt(fi.Size(), 10) + "/" + strconv.FormatInt(fi.ModTime().UnixNano(), 10)
 	}
 	if stamp == "" || stamp != authHolds.stamp {
+		// read once a change of the file: a file that doesn't read is
+		// read (and logged) again only once it changes
 		authHolds.holds, authHolds.err = parseAuthHolds(path)
-		if authHolds.err == nil && stamp != "" {
-			authHolds.stamp = stamp
-		} else {
-			authHolds.stamp = ""
-		}
+		authHolds.stamp = stamp
 	}
 	if authHolds.err != nil {
 		return nil, authHolds.err
@@ -280,6 +278,12 @@ func startAuthHold(r *http.Request, pid, account, agent string) (AuthHold, bool)
 	h := who
 	h.At, h.Until, h.Provider, h.Account = now, now.Add(d), pid, account
 	if err := editAuthHolds(func(hs []AuthHold) []AuthHold {
+		// another request of the holder's that met it at the same time
+		// started it already: that one stands, one reset for both
+		if i := slices.IndexFunc(hs, func(o AuthHold) bool { return o.holderOf() == h.holderOf() && now.Before(o.Until) }); i >= 0 {
+			h = hs[i]
+			return hs
+		}
 		hs = slices.DeleteFunc(hs, func(o AuthHold) bool { return o.holderOf() == h.holderOf() })
 		return append(hs, h)
 	}); err != nil {

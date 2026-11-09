@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -314,5 +315,58 @@ func TestAuthHoldStopsTheGroup(t *testing.T) {
 	heldAnswer(t, rec, now.Add(time.Duration(settings.DefaultAuthHoldHours)*time.Hour), now)
 	if other.n != 0 || runsOf(t, log) != "own" {
 		t.Fatalf("asked on: the other provider %d times, Claude runs %q", other.n, runsOf(t, log))
+	}
+}
+
+// Two requests of one caller meeting authentication_failed together start
+// one hold: both read the same reset.
+func TestAuthHoldOneResetForTwoAtOnce(t *testing.T) {
+	claudeSubscriptionFirstSays(t, authRefused)
+	now := time.Now().Truncate(time.Second)
+	move := holdClockAt(t, now)
+	req := httptest.NewRequest("POST", "/v1/messages", nil)
+	req.Header.Set(UserHeader, "bob")
+	first, ok := startAuthHold(req, "claude", "me@example.com", "claude")
+	if !ok {
+		t.Fatal("not held")
+	}
+	move(time.Minute) // the second, a moment on, as two at once read the file in turn
+	// it read the holds before the first was written, as a request at the
+	// same time does: only the edit, under its lock, sees the first
+	readAuthHolds(time.Now())
+	authHolds.Lock()
+	authHolds.holds = nil
+	authHolds.Unlock()
+	second, _ := startAuthHold(req, "claude", "me@example.com", "claude")
+	if !second.Until.Equal(first.Until) {
+		t.Fatalf("two resets: %v and %v", first.Until, second.Until)
+	}
+	hs, _ := AuthHolds()
+	if len(hs) != 1 {
+		t.Fatalf("holds %+v", hs)
+	}
+}
+
+// A hold file that doesn't read is read, and logged, once until it
+// changes, not at every request.
+func TestAuthHoldsUnreadableLoggedOnce(t *testing.T) {
+	fresh(t)
+	holdClockAt(t, time.Now())
+	os.MkdirAll(filepath.Dir(authHoldsPath()), 0o700)
+	os.WriteFile(authHoldsPath(), []byte("{not json"), 0o600)
+	authHolds.Lock()
+	authHolds.stamp = ""
+	authHolds.Unlock()
+	var logged strings.Builder
+	was := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(was) })
+	for range 5 {
+		if _, err := readAuthHolds(time.Now()); err == nil {
+			t.Fatal("an unreadable file read")
+		}
+	}
+	if n := strings.Count(strings.TrimSpace(logged.String()), "\n") + 1; logged.Len() == 0 || n != 1 {
+		t.Fatalf("logged %d times:\n%s", n, logged.String())
 	}
 }
