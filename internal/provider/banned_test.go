@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -139,5 +140,50 @@ func TestBannedAccountNeverSigned(t *testing.T) {
 	}
 	if _, _, err := p.Account.Token(context.Background()); err != ErrAccountBanned {
 		t.Fatalf("token given: %v", err)
+	}
+}
+
+// While Claude Code is signed out, an account marked banned never stands
+// in for its own; one entry of two named alike is marked, not both.
+func TestBannedNeverStandsInAndMarksOneEntry(t *testing.T) {
+	now := time.Now()
+	ls := []savedLogin{
+		{Agent: "claude", User: "a@x.y", Banned: true, Seen: now},
+		{Agent: "claude", User: "b@x.y", Seen: now.Add(-time.Hour)},
+	}
+	if got := claudeStandIn(ls); got != "b@x.y" {
+		t.Fatalf("stand-in %q", got)
+	}
+	home := signIn(t)
+	rememberLogins(true)
+	codexSignIn(t, home, "work@example.com", "r-work")
+	rememberLogins(true)
+	// two entries named alike that a read keeps apart (only Claude's and
+	// Codex's are folded on read), as two seats of one name are
+	loginsMu.Lock()
+	ls = append(readLogins(),
+		savedLogin{Agent: "grok", User: "twin@x.y", Home: "/a", Seen: now},
+		savedLogin{Agent: "grok", User: "twin@x.y", Home: "/b", Seen: now})
+	if err := writeLogins(ls); err != nil {
+		t.Fatal(err)
+	}
+	loginsMu.Unlock()
+	if err := SetLoginBanned("grok", "twin@x.y", true); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, l := range readLogins() {
+		if l.User == "twin@x.y" && l.Banned {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d entries marked", n)
+	}
+	if err := SetLoginBanned("codex", "me@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := WarmNow(context.Background(), "codex", "me@example.com"); err == nil || !strings.Contains(err.Error(), "banned") {
+		t.Fatalf("warmed: %v", err)
 	}
 }

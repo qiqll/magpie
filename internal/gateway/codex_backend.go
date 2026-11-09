@@ -795,7 +795,8 @@ func compactOn(r *http.Request, model string) *provider.Provider {
 		return nil
 	}
 	p, _, ok := provider.Resolve("codex/" + model)
-	if !ok || p.Account == nil || p.Account.Agent != "codex" || !p.OwnPaused() {
+	// a sign-in the user marked banned is moved off as a paused one is
+	if !ok || p.Account == nil || p.Account.Agent != "codex" || !p.OwnPaused() && !provider.AccountBanned(p.Account) {
 		return nil
 	}
 	return compactFirst(r, model, p.AlsoOn())

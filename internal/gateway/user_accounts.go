@@ -2356,7 +2356,10 @@ func UserSeatOut(p provider.Provider, who string, rests map[string]Rest) (out Se
 // counts them.
 func seatCandidates(p provider.Provider) []candidate {
 	if p.Account != nil {
-		out := []candidate{{p: p, rest: p.ID}}
+		var out []candidate
+		if !provider.AccountBanned(p.Account) {
+			out = append(out, candidate{p: p, rest: p.ID}) // one marked banned is no seat
+		}
 		for _, q := range p.AlsoOn() {
 			out = append(out, candidate{p: q, rest: p.ID + "@" + q.Account.User})
 		}

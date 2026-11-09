@@ -98,3 +98,28 @@ func TestBannedSignedInAccountNotACandidate(t *testing.T) {
 		t.Fatalf("candidates %v", users)
 	}
 }
+
+// The account Codex is signed in to, marked banned and not paused, is
+// moved off as a paused one is: a compaction goes to another account on
+// (no 403 from the relay), a search never takes it, and it is no seat.
+func TestBannedOwnSignInCompactedElsewhere(t *testing.T) {
+	codexSignedIn(t, "spare@example.com", "third@example.com")
+	usersUpstream(t, nil)
+	banSaved(t, "me@example.com", true)
+	r := httptest.NewRequest("POST", CodexPath+"/responses/compact", nil)
+	if on := compactOn(r, "gpt-5.5"); on == nil || on.Account.User == "me@example.com" {
+		t.Fatalf("compacted on %+v", on)
+	}
+	ons, _ := chatGPTSearchers(httptest.NewRequest("POST", "/v1/responses", nil), "codex/gpt-5.5")
+	for _, o := range ons {
+		if o.Account.User == "me@example.com" {
+			t.Fatal("searches with the banned sign-in")
+		}
+	}
+	p, _, _ := provider.Resolve("codex/gpt-5.5")
+	for _, c := range seatCandidates(p) {
+		if c.p.Account.User == "me@example.com" {
+			t.Fatal("the banned sign-in is a seat")
+		}
+	}
+}

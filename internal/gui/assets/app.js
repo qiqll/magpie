@@ -13233,7 +13233,7 @@ function cliproxyButton(a, l) {
 function renderAccounts(a, p) {
   const sub = subOf(a.agent);
   const list = el("div", "accts");
-  const ls = loginsInOrder(a, p).filter((l) => !l.banned), banned = a.logins?.filter((l) => l.banned) || [];
+  const ls = loginsInOrder(a, p).filter((l) => !l.banned), banned = loginsInOrder(a, p).filter((l) => l.banned);
   if (p) list.dataset.provider = p.id, list.classList.toggle("weighted", (draft?.routing ?? (p.routing || "")) === "weight");
   // a Claude account refused or with no sign-in waits to sign in again
   const unusable = (l) => a.agent === "claude" && !!l.lapsed;

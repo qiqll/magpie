@@ -144,14 +144,13 @@ func SetLoginBanned(agent, user string, banned bool) error {
 	loginsMu.Lock()
 	defer loginsMu.Unlock()
 	ls := readLogins()
-	found := false
-	for i := range ls {
-		if ls[i].Agent == agent && strings.EqualFold(ls[i].User, user) {
-			ls, _ = mark(ls, i)
-			found = true
-		}
-	}
-	if !found {
+	// one entry, the one shown before one hidden, as editSideLogin picks:
+	// two seats named alike are two entries, and only the one picked is
+	// marked (43a65950: matching every entry of a name took both)
+	i := pickSaved(ls, func(l savedLogin) bool { return l.Agent == agent && strings.EqualFold(l.User, user) })
+	if i >= 0 {
+		ls, _ = mark(ls, i)
+	} else {
 		// the agent's own sign-in not saved yet: saved now, with the mark
 		live, ok := liveLogin(agent)
 		if !ok || !strings.EqualFold(live.User, user) {

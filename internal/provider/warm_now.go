@@ -47,6 +47,9 @@ func WarmNow(ctx context.Context, agent, user string) error {
 	if user == "" || i < 0 {
 		return fmt.Errorf("no %s account %q", name, user)
 	}
+	if ls[i].Banned {
+		return fmt.Errorf("%s is marked banned in magpie; lift the mark to warm it up", ls[i].User)
+	}
 	if ls[i].Lapsed != "" {
 		// as the scheduled warm-up leaves it out (codexWarmUsage)
 		return fmt.Errorf("%s needs signing in again: %s", ls[i].User, ls[i].Lapsed)

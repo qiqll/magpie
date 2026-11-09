@@ -286,7 +286,9 @@ func pluginLogins(pp plugin.Provider) []pluginLogin {
 	}
 	var out []pluginLogin
 	for _, l := range sideLogins(agent, "", func(l savedLogin) bool { _, ok := byKey[l.Home]; return ok && l.Hidden == "" }) {
-		l.Lapsed = l.saved.Lapsed // a refused sign-in shows on the account
+		if !l.saved.Banned {
+			l.Lapsed = l.saved.Lapsed // a refused sign-in shows on the account
+		}
 		l.Own = own[l.saved.Home]
 		out = append(out, pluginLogin{l, byKey[l.saved.Home]})
 	}
