@@ -124,7 +124,7 @@ func (p Provider) OwnPaused() bool {
 // afresh had none, and a second WorkBuddy AI account queued 62s with the
 // wait set to 1s (#1899).
 func (p Provider) AlsoOn() []Provider {
-	out := withoutBanned(p.alsoOn()) // the user's banned mark: never in use (banned.go)
+	out := withoutUnusable(p.alsoOn()) // banned or disabled by the user: never in use (banned.go)
 	for i, q := range out {
 		out[i] = withPicks(q, p)
 	}
@@ -188,7 +188,7 @@ func (a *Account) Token(ctx context.Context) (tok string, ok bool, err error) {
 	if a == nil {
 		return "", false, nil
 	}
-	if err := errIfBanned(ctx, a); err != nil {
+	if err := errIfUnusable(ctx, a); err != nil {
 		return "", a.token != nil, err
 	}
 	if a.token == nil {

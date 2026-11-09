@@ -126,8 +126,8 @@ func accountsKeysOf(keys []access.Identity, ps []provider.Provider, c accountsCa
 					continue
 				}
 				for _, a := range p.AccountIDs() {
-					// one marked banned is used by no key (provider/banned.go)
-					if !a.Key && r.allows(who, p.ID, a.ID) && !p.BannedUser(a.User) {
+					// one marked banned or disabled is used by no key (provider/banned.go)
+					if !a.Key && r.allows(who, p.ID, a.ID) && !p.UnusableUser(a.User) {
 						k.Accounts = append(k.Accounts, strings.ToLower(p.ID+"/"+strings.TrimSpace(a.User)))
 					}
 				}

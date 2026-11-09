@@ -140,8 +140,8 @@ func listSideLogins(ls []savedLogin, agent, ownUser string, usable func(savedLog
 			first = len(out)
 		}
 		// a sign-in its vendor revoked shows on the account (signin_revoked.go)
-		lg := Login{Agent: agent, User: l.User, Plan: l.Plan, Seen: l.Seen, On: l.On, Own: l.own(), Lapsed: revokedLapse(l), Banned: l.Banned}
-		if l.Banned {
+		lg := Login{Agent: agent, User: l.User, Plan: l.Plan, Seen: l.Seen, On: l.On, Own: l.own(), Lapsed: revokedLapse(l), Banned: l.Banned, Disabled: l.Disabled}
+		if l.unusable() {
 			lg.Lapsed = "" // no sign-in to make again (banned.go)
 		}
 		out = append(out, sideLogin{lg, l})

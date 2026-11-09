@@ -2777,12 +2777,14 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acc .dot { width: 16px; height: 16px; flex: none; border-radius: 50%; display: grid; place-items: center; box-shadow: inset 0 0 0 1.5px var(--faint); color: var(--muted); }
 .acc.in-use .dot { background: var(--fg); box-shadow: none; color: var(--card); }
 .acc .using { font-size: 11px; color: var(--fg-2); padding: 2px 8px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--line); }
-/* the accounts marked banned, folded under an editor's list (bannedFold) */
+/* the accounts marked banned or disabled, folded under an editor's list (bannedFill) */
 .acc-banned { display: flex; flex-direction: column; gap: 4px; padding: 6px 0 2px; }
 .acc-banned-head { align-self: flex-start; font-size: 12px; }
 .acc-banned-row { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 3px 0; }
 .acc-banned-row > .acct-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acc-banned-row .using.banned { font-size: 11px; padding: 2px 8px; border-radius: 999px; color: var(--red); background: var(--red-soft); }
+.acc-banned-row .using.disabled { font-size: 11px; padding: 2px 8px; border-radius: 999px; color: var(--fg-2); box-shadow: inset 0 0 0 1px var(--line); }
+.acc-marks { display: inline-flex; gap: 6px; }
 .acc .text.quiet { opacity: 0; transition: opacity .15s; }
 .acc:hover .text.quiet, .acc.held .text.quiet { opacity: 1; }
 .acc .text.quiet:focus-visible { opacity: 1; }

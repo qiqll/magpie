@@ -2560,6 +2560,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// the user's mark that the vendor banned the account: routed
 			// to, switched to and read no more, its history kept
 			change = func() error { return provider.SetLoginBanned(in.Agent, in.User, r.PathValue("action") == "ban") }
+		case "disable", "enable":
+			// the user's own: the account turned off, as banned is
+			change = func() error { return provider.SetLoginDisabled(in.Agent, in.User, r.PathValue("action") == "disable") }
 		default:
 			http.NotFound(rw, r)
 			return

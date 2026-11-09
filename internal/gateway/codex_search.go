@@ -121,7 +121,7 @@ func chatGPTSearchers(r *http.Request, model string) ([]provider.Provider, strin
 		return nil, ""
 	}
 	var all []provider.Provider
-	if !p.OwnPaused() && !provider.AccountBanned(p.Account) {
+	if !p.OwnPaused() && !provider.AccountUnusable(p.Account) {
 		all = append(all, p)
 	}
 	all = append(all, p.AlsoOn()...)

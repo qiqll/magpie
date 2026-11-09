@@ -494,7 +494,7 @@ func claudeStandIn(ls []savedLogin) string {
 	user, best := "", -1
 	var seen time.Time
 	for _, l := range ls {
-		if l.Agent != "claude" || l.Held || l.Banned || l.Lapsed != "" && l.Refused == "" {
+		if l.Agent != "claude" || l.Held || l.unusable() || l.Lapsed != "" && l.Refused == "" {
 			continue
 		}
 		rank := 0

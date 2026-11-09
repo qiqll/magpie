@@ -3232,7 +3232,7 @@ func tilde(p string) string {
 func loginUsers(agent string) []string {
 	var out []string
 	for _, l := range provider.Logins(agent) {
-		if l.User != "" && !l.Banned && !slices.ContainsFunc(out, func(u string) bool { return strings.EqualFold(u, l.User) }) {
+		if l.User != "" && !l.Unusable() && !slices.ContainsFunc(out, func(u string) bool { return strings.EqualFold(u, l.User) }) {
 			out = append(out, l.User)
 		}
 	}

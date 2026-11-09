@@ -86,7 +86,7 @@ var pluginSignInsKept = func() []pluginSignIn {
 			continue
 		}
 		for _, l := range pluginLogins(pp) {
-			if !l.On || l.Lapsed != "" || l.Banned {
+			if !l.On || l.Lapsed != "" || l.Unusable() {
 				continue
 			}
 			if at, ok := plugin.RenewAt(pp, l.acct.Key); ok {

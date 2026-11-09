@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -24,6 +25,26 @@ func bannedOf(t *testing.T, user string) bool {
 	return false
 }
 
+// signInAgainAs signs Codex in to the saved account user again, the same
+// account (its own identity) with a new refresh token, as a sign-in again
+// in Codex would.
+func signInAgainAs(t *testing.T, home, user, refresh string) {
+	t.Helper()
+	for _, l := range readLogins() {
+		if l.Agent != "codex" || l.User != user {
+			continue
+		}
+		var a map[string]any
+		if err := json.Unmarshal(l.Auth, &a); err != nil {
+			t.Fatal(err)
+		}
+		a["tokens"].(map[string]any)["refresh_token"] = refresh
+		writeFile(t, filepath.Join(home, ".codex", "auth.json"), a)
+		return
+	}
+	t.Fatalf("%s isn't saved", user)
+}
+
 // A banned mark is the user's: a sign-in to the account again, the look
 // that saves the agents' sign-ins (rememberLogins) and the keep-alive
 // write the entry anew, and it stays; only the user lifts it.
@@ -38,14 +59,14 @@ func TestBannedKeptUntilTheUserLiftsIt(t *testing.T) {
 	if !bannedOf(t, "me@example.com") || bannedOf(t, "work@example.com") {
 		t.Fatal("not listed banned, or another is")
 	}
-	if !AccountBanned(&Account{Agent: "codex", User: "ME@example.com"}) {
+	if !AccountUnusable(&Account{Agent: "codex", User: "ME@example.com"}) {
 		t.Fatal("the mark is matched in one case only")
 	}
 
 	// signed in to it again, and away from it again
-	codexSignIn(t, home, "me@example.com", "r-again")
+	signInAgainAs(t, home, "me@example.com", "r-again")
 	rememberLogins(true)
-	if !bannedOf(t, "me@example.com") {
+	if !bannedOf(t, "me@example.com") || !strings.Contains(string(savedOf(t, "me@example.com").Auth), "r-again") {
 		t.Fatal("a sign-in again took the mark away")
 	}
 	codexSignIn(t, home, "work@example.com", "r-work")
@@ -186,4 +207,120 @@ func TestBannedNeverStandsInAndMarksOneEntry(t *testing.T) {
 	if err := WarmNow(context.Background(), "codex", "me@example.com"); err == nil || !strings.Contains(err.Error(), "banned") {
 		t.Fatalf("warmed: %v", err)
 	}
+}
+
+// Disabled is kept as banned is, beside it and apart from it: a sign-in
+// again, rememberLogins, upsertLogin and dedupeLogins keep it; it isn't
+// renewed, read, signed or switched to; the two marks are lifted apart, and
+// an account with both stays out until both are.
+func TestDisabledKeptAndHeldApartFromBanned(t *testing.T) {
+	home := signIn(t)
+	rememberLogins(true)
+	codexSignIn(t, home, "work@example.com", "r-work")
+	rememberLogins(true)
+	var got []string
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
+		got = append(got, body["refresh_token"])
+		json.NewEncoder(w).Encode(map[string]any{"access_token": fakeJWT(map[string]any{"exp": float64(time.Now().Add(time.Hour).Unix())}),
+			"refresh_token": body["refresh_token"] + "-2"})
+	}))
+	defer fake.Close()
+	old := codexTokenURL
+	codexTokenURL = fake.URL
+	t.Cleanup(func() { codexTokenURL = old })
+	listed := func() Login {
+		ForgetAccounts()
+		for _, l := range Logins("codex") {
+			if l.User == "me@example.com" {
+				return l
+			}
+		}
+		t.Fatal("me@ isn't listed")
+		return Login{}
+	}
+
+	if err := SetLoginDisabled("codex", "me@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	if l := listed(); !l.Disabled || l.Banned || !AccountUnusable(&Account{Agent: "codex", User: "ME@example.com"}) {
+		t.Fatalf("not disabled alone: %+v", l)
+	}
+	// a sign-in again, rememberLogins, upsertLogin and dedupeLogins keep it
+	signInAgainAs(t, home, "me@example.com", "r-again")
+	rememberLogins(true)
+	if !listed().Disabled || !strings.Contains(string(savedOf(t, "me@example.com").Auth), "r-again") {
+		t.Fatal("a sign-in again took the mark away, or wasn't the same account")
+	}
+	codexSignIn(t, home, "work@example.com", "r-work")
+	rememberLogins(true)
+	loginsMu.Lock()
+	ls := readLogins()
+	for _, l := range ls {
+		if l.User == "me@example.com" {
+			fresh := l
+			fresh.Disabled, fresh.DisabledAt = false, time.Time{}
+			ls = upsertLogin(ls, fresh)
+			if folded := dedupeLogins([]savedLogin{fresh, l}); len(folded) != 1 || !folded[0].Disabled {
+				t.Errorf("folded: %+v", folded)
+			}
+		}
+	}
+	writeLogins(ls)
+	loginsMu.Unlock()
+	if !listed().Disabled {
+		t.Fatal("a rewrite took the mark away")
+	}
+	// nothing renewed, read, signed or switched to
+	if rs := RenewLogins(context.Background(), 0); len(got) != 0 || slices.ContainsFunc(rs, func(r Renewal) bool { return r.User == "me@example.com" }) {
+		t.Fatalf("renewed: %+v %v", rs, got)
+	}
+	if logins, _ := usageLogins("codex"); slices.ContainsFunc(logins, func(l Login) bool { return l.User == "me@example.com" }) {
+		t.Fatal("its allowance is read")
+	}
+	p := Provider{ID: "codex", Account: &Account{Agent: "codex", User: "me@example.com"}}
+	if err := p.Sign(context.Background(), httptest.NewRequest("POST", "https://chatgpt.com/backend-api/codex/responses", nil), Responses, nil); err != ErrAccountDisabled {
+		t.Fatalf("signed: %v", err)
+	}
+	if err := SwitchLogin("codex", "me@example.com"); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("switched: %v", err)
+	}
+	// banned too: both kept, banned said first; enabled, still out
+	if err := SetLoginBanned("codex", "me@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	if l := listed(); !l.Disabled || !l.Banned {
+		t.Fatalf("both: %+v", l)
+	}
+	if err := SetLoginDisabled("codex", "me@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	if l := listed(); l.Disabled || !l.Banned || !AccountUnusable(p.Account) {
+		t.Fatalf("enabled, still banned: %+v", l)
+	}
+	if err := SetLoginBanned("codex", "me@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	if AccountUnusable(p.Account) {
+		t.Fatal("both lifted, still out")
+	}
+	if rs := RenewLogins(context.Background(), 0); len(got) != 1 || !slices.ContainsFunc(rs, func(r Renewal) bool { return r.User == "me@example.com" && r.Renewed }) {
+		t.Fatalf("lifted, not renewed: %+v %v", rs, got)
+	}
+}
+
+// savedOf is the saved codex account user, the only entry of its name.
+func savedOf(t *testing.T, user string) savedLogin {
+	t.Helper()
+	var out []savedLogin
+	for _, l := range readLogins() {
+		if l.Agent == "codex" && strings.HasPrefix(l.User, user) {
+			out = append(out, l)
+		}
+	}
+	if len(out) != 1 {
+		t.Fatalf("%d entries for %s: %+v", len(out), user, out)
+	}
+	return out[0]
 }

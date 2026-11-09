@@ -123,3 +123,43 @@ func TestBannedOwnSignInCompactedElsewhere(t *testing.T) {
 		}
 	}
 }
+
+// A disabled account is left out as a banned one is: a spare is never
+// asked, and Codex's own sign-in is no candidate, compacted elsewhere,
+// searched with by nobody and no seat.
+func TestDisabledAccountLeftOutAsBanned(t *testing.T) {
+	codexSignedIn(t, "spare@example.com", "third@example.com")
+	asked, _ := usersUpstream(t, map[string]int{"acct-1": http.StatusTooManyRequests})
+	if err := provider.SetLoginDisabled("codex", "spare@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	provider.ForgetAccounts()
+	codexPostTo(New(), `{"model":"gpt-5.5","stream":true,"input":"ping"}`)
+	if got := asked(true); slices.Contains(got, "acct-2") {
+		t.Fatalf("asked %v: the disabled account was asked", got)
+	}
+	if err := provider.SetLoginDisabled("codex", "me@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	provider.ForgetAccounts()
+	p, _, _ := provider.Resolve("codex/gpt-5.5")
+	for _, c := range accountsOn(p, "gpt-5.5") {
+		if c.p.Account.User != "third@example.com" {
+			t.Fatalf("candidate %s", c.p.Account.User)
+		}
+	}
+	if on := compactOn(httptest.NewRequest("POST", CodexPath+"/responses/compact", nil), "gpt-5.5"); on == nil || on.Account.User != "third@example.com" {
+		t.Fatalf("compacted on %+v", on)
+	}
+	ons, _ := chatGPTSearchers(httptest.NewRequest("POST", "/v1/responses", nil), "codex/gpt-5.5")
+	for _, o := range ons {
+		if o.Account.User != "third@example.com" {
+			t.Fatalf("searches with %s", o.Account.User)
+		}
+	}
+	for _, c := range seatCandidates(p) {
+		if c.p.Account.User != "third@example.com" {
+			t.Fatalf("seat %s", c.p.Account.User)
+		}
+	}
+}

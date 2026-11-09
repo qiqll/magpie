@@ -25,14 +25,14 @@ import (
 // `magpie accounts project <gemini|antigravity> <email> <project>`,
 // `magpie accounts alias <agent> <email> [<name>|--clear]`
 // `magpie accounts switch-only <codex|claude> [on|off]`
-// `magpie accounts ban|unban <agent> <email>`
+// `magpie accounts ban|unban|disable|enable <agent> <email>`
 // — the subscriptions magpie remembers, how much of each one's allowance is
 // used, and switching the agent between them.
 func accountsCmd(args []string) error {
 	if len(args) > 1 && args[1] == "discovery" {
 		return accountsDiscoveryCmd(args[2:])
 	}
-	const usage = "usage: magpie accounts [claude|codex|grok|copilot|gemini|antigravity|zed|factory|mimo|<plugin>] [--json] | magpie accounts add <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> | magpie accounts add copilot [--host <name>.ghe.com] | magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes] | magpie accounts refresh [--json] | magpie accounts checkin [--json] | magpie accounts switch|forget <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> <email> | magpie accounts switch <claude|codex> next | magpie accounts switch|forget copilot <login>[@<name>.ghe.com] [--host <name>.ghe.com] | magpie accounts project <gemini|antigravity> <email> <gcp-project-id> | magpie accounts alias <agent|<plugin>> <email> [<name>|--clear] | magpie accounts switch-only <codex|claude> [on|off] | magpie accounts ban|unban <agent|<plugin>> <email>"
+	const usage = "usage: magpie accounts [claude|codex|grok|copilot|gemini|antigravity|zed|factory|mimo|<plugin>] [--json] | magpie accounts add <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> | magpie accounts add copilot [--host <name>.ghe.com] | magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes] | magpie accounts refresh [--json] | magpie accounts checkin [--json] | magpie accounts switch|forget <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> <email> | magpie accounts switch <claude|codex> next | magpie accounts switch|forget copilot <login>[@<name>.ghe.com] [--host <name>.ghe.com] | magpie accounts project <gemini|antigravity> <email> <gcp-project-id> | magpie accounts alias <agent|<plugin>> <email> [<name>|--clear] | magpie accounts switch-only <codex|claude> [on|off] | magpie accounts ban|unban|disable|enable <agent|<plugin>> <email>"
 	agentID := func(s string) (string, error) {
 		switch strings.ToLower(s) {
 		case "claude", "cc":
@@ -158,9 +158,10 @@ func accountsCmd(args []string) error {
 		}
 		return addAccount(id)
 	}
-	if len(args) > 1 && (args[1] == "ban" || args[1] == "unban") {
-		// the user's mark that the vendor banned the account
-		// (provider/banned.go): routed to, switched to and read no more
+	if len(args) > 1 && (args[1] == "ban" || args[1] == "unban" || args[1] == "disable" || args[1] == "enable") {
+		// the user's mark that the vendor banned the account, or that
+		// they turned it off (provider/banned.go): routed to, switched to
+		// and read no more
 		if len(args) != 4 {
 			return fmt.Errorf("%s", usage)
 		}
@@ -171,14 +172,20 @@ func accountsCmd(args []string) error {
 		if args[3], err = accountNamed(id, args[3]); err != nil {
 			return err
 		}
-		if err := provider.SetLoginBanned(id, args[3], args[1] == "ban"); err != nil {
+		set := provider.SetLoginBanned
+		if args[1] == "disable" || args[1] == "enable" {
+			set = provider.SetLoginDisabled
+		}
+		if err := set(id, args[3], args[1] == "ban" || args[1] == "disable"); err != nil {
 			return err
 		}
-		if args[1] == "ban" {
-			fmt.Println(green.Render("✓"), args[3], "is marked banned: magpie sends it nothing, its usage history kept")
-		} else {
-			fmt.Println(green.Render("✓"), args[3], "is no longer marked banned")
+		said := map[string]string{
+			"ban":     "is marked banned: magpie sends it nothing, its usage history kept",
+			"unban":   "is no longer marked banned",
+			"disable": "is disabled: magpie sends it nothing, its usage history kept",
+			"enable":  "is no longer disabled",
 		}
+		fmt.Println(green.Render("✓"), args[3], said[args[1]])
 		return nil
 	}
 	if len(args) > 1 && (args[1] == "switch" || args[1] == "forget") {
@@ -322,8 +329,8 @@ func accountsCmd(args []string) error {
 		if r.Resets != nil {
 			line += "  " + resetsCell(r.Resets, r.Agent, r.User)
 		}
-		if r.Banned {
-			line += "  " + muted.Render("banned")
+		if marks := slices.DeleteFunc([]string{map[bool]string{true: "banned"}[r.Banned], map[bool]string{true: "disabled"}[r.Disabled]}, func(s string) bool { return s == "" }); len(marks) > 0 {
+			line += "  " + muted.Render(strings.Join(marks, ", "))
 		} else if r.Lapsed != "" {
 			line += "  " + muted.Render(r.Lapsed)
 		} else if r.Error != "" {
@@ -338,17 +345,18 @@ func accountsCmd(args []string) error {
 
 // accountRow is one account and its allowance, as `magpie accounts` shows it.
 type accountRow struct {
-	Agent   string      `json:"agent"`
-	User    string      `json:"user"`
-	Plan    string      `json:"plan,omitempty"`
-	Active  bool        `json:"active"` // the agent is signed in to it
-	On      bool        `json:"on"`     // in use: the active one, or next in line
-	Windows []quotaSpan `json:"windows"`
-	Error   string      `json:"error,omitempty"`
-	Lapsed  string      `json:"lapsed,omitempty"` // its sign-in has to be made again
-	Banned  bool        `json:"banned,omitempty"` // the user marked it banned (provider/banned.go)
-	AsOf    *time.Time  `json:"asOf,omitempty"`   // last reading when it couldn't be read now
-	ReadAt  *time.Time  `json:"readAt,omitempty"` // when what is shown was read, when known
+	Agent    string      `json:"agent"`
+	User     string      `json:"user"`
+	Plan     string      `json:"plan,omitempty"`
+	Active   bool        `json:"active"` // the agent is signed in to it
+	On       bool        `json:"on"`     // in use: the active one, or next in line
+	Windows  []quotaSpan `json:"windows"`
+	Error    string      `json:"error,omitempty"`
+	Lapsed   string      `json:"lapsed,omitempty"`   // its sign-in has to be made again
+	Banned   bool        `json:"banned,omitempty"`   // the user marked it banned (provider/banned.go)
+	Disabled bool        `json:"disabled,omitempty"` // the user turned it off (provider/banned.go)
+	AsOf     *time.Time  `json:"asOf,omitempty"`     // last reading when it couldn't be read now
+	ReadAt   *time.Time  `json:"readAt,omitempty"`   // when what is shown was read, when known
 	// Resets are a Codex account's rate-limit resets, when it holds any.
 	Resets *provider.ResetCredits `json:"resets,omitempty"`
 	// Balance is what the account holds beside its windows, a ChatGPT
@@ -390,7 +398,7 @@ func accountRows(ls []provider.Login, now time.Time) []accountRow {
 	wg.Wait()
 	rows := []accountRow{}
 	for _, l := range ls {
-		r := accountRow{Agent: l.Agent, User: l.User, Plan: l.Plan, Active: l.Active, On: l.On, Windows: []quotaSpan{}, Lapsed: l.Lapsed, Banned: l.Banned}
+		r := accountRow{Agent: l.Agent, User: l.User, Plan: l.Plan, Active: l.Active, On: l.On, Windows: []quotaSpan{}, Lapsed: l.Lapsed, Banned: l.Banned, Disabled: l.Disabled}
 		r.Seat = provider.SeatNameOf(l.Agent, l.User)
 		r.Alias = cmp.Or(provider.AccountLabelOf(l.Agent, l.User), r.Seat)
 		for user, q := range usage[l.Agent] {

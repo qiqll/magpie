@@ -72,7 +72,7 @@ func callerKeyRoutes(mux *http.ServeMux) {
 		w.Header().Set("Cache-Control", "no-store")
 		out := []keyModelJSON{}
 		accounts := []keyModelJSON{}
-		banned := []string{}
+		unusable := []string{}
 		for _, e := range provider.Catalog() {
 			if e.Group != "" {
 				// by the id magpie keeps it by, group/<id>, as a key held to it
@@ -113,17 +113,17 @@ func callerKeyRoutes(mux *http.ServeMux) {
 			// name the user gave it, else who is signed in; a key by its
 			// fingerprint
 			for _, a := range p.AccountIDs() {
-				if !a.Key && p.BannedUser(a.User) {
-					// marked banned by the user: no key is given it (provider/banned.go);
-					// one a key holds already is kept in its list, and banned is
-					// said for the menu to leave it out
-					banned = append(banned, p.ID+"/"+a.ID)
+				if !a.Key && p.UnusableUser(a.User) {
+					// marked banned or disabled by the user: no key is given it
+					// (provider/banned.go); one a key holds already is kept in its
+					// list, and unusable is said for the menu to leave it out
+					unusable = append(unusable, p.ID+"/"+a.ID)
 					continue
 				}
 				accounts = append(accounts, keyModelJSON{ID: p.ID + "/" + a.ID, Name: a.Shown(p), Provider: p.ID, ProviderName: name, Account: !a.Key, Key: a.Key, Plan: a.Plan})
 			}
 		}
-		writeJSON(w, map[string]any{"models": out, "accounts": accounts, "banned": banned})
+		writeJSON(w, map[string]any{"models": out, "accounts": accounts, "unusable": unusable})
 	})
 	mux.HandleFunc("POST /api/caller-keys/{action}", func(w http.ResponseWriter, r *http.Request) {
 		var in access.Change

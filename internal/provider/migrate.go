@@ -785,9 +785,9 @@ func keepOrder(pp plugin.Provider, accts []Moving, moved []movedAccount) error {
 		if a.Lapsed {
 			l.Lapsed = lapsedText(pp, a.User)
 		}
-		// the user's banned mark on the built-in's account goes with it
-		if i := slices.IndexFunc(ls, func(b savedLogin) bool { return b.Banned && b.Agent == pp.ID && strings.EqualFold(b.User, a.User) }); i >= 0 {
-			l = keepBanned(l, ls[i])
+		// the user's banned or disabled mark on the built-in's account goes with it
+		if i := slices.IndexFunc(ls, func(b savedLogin) bool { return b.unusable() && b.Agent == pp.ID && strings.EqualFold(b.User, a.User) }); i >= 0 {
+			l = keepMarks(l, ls[i])
 		}
 		ls = append(ls, l)
 	}

@@ -338,32 +338,33 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 		w, body, hooked = gatewayHooks(w, r, provider.Responses, body)
 		defer hooked()
 	}
-	if codexOwnBanned(r) {
+	if err := codexOwnRefused(r); err != nil {
 		// relayed as it came, it would reach Codex's own sign-in, which
-		// the user marked banned: nothing is sent it (provider/banned.go)
-		writeError(w, provider.Responses, http.StatusForbidden, provider.ErrAccountBanned.Error())
+		// the user marked banned or disabled: nothing is sent it
+		// (provider/banned.go)
+		writeError(w, provider.Responses, http.StatusForbidden, err.Error())
 		return
 	}
 	s.codexUpstream(w, r, rest, body)
 }
 
-// codexOwnBanned says r, relayed as it came, would go on the account
-// Codex is signed in to, and the user marked that account banned. A
-// request signed by an account magpie doesn't have (a Codex in WSL)
-// isn't its.
-func codexOwnBanned(r *http.Request) bool {
+// codexOwnRefused is why r, relayed as it came, isn't sent: it would go on
+// the account Codex is signed in to, and the user marked that account
+// banned or disabled; nil otherwise. A request signed by an account magpie
+// doesn't have (a Codex in WSL) isn't its.
+func codexOwnRefused(r *http.Request) error {
 	if apiKey(r.Header) {
-		return false
+		return nil
 	}
 	if acct := r.Header.Get("chatgpt-account-id"); acct != "" && acct != provider.CodexSignedInAccount() {
-		return false
+		return nil
 	}
 	for _, l := range provider.Logins("codex") {
 		if l.Active {
-			return l.Banned
+			return provider.LoginRefusal("codex", l.User)
 		}
 	}
-	return false
+	return nil
 }
 
 // sealedTaskError is what a subagent is told whose task its lead sealed
@@ -795,8 +796,8 @@ func compactOn(r *http.Request, model string) *provider.Provider {
 		return nil
 	}
 	p, _, ok := provider.Resolve("codex/" + model)
-	// a sign-in the user marked banned is moved off as a paused one is
-	if !ok || p.Account == nil || p.Account.Agent != "codex" || !p.OwnPaused() && !provider.AccountBanned(p.Account) {
+	// a sign-in the user marked banned or disabled is moved off as a paused one is
+	if !ok || p.Account == nil || p.Account.Agent != "codex" || !p.OwnPaused() && !provider.AccountUnusable(p.Account) {
 		return nil
 	}
 	return compactFirst(r, model, p.AlsoOn())

@@ -340,16 +340,16 @@ func keepAtOnce(n int, out, aside []candidate) ([]candidate, []candidate) {
 
 // accountsOn are the accounts of p (signed in: p.Account) a request may
 // take, in the user's order: the one signed in to, unless the user paused
-// it for the others on (#263) or marked it banned, then the others on; kept signed in to an
+// it for the others on (#263) or marked it banned or disabled, then the others on; kept signed in to an
 // account of the user's choosing, the one signed in to stands at its own
 // place in the order, not first (#524). A search API that signs in as a
 // plugin's provider takes its accounts so too (search_signin.go).
 func accountsOn(p provider.Provider, model string) []candidate {
-	also := p.AlsoOn() // never one the user marked banned (provider/banned.go)
+	also := p.AlsoOn() // never one the user marked banned or disabled (provider/banned.go)
 	var all []candidate
-	// the one signed in to, marked banned, is left out with no other
-	// left either: unlike a lapsed one (leaveLapsed), never tried
-	if (len(also) == 0 || !p.OwnPaused()) && !provider.AccountBanned(p.Account) {
+	// the one signed in to, marked banned or disabled, is left out with
+	// no other left either: unlike a lapsed one (leaveLapsed), never tried
+	if (len(also) == 0 || !p.OwnPaused()) && !provider.AccountUnusable(p.Account) {
 		all = append(all, candidate{p: p, model: model, rest: p.ID})
 	}
 	for i, q := range also {

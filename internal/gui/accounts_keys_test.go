@@ -122,6 +122,7 @@ func TestAccountsKeysLeaveBannedOut(t *testing.T) {
 	os.MkdirAll(filepath.Dir(path), 0o700)
 	b, _ := json.Marshal([]map[string]any{
 		{"agent": "codex", "user": "Gone@example.com", "banned": true, "seen": time.Now()},
+		{"agent": "codex", "user": "off@example.com", "disabled": true, "seen": time.Now()},
 		{"agent": "codex", "user": "ops@example.com", "seen": time.Now()},
 	})
 	if err := os.WriteFile(path, b, 0o600); err != nil {

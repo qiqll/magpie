@@ -281,7 +281,7 @@ func NextLogin(ctx context.Context, agent string) (from, to string, back, ok boo
 	// kept on the first, the agent goes back to it at once, however little
 	// that has left (#524)
 	share, keep := loginSwitching(agent)
-	if keep && first != nil && first.On && first.Lapsed == "" && !first.Banned {
+	if keep && first != nil && first.On && first.Lapsed == "" && !first.Unusable() {
 		return from, first.User, true, true
 	}
 	// the account it is on, and the one it goes back to, are read; the

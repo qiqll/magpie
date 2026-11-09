@@ -322,8 +322,8 @@ func cachedLoginReading(ctx context.Context, l Login) loginUsageEntry {
 // False for an agent that tells none, and for the built-in Grok, read by
 // home.
 func usageLogins(agent string) (logins []Login, ok bool) {
-	// one the user marked banned isn't read (banned.go)
-	unbanned := func(ls []Login) []Login { return slices.DeleteFunc(ls, func(l Login) bool { return l.Banned }) }
+	// one the user marked banned or disabled isn't read (banned.go)
+	unbanned := func(ls []Login) []Login { return slices.DeleteFunc(ls, Login.Unusable) }
 	if pp, plugin := pluginOfAgent(agent); plugin {
 		return unbanned(pluginUsageLogins(pp)), true
 	}

@@ -19,8 +19,10 @@
 //   last 5 hours' requests, failures, tokens and cost;
 // - a gateway key keeps the accounts /api/accounts/keys says it may use.
 // 需求方 (2026-11-08): an account its vendor banned is marked so by hand:
-// - Status filters it out by default (Not banned), Banned only and Banned
-//   or not show it, kept in magpie.acxFilter, a word finds it then;
+// - Status filters it out by default (Normal), Banned, Disabled and All
+//   show it, kept in magpie.acxFilter, a word finds it then;
+// - one the user disabled is held the same, said Disabled, with Disable and
+//   Enable; one with both marks says both and stays out until both go;
 // - its badge says Banned, Mark banned and Lift ban post login/ban and
 //   login/unban;
 // - the provider's editor leaves it out of its accounts, folded under
@@ -56,8 +58,12 @@ function providersOf(seen) {
         accountAdded: { "alice@example.com": daysAgo(3), "bob@example.com": daysAgo(20) } }),
       prov("codex", "Codex", "codex", [
         { user: "ops@example.com", plan: "pro", active: true, on: true },
-        { user: "qa@example.com", plan: "plus", on: seen.on.has("qa@example.com"), banned: seen.banned?.has("qa@example.com") },
-        ...(seen.banned ? [{ user: "dave@example.com", plan: "pro", on: true, banned: seen.banned.has("dave@example.com") }] : []),
+        { user: "qa@example.com", plan: "plus", on: seen.on.has("qa@example.com"), banned: seen.banned?.has("qa@example.com"), disabled: seen.disabled?.has("qa@example.com") },
+        ...(seen.banned ? [
+          { user: "dave@example.com", plan: "pro", on: true, banned: seen.banned.has("dave@example.com"), disabled: seen.disabled.has("dave@example.com") },
+          { user: "erin@example.com", plan: "pro", on: true, banned: seen.banned.has("erin@example.com"), disabled: seen.disabled.has("erin@example.com") },
+          { user: "frank@example.com", plan: "pro", on: true, banned: seen.banned.has("frank@example.com"), disabled: seen.disabled.has("frank@example.com") },
+        ] : []),
       ], { accountAdded: { "ops@example.com": daysAgo(60) } }),
       // a key provider: no accounts, not listed
       { id: "openrouter", name: "OpenRouter", icon: "openrouter", models: [], agents: [], fallback: [], headers: {}, chat: "https://openrouter.ai/api/v1", responses: "", anthropic: "", catalog: "", key: { set: true, masked: "sk-or-…abcd" }, ready: true, keyList: [{ id: "k1", name: "main", masked: "sk-or-…abcd" }] },
@@ -101,6 +107,12 @@ function serve(lang, seen) {
       const b = req.postDataJSON();
       seen.posts.push([url.pathname, b]);
       if (url.pathname.endsWith("/on")) { seen.on.add(b.user); seen.off.delete(b.user); } else { seen.off.add(b.user); seen.on.delete(b.user); }
+      return json(providersOf(seen));
+    }
+    if (url.pathname === "/api/login/disable" || url.pathname === "/api/login/enable") {
+      const b = req.postDataJSON();
+      seen.posts.push([url.pathname, b]);
+      url.pathname.endsWith("/disable") ? seen.disabled.add(b.user) : seen.disabled.delete(b.user);
       return json(providersOf(seen));
     }
     if (url.pathname === "/api/login/ban" || url.pathname === "/api/login/unban") {
@@ -165,7 +177,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.doesNotMatch(bob.sub, /s3cret/, "the proxy's password isn't shown");
         // the editor tick's own action on each
         assert.deepEqual(rows.map((r) => r.acts), [
-          [x("Pause"), x("Mark banned"), x("Open")], [x("Stop using"), x("Mark banned"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Open")], [x("Mark banned"), x("Open")], [x("Use"), x("Mark banned"), x("Open")],
+          [x("Pause"), x("Mark banned"), x("Disable"), x("Open")], [x("Stop using"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Mark banned"), x("Disable"), x("Open")], [x("Use"), x("Mark banned"), x("Disable"), x("Open")],
         ]);
         assert.equal(await page.locator("#acxSum").textContent(), [x("{n} accounts", { n: 6 }), x("{n} in use", { n: 3 }), x("{n} to sign in again", { n: 2 })].join(" · "));
         if (width > 600) assert.equal(new Set(rows.filter((r) => r.meters != null).map((r) => r.meters)).size, 1, "the windows line up");
@@ -279,7 +291,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(card("qa@example.com").stats.slice(0, 2), ["0", "0"]);
         // the same actions as a row's
         assert.deepEqual(cards.map((c) => c.acts), [
-          [x("Pause"), x("Mark banned"), x("Open")], [x("Stop using"), x("Mark banned"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Open")], [x("Mark banned"), x("Open")], [x("Use"), x("Mark banned"), x("Open")],
+          [x("Pause"), x("Mark banned"), x("Disable"), x("Open")], [x("Stop using"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Mark banned"), x("Disable"), x("Open")], [x("Use"), x("Mark banned"), x("Disable"), x("Open")],
         ]);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "nothing wider than the window");
 
@@ -337,7 +349,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     const x = (s, a) => tr(lang, s, a);
     for (const width of [1000, 380]) {
       test(`${engine} ${lang} ${width}: an account marked banned is filtered out, folded in the editor and not switched to`, async (t) => {
-        const seen = { posts: [], starts: [], usage: [], on: new Set(), off: new Set(), banned: new Set(["dave@example.com"]) };
+        const seen = { posts: [], starts: [], usage: [], on: new Set(), off: new Set(), banned: new Set(["dave@example.com", "frank@example.com"]), disabled: new Set(["erin@example.com", "frank@example.com"]) };
         const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
         t.after(() => browser.close());
         const page = await (await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: "reduce" })).newPage();
@@ -357,49 +369,74 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         };
         // left out by default, said in the sum
         assert.ok(!(await users()).includes("dave@example.com"), "a banned one is left out by default");
-        assert.equal(await page.locator("#acxBanned").textContent(), x("Not banned"));
-        assert.ok((await page.locator("#acxSum").textContent()).includes(x("{n} banned", { n: 1 })));
+        assert.equal(await page.locator("#acxBanned").textContent(), x("Normal"));
+        assert.ok(!(await users()).some((u) => /erin|frank/.test(u)), "neither banned nor disabled ones by default");
+        const sumSaid = await page.locator("#acxSum").textContent();
+        assert.ok(sumSaid.includes(x("{n} banned", { n: 2 })) && sumSaid.includes(x("{n} disabled", { n: 2 })), sumSaid);
         await page.locator("#acxQ").fill("dave");
         await settle(page);
         assert.deepEqual(await users(), [], "not found while left out");
         // Banned only: it, its badge, its actions, found by a word
-        await pick("#acxBanned", x("Banned only"));
+        await pick("#acxBanned", x("Banned"));
         let rows = await rowsOf(page);
         assert.deepEqual(rows.map((r) => [r.user, r.state]), [["dave@example.com", x("Banned")]]);
-        assert.deepEqual(rows[0].acts, [x("Lift ban"), x("Open")], "no Use, no Sign in again");
+        assert.deepEqual(rows[0].acts, [x("Lift ban"), x("Disable"), x("Open")], "no Use, no Sign in again");
         await page.locator("#acxQ").fill("");
         await settle(page);
-        assert.deepEqual(await users(), ["dave@example.com"]);
+        assert.deepEqual(await users(), ["dave@example.com", "frank@example.com"]);
+        // one with both marks says both
+        const badges = await page.$$eval('#acxList .row.acx[data-user="frank@example.com"] .acx-state', (bs) => bs.map((b) => b.textContent));
+        assert.deepEqual(badges, [x("Banned"), x("Disabled")]);
+        // Disabled: those turned off, the one with both too
+        await pick("#acxBanned", x("Disabled"));
+        rows = await rowsOf(page);
+        assert.deepEqual(rows.map((r) => [r.user, r.state]), [["erin@example.com", x("Disabled")], ["frank@example.com", x("Banned")]]);
+        assert.deepEqual(rows[0].acts, [x("Mark banned"), x("Enable"), x("Open")]);
         // kept as the page opens again
         await page.goto("http://magpie.test/?view=accounts");
-        await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 1);
-        assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("magpie.acxFilter"))).b, "banned");
-        // Banned or not: every one
-        await pick("#acxBanned", x("Banned or not"));
-        assert.equal((await users()).length, 7);
+        await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 2);
+        assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("magpie.acxFilter"))).b, "disabled");
+        // All: every one
+        await pick("#acxBanned", x("All"));
+        assert.equal((await users()).length, 9);
         // Mark banned and Lift ban post their calls
         await page.locator('#acxList .row.acx[data-user="qa@example.com"] .acx-ban').click();
         await page.waitForFunction((s) => document.querySelector('#acxList .row.acx[data-user="qa@example.com"] .acx-state')?.textContent === s, x("Banned"));
         await page.locator('#acxList .row.acx[data-user="dave@example.com"] .acx-ban').click();
         await page.waitForFunction((s) => document.querySelector('#acxList .row.acx[data-user="dave@example.com"] .acx-state')?.textContent === s, x("In use"));
-        assert.deepEqual(seen.posts, [["/api/login/ban", { agent: "codex", user: "qa@example.com" }], ["/api/login/unban", { agent: "codex", user: "dave@example.com" }]]);
+        // Enable on one disabled, and on one with both: that one stays out, banned
+        await page.locator('#acxList .row.acx[data-user="erin@example.com"] .acx-disable').click();
+        await page.waitForFunction((s) => document.querySelector('#acxList .row.acx[data-user="erin@example.com"] .acx-state')?.textContent === s, x("In use"));
+        await page.locator('#acxList .row.acx[data-user="frank@example.com"] .acx-disable').click();
+        await page.waitForFunction((s) => document.querySelectorAll('#acxList .row.acx[data-user="frank@example.com"] .acx-state').length === 1 && document.querySelector('#acxList .row.acx[data-user="frank@example.com"] .acx-state').textContent === s, x("Banned"));
+        assert.deepEqual(seen.posts, [["/api/login/ban", { agent: "codex", user: "qa@example.com" }], ["/api/login/unban", { agent: "codex", user: "dave@example.com" }],
+          ["/api/login/enable", { agent: "codex", user: "erin@example.com" }], ["/api/login/enable", { agent: "codex", user: "frank@example.com" }]]);
+        seen.disabled.add("frank@example.com"); // both marks again, for the editor
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "nothing wider than the window");
 
         // the editor: qa folded under the accounts, opened to lift or remove
         await page.goto("http://magpie.test/?view=providers&edit=codex");
         await page.locator(".editor .acc-banned-head").waitFor();
         const listed = await page.$$eval(".editor .accts > .acc", (rs) => rs.map((r) => r.dataset.accountId));
-        assert.ok(!listed.includes("qa@example.com") && listed.includes("dave@example.com"), "the banned one isn't among the accounts: " + listed);
-        assert.equal(await page.locator(".editor .acc-banned-head").textContent(), x("1 banned account") + " · " + x("Show"));
+        assert.ok(!listed.includes("qa@example.com") && !listed.includes("frank@example.com") && listed.includes("dave@example.com"), "a banned or disabled one is among the accounts: " + listed);
+        assert.equal(await page.locator(".editor .acc-banned-head").textContent(), x("{n} banned accounts", { n: 2 }) + " · " + x("Show"));
         await page.locator(".editor .acc-banned-head").click();
+        const both = page.locator('.editor .acc-banned-row[data-account-id="frank@example.com"]');
+        await both.waitFor();
+        assert.deepEqual(await both.locator(".using").allTextContents(), [x("Banned"), x("Disabled")]);
+        assert.deepEqual(await both.locator(".text").allTextContents(), [x("Lift ban"), x("Enable"), x("Remove")]);
         const row = page.locator('.editor .acc-banned-row[data-account-id="qa@example.com"]');
-        await row.waitFor();
         assert.deepEqual(await row.locator(".text").allTextContents(), [x("Lift ban"), x("Remove")]);
         await row.locator(".acc-ban").click();
-        await page.waitForFunction(() => !document.querySelector(".editor .acc-banned"));
+        await page.waitForFunction((s) => document.querySelector(".editor .acc-banned-head")?.textContent.startsWith(s), x("1 banned account"));
         assert.deepEqual(seen.posts.at(-1), ["/api/login/unban", { agent: "codex", user: "qa@example.com" }]);
+        // only disabled: the fold says so
+        seen.banned.delete("frank@example.com");
+        await page.goto("http://magpie.test/?view=providers&edit=codex");
+        await page.locator(".editor .acc-banned-head").waitFor();
+        assert.equal(await page.locator(".editor .acc-banned-head").textContent(), x("1 disabled account") + " · " + x("Show"));
 
-        // Switch accounts only: a banned one isn't offered
+        // Switch accounts only: neither a banned nor a disabled one is offered
         seen.banned.add("qa@example.com");
         await page.evaluate(() => loadProviders());
         const offered = await page.evaluate(async () => {
@@ -412,7 +449,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           e.button.remove();
           return names;
         });
-        assert.ok(offered.includes("ops@example.com") && !offered.includes("qa@example.com"), "offered " + offered);
+        assert.ok(offered.includes("ops@example.com") && offered.includes("dave@example.com") && !offered.includes("qa@example.com") && !offered.includes("frank@example.com"), "offered " + offered);
         assert.deepEqual(errors, []);
       });
     }
