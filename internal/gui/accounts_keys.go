@@ -9,11 +9,12 @@ import (
 	"github.com/yetone/magpie/internal/provider"
 )
 
-// accountsKeyJSON is a gateway key as Models › Accounts filters by it:
+// AccountsKey is a gateway key as Models › Accounts filters by it, and as
+// `magpie accounts keys` lists it:
 // the subscription accounts a request sending it may be served by, as
 // "<provider>/<account>" in lower case (the account's name, as the page
 // knows its rows), or All for a key held to none.
-type accountsKeyJSON struct {
+type AccountsKey struct {
 	ID       string   `json:"id"`
 	Name     string   `json:"name"`
 	All      bool     `json:"all,omitempty"`
@@ -110,10 +111,10 @@ func (c accountsCatalog) reachOf(who access.Identity, pid string) keyReach {
 }
 
 // accountsKeysOf are keys' accounts among those of providers ps.
-func accountsKeysOf(keys []access.Identity, ps []provider.Provider, c accountsCatalog) []accountsKeyJSON {
-	out := make([]accountsKeyJSON, 0, len(keys))
+func accountsKeysOf(keys []access.Identity, ps []provider.Provider, c accountsCatalog) []AccountsKey {
+	out := make([]AccountsKey, 0, len(keys))
 	for _, who := range keys {
-		k := accountsKeyJSON{ID: who.KeyID, Name: who.KeyName, All: !who.Restricted(), Accounts: []string{}}
+		k := AccountsKey{ID: who.KeyID, Name: who.KeyName, All: !who.Restricted(), Accounts: []string{}}
 		if !k.All {
 			for _, p := range ps {
 				// a provider turned off is listed on the page too: a key
@@ -138,16 +139,27 @@ func accountsKeysOf(keys []access.Identity, ps []provider.Provider, c accountsCa
 	return out
 }
 
+// AccountsKeys are the gateway keys that work now, each with the accounts
+// it may be served by, by the gateway's own rule: the route's and the
+// command's one list.
+func AccountsKeys() ([]AccountsKey, error) {
+	keys, err := access.Identities()
+	if err != nil {
+		return nil, err
+	}
+	return accountsKeysOf(keys, provider.All(), readAccountsCatalog()), nil
+}
+
 func accountsKeyRoutes(mux *http.ServeMux) {
 	// the gateway keys that work now, each with the accounts it may use,
 	// for Models › Accounts' key filter
 	mux.HandleFunc("GET /api/accounts/keys", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		keys, err := access.Identities()
+		keys, err := AccountsKeys()
 		if err != nil {
 			fail(w, err)
 			return
 		}
-		writeJSON(w, map[string]any{"keys": accountsKeysOf(keys, provider.All(), readAccountsCatalog())})
+		writeJSON(w, map[string]any{"keys": keys})
 	})
 }

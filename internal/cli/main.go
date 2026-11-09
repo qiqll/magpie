@@ -107,6 +107,7 @@ const usage = `magpie — one place to pick every agent's model
   magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes]   bring in accounts from other tools' files (Codex's auth.json, Cockpit Tools, CLIProxyAPI, Sub2API, claude-swap); the tool a ChatGPT or Claude file came from is signed out of it
   magpie accounts switch <agent> <email|name>   sign the agent in to another of them, by its email or the name you gave it
   magpie accounts switch <claude|codex> next   to the next account in order with room, or the one with the most left
+  magpie accounts keys [--json]   each gateway key and the subscription accounts it may be served by
   magpie accounts ban|unban <agent> <email|name>   mark an account its vendor banned: magpie sends it nothing and reads nothing of it, its usage kept
   magpie accounts disable|enable <agent> <email|name>   turn an account off in magpie, as banned does, though its vendor did nothing
   magpie accounts refresh         renew the saved ChatGPT and Claude sign-ins now (the gateway does it every 8 days)

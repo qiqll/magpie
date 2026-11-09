@@ -763,7 +763,11 @@ Discord). The list keeps an account by its stable id, kept
 through renames, shown by who is signed in; one gone later — a key
 rotated, an account signed out, an account of an agent that keeps no
 logins renamed — is kept as it is, matching nothing, so the key is held
-closer, never wider. A routing group the key names is its members'
+closer, never wider. Which accounts each key that works now may be served
+by, by this rule and the routing groups it may use, is listed by
+`magpie accounts keys` (`all` for a key held to none; `--json` is the list
+Models › Accounts' key filter reads, `GET /api/accounts/keys`); an account
+marked banned or disabled is in none. A routing group the key names is its members'
 through the accounts it may use only: naming a group is not naming its
 accounts, and magpie's own calls for the key — a web search, a picture
 described, a Codex title, a routing group's classifier — are of the
