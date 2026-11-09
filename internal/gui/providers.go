@@ -176,6 +176,10 @@ type providerJSON struct {
 	// (provider.AccountAddedOf): one from before magpie kept it has none.
 	// Shown only: the editor's Save keeps the file's (provider.go)
 	AccountAdded map[string]time.Time `json:"accountAdded,omitempty"`
+	// when each account was first used, its vendor serving a request of it
+	// through the gateway (provider.AccountFirstUsedOf): the growth policy
+	// counts its days from it. Shown only, as AccountAdded is
+	AccountFirstUsed map[string]time.Time `json:"accountFirstUsed,omitempty"`
 	// where a custom provider's balance is asked (see provider.Balance)
 	BalanceURL    string `json:"balanceURL,omitempty"`
 	BalancePath   string `json:"balancePath,omitempty"`
@@ -737,6 +741,12 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 					out.AccountAdded = map[string]time.Time{}
 				}
 				out.AccountAdded[strings.ToLower(strings.TrimSpace(r))] = at
+			}
+			if at := provider.AccountFirstUsedOf(p.ID, r); !at.IsZero() {
+				if out.AccountFirstUsed == nil {
+					out.AccountFirstUsed = map[string]time.Time{}
+				}
+				out.AccountFirstUsed[strings.ToLower(strings.TrimSpace(r))] = at
 			}
 		}
 	}

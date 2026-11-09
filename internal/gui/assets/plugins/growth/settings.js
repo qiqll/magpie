@@ -1,5 +1,5 @@
 // Settings › Growth policy (T-078): how far a subscription account added to
-// magpie lately is used, by the days since it was added (settings.Growth,
+// magpie lately is used, by the days since its first use (settings.Growth,
 // provider/growth.go). A row is a stage: the day it starts on, the window
 // it holds and the share; rows that start on one day are one stage, which
 // lasts until the next one starts. The rows are edited as a draft and
@@ -28,7 +28,7 @@ function renderGrowth(s) {
   const head = el("div", "row pref growth-head");
   const who = el("div", "who");
   who.append(el("div", "name", t("New accounts are used gently")),
-    el("div", "sub" + (growthErr ? " err" : ""), growthErr || t("A subscription account added to magpie is held at the share of a window its stage gives, counted in days from when magpie first saw it, and routing goes on to your other accounts until that window renews. Stages don't add up: only the one for its day holds it, and only the windows that stage lists. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.")));
+    el("div", "sub" + (growthErr ? " err" : ""), growthErr || t("A subscription account added to magpie is held at the share of a window its stage gives, counted in days from its first use (the first request its vendor served through magpie; one not used yet is on day 0), and routing goes on to your other accounts until that window renews. Stages don't add up: only the one for its day holds it, and only the windows that stage lists. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.")));
   head.append(who);
   box.append(head);
 

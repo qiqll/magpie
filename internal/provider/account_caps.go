@@ -110,7 +110,7 @@ func (c WindowCaps) Holds() bool {
 
 // CapsOf is the caps of the account user of p: its usage cap and its
 // windows' own, and the growth policy's on the windows the user set
-// nothing on while it is new (growth.go). As with AccountCap, an account
+// nothing on while it is new, by the days since its first use (growth.go). As with AccountCap, an account
 // made afresh beside the agent's own reads them from providers.json.
 func (p Provider) CapsOf(user string) WindowCaps {
 	caps, wins := p.AccountCaps, p.AccountWindowCaps
@@ -121,7 +121,8 @@ func (p Provider) CapsOf(user string) WindowCaps {
 	}
 	k := accountKey(user)
 	c := WindowCaps{All: caps[k], Windows: wins[k]}
-	return c.withGrowth(accountAdded(p.ID, user), time.Now())
+	now := time.Now()
+	return c.withGrowth(growthFrom(p.ID, user, now), now)
 }
 
 // AccountCapsOf is CapsOf of the provider id.
@@ -129,7 +130,8 @@ func AccountCapsOf(id, user string) WindowCaps {
 	if s, ok := storedPicks(id); ok {
 		k := accountKey(user)
 		c := WindowCaps{All: s.AccountCaps[k], Windows: s.AccountWindowCaps[k]}
-		return c.withGrowth(s.AccountAdded[k], time.Now())
+		now := time.Now()
+		return c.withGrowth(growthFrom(id, user, now), now)
 	}
 	return WindowCaps{}
 }

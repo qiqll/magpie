@@ -3,6 +3,8 @@
 magpie.strings({
   zh: {
     "Search accounts": "搜索账号",
+    "First used": "首次使用",
+    "Never used": "还没用过",
     "Take it out of the gateway's rotation: it stays signed in and its usage is still read, unlike Disable": "移出网关的轮换：账号仍保持登录、照常读取用量，这一点与「停用」不同",
     "Not in rotation: still kept signed in and its usage read": "未轮换：仍保持登录，照常读取用量",
     "{n} in rotation": "{n} 个轮换中",
@@ -39,6 +41,8 @@ magpie.strings({
   },
   "zh-TW": {
     "Search accounts": "搜尋帳號",
+    "First used": "首次使用",
+    "Never used": "還沒用過",
     "Take it out of the gateway's rotation: it stays signed in and its usage is still read, unlike Disable": "移出閘道的輪換：帳號仍保持登入、照常讀取用量，這一點與「停用」不同",
     "Not in rotation: still kept signed in and its usage read": "未輪換：仍保持登入，照常讀取用量",
     "{n} in rotation": "{n} 個輪換中",
@@ -75,6 +79,8 @@ magpie.strings({
   },
   ja: {
     "Search accounts": "アカウントを検索",
+    "First used": "初回使用",
+    "Never used": "まだ未使用",
     "Take it out of the gateway's rotation: it stays signed in and its usage is still read, unlike Disable": "ゲートウェイのローテーションから外します：「停止」と違い、サインインは保たれ利用枠も読み取られます",
     "Not in rotation: still kept signed in and its usage read": "ローテーション外：サインインは保たれ、利用枠も読み取られます",
     "{n} in rotation": "{n} 件ローテーション中",
@@ -111,6 +117,8 @@ magpie.strings({
   },
   de: {
     "Search accounts": "Konten durchsuchen",
+    "First used": "Zuerst genutzt",
+    "Never used": "Noch nie genutzt",
     "Take it out of the gateway's rotation: it stays signed in and its usage is still read, unlike Disable": "Aus der Rotation des Gateways nehmen: Anders als bei Deaktivieren bleibt es angemeldet und sein Kontingent wird weiter gelesen",
     "Not in rotation: still kept signed in and its usage read": "Nicht in Rotation: bleibt angemeldet, sein Kontingent wird gelesen",
     "{n} in rotation": "{n} in Rotation",

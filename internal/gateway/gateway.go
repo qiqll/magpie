@@ -825,6 +825,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// the magpie serving the gateway, and only it, keeps the saved accounts
 	// signed in, so two never refresh one sign-in at once
 	go provider.KeepLoginsAlive(ctx)
+	// and reads once from the ledger when each account added before its
+	// first use was kept was first used (the growth policy's days)
+	go provider.BackfillFirstUsed(usage.FirstServed)
 	// and signs Codex and Claude Code in to their next account when the
 	// one they are on is spent
 	go provider.KeepOnAnAccountWithRoom(ctx)

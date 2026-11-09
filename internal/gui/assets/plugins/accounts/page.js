@@ -107,8 +107,8 @@ function acxRows() {
       // tokens are in and out, as tokensOf counts them: an account's
       // usage has no tokens of its own
       const sum = (k) => used.reduce((n, g) => n + (g[k] || 0), 0);
-      const added = p.accountAdded?.[acxLow(l.user)] || "";
-      out.push({ p, a, l, sub, state, banned, disabled, off, again, act, q, added, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
+      const added = p.accountAdded?.[acxLow(l.user)] || "", firstUsed = p.accountFirstUsed?.[acxLow(l.user)] || "";
+      out.push({ p, a, l, sub, state, banned, disabled, off, again, act, q, added, firstUsed, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
     }
   }
   return out;
@@ -374,6 +374,9 @@ function acxCard(r) {
     u.title = t("Added before magpie kept it");
     fact("Added", "acx-added", u);
   }
+  // the growth policy counts its days from its first use (provider/growth.go)
+  if (r.firstUsed) fact("First used", "acx-used", acxDay(r.firstUsed));
+  else if (r.added) fact("First used", "acx-used", el("span", "acx-unknown", t("Never used")));
   if (l.until) fact("Plan ends", "acx-until", acxDay(l.until));
   const proxy = p.accountProxies?.[acxLow(l.user)] || "";
   if (proxy) fact("Proxy", "acx-proxy", proxyShown(proxy));

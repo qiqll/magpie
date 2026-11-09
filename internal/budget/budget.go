@@ -157,6 +157,15 @@ func Forget() {
 // against the key's window. The two happen together so a window read from
 // the file meanwhile counts the call once.
 func Append(rec usage.Record) {
+	if rec.ServedOn() {
+		// the account's first use, for the growth policy: before the
+		// window's lock, as its first one writes providers.json
+		at := rec.Time
+		if at.IsZero() {
+			at = time.Now()
+		}
+		provider.NoteAccountUsed(rec.Provider, rec.ProviderAccount, at)
+	}
 	if rec.CallerKeyID == "" {
 		usage.Append(rec)
 		return

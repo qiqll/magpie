@@ -3,7 +3,7 @@
 magpie.strings({
   zh: {
     "New accounts are used gently": "新账号慢慢用",
-    "A subscription account added to magpie is held at the share of a window its stage gives, counted in days from when magpie first saw it, and routing goes on to your other accounts until that window renews. Stages don't add up: only the one for its day holds it, and only the windows that stage lists. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.": "加入 magpie 的订阅账号，按 magpie 第一次见到它起的天数，用到所在阶段给出的窗口比例就停下，路由转到你的其他账号，直到那个窗口重置。阶段不叠加：只按它当天所在的阶段，也只限那个阶段列出的窗口。magpie 开始记录加入时间之前就有的账号不受限；你在账号或窗口上自己设的上限优先。",
+    "A subscription account added to magpie is held at the share of a window its stage gives, counted in days from its first use (the first request its vendor served through magpie; one not used yet is on day 0), and routing goes on to your other accounts until that window renews. Stages don't add up: only the one for its day holds it, and only the windows that stage lists. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.": "加入 magpie 的订阅账号会按所处阶段被限制在窗口的一定比例内，天数从首次使用算起（厂商第一次经 magpie 处理它的请求；还没用过的算第 0 天），窗口重置前路由会转到你的其他账号。各阶段不叠加：只有当天所在的阶段生效，且只限制该阶段列出的窗口。magpie 开始记录日期之前加入的账号永不受限，你给账号或窗口设的上限优先。",
     "From day {from} on": "第 {from} 天起",
     "Days {from} to {to}": "第 {from}–{to} 天",
     "A stage with no start day": "未填开始天数的阶段",
@@ -18,7 +18,7 @@ magpie.strings({
   },
   "zh-TW": {
     "New accounts are used gently": "新帳號慢慢用",
-    "A subscription account added to magpie is held at the share of a window its stage gives, counted in days from when magpie first saw it, and routing goes on to your other accounts until that window renews. Stages don't add up: only the one for its day holds it, and only the windows that stage lists. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.": "加入 magpie 的訂閱帳號，按 magpie 第一次見到它起的天數，用到所在階段給出的視窗比例就停下，路由轉到你的其他帳號，直到那個視窗重置。階段不疊加：只按它當天所在的階段，也只限那個階段列出的視窗。magpie 開始記錄加入時間之前就有的帳號不受限；你在帳號或視窗上自己設的上限優先。",
+    "A subscription account added to magpie is held at the share of a window its stage gives, counted in days from its first use (the first request its vendor served through magpie; one not used yet is on day 0), and routing goes on to your other accounts until that window renews. Stages don't add up: only the one for its day holds it, and only the windows that stage lists. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.": "加入 magpie 的訂閱帳號會依所處階段被限制在視窗的一定比例內，天數從首次使用算起（廠商第一次經 magpie 處理它的請求；還沒用過的算第 0 天），視窗重置前路由會轉到你的其他帳號。各階段不疊加：只有當天所在的階段生效，且只限制該階段列出的視窗。magpie 開始記錄日期之前加入的帳號永不受限，你給帳號或視窗設的上限優先。",
     "From day {from} on": "第 {from} 天起",
     "Days {from} to {to}": "第 {from}–{to} 天",
     "A stage with no start day": "未填開始天數的階段",
@@ -33,7 +33,7 @@ magpie.strings({
   },
   ja: {
     "New accounts are used gently": "新しいアカウントは控えめに使う",
-    "A subscription account added to magpie is held at the share of a window its stage gives, counted in days from when magpie first saw it, and routing goes on to your other accounts until that window renews. Stages don't add up: only the one for its day holds it, and only the windows that stage lists. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.": "magpie に追加されたサブスクリプションのアカウントは、magpie が最初に見た日からの日数で決まる段階の割合までウィンドウを使うと止まり、そのウィンドウがリセットされるまでほかのアカウントへ振り分けられます。段階は重なりません。その日の段階だけが、その段階に挙げたウィンドウだけを制限します。magpie が追加日を記録する前からあるアカウントは制限されず、アカウントやウィンドウに自分で設定した上限が優先されます。",
+    "A subscription account added to magpie is held at the share of a window its stage gives, counted in days from its first use (the first request its vendor served through magpie; one not used yet is on day 0), and routing goes on to your other accounts until that window renews. Stages don't add up: only the one for its day holds it, and only the windows that stage lists. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.": "magpie に追加したサブスクリプションアカウントは、その段階が示すウィンドウの割合までに抑えられます。日数は初めて使った時点（ベンダーが magpie 経由で最初にリクエストを処理した時点。まだ使っていなければ 0 日目）から数え、ウィンドウが更新されるまでルーティングはほかのアカウントへ回ります。段階は積み重なりません。その日の段階だけが、その段階に挙げたウィンドウだけを抑えます。magpie が日付を記録する前に追加したアカウントは抑えられず、アカウントやウィンドウに設定した上限が優先されます。",
     "From day {from} on": "{from} 日目から",
     "Days {from} to {to}": "{from}〜{to} 日目",
     "A stage with no start day": "開始日が未入力の段階",
@@ -48,7 +48,7 @@ magpie.strings({
   },
   de: {
     "New accounts are used gently": "Neue Konten schonend nutzen",
-    "A subscription account added to magpie is held at the share of a window its stage gives, counted in days from when magpie first saw it, and routing goes on to your other accounts until that window renews. Stages don't add up: only the one for its day holds it, and only the windows that stage lists. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.": "Ein zu magpie hinzugefügtes Abo-Konto wird beim Anteil eines Fensters angehalten, den seine Stufe vorgibt, gezählt in Tagen ab dem Tag, an dem magpie es zuerst sah, und das Routing geht zu deinen anderen Konten weiter, bis sich das Fenster erneuert. Stufen addieren sich nicht: Nur die Stufe seines Tages hält es, und nur die Fenster, die diese Stufe nennt. Ein Konto, das vor dieser Aufzeichnung hinzukam, wird nie angehalten, und eine Grenze, die du selbst für ein Konto oder Fenster setzt, geht vor.",
+    "A subscription account added to magpie is held at the share of a window its stage gives, counted in days from its first use (the first request its vendor served through magpie; one not used yet is on day 0), and routing goes on to your other accounts until that window renews. Stages don't add up: only the one for its day holds it, and only the windows that stage lists. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.": "Ein zu magpie hinzugefügtes Abo-Konto wird auf den Anteil eines Fensters begrenzt, den seine Stufe vorgibt, gezählt in Tagen ab seiner ersten Nutzung (der ersten Anfrage, die sein Anbieter über magpie beantwortet hat; ein noch nicht genutztes ist an Tag 0), und das Routing geht zu deinen anderen Konten, bis sich das Fenster erneuert. Stufen addieren sich nicht: nur die Stufe seines Tages begrenzt es, und nur die Fenster, die diese Stufe nennt. Ein Konto, das hinzugefügt wurde, bevor magpie den Tag festhielt, wird nie begrenzt, und eine Grenze, die du für ein Konto oder ein Fenster setzt, geht vor.",
     "From day {from} on": "Ab Tag {from}",
     "Days {from} to {to}": "Tag {from} bis {to}",
     "A stage with no start day": "Stufe ohne Starttag",

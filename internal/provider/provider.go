@@ -450,6 +450,12 @@ type Provider struct {
 	// added before magpie kept this has none, and is not held. magpie's
 	// own: the editor's Save keeps what the file has.
 	AccountAdded map[string]time.Time `json:"accountAdded,omitempty"`
+	// AccountFirstUsed is, for a subscription, when its vendor first
+	// served a request of each account through the gateway (growth.go),
+	// by its name in lower case: the growth policy counts its days from
+	// it. Kept beside AccountAdded and gone with it; magpie's own, the
+	// editor's Save keeps what the file has.
+	AccountFirstUsed map[string]time.Time `json:"accountFirstUsed,omitempty"`
 	// CapStop, for a subscription whose accounts are capped, ends there
 	// (plugins#349): while every account is held at its cap, a request is
 	// answered 429, as the vendor would, rather than sent on to Fallback.
@@ -641,6 +647,11 @@ type file struct {
 	// when it was removed and put back when it is added again (#2057; see
 	// plugin_left.go).
 	PluginLeft []LeftRecord `json:"pluginLeft,omitempty"`
+	// FirstUsedRead says the usage ledger was read once for when each
+	// account added before AccountFirstUsed was kept was first used
+	// (BackfillFirstUsed): from then, an account with no first use has
+	// not been used. Until then its days count from AccountAdded.
+	FirstUsedRead bool `json:"firstUsedRead,omitempty"`
 	// Deleted are the providers the user deleted, so the calls made to
 	// one stay its own when another is added under its id (Renames).
 	Deleted []Deleted `json:"deleted,omitempty"`
@@ -863,6 +874,7 @@ func (p Provider) clone() Provider {
 	p.AccountProxies = maps.Clone(p.AccountProxies)
 	p.AccountCaps = maps.Clone(p.AccountCaps)
 	p.AccountAdded = maps.Clone(p.AccountAdded)
+	p.AccountFirstUsed = maps.Clone(p.AccountFirstUsed)
 	p.AccountNames = maps.Clone(p.AccountNames)
 	p.KeySpendCaps = maps.Clone(p.KeySpendCaps)
 	if p.AccountWindowCaps != nil {
@@ -1226,8 +1238,9 @@ func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err e
 	p.Delisted = delistedWith(*p, was)
 	p.DelistedAt = delistedAtWith(*p, was)
 	if was != nil {
-		// when its accounts were added is magpie's, never the editor's
-		p.AccountAdded = was.AccountAdded
+		// when its accounts were added and first used is magpie's, never
+		// the editor's
+		p.AccountAdded, p.AccountFirstUsed = was.AccountAdded, was.AccountFirstUsed
 		if p.Was == nil {
 			p.Was = was.Was
 		}
@@ -1243,6 +1256,7 @@ func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err e
 		}
 		f.Providers[i] = *p
 	} else {
+		p.AccountFirstUsed = nil // magpie's own, never the editor's
 		// a new provider under an id another had: what was recorded under
 		// it until now stays that one's
 		giveID(f.Providers, -1, p.ID, time.Now())
@@ -1809,6 +1823,7 @@ func normalize(p Provider) Provider {
 	p.AccountCaps = normalAccountCaps(p.AccountCaps)
 	p.AccountWindowCaps = normalWindowCaps(p.AccountWindowCaps)
 	p.AccountAdded = normalAccountAdded(p.AccountAdded)
+	p.AccountFirstUsed = normalAccountAdded(p.AccountFirstUsed)
 	p.AccountNames = normalAccountNames(p.AccountNames)
 	p.KeySpendCaps = normalKeySpendCaps(p.KeySpendCaps)
 	if len(p.Models) > 0 {

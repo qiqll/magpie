@@ -4,17 +4,25 @@ package provider
 // added lately is held at the share of its windows the policy's stage for
 // its days gives, as a cap the user set on it would hold it — routing
 // takes it for used up there and goes on to the next account
-// (gateway/fallback.go capHeld, codex_switch.go). The days are counted
-// from AccountAdded, written as logins.json is written with an account it
-// didn't have (noteAdded): Claude's and Codex's sign-ins, a plugin's, the
-// side logins', an agent's own read the first time. An account added
-// before magpie kept this has none, and is not held; as it leaves the list
+// (gateway/fallback.go capHeld, codex_switch.go). An account is the
+// policy's from AccountAdded, written as logins.json is written with an
+// account it didn't have (noteAdded): Claude's and Codex's sign-ins, a
+// plugin's, the side logins', an agent's own read the first time. Its days
+// are counted from its first use (AccountFirstUsed, 需求方 2026-11-09): an
+// account added long ago and first used today is on its day 0, where
+// counting from AccountAdded took it for old and held it not at all. Use
+// is a request its vendor served through the gateway (NoteAccountUsed, the
+// ledger's served rows): never a keep-alive, a usage read, a warm-up or the
+// editor's Test. Accounts added before first use was kept had theirs read
+// from the ledger once (BackfillFirstUsed); until that read went through,
+// their days count from AccountAdded as before. An account added
+// before magpie kept AccountAdded has none, and is not held; as it leaves the list
 // it is marked from before (addedBefore), so it isn't new when back. The
 // time stays while
 // the account is gone from the list and back (a plugin's, when its
 // sign-ins can't be read a while, or the plugin is installed again): only
-// the user removing it (forgetAdded) lets it go, and one removed and
-// added again is new again.
+// the user removing it (forgetAdded) lets it go, its first use with it, and
+// one removed and added again is new again.
 //
 // The user's word comes first: an account with a cap of its own
 // (AccountCaps) holds every window at it, and a window with a share of its
@@ -26,6 +34,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/yetone/magpie/internal/plugin"
@@ -50,9 +59,10 @@ var addedBefore = time.Unix(0, 0).UTC()
 func addedKnown(added time.Time) bool { return added.After(addedBefore) }
 
 // growthCaps is the share of each window (WindowCapID) the policy stages
-// holds an account added at added to at now: the windows of the stage of
-// the latest start its days have reached, alone. nil when no stage has
-// started, or added is not known (an account from before).
+// hold an account whose days count from added (growthFrom) to at now: the
+// windows of the stage of the latest start its days have reached, alone.
+// nil when no stage has started, or added is not known (an account from
+// before).
 func growthCaps(stages []settings.GrowthStage, added, now time.Time) map[string]int {
 	if !addedKnown(added) || len(stages) == 0 {
 		return nil
@@ -102,6 +112,198 @@ func (c WindowCaps) withGrowth(added, now time.Time) WindowCaps {
 	}
 	c.Windows = wins
 	return c
+}
+
+// growthFrom is when the growth policy counts the days of the account
+// user of the subscription id from: its first use; now (day 0) for one not
+// used yet, once the ledger was read for it (FirstUsedRead); its
+// AccountAdded until then, as before. Zero for one whose AccountAdded isn't
+// known (from before), which is never held.
+func growthFrom(id, user string, now time.Time) time.Time {
+	s, ok := storedPicks(id)
+	if !ok {
+		return time.Time{}
+	}
+	k := accountKey(user)
+	added := s.AccountAdded[k]
+	if !addedKnown(added) {
+		return time.Time{}
+	}
+	if used := s.AccountFirstUsed[k]; addedKnown(used) {
+		return used
+	}
+	if storedFile().FirstUsedRead {
+		return now
+	}
+	return added
+}
+
+// AccountFirstUsedOf is when the account user of the subscription id was
+// first used, zero for none kept, for the GUI to say.
+func AccountFirstUsedOf(id, user string) time.Time {
+	if s, ok := storedPicks(id); ok {
+		if at := s.AccountFirstUsed[accountKey(user)]; addedKnown(at) {
+			return at
+		}
+	}
+	return time.Time{}
+}
+
+// firstUsedSeen are the accounts (id and name, accountKey) the gateway has
+// served a request of since this magpie started, and so has looked at the
+// first use of: a request asks this set alone, and only an account's first
+// request here reads providers.json, and writes it when its first use
+// isn't kept. A change to when accounts were added lets it go (noteAdded,
+// forgetAdded), so an account added again is looked at again.
+var firstUsedSeen struct {
+	sync.Mutex
+	m map[loginAccount]bool
+}
+
+// forgetFirstUsedSeen lets every account be looked at again.
+func forgetFirstUsedSeen() {
+	firstUsedSeen.Lock()
+	firstUsedSeen.m = nil
+	firstUsedSeen.Unlock()
+}
+
+// NoteAccountUsed notes that the vendor of the subscription id served a
+// request of its account user at at (a served row of the gateway's, as
+// usage.Record.ServedOn tells it): the first one is the account's first
+// use, written once beside its AccountAdded. It is asked on every request,
+// takes no lock a request waits on but a moment's map lock, and is called
+// before the caller takes any of its own (budget.Append). An account whose
+// AccountAdded isn't known (from before, or not listed yet) gets none.
+func NoteAccountUsed(id, user string, at time.Time) {
+	a := loginAccount{id, accountKey(user)}
+	if a.id == "" || a.user == "" {
+		return
+	}
+	firstUsedSeen.Lock()
+	if firstUsedSeen.m[a] {
+		firstUsedSeen.Unlock()
+		return
+	}
+	if firstUsedSeen.m == nil {
+		firstUsedSeen.m = map[loginAccount]bool{}
+	}
+	firstUsedSeen.m[a] = true // claimed: a request beside this one writes nothing
+	firstUsedSeen.Unlock()
+	if s, ok := storedPicks(a.id); ok && (addedKnown(s.AccountFirstUsed[a.user]) || !addedKnown(s.AccountAdded[a.user])) {
+		return // kept already, or no account of the policy's
+	}
+	if !writeFirstUsed(a, at) {
+		// not written: the next request of the account tries again
+		firstUsedSeen.Lock()
+		delete(firstUsedSeen.m, a)
+		firstUsedSeen.Unlock()
+	}
+}
+
+// beforeFirstUsedWrite is called as a first use is about to be written,
+// for a test to hold it there.
+var beforeFirstUsedWrite = func() {}
+
+// writeFirstUsed keeps at as when account a was first used, when it has
+// none and its AccountAdded is known; false when providers.json couldn't
+// be read or written, which keeps nothing.
+func writeFirstUsed(a loginAccount, at time.Time) bool {
+	beforeFirstUsedWrite()
+	if err := providersMu.Take(); err != nil {
+		log.Printf("%v; %s's first use isn't kept yet", err, a.user)
+		return false
+	}
+	defer providersMu.Unlock()
+	f, err := read()
+	if err != nil {
+		log.Printf("providers.json: %v; %s's first use isn't kept yet", err, a.user)
+		return false
+	}
+	i := slices.IndexFunc(f.Providers, func(p Provider) bool { return p.ID == a.id })
+	if i < 0 {
+		return true
+	}
+	p := &f.Providers[i]
+	if !addedKnown(p.AccountAdded[a.user]) || addedKnown(p.AccountFirstUsed[a.user]) {
+		return true
+	}
+	p.AccountFirstUsed = maps.Clone(p.AccountFirstUsed)
+	if p.AccountFirstUsed == nil {
+		p.AccountFirstUsed = map[string]time.Time{}
+	}
+	p.AccountFirstUsed[a.user] = at.UTC().Truncate(time.Second)
+	if err := store(f); err != nil {
+		log.Printf("providers.json: %v; %s's first use isn't kept yet", err, a.user)
+		return false
+	}
+	return true
+}
+
+// FirstServed is when the ledger's first served request of each account of
+// want was, at or after the time want gives it (when it was added: a row
+// from before it was removed and added again is another life's); an
+// account with none isn't in it. An error is a ledger that couldn't be
+// read, never "none served". usage.FirstServed reads it; provider can't.
+type FirstServed func(want map[[2]string]time.Time) (map[[2]string]time.Time, error)
+
+// BackfillFirstUsed reads, once, when each account added before first use
+// was kept (AccountAdded known, AccountFirstUsed none) was first used, from
+// the ledger's served rows (served), and marks the read done
+// (FirstUsedRead). One with no served row is taken as never used: its days
+// start at its first use, day 0. A ledger that can't be read marks
+// nothing, and those accounts count from AccountAdded until a later start
+// reads it. providers.json is not held while the ledger is read.
+func BackfillFirstUsed(served FirstServed) {
+	f, err := read()
+	if err != nil || f.FirstUsedRead {
+		return
+	}
+	want := map[[2]string]time.Time{}
+	for _, p := range f.Providers {
+		for u, added := range p.AccountAdded {
+			if addedKnown(added) && !addedKnown(p.AccountFirstUsed[u]) {
+				want[[2]string{p.ID, u}] = added
+			}
+		}
+	}
+	found := map[[2]string]time.Time{}
+	if len(want) > 0 {
+		if found, err = served(want); err != nil {
+			log.Printf("usage ledger: %v; the accounts' first use is read at a later start, their days counted from when they were added till then", err)
+			return
+		}
+	}
+	if err := providersMu.Take(); err != nil {
+		log.Printf("%v; the accounts' first use is read at a later start", err)
+		return
+	}
+	defer providersMu.Unlock()
+	if f, err = read(); err != nil || f.FirstUsedRead {
+		return
+	}
+	for i := range f.Providers {
+		p := &f.Providers[i]
+		for u, added := range p.AccountAdded {
+			at, ok := found[[2]string{p.ID, u}]
+			// the same account still, and the earlier of the ledger's and
+			// one a request kept meanwhile
+			if !ok || !added.Equal(want[[2]string{p.ID, u}]) {
+				continue
+			}
+			if kept := p.AccountFirstUsed[u]; addedKnown(kept) && !kept.After(at) {
+				continue
+			}
+			p.AccountFirstUsed = maps.Clone(p.AccountFirstUsed)
+			if p.AccountFirstUsed == nil {
+				p.AccountFirstUsed = map[string]time.Time{}
+			}
+			p.AccountFirstUsed[u] = at.UTC().Truncate(time.Second)
+		}
+	}
+	f.FirstUsedRead = true
+	if err := store(f); err != nil {
+		log.Printf("providers.json: %v; the accounts' first use is read at a later start", err)
+	}
 }
 
 // accountAdded is when the account user of the subscription id was added,
@@ -249,8 +451,21 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount, left
 		if !ok {
 			continue
 		}
+		used, wasUsed := f.Providers[i].AccountFirstUsed[old.user]
 		delete(entry(old.id).AccountAdded, old.user)
 		entry(now.id).AccountAdded[now.user] = t
+		if wasUsed {
+			// its first use goes with it
+			o := entry(old.id)
+			o.AccountFirstUsed = maps.Clone(o.AccountFirstUsed)
+			delete(o.AccountFirstUsed, old.user)
+			n := entry(now.id)
+			n.AccountFirstUsed = maps.Clone(n.AccountFirstUsed)
+			if n.AccountFirstUsed == nil {
+				n.AccountFirstUsed = map[string]time.Time{}
+			}
+			n.AccountFirstUsed[now.user] = used
+		}
 		changed = true
 	}
 	has := func(a loginAccount) bool {
@@ -280,6 +495,7 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount, left
 	if err := store(f); err != nil {
 		log.Printf("providers.json: %v; when the accounts were added isn't kept", err)
 	}
+	forgetFirstUsedSeen()
 }
 
 // forgetAdded drops when each of users of the agent's accounts was added,
@@ -306,13 +522,19 @@ func forgetAdded(agent string, users ...string) {
 		if _, ok := p.AccountAdded[accountKey(u)]; ok {
 			if !changed {
 				p.AccountAdded = maps.Clone(p.AccountAdded)
+				p.AccountFirstUsed = maps.Clone(p.AccountFirstUsed)
 			}
 			delete(p.AccountAdded, accountKey(u))
+			// its first use goes with it: added again, it is new again
+			delete(p.AccountFirstUsed, accountKey(u))
 			changed = true
 		}
 	}
 	if !changed {
 		return
+	}
+	if len(p.AccountFirstUsed) == 0 {
+		p.AccountFirstUsed = nil
 	}
 	if len(p.AccountAdded) == 0 {
 		p.AccountAdded = nil
@@ -324,6 +546,7 @@ func forgetAdded(agent string, users ...string) {
 	if err := store(f); err != nil {
 		log.Printf("providers.json: %v; when the removed accounts were added is kept", err)
 	}
+	forgetFirstUsedSeen()
 }
 
 // addedBut is every account of the agent's provider with a day (or marked

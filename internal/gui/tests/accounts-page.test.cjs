@@ -19,6 +19,8 @@
 //   it), its proxy (no password), every window with its reset, and the
 //   last 5 hours' requests, failures, tokens and cost;
 // - a gateway key keeps the accounts /api/accounts/keys says it may use.
+// 需求方 (2026-11-09): a card says when the account was first used (or
+//   Never used), the day the growth policy counts from.
 // 需求方 (2026-11-08): an account its vendor banned is marked so by hand:
 // - Status filters it out by default (Normal), Banned, Disabled and All
 //   show it, kept in magpie.acxFilter, a word finds it then;
@@ -56,7 +58,7 @@ function providersOf(seen) {
         { user: "carol@example.com", plan: "pro", lapsed: "Its sign-in was refused (401)" },
         { user: "Claude setup-token 3204d0", token: true, lapsed: "Its token was refused (401)" },
       ], { accountNames: { "bob@example.com": "Work" }, accountProxies: { "bob@example.com": "http://u:s3cret@10.0.0.9:3128" },
-        accountAdded: { "alice@example.com": daysAgo(3), "bob@example.com": daysAgo(20) } }),
+        accountAdded: { "alice@example.com": daysAgo(3), "bob@example.com": daysAgo(20) }, accountFirstUsed: { "alice@example.com": daysAgo(2) } }),
       prov("codex", "Codex", "codex", [
         { user: "ops@example.com", plan: "pro", active: true, on: true },
         { user: "qa@example.com", plan: "plus", on: seen.on.has("qa@example.com"), banned: seen.banned?.has("qa@example.com"), disabled: seen.disabled?.has("qa@example.com") },
@@ -286,6 +288,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.match(card("alice@example.com").facts["acx-added"], /\d/);
         assert.equal(card("carol@example.com").facts["acx-added"], x("Unknown"));
         assert.equal(card("qa@example.com").facts["acx-added"], x("Unknown"));
+        // its first use, the growth policy's day 0; one added and not used yet says so,
+        // one from before magpie kept the day says nothing of it
+        assert.match(card("alice@example.com").facts["acx-used"], /\d/);
+        assert.equal(card("bob@example.com").facts["acx-used"], x("Never used"));
+        assert.equal(card("qa@example.com").facts["acx-used"], undefined);
         assert.ok(card("alice@example.com").facts["acx-plan"], "its plan");
         assert.match(card("bob@example.com").facts["acx-proxy"], /10\.0\.0\.9:3128/);
         assert.doesNotMatch(card("bob@example.com").facts["acx-proxy"], /s3cret/, "the proxy's password isn't shown");

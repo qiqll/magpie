@@ -53,11 +53,11 @@ function server(lang, posted) {
 }
 
 const want = {
-  en: { tab: "Growth policy", first: "Days 0 to 3", last: "From day 14 on", five: "5 hours", week: "7 days" },
-  zh: { tab: "成长策略", first: "第 0–3 天", last: "第 14 天起", five: "5 小时", week: "7 天" },
-  "zh-TW": { tab: "成長策略", first: "第 0–3 天", last: "第 14 天起" },
-  ja: { tab: "成長ポリシー", first: "0〜3 日目", last: "14 日目から" },
-  de: { tab: "Wachstumsregel", first: "Tag 0 bis 3", last: "Ab Tag 14" },
+  en: { tab: "Growth policy", first: "Days 0 to 3", last: "From day 14 on", five: "5 hours", week: "7 days", from: "from its first use" },
+  zh: { tab: "成长策略", first: "第 0–3 天", last: "第 14 天起", five: "5 小时", week: "7 天", from: "从首次使用算起" },
+  "zh-TW": { tab: "成長策略", first: "第 0–3 天", last: "第 14 天起", from: "從首次使用算起" },
+  ja: { tab: "成長ポリシー", first: "0〜3 日目", last: "14 日目から", from: "初めて使った時点" },
+  de: { tab: "Wachstumsregel", first: "Tag 0 bis 3", last: "Ab Tag 14", from: "ab seiner ersten Nutzung" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -81,6 +81,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const rows = page.locator("#growthList .growth-stage");
         await rows.first().waitFor();
         assert.equal(await rows.count(), 4, "magpie's four default stages");
+        // the days count from an account's first use, not from when it was added
+        assert((await page.locator("#growthList .growth-head .sub").textContent()).includes(w.from), "the days aren't said to count from first use");
         assert.equal((await rows.nth(0).locator(".name").textContent()).trim(), w.first);
         assert.equal((await rows.nth(3).locator(".name").textContent()).trim(), w.last);
         if (w.five) {
