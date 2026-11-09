@@ -3939,6 +3939,8 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 				}
 				r.emit(Event{Kind: KError, Text: text, Status: envelope.APIErrorStatus, Code: errKind, RequestID: reqID})
 				r.endSegment()
+				// the next turn's failure says its own kind, never this one's
+				reqID, errKind = "", ""
 			case cut:
 				failed("and Claude Code ended the turn without asking again")
 			case waiting && len(envelope.StructuredOutput) > 0 && string(envelope.StructuredOutput) != "null":

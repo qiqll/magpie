@@ -3,6 +3,8 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,7 +38,9 @@ func TestClaudeAuthFailedWallsTheOtherAccounts(t *testing.T) {
 				s := New()
 				body, _ := json.Marshal(map[string]any{"model": "claude/claude-sonnet-5", "max_tokens": 50, "stream": stream,
 					"messages": []map[string]any{{"role": "user", "content": "ping"}}})
-				code, reply := sendTo(s, "/v1/messages", string(body))
+				rec := httptest.NewRecorder()
+				s.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body))))
+				code, reply := rec.Code, rec.Body.String()
 				b, _ := os.ReadFile(log)
 				runs := strings.Join(strings.Fields(string(b)), ",")
 				if c.spare {
@@ -47,6 +51,15 @@ func TestClaudeAuthFailedWallsTheOtherAccounts(t *testing.T) {
 				}
 				if strings.Contains(runs, "tok-spare") || code == 200 {
 					t.Fatalf("the spare was asked after authentication_failed: %d runs %q %s", code, runs, reply)
+				}
+				// the one left lapsed: told a limit to come back to, not
+				// the sign-in (the owner's decision, 2026-10-29), as any
+				// lapsed account alone is
+				if stream {
+					return // a stream's error is an event of its own
+				}
+				if code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" || strings.Contains(strings.ToLower(reply), "log") {
+					t.Fatalf("told %d (Retry-After %q): %s", code, rec.Header().Get("Retry-After"), reply)
 				}
 			})
 		}
