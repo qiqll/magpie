@@ -17,12 +17,13 @@ import (
 // through the gateway: a row of the gateway's (not one read from an
 // agent's session files, nor one an app reported, nor magpie's own Test,
 // an MCP tool's or a search API's ask: those have a Source), with an
-// account, a 2xx, and not turned away by magpie. The growth policy counts an account's days from its
+// account, a 2xx, not turned away by magpie, and not a plugin's own cache
+// keep-alive ping. The growth policy counts an account's days from its
 // first such row (provider.NoteAccountUsed); a keep-alive, a usage read or a
 // warm-up writes no row, so is never one.
 func (r Record) ServedOn() bool {
 	return r.ProviderAccount != "" && r.Provider != "" && r.Status >= 200 && r.Status < 300 &&
-		r.Source == "" && !r.IsRejected()
+		r.Source == "" && r.Kind != KindKeepalive && !r.IsRejected()
 }
 
 // FirstServed is provider.FirstServed over usage.jsonl: for each account

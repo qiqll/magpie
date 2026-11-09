@@ -180,6 +180,10 @@ type providerJSON struct {
 	// through the gateway (provider.AccountFirstUsedOf): the growth policy
 	// counts its days from it. Shown only, as AccountAdded is
 	AccountFirstUsed map[string]time.Time `json:"accountFirstUsed,omitempty"`
+	// FirstUsedKnown: the ledger was read for first uses
+	// (provider.FirstUsedKnown), so an account with none was never used;
+	// till then the card says nothing of it, its days counted from Added
+	FirstUsedKnown bool `json:"firstUsedKnown,omitempty"`
 	// where a custom provider's balance is asked (see provider.Balance)
 	BalanceURL    string `json:"balanceURL,omitempty"`
 	BalancePath   string `json:"balancePath,omitempty"`
@@ -742,6 +746,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 				}
 				out.AccountAdded[strings.ToLower(strings.TrimSpace(r))] = at
 			}
+			out.FirstUsedKnown = provider.FirstUsedKnown()
 			if at := provider.AccountFirstUsedOf(p.ID, r); !at.IsZero() {
 				if out.AccountFirstUsed == nil {
 					out.AccountFirstUsed = map[string]time.Time{}

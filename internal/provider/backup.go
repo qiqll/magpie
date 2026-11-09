@@ -129,6 +129,8 @@ func Mirror(ps []Provider, gs []Group) error {
 		}
 		if h, ok := here[p.ID]; ok {
 			p = KeepSecrets(p, h, p.Key == "" && len(p.Keys) == 0)
+			// an account's first use here is kept, the earlier of the two
+			p.AccountFirstUsed = earlierFirstUsed(h.AccountFirstUsed, p.AccountFirstUsed)
 			p.KeepLogin, p.KeepLoginAs, p.SwitchOnly, p.RestartApp = h.KeepLogin, h.KeepLoginAs, h.SwitchOnly, h.RestartApp
 			p.KeepSelf = h.KeepSelf
 		} else {

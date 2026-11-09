@@ -376,7 +376,7 @@ function acxCard(r) {
   }
   // the growth policy counts its days from its first use (provider/growth.go)
   if (r.firstUsed) fact("First used", "acx-used", acxDay(r.firstUsed));
-  else if (r.added) fact("First used", "acx-used", el("span", "acx-unknown", t("Never used")));
+  else if (r.added && p.firstUsedKnown) fact("First used", "acx-used", el("span", "acx-unknown", t("Never used")));
   if (l.until) fact("Plan ends", "acx-until", acxDay(l.until));
   const proxy = p.accountProxies?.[acxLow(l.user)] || "";
   if (proxy) fact("Proxy", "acx-proxy", proxyShown(proxy));

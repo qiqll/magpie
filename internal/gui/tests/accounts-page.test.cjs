@@ -58,7 +58,7 @@ function providersOf(seen) {
         { user: "carol@example.com", plan: "pro", lapsed: "Its sign-in was refused (401)" },
         { user: "Claude setup-token 3204d0", token: true, lapsed: "Its token was refused (401)" },
       ], { accountNames: { "bob@example.com": "Work" }, accountProxies: { "bob@example.com": "http://u:s3cret@10.0.0.9:3128" },
-        accountAdded: { "alice@example.com": daysAgo(3), "bob@example.com": daysAgo(20) }, accountFirstUsed: { "alice@example.com": daysAgo(2) } }),
+        accountAdded: { "alice@example.com": daysAgo(3), "bob@example.com": daysAgo(20) }, accountFirstUsed: { "alice@example.com": daysAgo(2) }, firstUsedKnown: true }),
       prov("codex", "Codex", "codex", [
         { user: "ops@example.com", plan: "pro", active: true, on: true },
         { user: "qa@example.com", plan: "plus", on: seen.on.has("qa@example.com"), banned: seen.banned?.has("qa@example.com"), disabled: seen.disabled?.has("qa@example.com") },
@@ -293,6 +293,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.match(card("alice@example.com").facts["acx-used"], /\d/);
         assert.equal(card("bob@example.com").facts["acx-used"], x("Never used"));
         assert.equal(card("qa@example.com").facts["acx-used"], undefined);
+        // Codex's ledger not read yet (no firstUsedKnown): ops@, added, says nothing of it
+        assert.equal(card("ops@example.com").facts["acx-used"], undefined);
         assert.ok(card("alice@example.com").facts["acx-plan"], "its plan");
         assert.match(card("bob@example.com").facts["acx-proxy"], /10\.0\.0\.9:3128/);
         assert.doesNotMatch(card("bob@example.com").facts["acx-proxy"], /s3cret/, "the proxy's password isn't shown");

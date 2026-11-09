@@ -3,6 +3,7 @@ package provider
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -113,18 +114,6 @@ func TestGrowthBackfillFirstUse(t *testing.T) {
 	}
 }
 
-// A keep-alive and a usage read keep no first use: only a request the
-// gateway records as served does (usage.Record.ServedOn, budget.Append).
-func TestGrowthKeepAliveIsNoUse(t *testing.T) {
-	firstUsedFixture(t, time.Hour)
-	markRead(t)
-	RenewLogins(t.Context(), 0)
-	usageLogins("codex")
-	if at := AccountFirstUsedOf("codex", "new@example.com"); !at.IsZero() {
-		t.Fatalf("a keep-alive or usage read kept a first use: %v", at)
-	}
-}
-
 // Removed and added again, an account is new again: its first use goes
 // with its day.
 func TestGrowthFirstUseGoesWithRemoval(t *testing.T) {
@@ -174,9 +163,11 @@ func TestGrowthFirstUseWrittenOnce(t *testing.T) {
 	t.Cleanup(func() { beforeFirstUsedWrite = was })
 	var wg sync.WaitGroup
 	done := make(chan struct{})
+	var pending atomic.Int32
 	for range 20 {
 		wg.Add(1)
-		go func() { defer wg.Done(); NoteAccountUsed("codex", "new@example.com", time.Now()) }()
+		pending.Add(1)
+		go func() { defer wg.Done(); NoteAccountUsed("codex", "new@example.com", time.Now()); pending.Add(-1) }()
 	}
 	// 19 of them return while the first is held in its write
 	go func() {
@@ -192,6 +183,28 @@ func TestGrowthFirstUseWrittenOnce(t *testing.T) {
 		}
 	}()
 	<-done
+	// the other 19 return while the first is held in its write
+	returned := make(chan struct{})
+	go func() { wg.Wait(); close(returned) }()
+	deadline := time.After(10 * time.Second)
+	for {
+		mu.Lock()
+		n := writes
+		mu.Unlock()
+		if n > 1 {
+			t.Fatalf("%d writes started", n)
+		}
+		select {
+		case <-returned:
+			t.Fatal("every request waited for none, the held write too")
+		case <-deadline:
+			t.Fatal("the other requests waited on the held write")
+		case <-time.After(5 * time.Millisecond):
+		}
+		if pending.Load() == 1 {
+			break
+		}
+	}
 	close(release)
 	wg.Wait()
 	if writes != 1 {
@@ -222,5 +235,149 @@ func TestGrowthSaveKeepsFirstUse(t *testing.T) {
 		if at := AccountFirstUsedOf("codex", "new@example.com"); !at.Equal(want) {
 			t.Fatalf("Save with %v wrote the first use as %v", sent, at)
 		}
+	}
+}
+
+// Removed and added again by another magpie while this one runs (the
+// command line), an account is looked at again: its new life's first use
+// is kept, not taken for seen. One with no day yet is looked at again
+// once it has one. A first use is never earlier than the day it was added.
+func TestGrowthFirstUseAfterAnotherAddsAgain(t *testing.T) {
+	firstUsedFixture(t, 10*24*time.Hour)
+	markRead(t)
+	NoteAccountUsed("codex", "new@example.com", time.Now().Add(-9*24*time.Hour))
+	// as another magpie: removed, and added again an hour ago
+	forgetAdded("codex", "new@example.com")
+	f, _ := read()
+	added := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	// the entry went with its last day (forgetAdded): made again, as noteAdded does
+	f.Providers = append(f.Providers, Provider{ID: "codex", AccountAdded: map[string]time.Time{"new@example.com": added}})
+	if err := store(f); err != nil {
+		t.Fatal(err)
+	}
+	firstUsedSeen.Lock()
+	if firstUsedSeen.m == nil {
+		firstUsedSeen.m = map[loginAccount]time.Time{}
+	}
+	firstUsedSeen.m[loginAccount{"codex", "new@example.com"}] = time.Now().Add(-10 * 24 * time.Hour) // its old life, seen
+	firstUsedSeen.Unlock()
+	// a request of its old life, ended after the add
+	NoteAccountUsed("codex", "new@example.com", added.Add(-2*time.Hour))
+	if at := AccountFirstUsedOf("codex", "new@example.com"); !at.Equal(added) {
+		t.Fatalf("first use of its new life %v, want its day %v", at, added)
+	}
+	// an account with no day: not marked, so its day once kept is looked at
+	NoteAccountUsed("codex", "later@example.com", time.Now())
+	firstUsedSeen.Lock()
+	_, marked := firstUsedSeen.m[loginAccount{"codex", "later@example.com"}]
+	firstUsedSeen.Unlock()
+	if marked {
+		t.Fatal("an account with no day marked seen")
+	}
+}
+
+// A sync from another computer never takes a first use away, and keeps the
+// earlier of the two.
+func TestGrowthFirstUseKeptThroughASync(t *testing.T) {
+	here := map[string]time.Time{"a": time.Unix(2000, 0), "b": time.Unix(1000, 0)}
+	there := map[string]time.Time{"b": time.Unix(3000, 0), "c": time.Unix(4000, 0)}
+	got := earlierFirstUsed(here, there)
+	if !got["a"].Equal(time.Unix(2000, 0)) || !got["b"].Equal(time.Unix(1000, 0)) || !got["c"].Equal(time.Unix(4000, 0)) {
+		t.Fatalf("%v", got)
+	}
+	if got := earlierFirstUsed(here, nil); len(got) != 2 {
+		t.Fatalf("the other computer's none took ours away: %v", got)
+	}
+}
+
+// The backfill reads the ledger for an account a request kept a first use
+// of meanwhile too, and keeps the ledger's when it is earlier.
+func TestGrowthBackfillKeepsTheEarlier(t *testing.T) {
+	firstUsedFixture(t, 30*24*time.Hour)
+	NoteAccountUsed("codex", "new@example.com", time.Now())
+	at := time.Now().Add(-25 * 24 * time.Hour).UTC().Truncate(time.Second)
+	BackfillFirstUsed(func(want map[[2]string]time.Time) (map[[2]string]time.Time, error) {
+		if _, ok := want[[2]string{"codex", "new@example.com"}]; !ok {
+			t.Error("the ledger isn't asked for an account a request kept meanwhile")
+		}
+		return map[[2]string]time.Time{{"codex", "new@example.com"}: at}, nil
+	})
+	if got := AccountFirstUsedOf("codex", "new@example.com"); !got.Equal(at) {
+		t.Fatalf("first use %v, want the ledger's %v", got, at)
+	}
+}
+
+// claudeAddedAgo stores a Claude account added ago and never used, the
+// ledger read, Claude kept to the agent (switchOnly) as given.
+func claudeAddedAgo(t *testing.T, ago time.Duration, switchOnly bool) {
+	t.Helper()
+	signIn(t) // a sandbox HOME of its own
+	f, _ := read()
+	f.FirstUsedRead = true
+	f.Providers = []Provider{{ID: "claude", SwitchOnly: switchOnly,
+		AccountAdded: map[string]time.Time{"max@x.com": time.Now().Add(-ago).UTC().Truncate(time.Second)}}}
+	if err := store(f); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// throughMagpie has Claude Code's requests go to the gateway, or not, for
+// the test.
+func throughMagpie(t *testing.T, on bool) {
+	t.Helper()
+	was := ClaudeThroughMagpie
+	ClaudeThroughMagpie = func() bool { return on }
+	t.Cleanup(func() { ClaudeThroughMagpie = was })
+}
+
+// claudeFive is the share of the five hours the account is held to, by the
+// gateway's caps (CapsOf) and by the switch's (AccountCapsOf), which must
+// agree.
+func claudeFive(t *testing.T) int {
+	t.Helper()
+	a, _ := Provider{ID: "claude"}.CapsOf("max@x.com").Of("5 hours")
+	b, _ := AccountCapsOf("claude", "max@x.com").Of("5 hours")
+	if a != b {
+		t.Fatalf("the gateway holds at %d%%, the switch at %d%%", a, b)
+	}
+	return a
+}
+
+// An account Claude Code uses on its own (not through magpie, or Claude
+// kept to the agent) never has its first use seen, so its days count from
+// when it was added: added 30 days ago, it isn't held at day 0's 50% and the
+// switch doesn't move Claude Code off it there. Routed through magpie, one
+// never served is on day 0. The setting flipped, it follows at the next read.
+func TestGrowthAgentOnlyCountsFromAdded(t *testing.T) {
+	claudeAddedAgo(t, 30*24*time.Hour, false)
+	throughMagpie(t, false)
+	if s := claudeFive(t); s != 95 {
+		t.Fatalf("Claude Code on its own: day 30 by when it was added, 95%%; got %d%%", s)
+	}
+	if capReached(growthReading(60, 10), AccountCapsOf("claude", "max@x.com"), time.Now()) {
+		t.Fatal("switched off at 60% of its five hours on its own")
+	}
+	throughMagpie(t, true)
+	if s := claudeFive(t); s != 50 {
+		t.Fatalf("routed through magpie, never served: day 0, 50%%; got %d%%", s)
+	}
+	claudeAddedAgo(t, 30*24*time.Hour, true) // kept to the agent
+	if s := claudeFive(t); s != 95 {
+		t.Fatalf("kept to the agent: by when it was added, 95%%; got %d%%", s)
+	}
+}
+
+// Codex switch-only is the agent's own use too; routed, day 0.
+func TestGrowthCodexSwitchOnlyCountsFromAdded(t *testing.T) {
+	firstUsedFixture(t, 30*24*time.Hour)
+	markRead(t)
+	if s := newFiveHours(t); s != 50 {
+		t.Fatalf("routed, never served: 50%%, got %d%%", s)
+	}
+	if err := SetSwitchOnly("codex", true); err != nil {
+		t.Fatal(err)
+	}
+	if s := newFiveHours(t); s != 95 {
+		t.Fatalf("switch-only: by when it was added, 95%%; got %d%%", s)
 	}
 }

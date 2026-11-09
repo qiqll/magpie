@@ -12,8 +12,8 @@ import (
 )
 
 // A row the gateway records as served on an account keeps the account's
-// first use (provider.NoteAccountUsed); magpie's own Test, a failed try
-// and a row with no account don't.
+// first use (provider.NoteAccountUsed); magpie's own Test, a failed try,
+// a row with no account and a plugin's cache keep-alive ping don't.
 func TestServedRowKeepsFirstUse(t *testing.T) {
 	path := provider.Path()
 	os.MkdirAll(filepath.Dir(path), 0o700)
@@ -28,6 +28,7 @@ func TestServedRowKeepsFirstUse(t *testing.T) {
 		{Provider: "codex", ProviderAccount: "me@example.com", Status: 200, Source: usage.SourceProbe},
 		{Provider: "codex", ProviderAccount: "me@example.com", Status: 429},
 		{Provider: "codex", Status: 200},
+		{Provider: "codex", ProviderAccount: "me@example.com", Status: 200, Kind: usage.KindKeepalive},
 	} {
 		Append(r)
 	}

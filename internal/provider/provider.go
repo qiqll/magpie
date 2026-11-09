@@ -807,6 +807,18 @@ var beforeProvidersWrite = func() {}
 // file cut short. The read the change was made from is made under
 // providersMu, held until store returns.
 func store(f file) error {
+	if err := storeQuiet(f); err != nil {
+		return err
+	}
+	// what agents were handed of the catalog may be out of date now
+	catalog.Touched()
+	return nil
+}
+
+// storeQuiet is store for a change that is magpie's bookkeeping alone
+// (an account's first use, growth.go): nothing an agent was handed of
+// the catalog changes, so none is rebuilt.
+func storeQuiet(f file) error {
 	p := Path()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
@@ -829,8 +841,6 @@ func store(f file) error {
 		return err
 	}
 	pruneIcons(f)
-	// what agents were handed of the catalog may be out of date now
-	catalog.Touched()
 	return nil
 }
 
