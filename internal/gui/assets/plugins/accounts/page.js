@@ -6,10 +6,11 @@
 
 // the filters and the view (rows or cards), kept per machine as the
 // reader left them: a word, the provider, the state, the gateway key, when
-// it was added, and whether its 5 hours and its week have room
-let acxQuery = "", acxProv = "", acxState = "all", acxKey = "", acxAdded = "", acx5h = "", acx7d = "", acxView = "list";
-try { ({ q: acxQuery = "", p: acxProv = "", s: acxState = "all", k: acxKey = "", a: acxAdded = "", h5: acx5h = "", h7: acx7d = "", v: acxView = "list" } = JSON.parse(localStorage.getItem("magpie.acxFilter") || "{}")); } catch {}
-const acxKeep = () => { try { localStorage.setItem("magpie.acxFilter", JSON.stringify({ q: acxQuery, p: acxProv, s: acxState, k: acxKey, a: acxAdded, h5: acx5h, h7: acx7d, v: acxView })); } catch {} };
+// it was added, whether its 5 hours and its week have room, and whether
+// the ones the user marked banned show ("" not, "banned" only, "any")
+let acxQuery = "", acxProv = "", acxState = "all", acxKey = "", acxAdded = "", acx5h = "", acx7d = "", acxBanned = "", acxView = "list";
+try { ({ q: acxQuery = "", p: acxProv = "", s: acxState = "all", k: acxKey = "", a: acxAdded = "", h5: acx5h = "", h7: acx7d = "", b: acxBanned = "", v: acxView = "list" } = JSON.parse(localStorage.getItem("magpie.acxFilter") || "{}")); } catch {}
+const acxKeep = () => { try { localStorage.setItem("magpie.acxFilter", JSON.stringify({ q: acxQuery, p: acxProv, s: acxState, k: acxKey, a: acxAdded, h5: acx5h, h7: acx7d, b: acxBanned, v: acxView })); } catch {} };
 // the gateway keys that work, each with the accounts it may use, as the
 // gateway holds it (/api/accounts/keys), and when read
 let acxKeys = null, acxKeysAt = 0;
@@ -88,11 +89,13 @@ function acxRows() {
     const several = ls.filter((l) => !unusable(l) && ((l.active && !l.paused) || l.on)).length > 1;
     const pausable = (a.agent === "claude" || a.agent === "codex") && ls.some((l) => !unusable(l) && !l.active && l.on);
     for (const l of ls) {
-      const again = unusable(l) || signInLapsed(a.agent, l);
-      const state = again ? "again" : l.paused ? "paused" : isOn(l) ? "on" : "off";
+      // marked banned by the user: no sign-in to make again, nothing to use
+      const banned = !!l.banned;
+      const again = !banned && (unusable(l) || signInLapsed(a.agent, l));
+      const state = banned ? "banned" : again ? "again" : l.paused ? "paused" : isOn(l) ? "on" : "off";
       // the tick's own action, or none (the agent's own account, fixed)
       let act = null;
-      if (unusable(l)) act = null;
+      if (banned || unusable(l)) act = null;
       else if (l.active && (pausable || l.paused)) act = l.paused ? ["on", "Resume"] : ["off", "Pause"];
       else if (l.active && sub?.own && several) act = ["off", "Stop using"];
       else if (!l.active) act = isOn(l) ? ["off", "Stop using"] : ["on", "Use"];
@@ -102,17 +105,19 @@ function acxRows() {
       // usage has no tokens of its own
       const sum = (k) => used.reduce((n, g) => n + (g[k] || 0), 0);
       const added = p.accountAdded?.[acxLow(l.user)] || "";
-      out.push({ p, a, l, sub, state, again, act, q, added, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
+      out.push({ p, a, l, sub, state, banned, again, act, q, added, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
     }
   }
   return out;
 }
 
 const ACX_STATES = [["all", "All"], ["on", "In use"], ["again", "Sign in again"], ["off", "Not in use"]];
-const ACX_SAID = { on: "In use", paused: "Paused", again: "Sign in again", off: "Not in use" };
+const ACX_SAID = { on: "In use", paused: "Paused", again: "Sign in again", off: "Not in use", banned: "Banned" };
 const ACX_VIEWS = [["list", "List view"], ["cards", "Card view"]];
 const ACX_ADDED = [["7", "Added in the last 7 days"], ["30", "Added in the last 30 days"], ["old", "Added over 30 days ago"], ["unknown", "Added before magpie kept it"]];
 // a window's room: "room" left in it, "out" used up
+// the accounts marked banned: left out (""), alone, or with the rest
+const ACX_BANNED = [["banned", "Banned only"], ["any", "Banned or not"]];
 const ACX_ROOM = { "5h": [["room", "5 hours: room left"], ["out", "5 hours: used up"]], "7d": [["room", "7 days: room left"], ["out", "7 days: used up"]] };
 
 // acxWindows: an account's windows as bars, a failed reading's none
@@ -184,9 +189,11 @@ function acxDraw() {
   if (!ACX_ADDED.some(([v]) => v === acxAdded)) acxAdded = "";
   if (!ACX_ROOM["5h"].some(([v]) => v === acx5h)) acx5h = "";
   if (!ACX_ROOM["7d"].some(([v]) => v === acx7d)) acx7d = "";
+  if (!ACX_BANNED.some(([v]) => v === acxBanned)) acxBanned = "";
   fixed("#acxAdded", "Added any time", ACX_ADDED, acxAdded, "Added", (v) => { acxAdded = v; });
   fixed("#acx5h", "5 hours: any", ACX_ROOM["5h"], acx5h, "5 hours", (v) => { acx5h = v; });
   fixed("#acx7d", "7 days: any", ACX_ROOM["7d"], acx7d, "7 days", (v) => { acx7d = v; });
+  fixed("#acxBanned", "Not banned", ACX_BANNED, acxBanned, "Status", (v) => { acxBanned = v; });
   if (!ACX_VIEWS.some(([v]) => v === acxView)) acxView = "list";
   const vw = $("#acxView");
   vw.replaceChildren(segs(ACX_VIEWS.map(([k, n]) => [k, t(n)]), acxView, (k) => { acxView = k; acxKeep(); acxDraw(); }));
@@ -197,6 +204,7 @@ function acxDraw() {
 
   const words = acxLow(acxQuery);
   const rows = all.filter((r) => (!acxProv || r.p.id === acxProv)
+    && (acxBanned === "any" || r.banned === (acxBanned === "banned"))
     && (acxState === "all" || r.state === acxState || (acxState === "on" && r.state === "paused"))
     && acxKeyAllows(key, r)
     && (!acxAdded || acxAddedMatches(r.added, acxAdded))
@@ -211,6 +219,7 @@ function acxDraw() {
     const parts = [t(all.length === 1 ? "1 account" : "{n} accounts", { n: all.length }), t("{n} in use", { n: n("on") })];
     if (n("paused")) parts.push(t("{n} paused", { n: n("paused") }));
     if (n("again")) parts.push(t("{n} to sign in again", { n: n("again") }));
+    if (n("banned")) parts.push(t("{n} banned", { n: n("banned") }));
     sum.append(...parts.flatMap((s, i) => (i ? [" · ", el("span", "", s)] : [el("span", "", s)])));
     if (n("again")) sum.lastChild.classList.add("acx-warn");
   }
@@ -263,7 +272,17 @@ function acxActs(r) {
     };
     acts.append(b);
   }
-  if (q) acts.append(quotaRefresh(q, () => acxDraw()));
+  // a banned one's allowance isn't read (provider/banned.go)
+  if (q && !r.banned) acts.append(quotaRefresh(q, () => acxDraw()));
+  // the user's mark that the vendor banned it, or its lifting
+  const ban = el("button", "text acx-ban", t(r.banned ? "Lift ban" : "Mark banned"));
+  ban.type = "button";
+  ban.title = t(r.banned ? "Use it again: the gateway routes to it and its allowance is read" : "Its vendor banned it: the gateway never sends it a request, and its usage history stays");
+  ban.onclick = () => {
+    ban.classList.add("busy");
+    accountAction("login/" + (r.banned ? "unban" : "ban"), { agent: a.agent, user: l.user }).then(() => acxDraw());
+  };
+  acts.append(ban);
   const open = el("button", "text acx-open", t("Open"));
   open.type = "button";
   open.title = t("Open {name} in Providers, with this account's settings", { name: p.name });

@@ -262,7 +262,7 @@ func NextLogin(ctx context.Context, agent string) (from, to string, back, ok boo
 		// never one Codex keeps signed in in another folder (switchSavedLogin)
 		// nor one added by a setup-token, which Claude Code can't be
 		// signed in to
-		if !l.Active && l.On && l.Lapsed == "" && l.home == "" && !l.Token {
+		if !l.Active && l.On && l.Lapsed == "" && switchable(l) {
 			spares = append(spares, l)
 		}
 	}
@@ -281,7 +281,7 @@ func NextLogin(ctx context.Context, agent string) (from, to string, back, ok boo
 	// kept on the first, the agent goes back to it at once, however little
 	// that has left (#524)
 	share, keep := loginSwitching(agent)
-	if keep && first != nil && first.On && first.Lapsed == "" {
+	if keep && first != nil && first.On && first.Lapsed == "" && !first.Banned {
 		return from, first.User, true, true
 	}
 	// the account it is on, and the one it goes back to, are read; the

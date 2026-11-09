@@ -222,6 +222,9 @@ func (p Provider) Sign(ctx context.Context, req *http.Request, proto Protocol, b
 	if p.Account != nil && settings.AccountDiscoveryOff() && !p.publicAccount() {
 		return errAccountDiscoveryOff
 	}
+	if err := errIfBanned(ctx, p.Account); err != nil {
+		return err // marked banned by the user: never sent (banned.go)
+	}
 	ctx = p.Via(ctx) // a sign-in refreshed on the way goes through its proxy
 	// the agent's own headers the provider lists (PassHeaders), before an
 	// account's signing, which has the last word on its own

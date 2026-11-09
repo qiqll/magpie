@@ -113,3 +113,27 @@ func TestProviderInfoSaysWhenAccountsWereAdded(t *testing.T) {
 		t.Fatalf("one from before AccountAdded was kept is said as added: %v", info.AccountAdded)
 	}
 }
+
+// An account the user marked banned is used by no key: a key whose models
+// reach its provider lists the provider's other accounts and not it.
+func TestAccountsKeysLeaveBannedOut(t *testing.T) {
+	sandboxHome(t)
+	path := filepath.Join(filepath.Dir(provider.Path()), "logins.json")
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	b, _ := json.Marshal([]map[string]any{
+		{"agent": "codex", "user": "Gone@example.com", "banned": true, "seen": time.Now()},
+		{"agent": "codex", "user": "ops@example.com", "seen": time.Now()},
+	})
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ps := []provider.Provider{
+		{ID: "codex", Name: "Codex", Account: &provider.Account{Agent: "codex", User: "ops@example.com"}},
+	}
+	c := accountsCatalog{models: map[string][]string{"codex": {"codex/gpt-5"}}}
+	keys := []access.Identity{{KeyID: "codex", KeyName: "Codex", Models: []string{"*/gpt-5"}}}
+	got := accountsKeysOf(keys, ps, c)
+	if len(got) != 1 || !slices.Equal(got[0].Accounts, []string{"codex/ops@example.com"}) {
+		t.Fatalf("%+v", got)
+	}
+}

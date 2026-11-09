@@ -163,7 +163,7 @@ test("compat.js is the first of the page's own scripts", async () => {
   // cliproxy.js on an account's Export, proxies.js when Settings draws
   // Network; the checks above
   // still read them
-  for (const f of await scripts()) if (!["webfonts.js", "cfgblocked.js", "signsheets.js", "ruleedit.js", "ratewindows.js", "traywindows.js", "autoresetown.js", "registry.js", "navlamp.js", "whatsnew.js", "claudemode.js", "ctxtext.js", "resetask.js", "quotaall.js", "quitask.js", "checkinnow.js", "autobackup.js", "scrollends.js", "profilerename.js", "settingshints.js", "keyspend.js", "syncfiles.js", "agentcompact.js", "signagain.js", "cliproxy.js", "proxies.js"].includes(f)) assert(all.includes(f), f + " is not loaded by index.html");
+  for (const f of await scripts()) if (!["webfonts.js", "cfgblocked.js", "signsheets.js", "ruleedit.js", "ratewindows.js", "traywindows.js", "autoresetown.js", "registry.js", "navlamp.js", "whatsnew.js", "claudemode.js", "ctxtext.js", "resetask.js", "quotaall.js", "quitask.js", "checkinnow.js", "autobackup.js", "scrollends.js", "profilerename.js", "settingshints.js", "keyspend.js", "syncfiles.js", "agentcompact.js", "signagain.js", "cliproxy.js", "proxies.js", "banned.js"].includes(f)) assert(all.includes(f), f + " is not loaded by index.html");
 });
 
 test("the styles hold up in Safari 15.0", async () => {

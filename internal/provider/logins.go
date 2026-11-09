@@ -65,6 +65,9 @@ type Login struct {
 	// Token is a Claude account added by a setup-token: magpie's
 	// requests use it, Claude Code itself can't be signed in to it.
 	Token bool `json:"token,omitempty"`
+	// Banned is the user's mark that the vendor banned the account
+	// (banned.go): listed, never routed to, switched to or read.
+	Banned bool `json:"banned,omitempty"`
 
 	// first is the saved Claude account served in the place of Claude
 	// Code's own while it is signed out (claudeStandIn).
@@ -134,6 +137,11 @@ type savedLogin struct {
 	// (claudeSignInOwner). A sign-in renewed under that same profile is
 	// the Held account's still (claudeRenewedHeld).
 	HeldAs string `json:"heldAs,omitempty"`
+	// Banned is the user's mark that the vendor banned the account, and
+	// BannedAt when they set it (banned.go): magpie routes nothing to it
+	// and reads nothing of it, its history kept. Only the user lifts it.
+	Banned   bool      `json:"banned,omitempty"`
+	BannedAt time.Time `json:"bannedAt,omitzero"`
 	// was is the name a Copilot account read under a new one had in the
 	// file (#1220): its per-account settings are still kept by it, and
 	// move to the new one before the new name is written (renameSettled).
@@ -450,7 +458,7 @@ func upsertLogin(ls []savedLogin, l savedLogin) []savedLogin {
 			l.On = l.On || ls[i].On
 			l.Paused = l.Paused || ls[i].Paused
 			l.Order = ls[i].Order
-			ls[i] = l
+			ls[i] = keepBanned(l, ls[i])
 			return ls
 		}
 	}
@@ -489,6 +497,7 @@ func dedupeLogins(ls []savedLogin) []savedLogin {
 		keep.On = previous.On || l.On
 		keep.Paused = previous.Paused || l.Paused
 		keep.First = previous.First || l.First
+		keep = keepBanned(keepBanned(keep, previous), l)
 		keep.Order = previous.Order
 		if keep.Order == 0 {
 			keep.Order = l.Order
@@ -1231,6 +1240,10 @@ func loginsNow(agent string) []Login {
 			}
 			lg.Returns = l.On && strings.EqualFold(back[l.Agent], l.User)
 		}
+		if l.Banned {
+			// banned, it is no sign-in to make again: no bar asks for one
+			lg.Banned, lg.Lapsed, lg.Returns = true, "", false
+		}
 		out = append(out, lg)
 	}
 	return append(out, side...)
@@ -1352,6 +1365,9 @@ func SwitchLogin(agent, user string) error {
 	}
 	// the user's own choice: magpie doesn't sign the agent back in to the
 	// account it moved it off
+	if LoginBanned(agent, user) {
+		return fmt.Errorf("%s is marked banned in magpie; lift the mark to switch to it", user)
+	}
 	if slices.Contains(loginAgents, agent) {
 		setLoginReturn(agent, loginReturn{})
 	}
@@ -1648,8 +1664,9 @@ func nextOnForget(agent, user string) string {
 
 // switchable is an account an agent can be signed in to: not a Claude
 // setup-token one (errClaudeTokenSwitch), nor a ChatGPT account Codex
-// keeps in another folder (codexHeldIn).
-func switchable(l Login) bool { return !l.Token && l.home == "" }
+// keeps in another folder (codexHeldIn), nor one the user marked banned
+// (banned.go).
+func switchable(l Login) bool { return !l.Token && l.home == "" && !l.Banned }
 
 func forgetLogin(agent, user string) (signedOut bool, err error) {
 	loginsMu.Lock()

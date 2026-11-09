@@ -138,6 +138,9 @@ func renewLogins(ctx context.Context, every time.Duration, atOnce int) []Renewal
 	out := []Renewal{}
 	tried := 0
 	for _, l := range ls {
+		if l.Banned {
+			continue // the user marked it banned: nothing is renewed (banned.go)
+		}
 		if l.Agent == ChatGPTAPIID && l.Lapsed != "" {
 			// a ChatGPT API sign-in whose refresh was refused is left out
 			// of routing (SignInLapsed), so no request tries it again:

@@ -22,6 +22,7 @@ magpie.plugin("accounts", (ctx) => {
     <button class="sess-pick" id="acxAdded" type="button"></button>
     <button class="sess-pick" id="acx5h" type="button"></button>
     <button class="sess-pick" id="acx7d" type="button"></button>
+    <button class="sess-pick" id="acxBanned" type="button"></button>
     <span class="grow"></span>
     <div id="acxState"></div>
     <div id="acxView"></div>

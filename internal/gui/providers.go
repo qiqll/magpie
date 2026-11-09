@@ -2556,6 +2556,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			change = func() error { return provider.ForgetLogin(in.Agent, in.User) }
 		case "on", "off":
 			change = func() error { return provider.SetLoginOn(in.Agent, in.User, r.PathValue("action") == "on") }
+		case "ban", "unban":
+			// the user's mark that the vendor banned the account: routed
+			// to, switched to and read no more, its history kept
+			change = func() error { return provider.SetLoginBanned(in.Agent, in.User, r.PathValue("action") == "ban") }
 		default:
 			http.NotFound(rw, r)
 			return

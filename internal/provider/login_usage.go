@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -321,13 +322,16 @@ func cachedLoginReading(ctx context.Context, l Login) loginUsageEntry {
 // False for an agent that tells none, and for the built-in Grok, read by
 // home.
 func usageLogins(agent string) (logins []Login, ok bool) {
-	if pp, ok := pluginOfAgent(agent); ok {
-		return pluginUsageLogins(pp), true
+	// one the user marked banned isn't read (banned.go)
+	unbanned := func(ls []Login) []Login { return slices.DeleteFunc(ls, func(l Login) bool { return l.Banned }) }
+	if pp, plugin := pluginOfAgent(agent); plugin {
+		return unbanned(pluginUsageLogins(pp)), true
 	}
 	if agent == "grok" {
 		return nil, false
 	}
-	return builtinLogins(agent)
+	logins, ok = builtinLogins(agent)
+	return unbanned(logins), ok
 }
 
 // builtinLogins are the accounts of a built-in subscription whose

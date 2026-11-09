@@ -338,7 +338,32 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 		w, body, hooked = gatewayHooks(w, r, provider.Responses, body)
 		defer hooked()
 	}
+	if codexOwnBanned(r) {
+		// relayed as it came, it would reach Codex's own sign-in, which
+		// the user marked banned: nothing is sent it (provider/banned.go)
+		writeError(w, provider.Responses, http.StatusForbidden, provider.ErrAccountBanned.Error())
+		return
+	}
 	s.codexUpstream(w, r, rest, body)
+}
+
+// codexOwnBanned says r, relayed as it came, would go on the account
+// Codex is signed in to, and the user marked that account banned. A
+// request signed by an account magpie doesn't have (a Codex in WSL)
+// isn't its.
+func codexOwnBanned(r *http.Request) bool {
+	if apiKey(r.Header) {
+		return false
+	}
+	if acct := r.Header.Get("chatgpt-account-id"); acct != "" && acct != provider.CodexSignedInAccount() {
+		return false
+	}
+	for _, l := range provider.Logins("codex") {
+		if l.Active {
+			return l.Banned
+		}
+	}
+	return false
 }
 
 // sealedTaskError is what a subagent is told whose task its lead sealed

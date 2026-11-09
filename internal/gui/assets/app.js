@@ -1639,7 +1639,7 @@ function switchEntry(a) {
     setTimeout(() => b.classList.remove("done"), 5000 - ago);
   }
   b.append(pn ? el("span", "chev", svg(CHEV, 11, 1.7)) : svg(CHEV, 10, 1.6));
-  const opts = ls.filter((l) => !l.token).map((l) => ({ v: "u:" + l.user, name: l.user, literalName: true, note: l.lapsed ? "Sign-in required" : accountPlan({ agent: a.id, plan: l.plan }) }));
+  const opts = ls.filter((l) => !l.token && !l.banned).map((l) => ({ v: "u:" + l.user, name: l.user, literalName: true, note: l.lapsed ? "Sign-in required" : accountPlan({ agent: a.id, plan: l.plan }) }));
   const on = cx ? t("magpie only switches {agent}'s sign-in; its requests go straight to OpenAI", ag) : t("magpie serves no requests on these accounts");
   // the Only switch setting, where the accounts page offers it
   if (!cx || ls.filter((l) => !l.lapsed && (l.active || l.on)).length > 1) opts.push({ v: "only", name: t("Only switch {agent}'s sign-in", ag), literalName: true, ticked: !!p.switchOnly, note: on });
@@ -13220,6 +13220,8 @@ function loginsInOrder(a, p) {
   return ls.sort((x, y) => (y.active ? 1 : 0) - (x.active ? 1 : 0));
 }
 
+// banJS: e drawn by banned.js
+const banJS = (e, f, ...x) => (import("./banned.js").then(() => window[f](e, ...x), () => e.remove()), e);
 // cliproxyButton: Export, an account's sign-in as CLIProxyAPI's auth file
 // (provider.CLIProxyAgents), its icon, words and press in cliproxy.js
 function cliproxyButton(a, l) {
@@ -13231,15 +13233,12 @@ function cliproxyButton(a, l) {
 function renderAccounts(a, p) {
   const sub = subOf(a.agent);
   const list = el("div", "accts");
-  const ls = loginsInOrder(a, p);
+  const ls = loginsInOrder(a, p).filter((l) => !l.banned), banned = a.logins?.filter((l) => l.banned) || [];
   if (p) list.dataset.provider = p.id, list.classList.toggle("weighted", (draft?.routing ?? (p.routing || "")) === "weight");
   // a Claude account refused or with no sign-in waits to sign in again
   const unusable = (l) => a.agent === "claude" && !!l.lapsed;
-  // any other to sign in again keeps, in use or not, its Sign in again
-  // and Remove, the reason never in their place
+  // any other to sign in again keeps its Sign in again and Remove
   const signedOut = (l) => !unusable(l) && signInLapsed(a.agent, l);
-  // a Copilot account on an enterprise's GHE.com is named login@host, and
-  // signs in again there
   const againSite = (l) => signInAgainSite(a.agent, l.user);
   const several = ls.filter((l) => !unusable(l) && ((l.active && !l.paused) || l.on)).length > 1;
   // each one's weight (provider.AccountWeights), for its share
@@ -13390,6 +13389,7 @@ function renderAccounts(a, p) {
     row.append(aq);
     row.classList.add("with-aq"); // not :has(.aq), which Safari 15.0 lacks (#220)
     if (["codex", "claude", "antigravity"].includes(a.agent) && !sub?.plugin && !unusable(l) && !(a.agent === "antigravity" && l.own)) tools.append(cliproxyButton(a, l));
+    tools.append(banJS(el("button", "text acc-ban"), "banDress", a, l));
     if (p) row.append(...accountRestLines(p, l.user)); // maxleebeta on Discord
     // Remove goes under ⋯ too, but beside Sign in again while signed out
     if (!row.classList.contains("signed-out")) tools.append(...line.querySelectorAll(":scope > .text.quiet"));
@@ -13476,6 +13476,7 @@ function renderAccounts(a, p) {
     if (open.length) box.append(el("span", "note", t("No cap on {users}: used to 100% of each window", { users: open.join(", ") })));
     list.append(box);
   }
+  if (banned.length) list.append(banJS(el("div", "acc-banned"), "bannedFill", a, p, banned));
   const pv = a.agent === "codex" ? providers || {} : {};
   if (pv.codexDaemon) list.append(renderCodexDaemon(pv.codexDaemon));
   if (pv.codexApp) list.append(renderCodexApp(pv.codexApp));

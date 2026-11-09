@@ -31,6 +31,9 @@ magpie.strings({
     "Plan ends": "套餐到期",
     "Any gateway key": "任意网关 key",
     "Couldn't read the gateway keys": "读取网关 key 失败",
+    "Not banned": "未封",
+    "Banned only": "已封",
+    "Banned or not": "全部",
   },
   "zh-TW": {
     "Search accounts": "搜尋帳號",
@@ -62,6 +65,9 @@ magpie.strings({
     "Plan ends": "方案到期",
     "Any gateway key": "任意閘道 key",
     "Couldn't read the gateway keys": "讀取閘道 key 失敗",
+    "Not banned": "未封",
+    "Banned only": "已封",
+    "Banned or not": "全部",
   },
   ja: {
     "Search accounts": "アカウントを検索",
@@ -93,6 +99,9 @@ magpie.strings({
     "Plan ends": "プラン終了",
     "Any gateway key": "すべてのゲートウェイキー",
     "Couldn't read the gateway keys": "ゲートウェイキーを読み取れませんでした",
+    "Not banned": "凍結なし",
+    "Banned only": "凍結済みのみ",
+    "Banned or not": "すべて",
   },
   de: {
     "Search accounts": "Konten durchsuchen",
@@ -124,5 +133,8 @@ magpie.strings({
     "Plan ends": "Tarif endet",
     "Any gateway key": "Beliebiger Gateway-Schlüssel",
     "Couldn't read the gateway keys": "Gateway-Schlüssel konnten nicht gelesen werden",
+    "Not banned": "Nicht gesperrt",
+    "Banned only": "Nur gesperrte",
+    "Banned or not": "Alle",
   },
 });

@@ -440,7 +440,7 @@ function gatewayModelsBadge(k) {
   b.setAttribute("aria-label", t("Models this key may use"));
   b.setAttribute("aria-haspopup", "menu");
   b.setAttribute("aria-expanded", "false");
-  const open = (models, accounts) => {
+  const open = (models, accounts, banned = []) => {
     if (!b.isConnected) return;
     const opts = [{ v: "", name: "All models", note: "Any model and any account, now and later" }];
     const seen = new Set();
@@ -527,7 +527,9 @@ function gatewayModelsBadge(k) {
     // an account signed out: behind every live entry, a model gone
     // before an account signed out
     for (const v of ms) if (!opts.some((o) => o.v === v)) opts.push({ v, name: v, note: "Not served now", literalName: true });
-    for (const v of as) if (!accountsSet.has(v)) { accountsSet.add(v); opts.push({ v, name: v, note: "Not signed in now", also: alsoOf(v), title: alsoOf(v), literalName: true }); }
+    // one the user marked banned isn't offered, held by the key or not (provider/banned.go)
+    const bannedSet = new Set(banned.map((v) => v.toLowerCase()));
+    for (const v of as) if (!accountsSet.has(v) && !bannedSet.has(v.toLowerCase())) { accountsSet.add(v); opts.push({ v, name: v, note: "Not signed in now", also: alsoOf(v), title: alsoOf(v), literalName: true }); }
     openProtoMenu(b, opts, [...ms, ...as], (picked) => {
       // one action at a time: gatewayKeyAction is busy while one is sent.
       // The accounts are sent only when they changed: a model picked says
@@ -551,17 +553,17 @@ function gatewayModelsBadge(k) {
     e.stopPropagation();
     if (b.classList.contains("open")) return closeProtoMenu();
     const loading = keyModelsLoading = { id: k.id, open };
-    let models = [], accounts = [];
+    let models = [], accounts = [], banned = [];
     // the keys read again with the list: which other key holds an account
     // may have changed outside this window (the CLI, another window)
-    try { [{ models, accounts }] = await Promise.all([api("caller-keys/models"), refreshGatewayKeys()]); } catch (err) {
+    try { [{ models, accounts, banned = [] }] = await Promise.all([api("caller-keys/models"), refreshGatewayKeys()]); } catch (err) {
       if (keyModelsLoading === loading) keyModelsLoading = null;
       status(t(err.message), "err");
       return;
     }
     if (keyModelsLoading !== loading) return;
     keyModelsLoading = null;
-    loading.open(models, accounts);
+    loading.open(models, accounts, banned);
   };
   if (keyModelsLoading?.id === k.id) keyModelsLoading.open = open;
   return b;
