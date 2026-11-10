@@ -4,6 +4,7 @@
 // works. {name} slots are filled by t(str, vars).
 const I18N = {
   zh: {
+    "Any gateway key": "任意网关密钥",
     "Add a {name} account": "添加 {name} 账号",
     "Pause": "暂停",
     "Every subscription account on one page: its state, allowances and recent requests, used, paused or signed in again there": "所有订阅账号集中在一页：状态、额度与近期请求，并可在此启用、暂停或重新登录",
@@ -4971,6 +4972,7 @@ const I18N = {
     "Growth policy": "成长策略",
   },
   "zh-TW": {
+    "Any gateway key": "任意閘道金鑰",
     "Add a {name} account": "新增 {name} 帳號",
     "Pause": "暫停",
     "Every subscription account on one page: its state, allowances and recent requests, used, paused or signed in again there": "所有訂閱帳號集中在一頁：狀態、額度與近期請求，並可在此啟用、暫停或重新登入",
@@ -9923,6 +9925,7 @@ const I18N = {
     "Growth policy": "成長策略",
   },
   ja: {
+    "Any gateway key": "どのゲートウェイキーでも",
     "Add a {name} account": "{name} アカウントを追加",
     "Pause": "一時停止",
     "Every subscription account on one page: its state, allowances and recent requests, used, paused or signed in again there": "すべてのサブスクリプションアカウントを 1 ページに：状態、枠、最近のリクエスト。ここで使用・一時停止・再サインインも",
@@ -14877,6 +14880,7 @@ const I18N = {
     "Growth policy": "成長ポリシー",
   },
   de: {
+    "Any gateway key": "Jeder Zugangsschlüssel",
     "Add a {name} account": "{name}-Konto hinzufügen",
     "Pause": "Pausieren",
     "Every subscription account on one page: its state, allowances and recent requests, used, paused or signed in again there": "Alle Abo-Konten auf einer Seite: Zustand, Kontingente und letzte Anfragen, dort verwenden, pausieren oder neu anmelden",
