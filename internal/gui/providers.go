@@ -216,6 +216,10 @@ type providerJSON struct {
 	// (provider.FirstUsedKnown), so an account with none was never used;
 	// till then the card says nothing of it, its days counted from Added
 	FirstUsedKnown bool `json:"firstUsedKnown,omitempty"`
+	// how the growth policy holds each account now, by its name in lower
+	// case (provider.AccountGrowthOf, the gateway's own hold): its day,
+	// last day and shares, for its row to say; none for one it doesn't hold
+	AccountGrowth map[string]*provider.AccountGrowth `json:"accountGrowth,omitempty"`
 	// where a custom provider's balance is asked (see provider.Balance)
 	BalanceURL    string `json:"balanceURL,omitempty"`
 	BalancePath   string `json:"balancePath,omitempty"`
@@ -832,6 +836,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		Outputs: provider.OutputsOf(p.ID), Compacts: provider.CompactsOf(p.ID),
 	}
 	if p.Account != nil {
+		now := time.Now()
 		for _, r := range p.AccountRefs() {
 			if s := provider.SeatNameOf(p.ID, r); s != "" {
 				if out.AccountSeats == nil {
@@ -857,6 +862,12 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 					out.AccountFirstUsed = map[string]time.Time{}
 				}
 				out.AccountFirstUsed[strings.ToLower(strings.TrimSpace(r))] = at
+			}
+			if g := provider.AccountGrowthOf(p.ID, r, now); g != nil {
+				if out.AccountGrowth == nil {
+					out.AccountGrowth = map[string]*provider.AccountGrowth{}
+				}
+				out.AccountGrowth[strings.ToLower(strings.TrimSpace(r))] = g
 			}
 		}
 	}
@@ -2474,6 +2485,13 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			return
 		case "accountcap":
 			if err := provider.SetAccountCap(in.ID, req.Account, req.Cap); err != nil {
+				fail(rw, err)
+				return
+			}
+		case "skipgrowth":
+			// the growth policy lets the account go: 100 on each window
+			// the user set nothing on (T-132)
+			if err := provider.SkipGrowth(in.ID, req.Account); err != nil {
 				fail(rw, err)
 				return
 			}

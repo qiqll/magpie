@@ -188,11 +188,19 @@ func (p Provider) CapsOf(user string) WindowCaps {
 
 // AccountCapsOf is CapsOf of the provider id.
 func AccountCapsOf(id, user string) WindowCaps {
+	return accountCapsAt(id, user, time.Now())
+}
+
+// accountCapsAt is AccountCapsOf at now; ownCapsOf is it without the
+// growth policy's, the user's own alone.
+func accountCapsAt(id, user string, now time.Time) WindowCaps {
+	return ownCapsOf(id, user).withGrowth(growthFrom(id, user, now), now)
+}
+
+func ownCapsOf(id, user string) WindowCaps {
 	if s, ok := storedPicks(id); ok {
 		k := accountKey(user)
-		c := WindowCaps{All: s.AccountCaps[k], Windows: s.AccountWindowCaps[k], Amounts: s.AccountWindowAmounts[k]}
-		now := time.Now()
-		return c.withGrowth(growthFrom(id, user, now), now)
+		return WindowCaps{All: s.AccountCaps[k], Windows: s.AccountWindowCaps[k], Amounts: s.AccountWindowAmounts[k]}
 	}
 	return WindowCaps{}
 }

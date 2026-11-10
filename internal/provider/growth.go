@@ -27,11 +27,14 @@ package provider
 //
 // The user's word comes first: an account with a cap of its own
 // (AccountCaps) holds every window at it, and a window with a share of its
-// own (AccountWindowCaps, 100 among them) keeps it. The policy fills in
-// only the windows the user left alone.
+// own (AccountWindowCaps, 100 among them) or an amount (AccountWindowAmounts)
+// keeps it. The policy fills in only the windows the user left alone.
+// Skipping the warm-up (SkipGrowth, T-132) is a share of 100 on each of
+// those, so a share the user sets on one later is theirs as any other.
 
 import (
 	"cmp"
+	"fmt"
 	"log"
 	"maps"
 	"reflect"
@@ -136,9 +139,9 @@ func rampCaps(start, days int, added, now time.Time) map[string]int {
 }
 
 // withGrowth is c with the policy's shares for an account added at added,
-// at now, on the windows the user set nothing on; c as it is when the
-// account has a cap of its own, which holds every window. c's map is
-// never written: one with growth is a copy.
+// at now, on the windows the user set nothing on (no share, no amount); c
+// as it is when the account has a cap of its own, which holds every
+// window. c's map is never written: one with growth is a copy.
 func (c WindowCaps) withGrowth(added, now time.Time) WindowCaps {
 	if !addedKnown(added) || c.All > 0 {
 		return c
@@ -152,7 +155,7 @@ func (c WindowCaps) withGrowth(added, now time.Time) WindowCaps {
 		wins = map[string]int{}
 	}
 	for w, share := range g {
-		if _, own := wins[w]; !own {
+		if _, own := wins[w]; !own && c.Amounts[w] <= 0 {
 			wins[w] = share
 		}
 	}
@@ -257,6 +260,142 @@ func GrowthAccounts(now time.Time) []GrowthAccount {
 		return cmp.Or(cmp.Compare(a.Provider, b.Provider), cmp.Compare(a.Account, b.Account))
 	})
 	return out
+}
+
+// AccountGrowth is how the growth policy holds an account at a time, for
+// its row on Models › Accounts to say (T-132): the policy in effect, the
+// account's day (as GrowthAccounts counts it), Days the first day it holds
+// nothing (0 when that is past GrowthDaysMost), and the share of the 5
+// hours and of the week it holds the account to, 100 where it holds
+// neither. Next is the next day before Days a stage changes a share, with
+// the shares from then (stages only: a ramp rises every day). Waiting is
+// one not used yet, on day 0 until its first use; ByAdded one whose days
+// count from when it was added, the gateway not serving it
+// (gatewayServed).
+type AccountGrowth struct {
+	Policy        string `json:"policy"`
+	Name          string `json:"name"`
+	Builtin       bool   `json:"builtin,omitempty"`
+	Kind          string `json:"kind"`
+	Day           int    `json:"day"`
+	Days          int    `json:"days,omitempty"`
+	FiveHours     int    `json:"fiveHours"`
+	Week          int    `json:"week"`
+	Next          int    `json:"next,omitempty"`
+	NextFiveHours int    `json:"nextFiveHours,omitempty"`
+	NextWeek      int    `json:"nextWeek,omitempty"`
+	Waiting       bool   `json:"waiting,omitempty"`
+	ByAdded       bool   `json:"byAdded,omitempty"`
+}
+
+// AccountGrowthOf is how the growth policy holds the account user of the
+// subscription id at now, nil when it holds none of its windows: one from
+// before, one past its last day, a policy that is Off, a cap of the
+// account's own, or every window the user's (a warm-up skipped). Its
+// shares are those AccountCapsOf adds to the user's own caps, through the
+// same withGrowth and growthFrom the gateway's holds read, so the row
+// never says what the gateway doesn't hold.
+func AccountGrowthOf(id, user string, now time.Time) *AccountGrowth {
+	s, ok := storedPicks(id)
+	if !ok {
+		return nil
+	}
+	own := ownCapsOf(id, user)
+	from := growthFrom(id, user, now)
+	if !addedKnown(from) {
+		return nil
+	}
+	// the policy's shares on the windows the user left alone, at the day
+	// at, and whether it holds any
+	held := func(at time.Time) (fiveHours, week int, any bool) {
+		c := own.withGrowth(from, at)
+		least := func(win string) int {
+			share := 100
+			for _, w := range growthWindows[win] {
+				if _, mine := own.Windows[w]; mine {
+					continue
+				}
+				if v, ok := c.Windows[w]; ok {
+					share, any = min(share, v), true
+				}
+			}
+			return share
+		}
+		return least(settings.GrowthFiveHours), least(settings.GrowthWeek), any
+	}
+	f, w, any := held(now)
+	if !any {
+		return nil
+	}
+	p := settings.Shared().GrowthInEffect()
+	day := max(int(now.Sub(from).Hours()/24), 0)
+	g := &AccountGrowth{
+		Policy: p.ID, Name: p.Name, Builtin: p.Builtin, Kind: p.Kind,
+		Day: day, FiveHours: f, Week: w,
+		Waiting: gatewayServed(s) && storedFile().FirstUsedRead && !addedKnown(s.AccountFirstUsed[accountKey(user)]),
+		ByAdded: !gatewayServed(s),
+	}
+	for d := day + 1; d <= settings.GrowthDaysMost+1; d++ {
+		nf, nw, more := held(from.Add(time.Duration(d) * 24 * time.Hour))
+		if !more {
+			g.Days = d
+			break
+		}
+		if p.Kind == settings.GrowthStaged && g.Next == 0 && (nf != f || nw != w) {
+			g.Next, g.NextFiveHours, g.NextWeek = d, nf, nw
+		}
+	}
+	return g
+}
+
+// SkipGrowth lets the growth policy go of the account ref of the
+// subscription id (T-132): a share of 100, none, on each window it would
+// hold that the user set nothing on, so the gateway holds it at the
+// user's own caps alone. A window with a share or an amount of the user's
+// keeps it, and a share the user sets later is theirs, as on any window
+// (SetWindowCaps); one set back to follow the account's cap is the
+// policy's again. An account with a cap of its own, which the policy
+// never holds, is left as it is.
+func SkipGrowth(id, ref string) error {
+	p, err := Find(id)
+	if err != nil {
+		return err
+	}
+	if p.Account == nil {
+		return fmt.Errorf("%s has keys, not subscription accounts with usage windows to cap", p.Name)
+	}
+	r, ok := p.accountRef(ref)
+	if !ok {
+		return fmt.Errorf("%s has no account %q", p.Name, ref)
+	}
+	k := accountKey(r)
+	// on the caps as they are stored then, not as they were read: another
+	// set meanwhile stays (T-079)
+	return editStored(p.ID, func(q *Provider) bool {
+		if q.AccountCaps[k] > 0 {
+			return false
+		}
+		all := map[string]map[string]int{}
+		for u, m := range q.AccountWindowCaps {
+			all[u] = maps.Clone(m)
+		}
+		if all[k] == nil {
+			all[k] = map[string]int{}
+		}
+		changed := false
+		for _, wins := range growthWindows {
+			for _, w := range wins {
+				if _, mine := all[k][w]; mine || q.AccountWindowAmounts[k][w] > 0 {
+					continue
+				}
+				all[k][w], changed = 100, true
+			}
+		}
+		if changed {
+			q.AccountWindowCaps = normalWindowCaps(all)
+		}
+		return changed
+	})
 }
 
 // growthFrom is when the growth policy counts the days of the account

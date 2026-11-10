@@ -115,7 +115,9 @@ function acxRows() {
       // usage has no tokens of its own
       const sum = (k) => used.reduce((n, g) => n + (g[k] || 0), 0);
       const added = p.accountAdded?.[acxLow(l.user)] || "", firstUsed = p.accountFirstUsed?.[acxLow(l.user)] || "";
-      out.push({ p, a, l, sub, state, banned, disabled, off, authFailed, again, act, q, added, firstUsed, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
+      // how the growth policy holds it now, as the gateway does (provider.AccountGrowthOf)
+      const growth = p.accountGrowth?.[acxLow(l.user)] || null;
+      out.push({ p, a, l, sub, state, banned, disabled, off, authFailed, again, act, q, added, firstUsed, growth, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
     }
   }
   return out;
@@ -365,7 +367,45 @@ function acxActs(r) {
   return acts;
 }
 
-// acxWho: an account's name or alias and its state's badge
+// acxGrowthSaid: how the growth policy holds an account, from the gateway's
+// own count (provider.AccountGrowthOf): ramping up, its day of the days it
+// holds (from when it was added, for one the gateway doesn't serve; from
+// its first use, not yet, for one not used), the share it holds the 5
+// hours and the week to now, and a stage's next day. Nothing is worked out
+// here.
+function acxGrowthSaid(g) {
+  const parts = [t("Ramping up")];
+  if (g.waiting) parts.push(t("starts at first use"));
+  else if (g.byAdded) parts.push(g.days ? t("day {day} of {days} since added", { day: g.day, days: g.days }) : t("day {day} since added", { day: g.day }));
+  else parts.push(g.days ? t("day {day} of {days}", { day: g.day, days: g.days }) : t("day {day}, held for good", { day: g.day }));
+  parts.push(g.fiveHours === g.week ? t("now {n}%", { n: g.fiveHours }) : t("now 5h {five}% · week {week}%", { five: g.fiveHours, week: g.week }));
+  if (g.next) parts.push(t("next step on day {day}", { day: g.next }));
+  return parts.join(" · ");
+}
+
+// acxGrowth: an account's ramp-up as a button, which offers Skip ramp-up:
+// 100 on each window the policy holds that the user set nothing on
+// (provider.SkipGrowth), so a cap set later is the user's
+function acxGrowth(r) {
+  const { p, l, growth: g } = r;
+  const b = el("button", "acx-grow", acxGrowthSaid(g));
+  b.type = "button";
+  b.title = t("{policy} holds this new account to a share of its windows, rising to 100%. Click to skip the ramp-up", { policy: g.builtin ? t(g.name) : g.name })
+    + (g.byAdded ? "\n" + t("Its days count from when it was added: its agent asks its vendor itself, so magpie never sees its first use") : "")
+    + (g.waiting ? "\n" + t("Its days start on the first request its vendor serves through magpie") : "");
+  b.setAttribute("aria-haspopup", "menu");
+  b.onclick = (e) => {
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    openProtoMenu(b, [{ v: "skip", name: "Skip ramp-up", note: "Its windows go to 100%, or to a cap you set on them" }], "", () => {
+      b.classList.add("busy");
+      accountAction("provider/skipgrowth", { id: p.id, account: l.user }, t("{who} skipped its ramp-up", { who: accountNameOf(p, l.user) || l.user })).then(() => acxDraw());
+    }, "Ramping up");
+  };
+  return b;
+}
+
+// acxWho: an account's name or alias, its state's badge and its ramp-up
 function acxWho(r) {
   const { p, l } = r;
   const who = el("div", "who");
@@ -379,6 +419,7 @@ function acxWho(r) {
   name.append(badge);
   // both marks: both said
   if (r.banned && r.disabled) name.append(el("span", "acx-state disabled", t("Disabled")));
+  if (r.growth) name.append(acxGrowth(r));
   who.append(name);
   return [who, alias];
 }

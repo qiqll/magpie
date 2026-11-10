@@ -8,7 +8,11 @@
 .acx-list[hidden] { display: none; }
 .row.acx { flex-wrap: wrap; row-gap: 6px; }
 .row.acx .who { flex: 1 1 200px; }
-.row.acx .name { display: flex; align-items: center; gap: 8px; }
+.row.acx .name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 3px; }
+/* its ramp-up (acxGrowth): a pill beside the state, which opens Skip ramp-up */
+.acx-grow { flex: 0 1 auto; min-width: 0; max-width: 100%; padding: 1px 7px; border: 0; border-radius: 9px; font: inherit; font-size: 11px; font-weight: 500; color: var(--accent); background: var(--pill); cursor: pointer; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.acx-grow:hover, .acx-grow.open { background: var(--line); }
+.acx-grow.busy { opacity: .6; }
 .acx-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .acx-state { flex: none; padding: 1px 7px; border-radius: 9px; font-size: 11px; font-weight: 500; color: var(--muted); background: var(--pill); }
 .acx-state.on { color: var(--green); background: var(--green-soft); }
@@ -44,7 +48,7 @@
 .acx-card.off .acx-name, .acx-card.off .acx-head .ic { opacity: .6; }
 .acx-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .acx-head .who { flex: 1; min-width: 0; }
-.acx-head .name { display: flex; align-items: center; gap: 8px; font-weight: 550; }
+.acx-head .name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 3px; font-weight: 550; }
 .acx-head .sub { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acx-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 0; font-size: 12px; }
 .acx-facts dt { color: var(--muted); }
