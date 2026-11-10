@@ -423,6 +423,12 @@ func perKeyEvery(p provider.Provider, model string, from provider.Protocol) (out
 				left = append(left, c)
 			}
 		}
+		if len(out) == 0 {
+			// every account listing it lapsed (leaveLapsed reads the
+			// model by the user's id, AccountsFor by the vendor's): those
+			// left are tried as AccountsFor tries them when none lists it
+			out, left = left, nil
+		}
 		return out, nil, left, barred
 	}
 	// a key at the spend cap set on it is used up for routing until the

@@ -78,7 +78,12 @@ func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owne
 	if binErr != nil {
 		return nil
 	}
-	work := b.callerWork(req, binary, configDir)
+	// in WSL startRun never runs in the caller's folder (its path is
+	// Windows'), so neither is its session looked for there
+	work := ""
+	if binary.wsl == nil {
+		work = b.callerWork(req, binary, configDir)
+	}
 	if work == "" {
 		var err error
 		if work, err = claudeWorkDir(); err != nil {

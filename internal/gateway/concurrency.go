@@ -522,11 +522,13 @@ func (s *Server) concurrency(w http.ResponseWriter, r *http.Request) {
 	told := keys
 	if own != nil {
 		// bound by user, a user is told the lanes of its own group's keys
-		// alone (sharers, T-089): another key's id and load are its
-		// holder's; the count of those waiting stays the gateway's
+		// alone (groupOf, as usersOwn.filter: every sharing key when its
+		// key shares, else its own key alone; T-089). Another key's id and
+		// load are its holder's, an issued key's issuer's lane among them;
+		// the count of those waiting stays the gateway's
 		told = map[string]Lane{}
 		for id, ln := range keys {
-			if own.sharers[id] {
+			if own.group == sharedUsers && own.sharers[id] || own.group != sharedUsers && id == own.group {
 				told[id] = ln
 			}
 		}

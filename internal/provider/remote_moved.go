@@ -38,6 +38,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -189,8 +190,19 @@ func seekMoved(ctx context.Context, id string) (*Provider, bool) {
 			return nil, false // changed meanwhile: the user's word stands
 		}
 		was := q.Chat
-		q.Chat, q.Responses, q.Anthropic, q.Decide = u.Scheme+"://"+at, "", "", ""
-		if err := Save(*q); err != nil {
+		// put in on the provider as it is stored then (T-094), and only
+		// while its address is still the one that didn't answer
+		err = editFound(q, func(r *Provider) error {
+			if r.Chat != was {
+				return errSeekChanged
+			}
+			r.Chat, r.Responses, r.Anthropic, r.Decide = u.Scheme+"://"+at, "", "", ""
+			return nil
+		})
+		if errors.Is(err, errSeekChanged) {
+			return nil, false
+		}
+		if err != nil {
 			log.Printf("%s: found at %s, not saved: %v", id, at, err)
 			return nil, false
 		}
@@ -200,6 +212,10 @@ func seekMoved(ctx context.Context, id string) (*Provider, bool) {
 	}
 	return nil, false
 }
+
+// errSeekChanged: the provider's address changed while its Remote magpie
+// was looked for; the user's word stands.
+var errSeekChanged = errors.New("the provider's address changed meanwhile")
 
 // isRemote says the magpie at at is p's: it proves it holds p's key, then
 // lists for it, and isn't this magpie. The key goes out only after the
