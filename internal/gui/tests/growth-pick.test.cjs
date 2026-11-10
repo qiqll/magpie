@@ -124,6 +124,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal((await gone.textContent()).trim(), x("The policy it picked ({id}) is gone: its accounts are held by the default until you pick another", { id: "deleted-one" }));
         assert.equal((await pill.textContent()).trim(), follow);
         assert.ok(await sideways(page) <= 1, "the warning scrolls sideways");
+        // Follow the default clears the id gone (review M1)
+        await pill.click();
+        await items.first().click();
+        await gone.waitFor({ state: "detached" });
+        assert.deepEqual(ctl.posts.at(-1), { id: "codex", growthPolicy: "" });
         ctl.pick = "slow";
 
         // Settings › Growth policy: In use names who the policy shown holds,

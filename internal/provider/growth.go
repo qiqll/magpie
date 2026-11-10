@@ -179,6 +179,12 @@ func SetGrowthPolicy(id, policy string) error {
 		return fmt.Errorf("no growth policy has the id %q", policy)
 	}
 	return editFound(p, func(q *Provider) error {
+		// asked again under providers.json's lock: a policy deleted since
+		// the check above isn't written (review L2). Settings are only
+		// read here, so no lock is taken the other way round.
+		if policy != "" && !settings.Shared().GrowthKnows(policy) {
+			return fmt.Errorf("no growth policy has the id %q", policy)
+		}
 		q.GrowthPolicy = policy
 		return nil
 	})
