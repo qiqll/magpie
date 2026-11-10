@@ -140,7 +140,7 @@ func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
 		only, held = who.KeyID, true
 	}
 	keep := func(rt *Route) bool {
-		return (only == "" || rt.callerKey == only) && (own == nil || own.owns(rt.caller))
+		return (only == "" || rt.CallerKey == only) && (own == nil || own.owns(rt.caller))
 	}
 	seq, route := s.trace.sessionLatest(r.Context(), session, keep, after, wait)
 	if own != nil && route == nil {

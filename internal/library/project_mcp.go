@@ -115,8 +115,10 @@ func (l *Library) syncProjectMCP(p *Project, fail func(what string, err error)) 
 			}
 		}
 	}) {
+		// one turned off (ServerOn) is off in every project too, and
+		// keeps the project's agents for when it is on again
 		s := l.server(name)
-		if s == nil {
+		if s == nil || s.Hidden {
 			continue
 		}
 		for _, id := range p.Servers[name] {
@@ -157,7 +159,7 @@ func (l *Library) syncProjectMCP(p *Project, fail func(what string, err error)) 
 			continue
 		}
 		abs := filepath.Join(p.Dir, filepath.FromSlash(rel))
-		f := &mcpFile{Path: abs, Format: format}
+		f := &mcpFile{Path: abs, Format: format, NoCmdRefs: rel == projectMCPFiles["droid"].rel}
 		had := p.Wrote[rel]
 		was := p.Startup[rel]
 		now := map[string]float64{}
@@ -187,7 +189,7 @@ func (l *Library) syncProjectMCP(p *Project, fail func(what string, err error)) 
 			}
 		}
 		for _, s := range want[rel] {
-			s := wroteStartup(s, was[s.Name])
+			s := wroteStartup(f.withCmdVars(s), was[s.Name])
 			old := entries[s.Name]
 			if old != nil && !slices.Contains(had, s.Name) {
 				fail("mcp:"+s.Name, fmt.Errorf("%s has a server called %s already that isn't magpie's: it's left as it is", rel, s.Name))

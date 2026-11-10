@@ -47,7 +47,8 @@ import (
 // a new list at its next launch, or on the Agents row's Restart.
 //
 // The app-server is ended as a clean exit (proc.End): the app reads any
-// other exit as a crash and shows it.
+// other exit as a crash and shows it. A signed-in ChatGPT app can show its
+// error page all the same; codex_app_crash.go reopens it then.
 
 // CodexAppRoute is set by the agent package: what in Codex's config the
 // app-server reads as it starts and magpie writes (its provider and base
@@ -68,6 +69,19 @@ var CodexAppRoute func() (route string, out, known bool)
 // nothing the app-server, the Codex app or the daemon goes by: an account
 // switch restarts none of them. false when it can't be told.
 var CodexNoAccount func() bool
+
+// CodexTakeoverOff is set by the agent package: whether the user has
+// turned off magpie's takeover of Codex's used-up account (AppOutOff):
+// its sign-in set to Always ChatGPT, as the takeover note's Keep on
+// ChatGPT does, or Codex not connected. The takeover ending while it says
+// so is the user's change, and the Codex app's app-server is restarted
+// for it as for a Connect, Restart the Codex app to follow off too: the
+// one the takeover started answers account/read with no account, so the
+// app shows none of its ChatGPT projects or chats till it restarts, which
+// the user who turned the takeover off to have them back can't tell
+// (Herzz____ on X, the Windows app's project list empty). Asked only as
+// the takeover ends; false while it isn't set.
+var CodexTakeoverOff func() bool
 
 // codexNoAccount is CodexNoAccount, false while it isn't set.
 func codexNoAccount() bool {
@@ -288,6 +302,14 @@ var codexApp struct {
 	// were last listed
 	back   map[int]bool
 	backAt time.Time
+	// crashSince, crashBy: magpie last ended the app's app-server at
+	// crashSince, and until crashBy its logs are read for the page the
+	// app shows when it can't take another (codexAppCrashStep); snag:
+	// the app showed that page and magpie couldn't reopen it, while the
+	// app-servers in snagPids (those running then) run
+	crashSince, crashBy time.Time
+	snag                bool
+	snagPids            []int
 }
 
 // codexAppBackEvery is how often the app-servers left on the takeover
@@ -406,6 +428,7 @@ func KeepCodexAppOnItsProvider(ctx context.Context, busy func() (int, time.Time)
 // have opened before: its app-servers are ended too. It says which pids it
 // ended.
 func codexAppStep(ctx context.Context, now time.Time, busy func() (int, time.Time)) []int {
+	codexAppCrashStep(ctx, now, busy)
 	if CodexAppRoute == nil {
 		return nil
 	}
@@ -417,7 +440,11 @@ func codexAppStep(ctx context.Context, now time.Time, busy func() (int, time.Tim
 	c := &codexApp
 	c.Lock()
 	switched := c.switched
+	wasOut := c.seen && c.out
 	c.Unlock()
+	// the takeover ending now: by the user's hand (CodexTakeoverOff), or
+	// by the reset, which is magpie's own change
+	offByHand := wasOut && !out && CodexTakeoverOff != nil && CodexTakeoverOff()
 	// an account switch is nothing to an app-server on a provider that
 	// takes no ChatGPT account (CodexNoAccount): it is forgotten, and a
 	// route change later restarts it all the same
@@ -443,13 +470,14 @@ func codexAppStep(ctx context.Context, now time.Time, busy func() (int, time.Tim
 	// it unless they asked magpie to (RestartApp; atom0964 on Discord: both
 	// of Codex's sign-in ticks off, and magpie still restarted the app to
 	// switch accounts). A switch the user made, a Connect or a Disconnect
-	// is theirs, and restarts it. So does whatever leaves the app-server on
+	// is theirs, and restarts it, and so does the takeover turned off by
+	// hand (CodexTakeoverOff). So does whatever leaves the app-server on
 	// a used-up account: the takeover in, the first look on one and a
 	// switch off one. The app greys Send for every model while that
 	// account's rate limit says not allowed and reads the account only as
 	// its app-server starts (8b0132b3d), so nothing magpie serves would
 	// reach it until a restart.
-	byHand := c.switched && !c.auto || c.seen && c.route != route && c.out == out
+	byHand := c.switched && !c.auto || c.seen && c.route != route && c.out == out || offByHand
 	needed := into || c.switched && c.spent
 	// left on the takeover: the app-servers it started while magpie was
 	// Codex's provider, which show no account till they restart
@@ -614,6 +642,7 @@ func codexAppStep(ctx context.Context, now time.Time, busy func() (int, time.Tim
 	}
 	if len(ended) > 0 {
 		log.Printf("codex: ended the Codex app's app-server %v for the app to start another: %s", ended, c.why)
+		watchCodexAppCrashLocked(now)
 	}
 	return ended
 }
@@ -641,7 +670,7 @@ func codexTurnOpen(home string, now, since time.Time) bool {
 		if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
 			return nil
 		}
-		info, err := d.Info()
+		info, err := sessionFileInfo(path)
 		if err != nil || now.Sub(info.ModTime()) > codexTurnWindow {
 			return nil
 		}
@@ -666,7 +695,10 @@ func codexSessionsQuietFor(home string, now time.Time, d time.Duration) bool {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			return nil
 		}
-		info, err := e.Info()
+		info, err := sessionFileInfo(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -678,6 +710,16 @@ func codexSessionsQuietFor(home string, now time.Time, d time.Duration) bool {
 	})
 	return quiet && err == nil
 }
+
+// sessionFileInfo is the session file at path's own time and size, never
+// the folder listing's (a fs.DirEntry's Info): Windows stamps a file in
+// its folder only as it is closed, and Codex keeps a session's file open
+// while the app-server runs it, so the listing has the time it was
+// opened (os.ReadDir on the Windows box: a file held open and written
+// to an hour after its stamp still listed the stamp, at its old size).
+// A turn running in a thread opened more than codexTurnWindow before
+// then counted as no turn, and its app-server was ended under it.
+func sessionFileInfo(path string) (fs.FileInfo, error) { return os.Lstat(path) }
 
 // sessionTurnTail is how much of a session file's end sessionTurnOpen reads.
 const sessionTurnTail = 512 << 10
@@ -757,6 +799,7 @@ func RestartCodexApp(ctx context.Context, bundle string) error {
 			return err
 		}
 		ended = append(ended, p.PID)
+		watchCodexAppCrash(time.Now())
 	}
 	if len(ended) == 0 {
 		return errors.New("the Codex app's app-server isn't running")
@@ -905,6 +948,7 @@ func RestartSwitchedCodexApp(ctx context.Context) error {
 			log.Printf("codex: restarting the Codex app's app-server %d for the account switched to: %v", p, err)
 			return ErrCodexAppNoEnd
 		}
+		watchCodexAppCrash(time.Now())
 	}
 	// waitFor lists the app-servers until ok holds of them, for at most limit
 	waitFor := func(limit time.Duration, ok func([]int) bool) (bool, error) {

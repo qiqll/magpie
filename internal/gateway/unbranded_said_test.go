@@ -20,9 +20,9 @@ func brandedAs(r *http.Request, keep bool) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), brandKey{}, b))
 }
 
-// The tool-loop notice is magpie's own answer to a turn: a caller that
-// isn't magpie's reads no magpie in it, the calls it names as they were
-// made. The owner and another magpie read it as it always was (T-120).
+// The tool-loop notice is magpie's own answer to a turn: no caller reads
+// magpie in it, the calls it names as they were made (T-120; since main's
+// rewording, the owner and another magpie neither).
 func TestToolLoopNoticeSaysNoMagpie(t *testing.T) {
 	v := &countingVendor{}
 	toolLoopOn(t, v)
@@ -35,10 +35,9 @@ func TestToolLoopNoticeSaysNoMagpie(t *testing.T) {
 		if code != 200 || !strings.Contains(got, "times in a row and got the same result") {
 			t.Fatalf("%s: %d %.600s", c.name, code, got)
 		}
-		if c.keeps != strings.Contains(got, "magpie stopped this turn before it reached the model") || saysMagpie(got) != c.keeps {
-			t.Errorf("%s: %.600s", c.name, got)
-		}
-		if !c.keeps && !strings.Contains(got, "The gateway stopped this turn") {
+		// main's notice goes to the vendor with the next turn, so it names
+		// magpie to no caller, the owner and another magpie included
+		if saysMagpie(got) || !strings.Contains(got, "This turn was stopped before it reached the model") {
 			t.Errorf("%s: %.600s", c.name, got)
 		}
 	}

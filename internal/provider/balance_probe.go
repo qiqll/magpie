@@ -17,20 +17,23 @@ import (
 // showed nowhere until the user found the field at the foot of the form
 // (小鱼 of yylx.io, 11-05: deleted and imported again, it worked).
 //
-// What is found is kept for the origin and key, and so is finding nothing,
-// for balanceProbeMiss: a poll asks again only after that.
+// What is found is kept for the origin and key, for balanceProbeHit, and
+// then looked for again, so a relay that moved to other software is not
+// read at a query that now means something else; finding nothing is kept
+// for balanceProbeMiss.
 var balanceProbes = []string{sub2APIKeyUsage, newAPIKeyUsage}
 
 // balanceProbeDown is how long a relay that couldn't be reached at all
 // is left before it is looked at again.
 const (
+	balanceProbeHit  = 24 * time.Hour
 	balanceProbeMiss = 6 * time.Hour
 	balanceProbeDown = 5 * time.Minute
 )
 
 type probeFound struct {
 	url   string    // "" when neither query told a balance
-	until time.Time // when a miss is looked at again
+	until time.Time // when it is looked for again
 }
 
 // probeLocal lets a test's relay on loopback be looked at.
@@ -114,6 +117,15 @@ func notProbed(host string) bool {
 	if contains(noProbeHosts, host) {
 		return true
 	}
+	return presetHosts()[host]
+}
+
+// presetHosts are the hostnames, lowered, that a vendor's or a local
+// server's preset names. The presets never change, and gathering their
+// bases again for every provider of every Providers poll was 3.5 MB of
+// what forty polls allocated with real accounts.
+var presetHosts = sync.OnceValue(func() map[string]bool {
+	out := map[string]bool{}
 	for _, d := range presets {
 		if d.Kind != KindVendor && d.Kind != KindLocal {
 			continue
@@ -123,20 +135,47 @@ func notProbed(host string) bool {
 			bases = append(bases, r.Chat, r.Responses, r.Anthropic)
 		}
 		for _, b := range bases {
-			if b != "" && strings.EqualFold(hostnameOf(b), host) {
-				return true
+			if b != "" {
+				if h := strings.ToLower(hostnameOf(b)); h != "" {
+					out[h] = true
+				}
 			}
 		}
 	}
-	return false
+	return out
+})
+
+func hostnameOf(raw string) string { return hostParts(raw).name }
+
+// hostParts are raw's host (port kept, lowered: hostOf) and hostname,
+// parsed once per URL.
+func hostParts(raw string) parsedHost {
+	hostnames.Lock()
+	h, ok := hostnames.m[raw]
+	hostnames.Unlock()
+	if ok {
+		return h
+	}
+	if u, err := url.Parse(raw); err == nil {
+		h = parsedHost{strings.ToLower(u.Host), u.Hostname()}
+	}
+	hostnames.Lock()
+	if hostnames.m == nil || len(hostnames.m) >= 512 {
+		hostnames.m = map[string]parsedHost{}
+	}
+	hostnames.m[raw] = h
+	hostnames.Unlock()
+	return h
 }
 
-func hostnameOf(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	return u.Hostname()
+type parsedHost struct{ host, name string }
+
+// hostnames are the base URLs hostParts has parsed: the provider list
+// asks every provider's on each poll (hostnameOf, hostOf), and parsing them again was ~0.4 MB
+// of its garbage an ask. A URL's hostname is the same every time.
+var hostnames struct {
+	sync.Mutex
+	m map[string]parsedHost
 }
 
 // probedBalanceURL is the query found for p, without asking: "" when none
@@ -150,6 +189,22 @@ func probedBalanceURL(p Provider) string {
 	return probed.m[balanceProbeKey(probeOrigins(p), p.Key)].url
 }
 
+// BalanceFound is the balance query magpie found for p by itself, with
+// its field ("" when none was found yet), and whether p is one it looks
+// for at all: a relay added by hand with no Balance URL. The editor shows
+// it, so a wrong amount can be put right with a Balance URL of the user's.
+func BalanceFound(p Provider) (u, field string, looked bool) {
+	p = keyQueryOf(p)
+	if !probesBalance(p) {
+		return "", "", false
+	}
+	if u = probedBalanceURL(p); u != "" {
+		p.BalanceURL = u
+		field = balancePathOf(p)
+	}
+	return u, field, true
+}
+
 // probeBalance looks for p's balance query, asking each origin's relay
 // queries in turn, and is what was found (false: none told a balance).
 // A query that answers 200 with its field read is the one; a failure to
@@ -160,14 +215,17 @@ func probeBalance(ctx context.Context, p Provider) (string, bool) {
 	probed.Lock()
 	f, seen := probed.m[k]
 	probed.Unlock()
-	if seen && (f.url != "" || time.Now().Before(f.until)) {
+	if seen && time.Now().Before(f.until) {
 		return f.url, f.url != ""
 	}
-	found, reached := "", false
+	found, reached, refused := "", false, false
 	for _, o := range origins {
 		for _, path := range balanceProbes {
-			ok, answered := askProbe(ctx, p, o+path)
-			reached = reached || answered
+			ok, code := askProbe(ctx, p, o+path)
+			reached = reached || code != 0
+			if o+path == f.url && (code == http.StatusUnauthorized || code == http.StatusForbidden) {
+				refused = true
+			}
 			if ok {
 				found = o + path
 				break
@@ -181,7 +239,17 @@ func probeBalance(ctx context.Context, p Provider) (string, bool) {
 		return "", false // cut short: nothing learnt
 	}
 	wait := balanceProbeMiss
-	if !reached {
+	switch {
+	case found != "":
+		wait = balanceProbeHit
+	case f.url != "" && (refused || !reached):
+		// the query found before turned the key away, or the relay is
+		// down: still its query, where the card says what went wrong
+		found, wait = f.url, balanceProbeDown
+		if refused {
+			wait = balanceProbeHit
+		}
+	case !reached:
 		wait = balanceProbeDown
 	}
 	probed.Lock()
@@ -194,11 +262,11 @@ func probeBalance(ctx context.Context, p Provider) (string, bool) {
 }
 
 // askProbe asks one relay query as balanceRead asks it, and is whether it
-// told a balance, and whether the relay answered at all.
-func askProbe(ctx context.Context, p Provider, raw string) (ok, answered bool) {
+// told a balance, and the status the relay answered with (0: none).
+func askProbe(ctx context.Context, p Provider, raw string) (ok bool, code int) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
-		return false, false
+		return false, 0
 	}
 	for k, v := range AuthHeaders(p, Chat) {
 		req.Header.Set(k, v)
@@ -207,17 +275,17 @@ func askProbe(ctx context.Context, p Provider, raw string) (ok, answered bool) {
 		req.Header.Set(k, withBalanceKey(v, p.Key, false))
 	}
 	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
+	res, err := Keyed(http.DefaultClient).Do(req)
 	if err != nil {
-		return false, false
+		return false, 0
 	}
 	defer res.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if res.StatusCode != http.StatusOK {
-		return false, true
+		return false, res.StatusCode
 	}
 	q := p
 	q.BalanceURL, q.BalancePath = raw, ""
 	amount, err := readBalancePath(b, balancePathOf(q))
-	return err == nil && amount != "", true
+	return err == nil && amount != "", res.StatusCode
 }

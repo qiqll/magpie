@@ -162,11 +162,11 @@ func (s *Server) usageRequests(w http.ResponseWriter, r *http.Request) {
 	}
 	who := access.Caller(r.Context())
 	if !heldKey(who) {
-		writeJSON(w, 200, withoutOthers(usageapi.LedgerPage(usageapi.PeriodOf(q.Get("period")), f, offset, limit), own))
+		writeJSON(w, 200, withoutClientIPs(withoutOthers(usageapi.LedgerPage(usageapi.PeriodOf(q.Get("period")), f, offset, limit), own)))
 		return
 	}
 	f.CallerKey = who.KeyID
-	writeJSON(w, 200, withoutAccounts(withoutOthers(usageapi.OwnPage(usageapi.LedgerPage(usageapi.PeriodOf(q.Get("period")), f, offset, limit), who.KeyID), own)))
+	writeJSON(w, 200, withoutClientIPs(withoutAccounts(withoutOthers(usageapi.OwnPage(usageapi.LedgerPage(usageapi.PeriodOf(q.Get("period")), f, offset, limit), who.KeyID), own))))
 }
 
 // withoutOthers is a user's own page (usage.Filter.Own) without the other

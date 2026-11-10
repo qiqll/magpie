@@ -204,7 +204,8 @@ function renderGatewayKeys() {
   // a drag in progress keeps its rows: the list is drawn when it ends
   if (gatewayKeysArranging) { gatewayKeysRenderPending = true; return; }
   const box = $("#gatewayKeys");
-  $("#gatewayKeysBlock").hidden = !providers?.gateway.lan;
+  $("#gatewayKeysBlock").hidden = !gwKeysShown();
+  $("#gatewayKeysOff").hidden = gwKeysShown();
   box.replaceChildren();
   $("#addGatewayKey").onclick = () => { gatewayKeyDraft = ""; renderGatewayKeys(); };
   // keys: a badge left unset folds away until the row is pointed at, as
@@ -226,7 +227,7 @@ function renderGatewayKeys() {
     tick.onclick = () => gatewayKeyAction(k.off ? "on-key" : "off-key", { key: k.id });
     // the copy sits by the key it copies (the owner: stranded among the
     // badges it read as nobody's); Rotate and Remove wait in the row's menu
-    row.append(tick, gatewayRename(k), el("span", "plan mono", k.masked), copyCallerKeyBtn(k), el("span", "grow"), ...(k.readOnly ? [gatewayReadOnlyTag()] : []), ...(k.sharesUsers ? [gatewayUsersTag()] : []), gatewayModelsBadge(k), gatewayQuotasBadge(k), gatewayLimitBadge(k), gatewayKeyMore(k));
+    row.append(tick, gatewayRename(k), el("span", "plan mono", k.masked), copyCallerKeyBtn(k), el("span", "grow"), ...(k.browser ? [gatewayBrowserTag()] : k.readOnly ? [gatewayReadOnlyTag()] : []), ...(k.sharesUsers ? [gatewayUsersTag()] : []), gatewayModelsBadge(k), ...gatewayKeptOutBadge(k), ...gatewayMCPBadge(k), gatewayQuotasBadge(k), ...(k.browser || k.readOnly ? [] : [gatewayConcurrencyBadge(k)]), gatewayLimitBadge(k), gatewayKeyMore(k));
     const under = gatewayLimit?.id === k.id ? [gatewayLimitEditor(k)] : keyUsed(k).map((u) => gatewayLimitLine(k, u));
     if (under.length) row.classList.add("with-limit"), row.append(...under);
     list.append(row);
@@ -308,6 +309,8 @@ function gatewayKeyPage() {
 
 const ROTATE_GLYPH = "M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3.25h-3.25";
 const REMOVE_GLYPH = "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4";
+const KEEP_OUT_GLYPH = "M8 1.8a6.2 6.2 0 1 0 0 12.4A6.2 6.2 0 0 0 8 1.8zM3.6 3.6l8.8 8.8";
+const MCP_GLYPH = "M6 2.5v3M10 2.5v3M4.5 5.5h7V8a3.5 3.5 0 0 1-7 0zM8 11.5v2";
 const POWER_GLYPH = "M8 2.5v5M4.8 4.6a4.75 4.75 0 1 0 6.4 0";
 function gatewayKeyMore(k) {
   const more = el("button", "copy gw-key-more");
@@ -325,16 +328,24 @@ function gatewayKeyMore(k) {
     openRowMenu(more, [
       { name: k.off ? "Enable key" : "Disable key", icon: POWER_GLYPH, run: () => gatewayKeyAction(k.off ? "on-key" : "off-key", { key: k.id }) },
       // read-only (Steven on Discord: a desk display's key reads quotas
-      // and usage, and uses nothing); the sharing key is given to agents
-      k.readOnly
+      // and usage, and uses nothing); the sharing key is given to agents.
+      // Magpie Browser's key connects the extension alone, and stays so:
+      // it is in a zip in Downloads
+      ...(k.browser ? [] : [k.readOnly
         ? { name: "Give full access", icon: EYE_GLYPH, run: () => gatewayKeyAccess(k, false) }
-        : { name: "Make read-only", icon: EYE_GLYPH, run: () => gatewayKeyAccess(k, true), off: k.lan, why: k.lan ? t("The sharing key is given to agents, so it can't be read-only") : "" },
+        : { name: "Make read-only", icon: EYE_GLYPH, run: () => gatewayKeyAccess(k, true), off: k.lan, why: k.lan ? t("The sharing key is given to agents, so it can't be read-only") : "" }]),
       // bound by user, its users one with every other sharing key's, or
       // its own as every key's are until it is set (T-089); an issued
-      // key's are always its own
-      k.sharesUsers
+      // key's are always its own. The Browser key uses no account
+      ...(k.browser ? [] : [k.sharesUsers
         ? { name: "Keep users to this key", icon: USERS_GLYPH, run: () => gatewayKeyUsers(k, false) }
-        : { name: "Share users with other keys", icon: USERS_GLYPH, run: () => gatewayKeyUsers(k, true), off: !!(k.issuer || k.expires), why: k.issuer || k.expires ? t("An issued key's users are its own") : "" },
+        : { name: "Share users with other keys", icon: USERS_GLYPH, run: () => gatewayKeyUsers(k, true), off: !!(k.issuer || k.expires), why: k.issuer || k.expires ? t("An issued key's users are its own") : "" }]),
+      // the MCP servers and tools it may use (wakaka on Discord); the
+      // Browser key connects the extension alone
+      ...(k.browser ? [] : [{ name: "MCP servers", icon: MCP_GLYPH, run: () => gatewayMCPPick(k, more) }]),
+      // every account but some, those signed in later too (LeiWang_2000
+      // on X); the Browser key uses no account
+      ...(k.browser ? [] : [{ name: "Keep accounts out", icon: KEEP_OUT_GLYPH, run: () => gatewayKeptOutPick(k, more) }]),
       { name: "Rotate key", icon: ROTATE_GLYPH, run: () => askGatewayKey(k, true) },
       { name: "Remove", icon: REMOVE_GLYPH, sep: true, run: () => askGatewayKey(k, false) },
     ]);
@@ -366,6 +377,14 @@ async function gatewayKeyUsers(k, shares) {
 function gatewayUsersTag() {
   const tag = el("span", "amodels key-users set", t("Users shared"));
   tag.title = t("A user this key names (X-Magpie-User) is the same user, on the same accounts, under every key that shares its users and without a key. Only for a front end that sets the header itself and drops one its callers send.");
+  return tag;
+}
+
+// Magpie Browser's key (the one the extension's zip was given) says so in
+// its row: it connects the extension and nothing else
+function gatewayBrowserTag() {
+  const tag = el("span", "amodels key-readonly key-browser set", t("Browser only"));
+  tag.title = t("This key connects the Magpie Browser extension and nothing else. It can't use models, MCP servers or stats.");
   return tag;
 }
 
@@ -424,7 +443,9 @@ let keyModelsLoading = null;
 // it may, always shown. A pick is sent when the menu closes.
 function gatewayModelsBadge(k) {
   const ms = k.models || [];
-  const as = k.accounts || [];
+  // the accounts kept out are gatewayKeptOutPick's, sent back as they are
+  const keptOut = (k.accounts || []).filter(isKeptOut);
+  const as = (k.accounts || []).filter((a) => !isKeptOut(a));
   const b = el("button", "amodels key-models" + (ms.length || as.length ? " set" : ""));
   b.type = "button";
   b.textContent = !ms.length && !as.length ? t("All models")
@@ -543,7 +564,9 @@ function gatewayModelsBadge(k) {
             : pickedAccounts.length ? "{name} may use only the picked accounts' models" : "{name} may use every model", { name: k.name }), "ok");
         }
         if (pickedAccounts.length !== as.length || pickedAccounts.some((v) => !as.includes(v))) {
-          await gatewayKeyAction("accounts-key", { key: k.id, accounts: pickedAccounts });
+          // an account picked is kept out no longer
+          const out = keptOut.filter((v) => !pickedAccounts.some((a) => a.toLowerCase() === keptIn(v).toLowerCase()));
+          await gatewayKeyAction("accounts-key", { key: k.id, accounts: [...pickedAccounts, ...out] });
         }
       })();
     }, "Models this key may use", "sess-menu", "right");
@@ -569,6 +592,112 @@ function gatewayModelsBadge(k) {
   return b;
 }
 
+// ---- the accounts a gateway key keeps out (LeiWang_2000 on X) ----
+
+// isKeptOut: an account entry "<provider>/!<id>" keeps that account out
+// (access.ExcludeMark): the key uses every other, those signed in later too
+const isKeptOut = (a) => /^[^/]+\/!./.test(a);
+// keptIn is the account a kept-out entry names, "<provider>/<id>"
+const keptIn = (a) => a.replace("/!", "/");
+
+// gatewayKeptOutPick picks the accounts a key keeps out, in the app's
+// menu, from the row's menu and from the key's badge once it keeps some
+// out. An account picked to use (gatewayModelsBadge) and kept out here is
+// kept out: it is taken off the picked ones.
+async function gatewayKeptOutPick(k, anchor) {
+  const as = k.accounts || [];
+  const out = as.filter(isKeptOut);
+  let accounts = [];
+  try { ({ accounts } = await api("caller-keys/models")); } catch (err) { status(t(err.message), "err"); return; }
+  if (!anchor.isConnected) return;
+  const opts = [{ v: "", name: "No account kept out", note: "" }];
+  for (const a of accounts || []) {
+    const slash = a.id.indexOf("/");
+    opts.push({ v: a.id.slice(0, slash) + "/!" + a.id.slice(slash + 1), name: a.name, note: a.plan ? a.providerName + " · " + a.plan : a.providerName, literalName: true });
+  }
+  // one kept out and signed out since stays kept out, as the CLI kept it
+  for (const v of out) if (!opts.some((o) => o.v === v)) opts.push({ v, name: keptIn(v), note: "Not signed in now", literalName: true });
+  openProtoMenu(anchor, opts, [...out], (picked) => {
+    if (picked.length === out.length && picked.every((v) => out.includes(v))) return;
+    const used = as.filter((a) => !isKeptOut(a) && !picked.some((v) => keptIn(v).toLowerCase() === a.toLowerCase()));
+    (async () => {
+      const done = await gatewayKeyAction("accounts-key", { key: k.id, accounts: [...used, ...picked] });
+      if (done) status(t(picked.length ? "{name} may use every account but those kept out" : "{name} keeps no account out", { name: k.name }), "ok");
+    })();
+  }, "Accounts this key keeps out", "sess-menu", "right");
+}
+
+// gatewayKeptOutBadge says which accounts a key keeps out; a key that
+// keeps none out has none (the row's menu sets it)
+function gatewayKeptOutBadge(k) {
+  const out = (k.accounts || []).filter(isKeptOut);
+  if (!out.length) return [];
+  const b = el("button", "amodels key-out set");
+  b.type = "button";
+  b.textContent = out.length === 1 ? t("Not {name}", { name: accountShown(keptIn(out[0])) }) : t("{n} accounts kept out", { n: out.length });
+  b.title = t("Every account but: {list}", { list: out.map((v) => accountShown(keptIn(v))).join(", ") });
+  b.setAttribute("aria-label", t("Accounts this key keeps out"));
+  b.setAttribute("aria-haspopup", "menu");
+  b.setAttribute("aria-expanded", "false");
+  b.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    gatewayKeptOutPick(k, b);
+  };
+  return [b];
+}
+
+// gatewayMCPPick picks the MCP servers and tools a key may use (wakaka
+// on Discord), as gatewayModelsBadge picks its models: a server whole, or
+// some of its tools, or none. It opens from the row's menu, and from the
+// key's MCP badge once it holds some.
+async function gatewayMCPPick(k, anchor) {
+  const ms = k.mcp || [];
+  let list = [];
+  try { ({ servers: list } = await api("caller-keys/mcp")); } catch (err) { status(t(err.message), "err"); return; }
+  if (!anchor.isConnected) return;
+  const opts = [{ v: "", name: "All MCP servers", note: "" }, { v: "-", name: "No MCP server", note: "" }];
+  for (const sv of list || []) {
+    opts.push({ v: sv.name, name: sv.title || sv.name, note: sv.title && sv.title !== sv.name ? sv.name : "", literalName: true });
+    for (const tool of sv.tools || []) opts.push({ v: sv.name + "/" + tool, name: tool, note: sv.name + "/" + tool, literalName: true });
+  }
+  // what the CLI kept that the list hasn't: a server gone, or a tool it
+  // no longer lists
+  for (const v of ms) if (!opts.some((o) => o.v === v)) opts.push({ v, name: v, note: "Not served now", literalName: true });
+  openProtoMenu(anchor, opts, [...ms], (picked) => {
+    // "No MCP server" just ticked is none; left ticked beside a server
+    // ticked since, the server
+    const mcp = picked.includes("-") && !ms.includes("-") ? ["-"] : picked.length > 1 ? picked.filter((v) => v !== "-") : picked;
+    (async () => {
+      const out = await gatewayKeyAction("mcp-key", { key: k.id, mcp });
+      if (out) status(t(!mcp.length ? "{name} may use every MCP server" : mcp[0] === "-" ? "{name} may use no MCP server" : "{name} may use only the MCP servers and tools picked", { name: k.name }), "ok");
+    })();
+  }, "MCP servers this key may use", "sess-menu", "right");
+}
+
+// gatewayMCPBadge says which MCP servers a key held to some may use; a
+// key that may use any has none (the row's menu sets it)
+function gatewayMCPBadge(k) {
+  const ms = k.mcp || [];
+  if (!ms.length) return [];
+  const b = el("button", "amodels key-mcp set");
+  b.type = "button";
+  const servers = new Set(ms.map((v) => v.split("/")[0]));
+  b.textContent = ms[0] === "-" ? t("No MCP server") : ms.length === 1 ? ms[0] : t("{n} MCP servers", { n: servers.size });
+  b.title = ms[0] === "-" ? t("No MCP server") : t("Only these MCP servers and tools: {list}", { list: ms.join(", ") });
+  b.setAttribute("aria-label", t("MCP servers this key may use"));
+  b.setAttribute("aria-haspopup", "menu");
+  b.setAttribute("aria-expanded", "false");
+  b.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    gatewayMCPPick(k, b);
+  };
+  return [b];
+}
+
 // ---- the quotas a gateway key is told (#2216) ----
 
 // gatewayQuotasBadge turns on or off a key's being told the quotas of what
@@ -589,6 +718,58 @@ function gatewayQuotasBadge(k) {
     e.preventDefault();
     const out = await gatewayKeyAction("quotas-key", { key: k.id, quotas: !k.quotas });
     if (out) status(t(k.quotas ? "{name} is told no quotas" : "{name} is told the quotas of what it may use", { name: k.name }), "ok");
+  };
+  return b;
+}
+
+// a key's requests at once (young02036 on Discord), as an account's are
+// set on the Providers page: the app's menu, no limit, a number, or the
+// user's own; more wait in a queue and go in order
+const KEY_CONC = [1, 2, 3, 5, 10];
+function gatewayConcurrencyBadge(k) {
+  const own = k.maxConcurrency || 0;
+  const b = el("button", "amodels key-conc" + (own ? " set" : ""));
+  b.type = "button";
+  b.textContent = own ? t("{n} at once", { n: own }) : t("No limit at once");
+  b.title = own ? t("At most {n} requests of this key at once; more wait in a queue and go in order", { n: own }) : t("No limit on this key's requests at once");
+  b.setAttribute("aria-label", t("Requests at once"));
+  b.setAttribute("aria-haspopup", "menu");
+  b.setAttribute("aria-expanded", "false");
+  const set = async (v) => {
+    const out = await gatewayKeyAction("concurrency-key", { key: k.id, maxConcurrency: v });
+    if (out) status(v ? t("{who}: at most {n} requests at once", { who: k.name, n: v }) : t("{who}: no limit on requests at once", { who: k.name }), "ok");
+  };
+  // Other…: a number of the user's own, in the badge's place
+  const other = () => {
+    const i = input(own ? String(own) : "", "1–1000", "text");
+    i.className = "rename-in alane-in";
+    i.inputMode = "numeric";
+    i.setAttribute("aria-label", t("Requests at once"));
+    let done = false;
+    const finish = (save) => {
+      if (done) return;
+      done = true;
+      const s = i.value.trim();
+      const v = /^\d+$/.test(s) && +s <= 1000 ? +s : null;
+      if (save && s && v == null) { status(t("Concurrency: a whole number from 0 to 1000"), "err"); return renderGatewayKeys(); }
+      if (save && s && v !== own) set(v);
+      else renderGatewayKeys();
+    };
+    i.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") finish(true); else if (e.key === "Escape") finish(false); };
+    i.onblur = () => finish(true);
+    b.replaceWith(i);
+    i.focus({ preventScroll: true });
+  };
+  b.onclick = (e) => {
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    const nums = !own || KEY_CONC.includes(own) ? KEY_CONC : [...KEY_CONC, own].sort((x, y) => x - y);
+    const opts = [{ v: 0, name: "No limit", note: "Any number at once" }, ...nums.map((n) => ({ v: n, name: String(n), note: "", literalName: true })),
+      { v: -1, name: "Other…", note: "A number of your own, up to 1000" }];
+    openProtoMenu(b, opts, own, (v) => {
+      if (v === -1) return other();
+      if (v !== own) set(v);
+    }, "Requests at once", "sess-menu");
   };
   return b;
 }
@@ -633,6 +814,10 @@ function limitCost(v) {
   return /^\d+(\.\d+)?$/.test(s) ? parseFloat(s) : NaN;
 }
 const usd = (n) => "$" + (n >= 100 ? n.toFixed(0) : n.toFixed(2));
+// limitModels names the models a limit counts (zola_xynb on X), "" when
+// it counts every call of the key
+const limitModels = (ms) => !ms?.length ? "" : ms.length === 1 ? ms[0] : t("{n} models", { n: ms.length });
+const sameModels = (a, b) => (a || []).length === (b || []).length && (a || []).every((m) => (b || []).includes(m));
 
 // keyLimits are a key's limits, its first and the rest (#2227), and
 // keyUsed what it has used of each, in the same order.
@@ -645,7 +830,7 @@ function limitDraft(k, n) {
   const taken = keyLimits(k).map((x) => x.period);
   // a new one in a window the key has no limit in yet: a week beside 5 hours
   const period = l.period || (n ? ["week", "hours", "day", "month"].find((p) => !taken.includes(p)) || "days" : "day");
-  return { id: k.id, n, period, days: l.days ? String(l.days) : "", hours: l.hours ? String(l.hours) : (n && period === "hours" ? "5" : ""), tokens: l.tokens ? String(l.tokens) : "", cost: l.cost ? String(l.cost) : "", cacheReads: !!l.cacheReads };
+  return { id: k.id, n, period, days: l.days ? String(l.days) : "", hours: l.hours ? String(l.hours) : (n && period === "hours" ? "5" : ""), tokens: l.tokens ? String(l.tokens) : "", cost: l.cost ? String(l.cost) : "", cacheReads: !!l.cacheReads, models: [...(l.models || [])] };
 }
 // bindingUsed is the limit holding a key most: of those spent, the one
 // that resets last, as it is refused until then; else the first
@@ -667,6 +852,7 @@ function gatewayLimitBadge(k) {
     if (u.tokenLimit) parts.push(fmtN(u.tokens) + " / " + fmtN(u.tokenLimit));
     if (u.costLimit) parts.push(usd(u.cost) + " / " + usd(u.costLimit));
     b.textContent = (u.spent ? t("Spent") + " · " : "") + parts.join(" · ") + " · " + perWords(u.period, u.days, u.hours)
+      + (u.models?.length ? " · " + limitModels(u.models) : "")
       + (more > 0 ? " · " + t(more === 1 ? "+1 limit" : "+{n} limits", { n: more }) : "");
   }
   b.title = t(u ? "Change this key's limit" : "Set a limit for this key");
@@ -688,13 +874,15 @@ function gatewayLimitLine(k, u) {
   const line = el("div", "key-limit" + (u.spent ? " spent" : ""));
   const parts = [];
   if (keyUsed(k).length > 1) parts.push(perWords(u.period, u.days, u.hours));
+  if (u.models?.length) parts.push(limitModels(u.models));
   if (u.tokenLimit) parts.push(t("{used} of {limit} tokens · {left} left", { used: fmtN(u.tokens), limit: fmtN(u.tokenLimit), left: fmtN(u.tokensLeft) }));
   if (u.costLimit) parts.push(t("{used} of {limit} estimated · {left} left", { used: usd(u.cost), limit: usd(u.costLimit), left: usd(u.costLeft) }));
   const at = new Date(u.reset);
   parts.push(t(u.spent ? "refused until {when}" : "resets {when}", { when: resetClock(at) }));
   if (u.inFlight) parts.push(t(u.inFlight === 1 ? "1 in flight" : "{n} in flight", { n: u.inFlight }));
   line.textContent = parts.join(" · ");
-  line.title = t("Counted from {start}; resets {when}", { start: new Date(u.start).toLocaleString(intlLang()), when: at.toLocaleString(intlLang()) })
+  line.title = (u.models?.length ? u.models.join(", ") + "\n" : "")
+    + t("Counted from {start}; resets {when}", { start: new Date(u.start).toLocaleString(intlLang()), when: at.toLocaleString(intlLang()) })
     + (u.unpriced ? "\n" + t("{n} calls without a known price aren't in the cost", { n: u.unpriced }) : "");
   return line;
 }
@@ -709,7 +897,8 @@ function gatewayLimitEditor(k) {
   const changed = () => d.period !== (kept.period || "day") || limitTokens(d.tokens) !== (kept.tokens || 0)
     || limitCost(d.cost) !== (kept.cost || 0) || d.cacheReads !== !!kept.cacheReads
     || (d.period === "days" && limitDays(d.days) !== kept.days)
-    || (d.period === "hours" && limitHours(d.hours) !== kept.hours);
+    || (d.period === "hours" && limitHours(d.hours) !== kept.hours)
+    || !sameModels(d.models, kept.models);
   const fields = el("div", "klf");
   // the app's own menu, not a native select
   const period = el("button", "sess-pick klf-period");
@@ -749,7 +938,21 @@ function gatewayLimitEditor(k) {
   cl.append(el("span", "klf-name", t("Estimated cost, US$")), cost);
   const pl = el("label", "klf-field");
   pl.append(el("span", "klf-name", t("Window")), period);
-  fields.append(pl, dl, hl, tl, cl);
+  // the models the limit counts (zola_xynb on X): none picked is every
+  // call of the key, as a limit set before there was a pick
+  const models = el("button", "sess-pick klf-pick klf-models-pick");
+  models.type = "button";
+  models.setAttribute("aria-label", t("Models this limit counts"));
+  models.setAttribute("aria-haspopup", "menu");
+  models.setAttribute("aria-expanded", "false");
+  const paintModels = () => {
+    models.title = d.models.join(", ");
+    models.replaceChildren(el("span", "", limitModels(d.models) || t("All models")), svg(CHEV, 11, 1.6));
+  };
+  paintModels();
+  const ml = el("label", "klf-field klf-models");
+  ml.append(el("span", "klf-name", t("Models")), models);
+  fields.append(pl, dl, hl, tl, cl, ml);
   // a key's limits (#2227), each a tab, when it has more than one or one
   // is being added: the editor is of one at a time
   let which = null;
@@ -757,7 +960,7 @@ function gatewayLimitEditor(k) {
     which = el("div", "klf-which");
     which.setAttribute("role", "tablist");
     which.setAttribute("aria-label", t("This key's limits"));
-    const tabs = limits.map((l, i) => ({ i, name: perWords(l.period, l.days, l.hours) }));
+    const tabs = limits.map((l, i) => ({ i, name: perWords(l.period, l.days, l.hours) + (l.models?.length ? " · " + limitModels(l.models) : "") }));
     if (n >= limits.length) tabs.push({ i: n, name: t("New limit") });
     for (const x of tabs) {
       const tab = el("button", "klf-tab" + (x.i === n ? " on" : ""), x.name);
@@ -806,6 +1009,32 @@ function gatewayLimitEditor(k) {
       if (v === "hours") hours.focus({ preventScroll: true });
     }, "Limit window", "sess-menu");
   };
+  models.onclick = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (models.classList.contains("open")) return closeProtoMenu();
+    let list = [];
+    try { ({ models: list } = await api("caller-keys/models")); } catch (err) { status(t(err.message), "err"); return; }
+    if (!models.isConnected || gatewayLimit !== d) return;
+    const opts = [{ v: "", name: "All models", note: "" }];
+    const seen = new Set();
+    // a routing group isn't one: what it picks is counted by the model
+    // that served the call
+    for (const m of list || []) {
+      if (m.group) continue;
+      if (!seen.has(m.provider)) {
+        seen.add(m.provider);
+        opts.push({ v: m.provider + "/*", name: t("Every {provider} model", { provider: m.providerName }), note: m.provider + "/*", literalName: true });
+      }
+      opts.push({ v: m.id, name: m.name, note: m.id, literalName: true });
+    }
+    for (const v of d.models) if (!opts.some((o) => o.v === v)) opts.push({ v, name: v, note: "Not served now", literalName: true });
+    openProtoMenu(models, opts, [...d.models], (picked) => {
+      d.models = picked;
+      paintModels();
+      update();
+    }, "Models this limit counts", "sess-menu");
+  };
   days.oninput = () => { d.days = days.value; update(); };
   hours.oninput = () => { d.hours = hours.value; update(); };
   tokens.oninput = () => { d.tokens = tokens.value; update(); };
@@ -824,6 +1053,7 @@ function gatewayLimitEditor(k) {
     save.disabled = true;
     const tk = limitTokens(d.tokens), c = limitCost(d.cost);
     const limit = tk || c ? { period: d.period, tokens: tk, cost: c, cacheReads: d.cacheReads } : null;
+    if (limit && d.models.length) limit.models = d.models;
     if (limit && d.period === "days") limit.days = limitDays(d.days);
     if (limit && d.period === "hours") limit.hours = limitHours(d.hours);
     // which one only when there are several: one is the key's only limit
@@ -849,7 +1079,27 @@ function gatewayLimitEditor(k) {
   }
   foot.append(cancel, save);
   if (which) box.append(which);
-  box.append(fields, hint, err);
+  // the limits are the Key limits built-in's: off, Save was refused with
+  // "turn the plugin on" and nothing here said where (the scattered
+  // settings audit after netube99 on X); the line shows only while it is
+  // off (data-feature-off) and turns it on in place
+  const off = el("div", "klf-off");
+  off.dataset.featureOff = "budget";
+  const on = el("button", "text", t("Turn on"));
+  on.type = "button";
+  on.onclick = async (e) => {
+    e.stopPropagation();
+    on.disabled = true;
+    try {
+      applyFeatures(prefs.builtins = await api("plugins/builtin", { id: "budget", on: true }));
+      status(t("Saved"), "ok", 1500);
+    } catch (err) {
+      status(t(err.message), "err");
+    }
+    on.disabled = false;
+  };
+  off.append(el("span", "", t("Off in Plugins › Built-in")), on);
+  box.append(off, fields, hint, err);
   if (used) {
     // count from 0 again, tokens and cost together (#1509)
     const zero = el("button", "text klf-reset", t("Reset usage"));

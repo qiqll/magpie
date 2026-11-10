@@ -86,7 +86,7 @@ func (s *Server) statusline(w http.ResponseWriter, r *http.Request) {
 			own = scope.own
 		}
 		keep := func(rt *Route) bool {
-			return (only == "" || rt.callerKey == only) && (own == nil || own.owns(rt.caller))
+			return (only == "" || rt.CallerKey == only) && (own == nil || own.owns(rt.caller))
 		}
 		if _, route := s.trace.sessionLatest(r.Context(), session, keep, 0, 0); route != nil {
 			sr := sessionRouteOf(*route)

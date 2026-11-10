@@ -57,6 +57,9 @@ type KeyInfo struct {
 	// Spend is the spend cap set on it and what it has spent in its
 	// period; nil with none.
 	Spend *KeySpend `json:"spend,omitempty"`
+	// Balance is the balance the user typed for it and what is left of
+	// it by magpie's count (key_balance_own.go); nil with none.
+	Balance *BalanceEstimate `json:"balance,omitempty"`
 }
 
 // KeySpend is a key's spend cap as its row tells it: the cap, what magpie
@@ -87,6 +90,9 @@ type KeyRest struct {
 	Model string `json:"model,omitempty"`
 	// Error: what the vendor said
 	Error string `json:"error,omitempty"`
+	// Rate: the vendor called it a rate limit and named when it lifts
+	// (gateway.Rest.Rate): the page says rate limited, not quota used up
+	Rate bool `json:"rate,omitempty"`
 }
 
 // RestKey is what the gateway rests the key k of a provider by: the
@@ -708,6 +714,7 @@ func ReplaceKey(id, keyRef, key string) (was, now string, err error) {
 		moveKeyed(q.AccountProxies, keyRef, now)
 		moveKeyed(q.AccountConcurrency, keyRef, now)
 		moveKeyed(q.KeySpendCaps, keyRef, now)
+		moveKeyed(q.KeyOwnBalances, keyRef, now)
 		return nil
 	})
 	if err != nil {

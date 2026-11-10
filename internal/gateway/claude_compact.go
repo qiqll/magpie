@@ -73,7 +73,12 @@ func (b *subscriptionBridge) compactAway(ctx context.Context, req *Request, owne
 		}
 		return b.unshelve(req, owner)
 	}
-	work := b.callerWork(req, configDir)
+	// where startRun put the conversation's session: the same folder
+	binary, binErr := claudeBinary()
+	if binErr != nil {
+		return nil
+	}
+	work := b.callerWork(req, binary, configDir)
 	if work == "" {
 		var err error
 		if work, err = claudeWorkDir(); err != nil {

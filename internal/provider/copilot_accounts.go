@@ -172,6 +172,7 @@ func moveAccountSettings(id string, moves map[string]string) error {
 			moved = moveKey(p.AccountWindowCaps, from, to) || moved
 			moved = moveKey(p.AccountAdded, from, to) || moved
 			moved = moveKey(p.AccountFirstUsed, from, to) || moved
+			moved = moveKey(p.AccountWindowAmounts, from, to) || moved
 			moved = moveKey(p.AccountConcurrency, from, to) || moved
 			moved = moveKey(p.AccountWeights, from, to) || moved
 			moved = moveKey(p.AccountNames, from, to) || moved
@@ -363,7 +364,7 @@ func copilotUser(ctx context.Context, token, host string) (user, plan string, er
 		}
 		req.Header.Set("Authorization", "token "+token)
 		req.Header.Set("Accept", "application/json")
-		res, err := http.DefaultClient.Do(req)
+		res, err := Keyed(http.DefaultClient).Do(req)
 		if err != nil {
 			return 0, err
 		}

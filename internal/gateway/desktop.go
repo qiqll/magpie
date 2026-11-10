@@ -461,6 +461,16 @@ func aliased(id string) (string, bool) {
 			return e.ID, true
 		}
 	}
+	// a model listed once more for a tier after the first it is picked
+	// for (desktopTierAlias), by whichever tier, so a session saved on it
+	// is served after the picks change too
+	for _, e := range provider.CatalogOf("claude-desktop") {
+		for _, t := range DesktopTierNames {
+			if aliasNumber(desktopTierKey(e.ID, t)) == number {
+				return e.ID, true
+			}
+		}
+	}
 	return "", false
 }
 
@@ -818,11 +828,17 @@ func desktopDefault(asked string) string {
 }
 
 // desktopSelectorRoots are the Claude-3p folders Desktop keeps its model
-// menus' choices in (desktopChosen): every set desktopdir finds. A test
-// sets its own.
+// menus' choices in (desktopChosen): every set desktopdir finds, and the
+// isolated Desktop's folder (#5671) when it is there (the newest choice
+// counts). A test sets its own.
 var desktopSelectorRoots = func() []string {
 	home, _ := os.UserHomeDir()
 	var out []string
+	if iso := desktopdir.Isolated(desktopdir.OS, home); iso != "" {
+		if fi, err := os.Stat(iso); err == nil && fi.IsDir() {
+			out = append(out, iso)
+		}
+	}
 	for _, d := range desktopdir.Sets(desktopdir.OS, home, appdir.Getenv) {
 		if d.ThreeP != "" {
 			out = append(out, d.ThreeP)

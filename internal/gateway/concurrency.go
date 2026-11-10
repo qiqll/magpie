@@ -513,8 +513,25 @@ func (s *Server) concurrency(w http.ResponseWriter, r *http.Request) {
 		// user is told none of them, its own included
 		active = []Active{}
 	}
+	// and those waiting for a slot of their gateway key's (key_slots.go)
+	keys := s.KeyLanes()
+	for _, ln := range keys {
+		waiting += ln.Waiting
+	}
 	b := s.Busy()
-	writeJSON(w, 200, map[string]any{"object": "concurrency", "data": lanes, "requests": b.Requests, "waiting": waiting, "tools": b.Tools, "active": active})
+	told := keys
+	if own != nil {
+		// bound by user, a user is told the lanes of its own group's keys
+		// alone (sharers, T-089): another key's id and load are its
+		// holder's; the count of those waiting stays the gateway's
+		told = map[string]Lane{}
+		for id, ln := range keys {
+			if own.sharers[id] {
+				told[id] = ln
+			}
+		}
+	}
+	writeJSON(w, 200, map[string]any{"object": "concurrency", "data": lanes, "requests": b.Requests, "keys": told, "waiting": waiting, "tools": b.Tools, "active": active})
 }
 
 // Lanes is how each key or account with requests out or waiting stands,

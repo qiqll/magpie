@@ -266,6 +266,9 @@ type Row struct {
 	// provider (provider.AccountNameOf): the same address may be named at
 	// one provider and not at another
 	AccountName string `json:"accountName,omitempty"`
+	// Canceled: its agent canceled it before it was answered
+	// (usage.Record.Canceled), which the page shows as no failure
+	Canceled bool `json:"canceled,omitempty"`
 }
 
 type Ledger struct {
@@ -383,7 +386,7 @@ func LedgerPage(p usage.Period, f usage.Filter, offset, limit int) Ledger {
 	named := map[string]string{} // provider and account: the name the user gave it
 	for _, r := range page {
 		a := who(r.Agent)
-		lr := Row{Row: r, AgentName: a.Name, Icon: a.Icon, ProviderName: which(r.Provider).Name}
+		lr := Row{Row: r, AgentName: a.Name, Icon: a.Icon, ProviderName: which(r.Provider).Name, Canceled: r.Canceled()}
 		if req := r.Requested; strings.HasPrefix(req, provider.GroupPrefix) {
 			if _, ok := pub[req]; !ok {
 				pub[req] = provider.PublicRef(req)

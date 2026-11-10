@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/usage"
@@ -129,8 +128,8 @@ func notePluginSearch(ctx context.Context, spec string, asked map[string]any, go
 // pluginSearchAsked is what magpie hands a plugin's search hook, as its
 // archive says it: the provider, the query, how many pages, the address
 // set (when one is) and the key masked or the account it signs in as.
-func pluginSearchAsked(v provider.SearchVendor, query, at, key, account string) map[string]any {
-	m := map[string]any{"hook": "search", "provider": v.PluginID, "query": query, "count": searchHits}
+func pluginSearchAsked(v provider.SearchVendor, query string, count int, at, key, account string) map[string]any {
+	m := map[string]any{"hook": "search", "provider": v.PluginID, "query": query, "count": count}
 	if at != "" {
 		m["url"] = at
 	}
@@ -200,9 +199,10 @@ func (s *Server) keepSearch(ctx context.Context, rec *usage.Record, start time.T
 	// magpie asked, as for a model's search; whose search it was is For,
 	// and bound by user its caller the user and key logSearch wrote on the
 	// row, so the user is told it as its own and no other user is (T-099)
-	rt := Route{callerKey: access.Caller(ctx).KeyID, caller: routeCaller{user: rec.User, key: rec.CallerKeyID}, Time: start, Agent: "magpie", Kind: "web_search", For: searchFor(ctx),
+	rt := Route{caller: routeCaller{user: rec.User, key: rec.CallerKeyID}, Time: start, Agent: "magpie", Kind: "web_search", For: searchFor(ctx),
 		Model: rec.Requested, Provider: where, Order: []Weighed{seat},
 		Tries: []Try{{ID: seat.ID, Model: seat.Model, Start: start, Done: true, Status: rec.Status, Millis: rec.Millis, Error: err}}}
+	rt.CallerKey, rt.CallerKeyName = callerKeyOf(ctx)
 	tr := s.trace.begin(rt)
 	rec.RouteID = tr.ID
 	c := Call{Route: tr.ID, Time: start, Agent: rt.Agent, Kind: "web_search", For: rt.For, Model: rec.Requested,
