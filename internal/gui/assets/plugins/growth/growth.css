@@ -1,0 +1,67 @@
+/* Settings › Growth policy (plugins/growth/settings.js): the policies on
+   the left, the one picked on the right with its chart; under ~560px the
+   list goes on top. The chart's two windows are categorical slots 1 and 2
+   of the dataviz reference palette, checked against the card in each
+   theme (CVD ΔE 24.7 light, 26.8 dark; each 3:1 or more on the card); the
+   week's line is dashed too, so the two are told apart without colour. */
+.gp { --gr-five: #2a78d6; --gr-week: #eb6834; align-items: flex-start; flex-wrap: wrap; gap: 14px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .gp { --gr-five: #3987e5; --gr-week: #d95926; } }
+:root[data-theme="dark"] .gp { --gr-five: #3987e5; --gr-week: #d95926; }
+.gp-side { flex: 1 1 170px; max-width: 240px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+@media (max-width: 560px) { .gp-side { max-width: none; } }
+.gp-main { flex: 999 1 300px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.gp-list { display: flex; flex-direction: column; gap: 2px; }
+.gp-item { display: flex; flex-direction: column; align-items: stretch; gap: 1px; padding: 6px 8px; border: 0; border-radius: 8px; background: none; font: inherit; color: var(--fg); text-align: left; cursor: default; }
+.gp-item:hover { background: var(--pill); }
+.gp-item.on { background: var(--sel); }
+.gp-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.gp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
+.gp-tag { flex: none; padding: 0 6px; border-radius: 8px; font-size: 10.5px; color: var(--muted); background: var(--pill); }
+.gp-tag.def { color: var(--accent); background: var(--accent-soft); }
+.gp-sum { font-size: 11.5px; color: var(--fg-2); }
+.gp-side .growth-new { align-self: flex-start; }
+.gp-edit { display: flex; flex-direction: column; gap: 8px; }
+/* the window app's .row.pref .segs sits at the row's end; here it follows its line */
+.gp .segs { margin-left: 0; }
+.gp .growth-stage .segs { align-self: center; }
+.growth-foot .growth-inuse { margin-top: 2px; }
+.gp-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
+.gp-title { font-weight: 600; }
+.gp-line .growth-name { flex: 1 1 140px; min-width: 0; }
+.gp-acts { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+.gp-lab, .gp-days { font-size: 12px; color: var(--fg-2); }
+.gp-days { flex: 1 1 100%; }
+.gp-line .growth-start, .gp-line .growth-cap { width: 48px; flex: none; }
+.gp-line .growth-days, .gp-line .growth-from { width: 56px; flex: none; }
+.gp-note { font-size: 11.5px; color: var(--fg-2); }
+.gp-edit .growth-add { align-self: flex-start; }
+.gp-chart { position: relative; min-width: 0; }
+.gp-chart.stale .gp-svg { opacity: .5; }
+.gp-svg { display: block; outline: none; touch-action: pan-y; }
+.gp-svg:focus-visible { box-shadow: 0 0 0 2px var(--accent); border-radius: 6px; }
+.gp-svg .grid { stroke: var(--line-2); stroke-width: 1; }
+.gp-svg .base { stroke: var(--line); stroke-width: 1; }
+.gp-svg .tick { fill: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.gp-svg .ln { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.gp-svg .ln.five { stroke: var(--gr-five); }
+.gp-svg .ln.week { stroke: var(--gr-week); stroke-dasharray: 5 4; }
+.gp-svg .acct { fill: var(--fg); stroke: var(--card); stroke-width: 2; }
+.gp-svg .hair { stroke: var(--muted); stroke-width: 1; }
+.gp-tip { position: absolute; top: 4px; z-index: 2; min-width: 150px; max-width: 220px; padding: 7px 10px; background: var(--pop-bg); border-radius: 9px; box-shadow: var(--shadow); font-size: 11.5px; pointer-events: none; }
+.gp-tip[hidden] { display: none; }
+.gp-tip b { display: block; margin-bottom: 3px; font-weight: 600; }
+.gp-tip-row, .gp-tip-acct { display: flex; align-items: center; gap: 6px; line-height: 1.6; }
+.gp-tip-row span, .gp-tip-acct span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-2); }
+.gp-tip em { margin-left: auto; padding-left: 10px; font-style: normal; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--fg); }
+.gp-tip-acct { border-top: 1px solid var(--line-2); }
+.gp-tip-acct em { font-weight: 400; color: var(--muted); }
+.gp-key { flex: none; width: 14px; height: 0; border-top: 2px solid var(--gr-five); }
+.gp-key.week { border-top: 2px dashed var(--gr-week); }
+.gp-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--fg); }
+.gp-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11.5px; color: var(--fg-2); }
+.gp-leg { display: inline-flex; align-items: center; gap: 6px; }
+.gp-table summary { font-size: 12px; color: var(--ctl-fg); cursor: default; }
+.gp-table table { margin-top: 6px; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.gp-table th, .gp-table td { padding: 2px 12px 2px 0; text-align: left; }
+.gp-table th { font-weight: 500; color: var(--muted); }
+.gp-table td { color: var(--fg-2); }

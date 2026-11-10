@@ -4,6 +4,9 @@
 // works. {name} slots are filled by t(str, vars).
 const I18N = {
   zh: {
+    "Standard": "标准",
+    "Gentle": "温和",
+    "Cautious": "谨慎",
     "Any gateway key": "任意网关密钥",
     "Add a {name} account": "添加 {name} 账号",
     "Pause": "暂停",
@@ -4972,6 +4975,9 @@ const I18N = {
     "Growth policy": "成长策略",
   },
   "zh-TW": {
+    "Standard": "標準",
+    "Gentle": "溫和",
+    "Cautious": "謹慎",
     "Any gateway key": "任意閘道金鑰",
     "Add a {name} account": "新增 {name} 帳號",
     "Pause": "暫停",
@@ -9925,6 +9931,9 @@ const I18N = {
     "Growth policy": "成長策略",
   },
   ja: {
+    "Standard": "標準",
+    "Gentle": "穏やか",
+    "Cautious": "慎重",
     "Any gateway key": "どのゲートウェイキーでも",
     "Add a {name} account": "{name} アカウントを追加",
     "Pause": "一時停止",
@@ -14880,6 +14889,9 @@ const I18N = {
     "Growth policy": "成長ポリシー",
   },
   de: {
+    "Standard": "Standard",
+    "Gentle": "Sanft",
+    "Cautious": "Vorsichtig",
     "Any gateway key": "Jeder Zugangsschlüssel",
     "Add a {name} account": "{name}-Konto hinzufügen",
     "Pause": "Pausieren",
