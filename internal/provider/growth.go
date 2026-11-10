@@ -174,7 +174,9 @@ func growthPolicyFor(id, user string) settings.GrowthPolicy {
 // SetAccountGrowthPolicy has the account ref of the subscription id held
 // by the growth policy policy (T-133), or by its subscription's for "":
 // one no policy has is refused, as SetGrowthPolicy refuses it. Written on
-// the record as it is under the lock (editFound).
+// the record as it is under the lock (editFound). A pick is cleared ("")
+// of an account the subscription no longer lists too, by its name: one
+// gone from outside magpie would keep its policy from being deleted.
 func SetAccountGrowthPolicy(id, ref, policy string) error {
 	p, err := Find(id)
 	if err != nil {
@@ -183,12 +185,13 @@ func SetAccountGrowthPolicy(id, ref, policy string) error {
 	if p.Account == nil {
 		return fmt.Errorf("%s has keys, not subscription accounts for a growth policy to hold", p.Name)
 	}
-	r, ok := p.accountRef(ref)
-	if !ok {
+	policy = strings.TrimSpace(policy)
+	k := accountKey(ref)
+	if r, ok := p.accountRef(ref); ok {
+		k = accountKey(r)
+	} else if policy != "" {
 		return fmt.Errorf("%s has no account %q", p.Name, ref)
 	}
-	k := accountKey(r)
-	policy = strings.TrimSpace(policy)
 	if policy != "" && !settings.Shared().GrowthKnows(policy) {
 		return fmt.Errorf("no growth policy has the id %q", policy)
 	}
@@ -387,12 +390,15 @@ func GrowthAccounts(now time.Time) []GrowthAccount {
 // the account's own pick, its subscription's, the default): the accounts
 // its chart marks (T-131, T-133).
 func GrowthAccountsOf(id string, now time.Time) []GrowthAccount {
-	return growthAccounts(now, func(sub, user string) bool { return growthPolicyFor(sub, user).ID == id })
+	return growthAccounts(now, func(s *Provider, user string) bool {
+		return settings.Shared().GrowthFor(s.AccountGrowthPolicy[user], s.GrowthPolicy).ID == id
+	})
 }
 
 // growthAccounts is GrowthAccounts of the accounts held reports true of,
-// every one for nil.
-func growthAccounts(now time.Time, held func(sub, user string) bool) []GrowthAccount {
+// every one for nil; held is given the record read once (growthPolicyFor's
+// pick, without a read of the file per account).
+func growthAccounts(now time.Time, held func(s *Provider, user string) bool) []GrowthAccount {
 	all, f := sharedAll(), storedFile()
 	var out []GrowthAccount
 	for _, s := range f.Providers {
@@ -410,7 +416,7 @@ func growthAccounts(now time.Time, held func(sub, user string) bool) []GrowthAcc
 		}
 		for u := range s.AccountAdded {
 			from := growthFrom(s.ID, u, now)
-			if !listed[u] || s.AccountCaps[u] > 0 || !addedKnown(from) || held != nil && !held(s.ID, u) {
+			if !listed[u] || s.AccountCaps[u] > 0 || !addedKnown(from) || held != nil && !held(&s, u) {
 				continue
 			}
 			out = append(out, GrowthAccount{

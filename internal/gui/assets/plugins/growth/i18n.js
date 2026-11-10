@@ -197,7 +197,7 @@ magpie.strings({
     "1 account picked it": "1 Konto hat sie gewählt",
     "{n} accounts picked it": "{n} Konten haben sie gewählt",
     "{name}: {own} · {n} ramping up": "{name}: {own} · {n} in der Einlaufphase",
-    "{names} picked it: pick another policy in its editor or on its accounts' rows first": "{names} hat sie gewählt: wähle zuerst im Editor oder in den Kontozeilen eine andere Richtlinie",
+    "{names} picked it: pick another policy in its editor or on its accounts' rows first": "{names} hat sie gewählt: wähle zuerst im Editor oder in den Kontozeilen eine andere Regel",
     "Follow the default ({name})": "Dem Standard folgen ({name})",
     "Growth policy this subscription's accounts are held by": "Wachstumsregel für die Konten dieses Abos",
     "The policy it picked ({id}) is gone: its accounts are held by the default until you pick another": "Die gewählte Regel ({id}) gibt es nicht mehr: bis du eine andere wählst, gilt für die Konten der Standard",

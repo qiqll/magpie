@@ -277,3 +277,27 @@ func TestGrowthUsesCountAnAccountsPick(t *testing.T) {
 		t.Fatalf("picks: %v %v", picks, err)
 	}
 }
+
+// A pick left by an account gone from outside magpie (its sign-in deleted
+// by hand, never removed through magpie) can be cleared by its name, so
+// the policy it names can be deleted; a policy can't be picked for it.
+func TestAccountGrowthPolicyOfAGoneAccountClears(t *testing.T) {
+	accountPickFixture(t, "", "")
+	f, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Providers[0].AccountGrowthPolicy = map[string]string{"gone@example.com": settings.GrowthCautious}
+	if err := store(f); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAccountGrowthPolicy("codex", "gone@example.com", settings.GrowthGentle); err == nil {
+		t.Fatal("picked a policy for an account Codex hasn't")
+	}
+	if err := SetAccountGrowthPolicy("codex", "Gone@example.com", ""); err != nil {
+		t.Fatalf("clearing a gone account's pick: %v", err)
+	}
+	if picks, err := GrowthPicks(); err != nil || len(picks) != 0 {
+		t.Fatalf("picks after clearing it: %v %v", picks, err)
+	}
+}
