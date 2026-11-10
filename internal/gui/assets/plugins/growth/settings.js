@@ -463,20 +463,29 @@ function growthDraw() {
   growthUseFill();
 }
 
-// growthUseFill says which subscriptions the policy shown holds and how
-// many of their accounts ramp up now; a policy one picked can't be
-// deleted until it picks another (T-131), as the server refuses too
+// growthUseFill says which subscriptions the policy shown holds, how
+// many of their accounts picked it themselves (T-133) and how many ramp
+// up now; a policy a subscription or an account picked can't be deleted
+// until it is picked no more (T-131), as the server refuses too
 function growthUseFill() {
   const box = growthChart.box?.closest("#growthList"), say = box?.querySelector(".growth-uses");
   if (!say) return;
   const uses = growthChart.key === growthChart.want ? growthChart.data?.uses : null;
   if (!uses) return say.replaceChildren();
-  say.replaceChildren(...(uses.length ? uses.map((u) => el("div", "growth-use", t(u.picked ? "{name} picked it · {n} ramping up" : "{name} follows the default · {n} ramping up", { name: u.name, n: u.accounts })))
+  const line = (u) => {
+    const own = u.accountsPicked ? t(u.accountsPicked === 1 ? "1 account picked it" : "{n} accounts picked it", { n: u.accountsPicked }) : "";
+    if (u.accountsOnly) return t("{name}: {own} · {n} ramping up", { name: u.name, own, n: u.accounts });
+    const said = t(u.picked ? "{name} picked it · {n} ramping up" : "{name} follows the default · {n} ramping up", { name: u.name, n: u.accounts });
+    return own ? said + " · " + own : said;
+  };
+  say.replaceChildren(...(uses.length ? uses.map((u) => el("div", "growth-use", line(u)))
     : [el("div", "growth-use", t("No subscription is held by it"))]));
-  const picked = uses.filter((u) => u.picked).map((u) => u.name), del = box.querySelector(".growth-delete");
+  const picked = uses.filter((u) => u.picked || u.accountsPicked).map((u) => u.name), del = box.querySelector(".growth-delete");
   if (del && picked.length) {
     del.disabled = true;
-    del.title = t("{names} picked it: pick another policy in its editor first", { names: picked.join(", ") });
+    del.title = uses.some((u) => u.accountsPicked)
+      ? t("{names} picked it: pick another policy in its editor or on its accounts' rows first", { names: picked.join(", ") })
+      : t("{names} picked it: pick another policy in its editor first", { names: picked.join(", ") });
   }
 }
 

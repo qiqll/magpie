@@ -48,6 +48,8 @@ async function acxLoad(again) {
     (!acxKeys || again || Date.now() - acxKeysAt > 30e3 ? api("accounts/keys")
       .then((k) => { acxKeys = k?.keys || []; acxKeysAt = Date.now(); acxKeysFailed = false; }, () => { acxKeysFailed = true; }) : Promise.resolve()),
     (!acxHolds || again || Date.now() - acxHoldsAt > 30e3 ? api("auth-holds").then(acxHoldsRead, () => {}) : Promise.resolve()),
+    // the growth policies an account can pick (plugins/growth/pick.js, T-133)
+    growthListLoad(again),
   ];
   for (const r of reads) r.then(() => { if (view === "accounts") acxDraw(); });
   await Promise.all(reads);
@@ -117,7 +119,9 @@ function acxRows() {
       const added = p.accountAdded?.[acxLow(l.user)] || "", firstUsed = p.accountFirstUsed?.[acxLow(l.user)] || "";
       // how the growth policy holds it now, as the gateway does (provider.AccountGrowthOf)
       const growth = p.accountGrowth?.[acxLow(l.user)] || null;
-      out.push({ p, a, l, sub, state, banned, disabled, off, authFailed, again, act, q, added, firstUsed, growth, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
+      // the growth policy it picked itself, "" when it follows its subscription's (T-133)
+      const pick = p.accountGrowthPolicy?.[acxLow(l.user)] || "";
+      out.push({ p, a, l, sub, state, banned, disabled, off, authFailed, again, act, q, added, firstUsed, growth, pick, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
     }
   }
   return out;
@@ -383,25 +387,61 @@ function acxGrowthSaid(g) {
   return parts.join(" · ");
 }
 
-// acxGrowth: an account's ramp-up as a button, which offers Skip ramp-up:
-// 100 on each window the policy holds that the user set nothing on
+// acxGrowth: an account's ramp-up as a button, or the growth policy it
+// picked itself while that holds none of its windows (T-133). It offers
+// the policies to pick for the account alone (growthAccountOpts, none
+// until they are read) and, while ramping up, Skip ramp-up: 100 on each
+// window the policy holds that the user set nothing on
 // (provider.SkipGrowth), so a cap set later is the user's
 function acxGrowth(r) {
   const { p, l, growth: g } = r;
-  const b = el("button", "acx-grow", acxGrowthSaid(g));
+  const picked = growthAccountPicked(p, l.user);
+  const b = el("button", "acx-grow", g ? acxGrowthSaid(g) : t("Growth policy: {name}", { name: picked.policy ? growthName(picked.policy) : picked.id }));
   b.type = "button";
-  b.title = t("{policy} holds this new account to a share of its windows, rising to 100%. Click to skip the ramp-up", { policy: g.builtin ? t(g.name) : g.name })
+  const choices = growthAccountOpts(p).length > 0;
+  b.title = (g ? t("{policy} holds this new account to a share of its windows, rising to 100%. Click to skip the ramp-up", { policy: g.builtin ? t(g.name) : g.name })
     + (g.byAdded ? "\n" + t("Its days count from when it was added: its agent asks its vendor itself, so magpie never sees its first use") : "")
-    + (g.waiting ? "\n" + t("Its days start on the first request its vendor serves through magpie") : "");
+    + (g.waiting ? "\n" + t("Its days start on the first request its vendor serves through magpie") : "")
+    + (choices ? "\n" + t("Its growth policy can be picked here too, for this account alone") : "")
+    : t("Picked for this account alone, before its subscription's. Click to pick another"))
+    + (picked.gone ? "\n" + t("The policy it picked ({id}) is gone: it is held by its subscription's until you pick another", { id: picked.id }) : "");
   b.setAttribute("aria-haspopup", "menu");
-  b.onclick = (e) => {
-    e.stopPropagation();
-    if (b.classList.contains("open")) return closeProtoMenu();
-    openProtoMenu(b, [{ v: "skip", name: "Skip ramp-up", note: "Its windows go to 100%, or to a cap you set on one. An account cap set later leaves them out: cap a window instead" }], "", () => {
-      b.classList.add("busy");
-      accountAction("provider/skipgrowth", { id: p.id, account: l.user }, t("{who} skipped its ramp-up", { who: accountNameOf(p, l.user) || l.user })).then(() => acxDraw());
-    }, "Ramping up");
-  };
+  b.onclick = (e) => acxGrowthMenu(e, b, r, !!g);
+  return b;
+}
+
+// acxGrowthMenu: the account's growth policy to pick (Follow the
+// subscription clears its own), with Skip ramp-up when skip; a pick that
+// is gone ticks nothing, so Follow the subscription saves too
+async function acxGrowthMenu(e, b, r, skip) {
+  e.stopPropagation();
+  if (b.classList.contains("open")) return closeProtoMenu();
+  const { p, l } = r;
+  await growthListLoad();
+  const picked = growthAccountPicked(p, l.user);
+  const opts = growthAccountOpts(p);
+  if (skip) opts.push({ v: "!skip", name: "Skip ramp-up", note: "Its windows go to 100%, or to a cap you set on one. An account cap set later leaves them out: cap a window instead" });
+  if (!opts.length) return;
+  const head = skip && opts.length === 1 ? "Ramping up" : "Growth policy this account is held by";
+  openProtoMenu(b, opts, picked.gone ? "!gone" : picked.id, (v) => {
+    b.classList.add("busy");
+    const done = v === "!skip"
+      ? accountAction("provider/skipgrowth", { id: p.id, account: l.user }, t("{who} skipped its ramp-up", { who: accountNameOf(p, l.user) || l.user }))
+      : growthAccountSave(p, l.user, v);
+    done.then(() => acxDraw());
+  }, head);
+}
+
+// acxGrowthFact: a card's Growth policy, for every account the policy
+// counts the days of: the one it picked, or its subscription's followed
+function acxGrowthFact(r) {
+  const { p, l } = r;
+  const picked = growthAccountPicked(p, l.user);
+  const b = el("button", "acx-grow acx-gp", picked.id ? (picked.policy ? growthName(picked.policy) : picked.id) : t("Follows its subscription"));
+  b.type = "button";
+  b.title = picked.gone ? t("The policy it picked ({id}) is gone: it is held by its subscription's until you pick another", { id: picked.id }) : t("Growth policy this account is held by");
+  b.setAttribute("aria-haspopup", "menu");
+  b.onclick = (e) => acxGrowthMenu(e, b, r, false);
   return b;
 }
 
@@ -419,7 +459,7 @@ function acxWho(r) {
   name.append(badge);
   // both marks: both said
   if (r.banned && r.disabled) name.append(el("span", "acx-state disabled", t("Disabled")));
-  if (r.growth) name.append(acxGrowth(r));
+  if (r.growth || r.pick) name.append(acxGrowth(r));
   who.append(name);
   return [who, alias];
 }
@@ -479,6 +519,8 @@ function acxCard(r) {
   // the growth policy counts its days from its first use (provider/growth.go)
   if (r.firstUsed) fact("First used", "acx-used", acxDay(r.firstUsed));
   else if (r.added && p.firstUsedKnown) fact("First used", "acx-used", el("span", "acx-unknown", t("Never used")));
+  // its growth policy, picked here for it alone (T-133), once the policies are read
+  if (r.added && growthAccountOpts(p).length) fact("Growth policy", "acx-gpf", acxGrowthFact(r));
   if (l.until) fact("Plan ends", "acx-until", acxDay(l.until));
   const proxy = p.accountProxies?.[acxLow(l.user)] || "";
   if (proxy) fact("Proxy", "acx-proxy", proxyShown(proxy));

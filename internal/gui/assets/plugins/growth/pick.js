@@ -33,3 +33,43 @@ function growthPickField(p) {
   else loadSettings().then(() => box.isConnected && draw(), () => {});
   return field(t("Growth policy"), box, t("How its new accounts are held while they ramp up: a share of each window that rises with their days. Policies are made in Settings › Growth policy."));
 }
+
+// An account's own growth policy (T-133), picked on its row in Models ›
+// Accounts: before its subscription's, which is before the default
+// (settings.GrowthFor). Follow the subscription clears it. One it picked
+// that is gone holds by its subscription's. No choices until the policies
+// are read (growthPrefs), so a row asks for nothing it can't save.
+function growthAccountOpts(p) {
+  const s = growthPrefs(), all = s?.growthPolicyList || [];
+  if (!all.length) return [];
+  const def = all.find((x) => x.id === s.growthInEffect) || all.find((x) => x.id === "standard");
+  const sub = all.find((x) => x.id === p.growthPolicy) || def;
+  const opts = [{ v: "", name: t("Follow the subscription ({name})", { name: sub ? growthName(sub) : t("Standard") }), note: sub ? growthSummary(sub) : "" }]
+    .concat(all.map((x) => ({ v: x.id, name: growthName(x), note: growthSummary(x) })));
+  for (const o of opts) o.literalName = true;
+  return opts;
+}
+
+// growthAccountPicked: the policy the account user of p picked itself —
+// its id ("" for none), the policy (null when gone or none), and whether
+// it is gone
+function growthAccountPicked(p, user) {
+  const id = p.accountGrowthPolicy?.[String(user).trim().toLowerCase()] || "";
+  const list = growthPrefs()?.growthPolicyList;
+  const policy = id ? (list || []).find((x) => x.id === id) || null : null;
+  return { id, policy, gone: !!id && !!list && !policy };
+}
+
+// growthPrefs: the policies and the default, from Settings when it was
+// read (prefs, kept current by its page), else from growthListLoad's own
+// read, which Models › Accounts asks for without drawing Settings
+let growthListRead = null;
+const growthPrefs = () => (prefs?.growthPolicyList ? prefs : growthListRead);
+function growthListLoad(again) {
+  if (prefs?.growthPolicyList || growthListRead && !again) return Promise.resolve();
+  return api("settings").then((s) => {
+    if (Array.isArray(s?.growthPolicyList)) growthListRead = { growthPolicyList: s.growthPolicyList, growthInEffect: s.growthInEffect };
+  }, () => {});
+}
+
+const growthAccountSave = (p, user, v) => accountAction("provider/accountgrowthpolicy", { id: p.id, account: user, growthPolicy: v }, t("Saved"));
