@@ -146,7 +146,16 @@ func (c WindowCaps) withGrowth(added, now time.Time) WindowCaps {
 	if !addedKnown(added) || c.All > 0 {
 		return c
 	}
-	g := policyCaps(settings.Shared().GrowthInEffect(), added, now)
+	return c.withPolicy(settings.Shared().GrowthInEffect(), added, now)
+}
+
+// withPolicy is withGrowth by the policy p, read once by a caller that
+// asks it of many days (AccountGrowthOf).
+func (c WindowCaps) withPolicy(p settings.GrowthPolicy, added, now time.Time) WindowCaps {
+	if !addedKnown(added) || c.All > 0 {
+		return c
+	}
+	g := policyCaps(p, added, now)
 	if len(g) == 0 {
 		return c
 	}
@@ -290,28 +299,32 @@ type AccountGrowth struct {
 
 // AccountGrowthOf is how the growth policy holds the account user of the
 // subscription id at now, nil when it holds none of its windows: one from
-// before, one past its last day, a policy that is Off, a cap of the
-// account's own, or every window the user's (a warm-up skipped). Its
-// shares are those AccountCapsOf adds to the user's own caps, through the
-// same withGrowth and growthFrom the gateway's holds read, so the row
-// never says what the gateway doesn't hold.
+// before, one past its last day, a policy that is Off, a subscription
+// turned off, a cap of the account's own, or every window it has the
+// user's (a ramp-up skipped). Its shares are those AccountCapsOf adds to
+// the user's own caps, through the same withGrowth (withPolicy, the
+// policy read once) and growthFrom the gateway's holds read, on the
+// windows the account was last read with (growthNamesOf), so the row
+// never says what the gateway doesn't hold. Only the days a share can
+// change on are asked: a ramp's each day to its last, a stage's start.
 func AccountGrowthOf(id, user string, now time.Time) *AccountGrowth {
 	s, ok := storedPicks(id)
-	if !ok {
+	if !ok || s.Off {
 		return nil
 	}
-	own := ownCapsOf(id, user)
 	from := growthFrom(id, user, now)
 	if !addedKnown(from) {
 		return nil
 	}
-	// the policy's shares on the windows the user left alone, at the day
-	// at, and whether it holds any
+	p := settings.Shared().GrowthInEffect()
+	own, names := ownCapsOf(id, user), growthNamesOf(id, user)
+	// the policy's shares on the windows it holds at the time at, and
+	// whether it holds any
 	held := func(at time.Time) (fiveHours, week int, any bool) {
-		c := own.withGrowth(from, at)
+		c := own.withPolicy(p, from, at)
 		least := func(win string) int {
 			share := 100
-			for _, w := range growthWindows[win] {
+			for _, w := range names[win] {
 				if _, mine := own.Windows[w]; mine {
 					continue
 				}
@@ -327,7 +340,6 @@ func AccountGrowthOf(id, user string, now time.Time) *AccountGrowth {
 	if !any {
 		return nil
 	}
-	p := settings.Shared().GrowthInEffect()
 	day := max(int(now.Sub(from).Hours()/24), 0)
 	g := &AccountGrowth{
 		Policy: p.ID, Name: p.Name, Builtin: p.Builtin, Kind: p.Kind,
@@ -335,7 +347,22 @@ func AccountGrowthOf(id, user string, now time.Time) *AccountGrowth {
 		Waiting: gatewayServed(s) && storedFile().FirstUsedRead && !addedKnown(s.AccountFirstUsed[accountKey(user)]),
 		ByAdded: !gatewayServed(s),
 	}
-	for d := day + 1; d <= settings.GrowthDaysMost+1; d++ {
+	var days []int
+	switch p.Kind {
+	case settings.GrowthRamp:
+		for d := day + 1; d <= min(p.Days, settings.GrowthDaysMost+1); d++ {
+			days = append(days, d)
+		}
+	case settings.GrowthStaged:
+		for _, st := range p.Stages {
+			if st.From > day {
+				days = append(days, st.From)
+			}
+		}
+		slices.Sort(days)
+		days = slices.Compact(days)
+	}
+	for _, d := range days {
 		nf, nw, more := held(from.Add(time.Duration(d) * 24 * time.Hour))
 		if !more {
 			g.Days = d
@@ -348,13 +375,41 @@ func AccountGrowthOf(id, user string, now time.Time) *AccountGrowth {
 	return g
 }
 
+// growthNamesOf are the policy's windows (growthWindows) the account user
+// of the subscription id has, by its last reading kept (lastReading): a
+// Codex account's week is "7 days", where a plugin's may be "weekly", and
+// the share a user set on the one it has is the one the gateway holds by.
+// Every name of growthWindows for an account never read.
+func growthNamesOf(id, user string) map[string][]string {
+	q, ok := lastReading(id + "/" + accountKey(user))
+	if !ok || len(q.Windows) == 0 {
+		return growthWindows
+	}
+	has := map[string]bool{}
+	for _, w := range q.Windows {
+		has[WindowCapID(w.Name)] = true
+	}
+	out := map[string][]string{}
+	for win, ws := range growthWindows {
+		for _, w := range ws {
+			if has[w] {
+				out[win] = append(out[win], w)
+			}
+		}
+	}
+	return out
+}
+
 // SkipGrowth lets the growth policy go of the account ref of the
-// subscription id (T-132): a share of 100, none, on each window it would
-// hold that the user set nothing on, so the gateway holds it at the
-// user's own caps alone. A window with a share or an amount of the user's
-// keeps it, and a share the user sets later is theirs, as on any window
+// subscription id (T-132), as the backlog's 需求方 asked: a share of 100,
+// none, on each window it would hold that the account has (growthNamesOf)
+// and the user set nothing on, so the gateway holds it at the user's own
+// caps alone. A window with a share or an amount of the user's keeps it,
+// and a share the user sets later is theirs, as on any window
 // (SetWindowCaps); one set back to follow the account's cap is the
-// policy's again. An account with a cap of its own, which the policy
+// policy's again. Those 100s are a window's own, so an account cap set
+// later leaves those windows out, as a 100 the user set does (Of); the
+// Skip menu says so. An account with a cap of its own, which the policy
 // never holds, is left as it is.
 func SkipGrowth(id, ref string) error {
 	p, err := Find(id)
@@ -368,7 +423,7 @@ func SkipGrowth(id, ref string) error {
 	if !ok {
 		return fmt.Errorf("%s has no account %q", p.Name, ref)
 	}
-	k := accountKey(r)
+	k, names := accountKey(r), growthNamesOf(p.ID, r)
 	// on the caps as they are stored then, not as they were read: another
 	// set meanwhile stays (T-079)
 	return editStored(p.ID, func(q *Provider) bool {
@@ -383,7 +438,7 @@ func SkipGrowth(id, ref string) error {
 			all[k] = map[string]int{}
 		}
 		changed := false
-		for _, wins := range growthWindows {
+		for _, wins := range names {
 			for _, w := range wins {
 				if _, mine := all[k][w]; mine || q.AccountWindowAmounts[k][w] > 0 {
 					continue

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"maps"
 	"testing"
 	"time"
 
@@ -15,6 +16,19 @@ func growthDefault(t *testing.T, id string, own ...settings.GrowthPolicy) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// freshReadings forgets the readings kept in memory, so the test's home's
+// are read (none until the test keeps one), before and after it.
+func freshReadings(t *testing.T) {
+	t.Helper()
+	forget := func() {
+		lastQuotas.Lock()
+		lastQuotas.loaded, lastQuotas.m = false, nil
+		lastQuotas.Unlock()
+	}
+	forget()
+	t.Cleanup(forget)
 }
 
 // heldAt is the share the gateway holds the account's window at, 100 for
@@ -32,6 +46,7 @@ func heldAt(t *testing.T, w string) int {
 // reads the same withGrowth as AccountCapsOf, never a formula of its own.
 func TestAccountGrowthIsTheGatewaysHold(t *testing.T) {
 	firstUsedFixture(t, time.Hour)
+	freshReadings(t)
 	for _, p := range []settings.GrowthPolicy{
 		{ID: "climb", Name: "Climb", Kind: settings.GrowthRamp, Start: 20, Days: 9},
 		{ID: "steps", Name: "Steps", Kind: settings.GrowthStaged, Stages: []settings.GrowthStage{
@@ -62,6 +77,7 @@ func TestAccountGrowthIsTheGatewaysHold(t *testing.T) {
 // let go have no last day.
 func TestAccountGrowthDays(t *testing.T) {
 	firstUsedFixture(t, 36*time.Hour)
+	freshReadings(t)
 	growthDefault(t, settings.GrowthStandard)
 	g := AccountGrowthOf("codex", "new@example.com", time.Now())
 	if g == nil || g.Day != 1 || g.Days != 14 || g.FiveHours != 53 || g.Week != 53 || g.Next != 0 || !g.Builtin || g.Kind != settings.GrowthRamp {
@@ -99,6 +115,7 @@ func TestAccountGrowthDays(t *testing.T) {
 // counts from when it was added, and says so.
 func TestAccountGrowthHowCounted(t *testing.T) {
 	firstUsedFixture(t, 3*24*time.Hour+time.Hour)
+	freshReadings(t)
 	growthDefault(t, settings.GrowthStandard)
 	if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g == nil || g.Day != 3 || g.Waiting || g.ByAdded {
 		t.Fatalf("before the ledger is read: %+v", g)
@@ -115,17 +132,26 @@ func TestAccountGrowthHowCounted(t *testing.T) {
 	}
 }
 
-// Skipping the warm-up lets the gateway hold the account at the user's
-// own caps alone, keeps a window's share the user set, and a share the
-// user sets after is theirs: taken off, the policy has the window again.
+// Skipping the ramp-up lets the gateway hold the account at the user's
+// own caps alone, on the windows the account has (its last reading: a
+// Codex account's week is "7 days"), keeps a window's share the user set,
+// and a share the user sets after is theirs: taken off, the policy has
+// the window again.
 func TestSkipGrowth(t *testing.T) {
 	firstUsedFixture(t, time.Hour)
+	freshReadings(t)
 	growthDefault(t, settings.GrowthStandard)
-	if err := SetWindowCap("codex", "new@example.com", "weekly", 70); err != nil {
+	keepLast(SubscriptionQuota{Provider: "codex", User: "new@example.com", Windows: []QuotaWindow{
+		{Name: "5 hours", Used: 10, Span: 5 * time.Hour}, {Name: "7 days", Used: 10, Span: 7 * 24 * time.Hour},
+	}}, "")
+	if err := SetWindowCap("codex", "new@example.com", "7 days", 70); err != nil {
 		t.Fatal(err)
 	}
-	if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g == nil || g.FiveHours != 50 || g.Week != 50 {
-		t.Fatalf("the week's own 70%% leaves the policy the 7 days: %+v", g)
+	if s := heldAt(t, "7 days"); s != 70 {
+		t.Fatalf("the user's own week: %d%%", s)
+	}
+	if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g == nil || g.FiveHours != 50 || g.Week != 100 {
+		t.Fatalf("the week its own 70%%, the policy holds the 5 hours alone: %+v", g)
 	}
 	if err := SkipGrowth("codex", "NEW@example.com"); err != nil {
 		t.Fatal(err)
@@ -133,17 +159,18 @@ func TestSkipGrowth(t *testing.T) {
 	if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g != nil {
 		t.Fatalf("skipped, the row says %+v", g)
 	}
+	if s, _ := storedPicks("codex"); !maps.Equal(s.AccountWindowCaps["new@example.com"], map[string]int{"5 hours": 100, "7 days": 70}) {
+		t.Fatalf("skipped, the windows kept: %v", s.AccountWindowCaps)
+	}
 	p, err := Find("codex")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, w := range []string{"5 hours", "7 days", "7 days · Opus"} {
-		if s, _ := p.CapsOf("new@example.com").Of(w); s != 0 {
-			t.Errorf("skipped, the gateway holds %s at %d%%", w, s)
-		}
+	if s, _ := p.CapsOf("new@example.com").Of("5 hours"); s != 0 {
+		t.Errorf("skipped, the gateway holds the 5 hours at %d%%", s)
 	}
-	if s := heldAt(t, "Weekly"); s != 70 {
-		t.Errorf("the user's own weekly share: %d%%", s)
+	if s, _ := p.CapsOf("new@example.com").Of("7 days"); s != 70 {
+		t.Errorf("skipped, the gateway holds the user's week at %d%%", s)
 	}
 	// the user's word after the skip
 	if err := SetWindowCap("codex", "new@example.com", "5 hours", 60); err != nil {
@@ -161,6 +188,16 @@ func TestSkipGrowth(t *testing.T) {
 	if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g == nil || g.FiveHours != 50 || g.Week != 100 {
 		t.Errorf("the five hours the policy's again: %+v", g)
 	}
+	// the subscription turned off: no row is held
+	if err := editStored("codex", func(q *Provider) bool { q.Off = true; return true }); err != nil {
+		t.Fatal(err)
+	}
+	if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g != nil {
+		t.Errorf("a subscription turned off: %+v", g)
+	}
+	if err := editStored("codex", func(q *Provider) bool { q.Off = false; return true }); err != nil {
+		t.Fatal(err)
+	}
 	// a cap of the account's own: the policy holds none, nothing written
 	if err := SetAccountCap("codex", "new@example.com", 80); err != nil {
 		t.Fatal(err)
@@ -172,7 +209,7 @@ func TestSkipGrowth(t *testing.T) {
 	if err := SkipGrowth("codex", "new@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if after, _ := storedPicks("codex"); after.AccountWindowCaps["new@example.com"]["5 hours"] != before.AccountWindowCaps["new@example.com"]["5 hours"] {
+	if after, _ := storedPicks("codex"); !maps.Equal(after.AccountWindowCaps["new@example.com"], before.AccountWindowCaps["new@example.com"]) {
 		t.Errorf("an account with a cap of its own was written: %v", after.AccountWindowCaps)
 	}
 	if err := SkipGrowth("codex", "nobody@example.com"); err == nil {
@@ -180,10 +217,33 @@ func TestSkipGrowth(t *testing.T) {
 	}
 }
 
+// An account never read: the skip writes each of the policy's windows,
+// whichever its vendor names.
+func TestSkipGrowthNeverRead(t *testing.T) {
+	firstUsedFixture(t, time.Hour)
+	freshReadings(t)
+	growthDefault(t, settings.GrowthStandard)
+	if err := SkipGrowth("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := storedPicks("codex")
+	for _, ws := range growthWindows {
+		for _, w := range ws {
+			if s.AccountWindowCaps["new@example.com"][w] != 100 {
+				t.Errorf("never read, %s left to the policy: %v", w, s.AccountWindowCaps)
+			}
+		}
+	}
+	if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g != nil {
+		t.Errorf("skipped: %+v", g)
+	}
+}
+
 // A window capped at an amount of its own is the user's: the policy
 // leaves it, and the skip doesn't write a share over it.
 func TestGrowthLeavesAnAmount(t *testing.T) {
 	firstUsedFixture(t, time.Hour)
+	freshReadings(t)
 	growthDefault(t, settings.GrowthStandard)
 	if err := SetWindowAmount("codex", "new@example.com", []string{"weekly"}, 40); err != nil {
 		t.Fatal(err)

@@ -397,7 +397,7 @@ function acxGrowth(r) {
   b.onclick = (e) => {
     e.stopPropagation();
     if (b.classList.contains("open")) return closeProtoMenu();
-    openProtoMenu(b, [{ v: "skip", name: "Skip ramp-up", note: "Its windows go to 100%, or to a cap you set on them" }], "", () => {
+    openProtoMenu(b, [{ v: "skip", name: "Skip ramp-up", note: "Its windows go to 100%, or to a cap you set on one. An account cap set later leaves them out: cap a window instead" }], "", () => {
       b.classList.add("busy");
       accountAction("provider/skipgrowth", { id: p.id, account: l.user }, t("{who} skipped its ramp-up", { who: accountNameOf(p, l.user) || l.user })).then(() => acxDraw());
     }, "Ramping up");

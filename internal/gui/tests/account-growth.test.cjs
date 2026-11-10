@@ -139,6 +139,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const item = page.locator(".proto-menu .pm-item");
         assert.equal(await item.locator(".pm-name").textContent(), x("Skip ramp-up"));
         assert.equal(await page.locator(".proto-menu .pm-head").textContent(), x("Ramping up"));
+        assert.equal(await item.locator(".pm-note").textContent(), x("Its windows go to 100%, or to a cap you set on one. An account cap set later leaves them out: cap a window instead"));
         await item.click();
         await page.waitForFunction(() => document.querySelectorAll("#acxList .acx-grow").length === 2);
         assert.deepEqual(seen.posts, [{ id: "claude", account: "new@example.com" }]);
