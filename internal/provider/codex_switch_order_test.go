@@ -15,6 +15,7 @@ import (
 // again once that is off (#524).
 func TestCodexLoginOrderedAndKept(t *testing.T) {
 	home := signIn(t) // me@example.com, acct-1
+	noGrowth(t)       // each account signed in is new: Standard holds its week from day 0 (T-129)
 	rememberLogins(true)
 	codexSignIn(t, home, "spare@example.com", "r-spare")
 	rememberLogins(true)

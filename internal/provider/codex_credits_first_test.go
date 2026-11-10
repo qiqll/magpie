@@ -52,6 +52,7 @@ func TestCodexCreditsFirstMode(t *testing.T) {
 // them, and moves on once they are gone.
 func TestCodexStaysOnAnAccountSpendingCreditsFirst(t *testing.T) {
 	home := signIn(t) // me@example.com, acct-1
+	noGrowth(t)       // each account signed in is new: Standard holds its week from day 0 (T-129)
 	rememberLogins(true)
 	codexSignIn(t, home, "spare@example.com", "r-spare")
 	rememberLogins(true)

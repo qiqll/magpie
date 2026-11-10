@@ -2346,9 +2346,6 @@ func saveOwn(s Settings, recording, reads bool) error {
 			return err
 		}
 	}
-	if err := CheckGrowthPolicies(s.GrowthPolicies, s.GrowthDefault); err != nil {
-		return err
-	}
 	if s.UsageAlert < 0 || s.UsageAlert > 100 {
 		return fmt.Errorf("a usage alert is at a percentage from 1 to 100, or 0 for off, not %d", s.UsageAlert)
 	}

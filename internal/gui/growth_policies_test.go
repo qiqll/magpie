@@ -44,9 +44,14 @@ func TestGrowthPolicyRoutes(t *testing.T) {
 	if code != 200 || s.GrowthInEffect != "slow" || len(s.GrowthPolicyList) != 5 || s.GrowthPolicyList[4].Name != "Slow" || !s.GrowthPolicyList[0].Builtin {
 		t.Fatalf("saved: %d %q %+v", code, s.GrowthInEffect, s.GrowthPolicyList)
 	}
+	if s.Growth != nil {
+		t.Fatalf("a ramp of the user's given to the stage rows as stages: %v", *s.Growth)
+	}
 	for _, bad := range []string{
-		`{"policies":[{"id":"standard","name":"Mine","kind":"ramp","start":60,"days":14}]}`,
-		`{"policies":[{"id":"slow","name":"Slow","kind":"ramp","start":0,"days":60}]}`,
+		`{"policies":[{"id":"slow","name":"Slow","kind":"ramp","start":20,"days":60}]}`, // no default: never read as Standard
+		`{"default":"slow"}`, // no policies: never read as none
+		`{"policies":[{"id":"standard","name":"Mine","kind":"ramp","start":60,"days":14}],"default":""}`,
+		`{"policies":[{"id":"slow","name":"Slow","kind":"ramp","start":0,"days":60}],"default":""}`,
 		`{"policies":[],"default":"slow"}`,
 	} {
 		if code, _ := post("/api/settings/growth-policies", bad); code == 200 {

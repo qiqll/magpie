@@ -49,6 +49,33 @@ func TestGrowthDefaultIsStandard(t *testing.T) {
 	if g := (Settings{GrowthPolicies: []GrowthPolicy{own}, GrowthDefault: "slow"}).GrowthInEffect(); !reflect.DeepEqual(g, own) {
 		t.Fatalf("the user's own: %+v", g)
 	}
+	// a built-in a later magpie adds under the id of the user's own
+	// doesn't take its place
+	own.ID = GrowthGentle
+	if g := (Settings{GrowthPolicies: []GrowthPolicy{own}, GrowthDefault: GrowthGentle}).GrowthInEffect(); !reflect.DeepEqual(g, own) {
+		t.Fatalf("the user's own beside a built-in of its id: %+v", g)
+	}
+}
+
+// Save doesn't check the growth policies: a settings.json with one a later
+// magpie wrote (a kind this one doesn't know) or a default gone still
+// takes every other setting's save, and is read as holding nothing or as
+// Standard.
+func TestSaveTakesPoliciesItDoesntKnow(t *testing.T) {
+	growthHome(t)
+	later := Settings{Theme: "dark", GrowthPolicies: []GrowthPolicy{{ID: "c", Name: "C", Kind: "curve"}}, GrowthDefault: "c"}
+	if err := Save(later); err != nil {
+		t.Fatalf("a kind a later magpie wrote: %v", err)
+	}
+	if s := Load(); s.Theme != "dark" || len(s.GrowthPolicies) != 1 || s.GrowthInEffect().Kind != "curve" {
+		t.Fatalf("read as %+v", s)
+	}
+	if err := Save(Settings{GrowthDefault: "gone"}); err != nil {
+		t.Fatalf("a default gone: %v", err)
+	}
+	if g := Load().GrowthInEffect(); g.ID != GrowthStandard {
+		t.Fatalf("a default gone read as %+v", g)
+	}
 }
 
 // CheckGrowthPolicies refuses a ramp out of its bounds, a name empty or
@@ -81,7 +108,6 @@ func TestCheckGrowthPolicies(t *testing.T) {
 		{"an id with a space", []GrowthPolicy{{ID: "a b", Name: "S", Kind: GrowthRamp, Start: 50, Days: 14}}, "", "letters, digits"},
 		{"no id", []GrowthPolicy{{Name: "S", Kind: GrowthRamp, Start: 50, Days: 14}}, "", "letters, digits"},
 		{"a built-in's id", []GrowthPolicy{{ID: GrowthStandard, Name: "Mine", Kind: GrowthRamp, Start: 60, Days: 14}}, "", "can't be changed"},
-		{"marked built in", []GrowthPolicy{{ID: "r", Name: "R", Kind: GrowthRamp, Start: 60, Days: 14, Builtin: true}}, "", "can't be changed"},
 		{"off is built in only", []GrowthPolicy{{ID: "r", Name: "R", Kind: GrowthOff}}, "", "ramps"},
 		{"bad stages", []GrowthPolicy{{ID: "r", Name: "R", Kind: GrowthStaged, Stages: []GrowthStage{{From: 0, Window: "1h", Cap: 50}}}}, "", "window"},
 		{"no stages", []GrowthPolicy{{ID: "r", Name: "R", Kind: GrowthStaged}}, "", ""},

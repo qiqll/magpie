@@ -150,50 +150,30 @@ func builtinGrowth(id string) GrowthPolicy {
 	return GrowthPolicy{}
 }
 
-// GrowthPolicyOf is the policy id: a built-in one or the user's own
-// (Growth's stages among them, as MigrateGrowth moves them); ok false for
-// none such. Its stages are read only.
-func (s Settings) GrowthPolicyOf(id string) (GrowthPolicy, bool) {
-	if p := builtinGrowth(id); p.ID != "" {
-		return p, true
-	}
-	for _, p := range s.GrowthPolicies {
-		if p.ID == id {
-			return p, true
-		}
-	}
-	if s.Growth != nil {
-		if mid, name := migratedID(s); mid == id {
-			return GrowthPolicy{ID: id, Name: name, Kind: GrowthStaged, Stages: *s.Growth}, true
-		}
-	}
-	return GrowthPolicy{}, false
-}
-
-// GrowthDefaultOf is the id of the policy accounts are held by: the one
-// the user made the default; their stages from before policies were kept
+// GrowthInEffect is the policy accounts are held by: the one the user made
+// the default (GrowthDefault), their own before a built-in of the same id
+// a later magpie may add; their stages from before policies were kept
 // (Growth) while they named none; Standard otherwise, and when the one
-// named is gone.
-func (s Settings) GrowthDefaultOf() string { return s.GrowthInEffect().ID }
-
-// GrowthInEffect is the policy accounts are held by (GrowthDefaultOf).
-// Its stages are read only: withGrowth asks it on every request, of
-// Shared's settings, so it makes nothing on the heap.
+// named is gone. Its stages are read only: withGrowth asks it on every
+// request, of Shared's settings. A settings.json holding what CheckGrowthPolicies
+// refuses (a kind a later magpie wrote, a default gone) is read, never
+// refused: Save doesn't check the policies, so it never blocks another
+// setting's save or a restore; EditGrowth does.
 func (s Settings) GrowthInEffect() GrowthPolicy {
 	if s.GrowthDefault == "" && s.Growth != nil {
 		// stages from before policies were kept, as MigrateGrowth makes
 		// them the default
-		id, name := migratedID(s)
+		id, name := migratedID(s.GrowthPolicies)
 		return GrowthPolicy{ID: id, Name: name, Kind: GrowthStaged, Stages: *s.Growth}
 	}
 	if s.GrowthDefault != "" {
-		if p := builtinGrowth(s.GrowthDefault); p.ID != "" {
-			return p
-		}
 		for _, p := range s.GrowthPolicies {
 			if p.ID == s.GrowthDefault {
 				return p
 			}
+		}
+		if p := builtinGrowth(s.GrowthDefault); p.ID != "" {
+			return p
 		}
 	}
 	return builtinGrowth(GrowthStandard)
@@ -234,7 +214,7 @@ func MigrateGrowth(s *Settings) bool {
 	if s.Growth == nil {
 		return false
 	}
-	id, name := migratedID(*s)
+	id, name := migratedID(s.GrowthPolicies)
 	s.GrowthPolicies = append(s.GrowthPolicies, migratedGrowth(*s.Growth, id, name))
 	if s.GrowthDefault == "" {
 		s.GrowthDefault = id
@@ -245,22 +225,26 @@ func MigrateGrowth(s *Settings) bool {
 
 // migratedID is the id and name the stages from before policies were
 // kept are moved to: GrowthMine and migratedName, or the first of
-// "mine-2", "mine-3"… (and "… 2") no policy of s has.
-func migratedID(s Settings) (string, string) {
-	id, name := GrowthMine, migratedName
-	for n := 2; growthTaken(s, id, name); n++ {
-		id, name = fmt.Sprintf("%s-%d", GrowthMine, n), fmt.Sprintf("%s %d", migratedName, n)
+// "mine-2", "mine-3"… (and "… 2") no policy of own or magpie's has.
+func migratedID(own []GrowthPolicy) (string, string) {
+	if !growthTaken(own, GrowthMine, migratedName) {
+		return GrowthMine, migratedName // made nothing on the heap
 	}
-	return id, name
+	for n := 2; ; n++ {
+		id, name := fmt.Sprintf("%s-%d", GrowthMine, n), fmt.Sprintf("%s %d", migratedName, n)
+		if !growthTaken(own, id, name) {
+			return id, name
+		}
+	}
 }
 
-// growthTaken says a policy of s, built in or the user's, has the id or
-// the name (in any case).
-func growthTaken(s Settings, id, name string) bool {
+// growthTaken says a policy of own, or a built-in one, has the id or the
+// name (in any case).
+func growthTaken(own []GrowthPolicy, id, name string) bool {
 	if builtinGrowth(id).ID != "" {
 		return true
 	}
-	for _, p := range s.GrowthPolicies {
+	for _, p := range own {
 		if p.ID == id || strings.EqualFold(strings.TrimSpace(p.Name), name) {
 			return true
 		}
@@ -285,7 +269,7 @@ func CheckGrowthPolicies(own []GrowthPolicy, def string) error {
 		names[strings.ToLower(b.Name)] = true
 	}
 	for _, p := range own {
-		if p.Builtin || builtinGrowth(p.ID).ID != "" {
+		if builtinGrowth(p.ID).ID != "" {
 			return fmt.Errorf("the built-in growth policy %q can't be changed", p.ID)
 		}
 		if !growthIDChars.MatchString(p.ID) || utf8.RuneCountInString(p.ID) > GrowthNameMost {
@@ -352,8 +336,10 @@ func NormalGrowthPolicies(own []GrowthPolicy) []GrowthPolicy {
 
 // EditGrowth changes the user's own growth policies and the default alone,
 // as edit returns them from what the file holds now, the stages from
-// before policies were kept moved first (MigrateGrowth), so a save
-// elsewhere from an older snapshot isn't undone. A settings file that
+// before policies were kept moved first (MigrateGrowth), under the
+// settings file's lock. (A Settings page save carries the policies from
+// the file as it read them before its own lock, as it carries every field
+// it doesn't send.) A settings file that
 // can't be read is left as it is, with the error: what it holds is
 // unknown, never "no policies". edit is given a copy; what it returns is
 // kept as NormalGrowthPolicies has it once CheckGrowthPolicies passes, and
@@ -390,7 +376,7 @@ func WithOwnStages(own []GrowthPolicy, def string, stages []GrowthStage) ([]Grow
 		at = slices.IndexFunc(own, func(p GrowthPolicy) bool { return p.ID == GrowthMine && p.Kind == GrowthStaged })
 	}
 	if at < 0 {
-		id, name := migratedID(Settings{GrowthPolicies: own})
+		id, name := migratedID(own)
 		own = append(own, GrowthPolicy{ID: id, Name: name, Kind: GrowthStaged})
 		at = len(own) - 1
 	}

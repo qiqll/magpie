@@ -823,7 +823,7 @@ func settingsState() settingsJSON {
 	if s.GrowthStages == nil {
 		s.GrowthStages = []settings.GrowthStage{}
 	}
-	if !g.Builtin {
+	if g.Kind == settings.GrowthStaged && !g.Builtin {
 		s.Growth = &s.GrowthStages
 	}
 	s.GrowthPolicyList, s.GrowthInEffect = s.Settings.GrowthPoliciesAll(), g.ID
@@ -1801,15 +1801,20 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	// of the default ("" for Standard); a built-in one is refused
 	mux.HandleFunc("POST /api/settings/growth-policies", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Policies []settings.GrowthPolicy `json:"policies"`
-			Default  string                  `json:"default"`
+			Policies *[]settings.GrowthPolicy `json:"policies"`
+			Default  *string                  `json:"default"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			fail(rw, err)
 			return
 		}
+		if in.Policies == nil || in.Default == nil {
+			// never read as "none" and "Standard": the whole is sent
+			http.Error(rw, "the growth policies are sent whole: policies and default", http.StatusBadRequest)
+			return
+		}
 		err := settings.EditGrowth(func([]settings.GrowthPolicy, string) ([]settings.GrowthPolicy, string, error) {
-			return in.Policies, in.Default, nil
+			return *in.Policies, *in.Default, nil
 		})
 		if err != nil {
 			fail(rw, err)
