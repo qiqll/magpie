@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -61,17 +60,16 @@ func TestPluginCheckinGoesThroughItsProxy(t *testing.T) {
 	if err := settings.Save(s); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
+	step := minuteEach(t)
 	abs, _ := filepath.Abs("../plugin/testdata/fake/index.js")
-	if _, err := plugin.Add(ctx, abs); err != nil {
+	if _, err := plugin.Add(step(), abs); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := plugin.Providers(ctx); err != nil {
+	if _, err := plugin.Providers(step()); err != nil {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"ck-direct", "ck-own"} {
-		if _, err := PluginAPIKey(ctx, "fakeco", 0, nil, k); err != nil {
+		if _, err := PluginAPIKey(step(), "fakeco", 0, nil, k); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -123,12 +121,12 @@ func TestPluginCheckinGoesThroughItsProxy(t *testing.T) {
 	// the loop's, on a day of its own
 	day := time.Date(2026, 10, 6, 10, 0, 0, 0, beijing)
 	loop := pluginCheckiner{now: func() time.Time { return day }, only: func(id string) bool { return PluginCheckinOn(settings.Load(), id) }}
-	check("the loop", loop.checkinNow(ctx, false))
+	check("the loop", loop.checkinNow(step(), false))
 	if o := ownSaw(); !slices.Equal(o, []string{"http://vendor.invalid/checkin/ck-own"}) {
 		t.Fatalf("the loop: the account's proxy was asked %q", o)
 	}
 	// a press, today
-	check("a press", CheckInPlugins(ctx, "fakeco"))
+	check("a press", CheckInPlugins(step(), "fakeco"))
 	if o := ownSaw(); !slices.Equal(o, []string{"http://vendor.invalid/checkin/ck-own", "http://vendor.invalid/checkin/ck-own"}) {
 		t.Fatalf("a press: the account's proxy was asked %q", o)
 	}

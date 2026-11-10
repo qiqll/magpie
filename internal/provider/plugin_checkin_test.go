@@ -15,6 +15,17 @@ import (
 	"github.com/yetone/magpie/internal/testenv"
 )
 
+// minuteEach gives each step of a test a minute of its own: one minute for
+// a whole test was spent by the host's start and the sign-ins under a full
+// run, and the step after failed on the deadline, not on what it tests.
+func minuteEach(t *testing.T) func() context.Context {
+	return func() context.Context {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		t.Cleanup(cancel)
+		return ctx
+	}
+}
+
 // pluginCheckinSandbox is the fake plugin with its own check-in, signed in
 // with each key; it says the file each press is written to.
 func pluginCheckinSandbox(t *testing.T, keys ...string) string {
@@ -25,17 +36,16 @@ func pluginCheckinSandbox(t *testing.T, keys ...string) string {
 	presses := filepath.Join(home, "presses")
 	t.Setenv("FAKE_CHECKIN", presses)
 	t.Cleanup(plugin.Settle)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
+	step := minuteEach(t)
 	abs, _ := filepath.Abs("../plugin/testdata/fake/index.js")
-	if _, err := plugin.Add(ctx, abs); err != nil {
+	if _, err := plugin.Add(step(), abs); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := plugin.Providers(ctx); err != nil {
+	if _, err := plugin.Providers(step()); err != nil {
 		t.Fatal(err)
 	}
 	for _, k := range keys {
-		if _, err := PluginAPIKey(ctx, "fakeco", 0, nil, k); err != nil {
+		if _, err := PluginAPIKey(step(), "fakeco", 0, nil, k); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -62,8 +72,7 @@ func pressed(t *testing.T, file string) []string {
 func TestPluginCheckinRunsAsTheBuiltinsDo(t *testing.T) {
 	keys := []string{"ck-claim", "ck-done", "ck-captcha", "ck-throw", "ck-odd"}
 	presses := pluginCheckinSandbox(t, keys...)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
+	step := minuteEach(t)
 
 	ps := pluginCheckinProviders()
 	if len(ps) != 1 || ps[0].ID != "fakeco" || ps[0].Name != "FakeCo" || len(ps[0].accounts) != len(keys) {
@@ -77,7 +86,7 @@ func TestPluginCheckinRunsAsTheBuiltinsDo(t *testing.T) {
 	loop := pluginCheckiner{now: func() time.Time { return now }, only: func(id string) bool { return PluginCheckinOn(settings.Load(), id) }}
 
 	// off (as it is by default): nothing pressed
-	if rs := loop.checkinNow(ctx, false); len(rs) != 0 || len(pressed(t, presses)) != 0 {
+	if rs := loop.checkinNow(step(), false); len(rs) != 0 || len(pressed(t, presses)) != 0 {
 		t.Fatalf("while off: %+v, pressed %q", rs, pressed(t, presses))
 	}
 	s := settings.Load()
@@ -86,7 +95,7 @@ func TestPluginCheckinRunsAsTheBuiltinsDo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rs := loop.checkinNow(ctx, false)
+	rs := loop.checkinNow(step(), false)
 	if len(rs) != len(keys) {
 		t.Fatalf("on: %d answers, want %d: %+v", len(rs), len(keys), rs)
 	}
@@ -131,19 +140,19 @@ func TestPluginCheckinRunsAsTheBuiltinsDo(t *testing.T) {
 
 	// a minute on: nothing asked again, each answered as kept
 	now = now.Add(time.Minute)
-	if rs := loop.checkinNow(ctx, false); len(rs) != len(keys) || len(pressed(t, presses)) != len(keys) {
+	if rs := loop.checkinNow(step(), false); len(rs) != len(keys) || len(pressed(t, presses)) != len(keys) {
 		t.Fatalf("a minute on: %+v, pressed %q", rs, pressed(t, presses))
 	}
 	// past wbCheckinRetry: the failures, and the done given before noon
 	// (#3326), not the captcha
 	now = now.Add(wbCheckinRetry)
-	loop.checkinNow(ctx, false)
+	loop.checkinNow(step(), false)
 	if p := pressed(t, presses)[len(keys):]; strings.Join(slices.Sorted(slices.Values(p)), ",") != "ck-done,ck-odd,ck-throw" {
 		t.Fatalf("past the retry, pressed again %q", p)
 	}
 	// the next Beijing day: each again
 	now = time.Date(2026, 10, 7, 0, 5, 0, 0, beijing)
-	loop.checkinNow(ctx, false)
+	loop.checkinNow(step(), false)
 	if p := pressed(t, presses); len(p) != 2*len(keys)+3 {
 		t.Fatalf("the next day, pressed %q", p)
 	}
@@ -170,7 +179,7 @@ func TestPluginCheckinRunsAsTheBuiltinsDo(t *testing.T) {
 	// a press now (Check in now, the CLI) asks the failure again at once,
 	// whatever the switch; another provider's press asks none of these
 	before := len(pressed(t, presses))
-	if rs := CheckInPlugins(ctx, "someone-else"); len(rs) != 0 || len(pressed(t, presses)) != before {
+	if rs := CheckInPlugins(step(), "someone-else"); len(rs) != 0 || len(pressed(t, presses)) != before {
 		t.Fatalf("another provider's press: %+v", rs)
 	}
 }
@@ -184,19 +193,18 @@ func TestPluginCheckinTakesOverTheVendors(t *testing.T) {
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Setenv("FAKE_ID", "qoder")
 	t.Cleanup(plugin.Settle)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
+	step := minuteEach(t)
 	abs, _ := filepath.Abs("../plugin/testdata/fake/index.js")
-	if _, err := plugin.Add(ctx, abs); err != nil {
+	if _, err := plugin.Add(step(), abs); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := plugin.Providers(ctx); err != nil {
+	if _, err := plugin.Providers(step()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := plugin.APIKey(ctx, "qoder", 0, nil, "ck-claim", plugin.NewAccount); err != nil {
+	if _, err := plugin.APIKey(step(), "qoder", 0, nil, "ck-claim", plugin.NewAccount); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := plugin.Providers(ctx); err != nil {
+	if _, err := plugin.Providers(step()); err != nil {
 		t.Fatal(err)
 	}
 	// a plugin without auth.checkin: magpie claims Qoder's credits itself
@@ -206,7 +214,7 @@ func TestPluginCheckinTakesOverTheVendors(t *testing.T) {
 	// with it, the plugin does, and magpie's own lists none
 	t.Setenv("FAKE_CHECKIN", filepath.Join(t.TempDir(), "presses"))
 	plugin.Restart()
-	if _, err := plugin.Providers(ctx); err != nil {
+	if _, err := plugin.Providers(step()); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(qoderCheckinAccounts()); n != 0 || !HasPluginCheckin() {
@@ -249,9 +257,8 @@ func pluginCheckinTeams(t *testing.T, teams ...string) (string, map[string]strin
 			t.Fatal(err)
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	if _, err := plugin.Providers(ctx); err != nil {
+	step := minuteEach(t)
+	if _, err := plugin.Providers(step()); err != nil {
 		t.Fatal(err)
 	}
 	keys := map[string]string{} // name@fake/uid → its sign-in's key
@@ -292,8 +299,7 @@ func pluginCards(p pluginCheckinProvider) []SubscriptionQuota {
 // checked in once a day, kept, carded and switched off on its own.
 func TestPluginCheckinTellsSignInsOfOneNameApart(t *testing.T) {
 	presses, keys := pluginCheckinTeams(t, "A/u1", "A/u2", "B/u3", "B/u4")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
+	step := minuteEach(t)
 	pluginCheckinOn(t)
 	ps := pluginCheckinProviders()
 	if len(ps) != 1 || len(ps[0].accounts) != 4 {
@@ -304,12 +310,12 @@ func TestPluginCheckinTellsSignInsOfOneNameApart(t *testing.T) {
 	all := "A@fake/u1,A@fake/u2,B@fake/u3,B@fake/u4"
 	sorted := func(p []string) string { return strings.Join(slices.Sorted(slices.Values(p)), ",") }
 
-	if rs := loop.checkinNow(ctx, false); len(rs) != 4 || sorted(pressed(t, presses)) != all {
+	if rs := loop.checkinNow(step(), false); len(rs) != 4 || sorted(pressed(t, presses)) != all {
 		t.Fatalf("the loop: %+v, pressed %q", rs, pressed(t, presses))
 	}
 	// kept for each: nothing asked again that day
 	now = now.Add(time.Minute)
-	if rs := loop.checkinNow(ctx, false); len(rs) != 4 || len(pressed(t, presses)) != 4 {
+	if rs := loop.checkinNow(step(), false); len(rs) != 4 || len(pressed(t, presses)) != 4 {
 		t.Fatalf("a minute on: %+v, pressed %q", rs, pressed(t, presses))
 	}
 	st := shownCheckins(pluginCheckinPath())
@@ -348,7 +354,7 @@ func TestPluginCheckinTellsSignInsOfOneNameApart(t *testing.T) {
 	// Check in now, the next day: each but the one switched off
 	now = time.Date(2026, 10, 7, 9, 0, 0, 0, beijing)
 	press := pluginCheckiner{now: func() time.Time { return now }, only: func(id string) bool { return id == "fakeco" }}
-	press.checkinNow(ctx, true)
+	press.checkinNow(step(), true)
 	if p := sorted(pressed(t, presses)[4:]); p != "A@fake/u1,B@fake/u3,B@fake/u4" {
 		t.Fatalf("Check in now with A@fake/u2 off pressed %q", p)
 	}
@@ -376,8 +382,7 @@ func userOf(p pluginCheckinProvider, key string) string {
 // stays off for each sign-in of it; another vendor's Off is left alone.
 func TestPluginCheckinCarriesOverDisplayNameEntries(t *testing.T) {
 	presses, keys := pluginCheckinTeams(t, "A/u1", "A/u2", "B/u3", "B/u4")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
+	step := minuteEach(t)
 	now := time.Date(2026, 10, 6, 10, 0, 0, 0, beijing)
 	legacy := map[string]WorkBuddyCheckin{
 		"fakeco|A@fake": {Day: "2026-10-06", At: now.Add(-time.Hour), Outcome: CheckinClaimed, Credit: 400},
@@ -435,7 +440,7 @@ func TestPluginCheckinCarriesOverDisplayNameEntries(t *testing.T) {
 
 	// the loop asks only A's namesake: the heir is in, B's are off
 	loop := pluginCheckiner{now: func() time.Time { return now }, only: func(id string) bool { return PluginCheckinOn(settings.Load(), id) }}
-	loop.checkinNow(ctx, false)
+	loop.checkinNow(step(), false)
 	var who string
 	for w, k := range keys {
 		if pluginCheckinKey("fakeco", k) == namesake {
@@ -447,7 +452,7 @@ func TestPluginCheckinCarriesOverDisplayNameEntries(t *testing.T) {
 	}
 	// and nothing is carried again, or asked again, on the next look
 	pluginCheckinProviders()
-	loop.checkinNow(ctx, false)
+	loop.checkinNow(step(), false)
 	if p := pressed(t, presses); len(p) != 1 {
 		t.Fatalf("a second look pressed %q", p)
 	}
@@ -746,8 +751,7 @@ func TestPluginCheckinAsksAgainAtUntil(t *testing.T) {
 				t.Fatal(err)
 			}
 			_ = os.Remove(presses)
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
+			step := minuteEach(t)
 			now := time.Date(2026, 10, 28, 9, 27, 0, 0, beijing).In(zone)
 			c := pluginCheckiner{now: func() time.Time { return now }, only: func(id string) bool { return PluginCheckinOn(settings.Load(), id) }}
 			var l wbCheckinLoop
@@ -761,7 +765,7 @@ func TestPluginCheckinAsksAgainAtUntil(t *testing.T) {
 				} else {
 					answer(CheckinClaimed, o)
 				}
-				for _, r := range l.tick(ctx, c) {
+				for _, r := range l.tick(step(), c) {
 					if !r.Asked {
 						continue
 					}
@@ -795,13 +799,13 @@ func TestPluginCheckinAsksAgainAtUntil(t *testing.T) {
 			if err := os.WriteFile(presses+".until", b, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if rs := l.tick(ctx, c); len(rs) != 1 || rs[0].Outcome != CheckinFailed || !rs[0].Asked {
+			if rs := l.tick(step(), c); len(rs) != 1 || rs[0].Outcome != CheckinFailed || !rs[0].Asked {
 				t.Fatalf("the gap: %+v", rs)
 			}
 			answer(CheckinClaimed, opens(now).AddDate(0, 0, 1))
 			var again []string
 			for now = now.Add(30 * time.Second); now.Before(time.Date(2026, 10, 30, 10, 2, 0, 0, beijing)); now = now.Add(30 * time.Second) {
-				for _, r := range l.tick(ctx, c) {
+				for _, r := range l.tick(step(), c) {
 					if r.Asked {
 						again = append(again, now.In(beijing).Format("15:04:05"))
 					}
@@ -823,8 +827,7 @@ func TestPluginCheckinAsksAgainAtUntil(t *testing.T) {
 func TestLoginCheckinsPressOneAccount(t *testing.T) {
 	keys := []string{"ck-claim", "ck-done"}
 	presses := pluginCheckinSandbox(t, keys...)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
+	step := minuteEach(t)
 	ps := pluginCheckinProviders()
 	if len(ps) != 1 || len(ps[0].accounts) != len(keys) {
 		t.Fatalf("the plugins that check in: %+v", ps)
@@ -846,7 +849,7 @@ func TestLoginCheckinsPressOneAccount(t *testing.T) {
 	}
 	a := ps[0].accounts[1]
 	q := LoginCheckins(PluginID("fakeco"), map[string]SubscriptionQuota{a.User: {}})[a.User]
-	rs := CheckInAccount(ctx, q.CheckinBy, q.CheckinKey)
+	rs := CheckInAccount(step(), q.CheckinBy, q.CheckinKey)
 	if len(rs) != 1 || rs[0].Outcome != CheckinDone && rs[0].Outcome != CheckinClaimed {
 		t.Fatalf("the press: %+v", rs)
 	}
