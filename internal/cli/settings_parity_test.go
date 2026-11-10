@@ -257,6 +257,7 @@ var notYet = map[string]string{
 	"POST /api/settings/claude-cache":            S2, // tune.go
 	"POST /api/settings/codex-agents-v1":         S2, // api.go
 	"POST /api/settings/growth":                  S2, // api.go
+	"POST /api/settings/growth-policies":         S2, // api.go: the growth policies (T-129)
 	"POST /api/settings/codex-async-compact":     S2, // api.go
 	"POST /api/settings/codex-auto-reset":        S2, // api.go
 	"POST /api/settings/codex-auto-review":       S2, // api.go

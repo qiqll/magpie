@@ -553,11 +553,19 @@ type Settings struct {
 	// vendor that queues, 0 for off. A model with no
 	// load reported, or one older than plugin.LoadFresh, keeps its place.
 	BusyLoad int `json:"busyLoad,omitempty"`
-	// Growth is the growth policy: how far a subscription account added
-	// lately is used, by the days since its first use (growth.go,
-	// provider/growth.go growthFrom). nil
-	// is DefaultGrowth; an empty list, saved on purpose, is none.
+	// Growth is the growth policy's stages as they were kept before
+	// policies were (T-129): how far a subscription account added lately
+	// is used, by the days since its first use (growth.go,
+	// provider/growth.go growthFrom). An empty list, saved on purpose, is
+	// none. Read as a stages policy of the user's own, the default while
+	// GrowthDefault names none, until a save of the policies moves it
+	// there (MigrateGrowth); nil after.
 	Growth *[]GrowthStage `json:"growth,omitempty"`
+	// GrowthPolicies are the user's own growth policies, beside the
+	// built-in ones (BuiltinGrowth), and GrowthDefault the id of the one
+	// accounts are held by: "" for Standard (GrowthInEffect).
+	GrowthPolicies []GrowthPolicy `json:"growthPolicies,omitempty"`
+	GrowthDefault  string         `json:"growthDefault,omitempty"`
 	// Searcher is the provider that searches the web for a model that
 	// can't: "<provider>" with the small model magpie picks of it,
 	// "<provider>/<model>", or empty for the one magpie picks
@@ -2337,6 +2345,9 @@ func saveOwn(s Settings, recording, reads bool) error {
 		if err := CheckGrowth(*s.Growth); err != nil {
 			return err
 		}
+	}
+	if err := CheckGrowthPolicies(s.GrowthPolicies, s.GrowthDefault); err != nil {
+		return err
 	}
 	if s.UsageAlert < 0 || s.UsageAlert > 100 {
 		return fmt.Errorf("a usage alert is at a percentage from 1 to 100, or 0 for off, not %d", s.UsageAlert)

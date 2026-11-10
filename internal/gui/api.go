@@ -393,9 +393,17 @@ type settingsJSON struct {
 	Version string `json:"version"`
 	Dir     string `json:"dir"`     // where magpie keeps its files, as shown
 	Gateway string `json:"gateway"` // the local endpoint
-	// GrowthStages is the growth policy in effect: Growth, or the default
-	// one while the user set none (Growth nil)
-	GrowthStages []settings.GrowthStage `json:"growthStages"`
+	// GrowthStages are the stages of the growth policy in effect when it
+	// has stages, none when it ramps or is off (T-129), and Growth those
+	// stages while that policy is the user's own, nil while it is
+	// magpie's: Settings › Growth policy's stage rows read the two
+	// (plugins/growth/settings.js) until it lists the policies.
+	GrowthStages []settings.GrowthStage  `json:"growthStages"`
+	Growth       *[]settings.GrowthStage `json:"growth"`
+	// GrowthPolicyList is every growth policy, the built-in ones first,
+	// and GrowthInEffect the id of the one accounts are held by.
+	GrowthPolicyList []settings.GrowthPolicy `json:"growthPolicyList"`
+	GrowthInEffect   string                  `json:"growthInEffect"`
 	// Builtins are the built-in plugins: each one's switch, whether it
 	// runs and what of it is in use (builtins.go)
 	Builtins []builtinJSON `json:"builtins"`
@@ -810,7 +818,15 @@ func codexWindowUnder(st settings.Settings, model string) *codexRunWindow {
 
 func settingsState() settingsJSON {
 	s := settingsJSON{Settings: settings.Load(), Version: Version, Dir: tilde(settings.Dir()), Portable: settings.Portable() != "", Gateway: gateway.URL()}
-	s.GrowthStages = s.GrowthOf()
+	g := s.Settings.GrowthInEffect()
+	s.GrowthStages = slices.Clone(g.Stages)
+	if s.GrowthStages == nil {
+		s.GrowthStages = []settings.GrowthStage{}
+	}
+	if !g.Builtin {
+		s.Growth = &s.GrowthStages
+	}
+	s.GrowthPolicyList, s.GrowthInEffect = s.Settings.GrowthPoliciesAll(), g.ID
 	s.AddrEnv = os.Getenv("MAGPIE_ADDR")
 	s.Log = tilde(applog.Current())
 	s.Builtins = builtinsState()
@@ -1750,8 +1766,11 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		writeJSON(rw, settingsState())
 	})
-	// the growth policy (T-078): how far a subscription account added
-	// lately is used, by its days; a null list is the default policy again
+	// the growth policy's stages (T-078), as Settings › Growth policy's
+	// rows edit them: saved to the user's own stages policy (the one moved
+	// from before policies were kept, or a new one), which becomes the
+	// default; a null list makes Standard the default again, the policy
+	// kept (T-129)
 	mux.HandleFunc("POST /api/settings/growth", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Stages *[]settings.GrowthStage `json:"stages"`
@@ -1766,13 +1785,33 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 				return
 			}
 		}
-		s, err := settings.LoadChecked()
+		err := settings.EditGrowth(func(own []settings.GrowthPolicy, def string) ([]settings.GrowthPolicy, string, error) {
+			if in.Stages == nil {
+				return own, "", nil
+			}
+			return settings.WithOwnStages(own, def, *in.Stages)
+		})
 		if err != nil {
 			fail(rw, err)
 			return
 		}
-		s.Growth = in.Stages
-		if err := settings.Save(s); err != nil {
+		writeJSON(rw, settingsState())
+	})
+	// the growth policies (T-129): the user's own, saved whole, and the id
+	// of the default ("" for Standard); a built-in one is refused
+	mux.HandleFunc("POST /api/settings/growth-policies", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Policies []settings.GrowthPolicy `json:"policies"`
+			Default  string                  `json:"default"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		err := settings.EditGrowth(func([]settings.GrowthPolicy, string) ([]settings.GrowthPolicy, string, error) {
+			return in.Policies, in.Default, nil
+		})
+		if err != nil {
 			fail(rw, err)
 			return
 		}

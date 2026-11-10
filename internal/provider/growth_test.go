@@ -29,6 +29,20 @@ func noGrowth(t *testing.T) {
 	}
 }
 
+// stagesBefore makes the stages a user who set none was held by before
+// policies were kept (settings.GrowthStagesBefore) the default policy, for
+// a test of how an account's days are counted, whose numbers are those
+// stages' (T-129 made Standard the default).
+func stagesBefore(t *testing.T) {
+	t.Helper()
+	err := settings.EditGrowth(func([]settings.GrowthPolicy, string) ([]settings.GrowthPolicy, string, error) {
+		return []settings.GrowthPolicy{{ID: "before", Name: "Before", Kind: settings.GrowthStaged, Stages: settings.GrowthStagesBefore()}}, "before", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // addedAgo moves when the account user of id was added to ago before now,
 // as days going by would.
 func addedAgo(t *testing.T, id, user string, ago time.Duration) {
@@ -67,6 +81,7 @@ func growthReading(used, week float64) SubscriptionQuota {
 // no day and is never held.
 func TestGrowthHoldsANewAccountByItsDays(t *testing.T) {
 	home := signIn(t) // me@example.com on codex, the first write
+	stagesBefore(t)
 	rememberLogins(true)
 	codexSignIn(t, home, "new@example.com", "r-new")
 	rememberLogins(true)
@@ -283,7 +298,7 @@ func TestAddedIn(t *testing.T) {
 // known, holds nothing.
 func TestGrowthCaps(t *testing.T) {
 	now := time.Now()
-	stages := settings.DefaultGrowth()
+	stages := settings.GrowthStagesBefore()
 	at := func(days float64) map[string]int {
 		return growthCaps(stages, now.Add(-time.Duration(days*24*float64(time.Hour))), now)
 	}
@@ -459,6 +474,7 @@ func TestAddedInShownAgain(t *testing.T) {
 func TestGrowthKeepsAPluginAccountsDay(t *testing.T) {
 	bun := testenv.Bun(t)
 	claudeHome(t)
+	stagesBefore(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -578,6 +594,7 @@ func TestGrowthFromBeforeBackNotHeld(t *testing.T) {
 func TestGrowthPluginInstalledAgainKeepsDays(t *testing.T) {
 	bun := testenv.Bun(t)
 	claudeHome(t)
+	stagesBefore(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

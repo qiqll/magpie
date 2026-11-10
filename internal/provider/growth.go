@@ -1,9 +1,10 @@
 package provider
 
 // The growth policy (T-078, settings/growth.go): a subscription account
-// added lately is held at the share of its windows the policy's stage for
-// its days gives, as a cap the user set on it would hold it — routing
-// takes it for used up there and goes on to the next account
+// added lately is held at the share of its windows the policy in effect
+// gives for its days (a ramp's, or its stage's: policyCaps, T-129), as a
+// cap the user set on it would hold it — routing takes it for used up
+// there and goes on to the next account
 // (gateway/fallback.go capHeld, codex_switch.go). An account is the
 // policy's from AccountAdded, written as logins.json is written with an
 // account it didn't have (noteAdded): Claude's and Codex's sign-ins, a
@@ -91,6 +92,48 @@ func growthCaps(stages []settings.GrowthStage, added, now time.Time) map[string]
 	return out
 }
 
+// policyCaps is the share of each window (WindowCapID) the policy p holds
+// an account whose days count from added to at now: a ramp's (rampCaps),
+// stages' (growthCaps), none for Off. nil when it holds nothing, or added
+// is not known (an account from before).
+func policyCaps(p settings.GrowthPolicy, added, now time.Time) map[string]int {
+	switch p.Kind {
+	case settings.GrowthRamp:
+		return rampCaps(p.Start, p.Days, added, now)
+	case settings.GrowthStaged:
+		return growthCaps(p.Stages, added, now)
+	}
+	return nil
+}
+
+// rampCaps is the share of each window a ramp from start% to 100% in
+// days holds an account whose days count from added to at now, the 5
+// hours and the week alike: start on its day 0, start+(100-start)×d/days
+// on its day d (whole days gone, the share's fraction dropped), so it
+// rises once a day; none from day days on, where it reaches 100%. A
+// day before added (a clock set back) is day 0. nil when added is not
+// known (an account from before).
+func rampCaps(start, days int, added, now time.Time) map[string]int {
+	if !addedKnown(added) || days <= 0 || start >= 100 {
+		return nil
+	}
+	d := max(int(now.Sub(added).Hours()/24), 0)
+	if d >= days {
+		return nil
+	}
+	share := max(start+(100-start)*d/days, 1)
+	if share >= 100 {
+		return nil
+	}
+	out := map[string]int{}
+	for _, wins := range growthWindows {
+		for _, w := range wins {
+			out[w] = share
+		}
+	}
+	return out
+}
+
 // withGrowth is c with the policy's shares for an account added at added,
 // at now, on the windows the user set nothing on; c as it is when the
 // account has a cap of its own, which holds every window. c's map is
@@ -99,7 +142,7 @@ func (c WindowCaps) withGrowth(added, now time.Time) WindowCaps {
 	if !addedKnown(added) || c.All > 0 {
 		return c
 	}
-	g := growthCaps(settings.Shared().GrowthOf(), added, now)
+	g := policyCaps(settings.Shared().GrowthInEffect(), added, now)
 	if len(g) == 0 {
 		return c
 	}

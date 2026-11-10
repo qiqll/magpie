@@ -215,6 +215,9 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 	was.RouterAllTools = true                                                             // the Library's servers/hub-tools
 	was.BusyLoad = 150                                                                    // the Routing page's busy-load
 	was.Growth = &[]settings.GrowthStage{{From: 2, Window: settings.GrowthWeek, Cap: 70}} // its own page's
+	// and the growth policies' (T-129)
+	was.GrowthPolicies = []settings.GrowthPolicy{{ID: "slow", Name: "Slow", Kind: settings.GrowthRamp, Start: 20, Days: 60}}
+	was.GrowthDefault = "slow"
 	six := 6
 	was.AuthHoldHours = &six // Models › Accounts' auth-holds/hours
 	// the Routing groups page's defaults for every group (groups/defaults)

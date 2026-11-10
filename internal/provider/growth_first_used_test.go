@@ -13,6 +13,7 @@ import (
 func firstUsedFixture(t *testing.T, ago time.Duration) {
 	t.Helper()
 	home := signIn(t)
+	stagesBefore(t)
 	rememberLogins(true)
 	codexSignIn(t, home, "new@example.com", "r-new")
 	rememberLogins(true)
@@ -312,6 +313,7 @@ func TestGrowthBackfillKeepsTheEarlier(t *testing.T) {
 func claudeAddedAgo(t *testing.T, ago time.Duration, switchOnly bool) {
 	t.Helper()
 	signIn(t) // a sandbox HOME of its own
+	stagesBefore(t)
 	f, _ := read()
 	f.FirstUsedRead = true
 	f.Providers = []Provider{{ID: "claude", SwitchOnly: switchOnly,
