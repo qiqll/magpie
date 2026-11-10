@@ -17,10 +17,12 @@
 let growthDraft = null, growthErr = "", growthSel = null;
 // growthChart is the last chart asked for: its policy (key), what came
 // back, and the box it is drawn in
-const growthChart = { key: "", want: "", data: null, box: null, timer: 0, ro: null, day: -1 };
+const growthChart = { key: "", want: "", data: null, err: "", box: null, timer: 0, ro: null, day: -1 };
 const GROWTH_WINDOWS = [["5h", "5 hours"], ["7d", "7 days"]];
 const GROWTH_BUILTIN = { standard: "Standard", gentle: "Gentle", cautious: "Cautious", off: "Off" };
 const GROWTH_SVG = "http://www.w3.org/2000/svg";
+// what the page says under its name, in each language through t()
+const GROWTH_SAYS = "A subscription account added to magpie is held to a share of its windows that grows with its days, counted from its first use (the first request its vendor served through magpie; one not used yet is on day 0), and routing goes on to your other accounts until the window renews. The default policy holds every account. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.";
 
 const growthName = (p) => (p.builtin ? t(GROWTH_BUILTIN[p.id] || p.name) : p.name);
 // a policy of the user's as the inputs hold it: numbers as typed
@@ -69,10 +71,17 @@ function growthSummary(p) {
 function growthFreeName(all, name) {
   const taken = new Set(all.map((p) => growthName(p).trim().toLowerCase()));
   for (const b of Object.values(GROWTH_BUILTIN)) taken.add(b.toLowerCase());
-  let out = name;
-  for (let n = 2; taken.has(out.toLowerCase()); n++) out = `${name} ${n}`;
+  const cut = (s, room) => [...s].slice(0, 64 - room).join("");
+  let out = cut(name, 0);
+  for (let n = 2; taken.has(out.toLowerCase()); n++) out = `${cut(name, String(n).length + 1)} ${n}`;
   return out;
 }
+
+const growthFreeID = (all) => {
+  let id = "p-" + Date.now().toString(36);
+  for (let n = 2; all.some((p) => p.id === id); n++) id = `p-${Date.now().toString(36)}-${n}`;
+  return id;
+};
 
 function renderGrowth(s) {
   const box = $("#growthList");
@@ -83,7 +92,13 @@ function renderGrowth(s) {
   const redraw = () => renderGrowth(prefs);
   // an edit lights Save and Discard as it is typed, before any redraw
   const edit = () => {
-    growthDraft = d; growthErr = "";
+    growthDraft = d;
+    if (growthErr) {
+      growthErr = "";
+      const sub = box.querySelector(".growth-head .sub");
+      sub.classList.remove("err");
+      sub.textContent = t(GROWTH_SAYS);
+    }
     for (const b of box.querySelectorAll(".growth-save, .growth-discard")) b.disabled = false;
     growthAsk(cur);
   };
@@ -92,21 +107,24 @@ function renderGrowth(s) {
   const head = el("div", "row pref growth-head");
   const who = el("div", "who");
   who.append(el("div", "name", t("New accounts are used gently")),
-    el("div", "sub" + (growthErr ? " err" : ""), growthErr || t("A subscription account added to magpie is held to a share of its windows that grows with its days, counted from its first use (the first request its vendor served through magpie; one not used yet is on day 0), and routing goes on to your other accounts until the window renews. The default policy holds every account. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.")));
+    el("div", "sub" + (growthErr ? " err" : ""), growthErr || t(GROWTH_SAYS)));
   head.append(who);
   box.append(head);
+  if (!cur) return;
+  // the saved policies' chart is asked again on each draw: its accounts'
+  // days move on while the page stays open (review L4)
+  if (!growthDraft) growthChart.key = "";
 
   const wrap = el("div", "row pref gp");
   const side = el("div", "gp-side");
   const list = el("div", "gp-list");
-  list.setAttribute("role", "listbox");
+  list.setAttribute("role", "group");
   list.setAttribute("aria-label", t("Growth policies"));
   for (const p of all) {
     const item = el("button", "gp-item" + (p === cur ? " on" : ""));
     item.type = "button";
     item.dataset.id = p.id;
-    item.setAttribute("role", "option");
-    item.setAttribute("aria-selected", String(p === cur));
+    item.setAttribute("aria-pressed", String(p === cur));
     const top = el("span", "gp-top");
     top.append(el("span", "gp-name", growthName(p)));
     if (p.id === d.def) top.append(el("span", "gp-tag def", t("Default")));
@@ -118,7 +136,7 @@ function renderGrowth(s) {
   const add = el("button", "text growth-new", t("New policy"));
   add.type = "button";
   add.onclick = () => {
-    const p = { id: "p-" + Date.now().toString(36), name: growthFreeName(all, t("New policy")), kind: "ramp", start: "50", days: "14", stages: [] };
+    const p = { id: growthFreeID(all), name: growthFreeName(all, t("New policy")), kind: "ramp", start: "50", days: "14", stages: [] };
     d.own.push(p);
     growthSel = p.id;
     edit();
@@ -204,7 +222,7 @@ function growthEditor(p, d, all, edit, redraw) {
     copy.type = "button";
     copy.onclick = () => {
       const c = growthEditable(p);
-      c.id = "p-" + Date.now().toString(36);
+      c.id = growthFreeID(all);
       c.name = growthFreeName(all, t("Copy of {name}", { name: growthName(p) }));
       d.own.push(c);
       growthSel = c.id;
@@ -309,6 +327,7 @@ function growthAsk(p) {
   const [out] = growthOut(p);
   const key = out ? JSON.stringify({ kind: out.kind, start: out.start, days: out.days, stages: out.stages }) : "";
   growthChart.want = key;
+  growthChart.err = "";
   clearTimeout(growthChart.timer);
   if (key && key === growthChart.key) return growthDraw();
   growthDraw();
@@ -318,8 +337,13 @@ function growthAsk(p) {
       if (growthChart.want !== key) return;
       growthChart.key = key;
       growthChart.data = data;
+      growthChart.err = "";
       growthDraw();
-    }).catch(() => {});
+    }).catch((e) => {
+      if (growthChart.want !== key) return;
+      growthChart.err = t("magpie couldn't draw this policy: {why}", { why: e.message });
+      growthDraw();
+    });
   }, growthChart.data ? 120 : 0);
 }
 
@@ -344,7 +368,7 @@ function growthDraw() {
   const last = Math.max(1, pts.length - 1);
   const x = (day) => L + ((W - L - R) * Math.min(day, last)) / last;
   const y = (v) => T + ((H - T - B) * (100 - v)) / 100;
-  const chart = gsvg("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, class: "gp-svg", tabindex: "0", role: "img" });
+  const chart = gsvg("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, class: "gp-svg", tabindex: "0", role: "group" });
   chart.setAttribute("aria-label", t("Each day's share of the 5 hours and the week"));
   for (const v of [0, 25, 50, 75, 100]) {
     chart.append(gsvg("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), class: v ? "grid" : "base" }));
@@ -431,6 +455,7 @@ function growthDraw() {
     show((shown < 0 ? 0 : shown) + go);
   });
   box.append(chart, tip);
+  if (growthChart.err && growthChart.key !== growthChart.want) box.append(el("div", "gp-note err growth-chart-err", growthChart.err));
   if (had >= 0) { chart.focus(NO_SCROLL); show(had); }
   growthTableFill();
 }

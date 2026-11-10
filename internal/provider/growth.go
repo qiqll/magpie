@@ -218,19 +218,32 @@ type GrowthAccount struct {
 	Waiting  bool   `json:"waiting,omitempty"`
 }
 
-// GrowthAccounts are the accounts with a day at now, by subscription and
-// name. One from before AccountAdded was kept has none and isn't listed.
+// GrowthAccounts are the accounts the policy holds at now, each with its
+// day, by subscription and name: those its subscription lists now (as the
+// Providers page does, AccountRefs), on a subscription that isn't off,
+// with no cap of their own (which holds every window, withGrowth). A day
+// is kept for an account gone from the list a while, so the day alone
+// doesn't say it is held. One from before AccountAdded was kept has no
+// day and isn't listed.
 func GrowthAccounts(now time.Time) []GrowthAccount {
 	all, f := sharedAll(), storedFile()
 	var out []GrowthAccount
 	for _, s := range f.Providers {
-		name := s.ID
-		if p := lookIn(all, s.ID); p != nil && p.Name != "" {
-			name = p.Name
+		p := lookIn(all, s.ID)
+		if p == nil || p.Account == nil || p.Off || len(s.AccountAdded) == 0 {
+			continue
+		}
+		name := cmp.Or(p.Name, s.ID)
+		listed := map[string]bool{}
+		for _, r := range p.AccountRefs() {
+			listed[accountKey(r)] = true
+			if u := p.PluginUser(r); u != "" {
+				listed[accountKey(u)] = true
+			}
 		}
 		for u := range s.AccountAdded {
 			from := growthFrom(s.ID, u, now)
-			if !addedKnown(from) {
+			if !listed[u] || s.AccountCaps[u] > 0 || !addedKnown(from) {
 				continue
 			}
 			out = append(out, GrowthAccount{

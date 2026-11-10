@@ -34,6 +34,7 @@
 .gp-line .growth-start, .gp-line .growth-cap { width: 48px; flex: none; }
 .gp-line .growth-days, .gp-line .growth-from { width: 56px; flex: none; }
 .gp-note { font-size: 11.5px; color: var(--fg-2); }
+.gp-note.err { color: var(--red); }
 .gp-edit .growth-add { align-self: flex-start; }
 .gp-chart { position: relative; min-width: 0; }
 .gp-chart.stale .gp-svg { opacity: .5; }

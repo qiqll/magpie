@@ -129,4 +129,32 @@ func TestGrowthAccounts(t *testing.T) {
 	if keys := slices.Sorted(maps.Keys(m)); !slices.Equal(keys, []string{"account", "day", "name", "provider"}) {
 		t.Errorf("an account says %v", keys)
 	}
+
+	// a cap of its own holds every window, the policy none: not marked
+	if err := SetAccountCap("codex", "new@example.com", 80); err != nil {
+		t.Fatal(err)
+	}
+	if got := codex(); len(got) != 0 {
+		t.Errorf("an account with a cap of its own: %+v", got)
+	}
+	if err := SetAccountCap("codex", "new@example.com", 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := codex(); len(got) != 1 {
+		t.Fatalf("its cap taken off: %+v", got)
+	}
+	// a day kept for an account not in the list (a sign-in not listed a
+	// while, a plugin removed): not marked either
+	f, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(f.Providers, func(p Provider) bool { return p.ID == "codex" })
+	f.Providers[i].AccountAdded["gone@example.com"] = time.Now().Add(-time.Hour).UTC()
+	if err := store(f); err != nil {
+		t.Fatal(err)
+	}
+	if got := codex(); len(got) != 1 || got[0].Account != "new@example.com" {
+		t.Errorf("an account not listed is marked: %+v", got)
+	}
 }

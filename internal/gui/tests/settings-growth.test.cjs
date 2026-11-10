@@ -8,7 +8,8 @@
 // formula of the page's would give), the account on its day in the
 // tooltip, from the keyboard too. A built-in one is read only and copied;
 // the copy's ramp out of range is said in the page's language and nothing
-// is saved; a change asks for its chart again; a refused save is said in the
+// is saved; a change asks for its chart again, and one the server can't
+// draw says why; a refused save is said in the
 // page's language; the policies are saved whole with the default. Every
 // language, at a narrow and a wide window, in each engine asked for; no
 // backend, the API is faked here.
@@ -54,7 +55,9 @@ function server(lang, saves, previews) {
     if (url.pathname === "/api/providers") return json({ providers: [], presets: [], excluded: [], gateway: { running: true, window: true } });
     if (url.pathname === "/api/state") return json({ agents: [], profiles: [], settings: { lang, theme: "light" }, fx: cur.fx });
     if (url.pathname === "/api/growth/preview") {
-      previews.push(req.postDataJSON().policy);
+      const policy = req.postDataJSON().policy;
+      previews.push(policy);
+      if (policy.start === 41) return route.fulfill({ status: 400, json: { error: "a growth ramp starts at 1% to 99%, not 41%" } });
       return json({ points: POINTS, accounts: ACCOUNTS });
     }
     if (url.pathname === "/api/settings/growth-policies") {
@@ -76,11 +79,11 @@ function server(lang, saves, previews) {
 }
 
 const want = {
-  en: { tab: "Growth policy", first: "Days 0 to 7", week: "From day 3 on", firstToThree: "Days 0 to 3", threeToSeven: "Days 3 to 7", last: "From day 14 on", standard: "Standard", note: "used to let such a window go", ramp: "A ramp starts at 1% to 99% and reaches 100% in 1 to 365 days", refused: "magpie didn't save the policies:", from: "from its first use" },
-  zh: { tab: "成长策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", standard: "标准", note: "以前会直接放开", ramp: "爬坡的起点为 1% 到 99%，在 1 到 365 天内到 100%", refused: "magpie 没有保存这些策略：", from: "从首次使用算起" },
-  "zh-TW": { tab: "成長策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", standard: "標準", note: "以前會直接放開", ramp: "爬坡的起點為 1% 到 99%，在 1 到 365 天內到 100%", refused: "magpie 沒有儲存這些策略：", from: "從首次使用算起" },
-  ja: { tab: "成長ポリシー", first: "0〜7 日目", week: "3 日目から", firstToThree: "0〜3 日目", threeToSeven: "3〜7 日目", last: "14 日目から", standard: "標準", note: "制限を外していました", ramp: "ランプは 1%〜99% から始まり、1〜365 日で 100% に達します", refused: "magpie はポリシーを保存できませんでした：", from: "初めて使った時点" },
-  de: { tab: "Wachstumsregel", first: "Tag 0 bis 7", week: "Ab Tag 3", firstToThree: "Tag 0 bis 3", threeToSeven: "Tag 3 bis 7", last: "Ab Tag 14", standard: "Standard", note: "Früher gab magpie", ramp: "Ein Anstieg beginnt bei 1 % bis 99 % und erreicht 100 % in 1 bis 365 Tagen", refused: "magpie hat die Regeln nicht gespeichert:", from: "ab seiner ersten Nutzung" },
+  en: { tab: "Growth policy", first: "Days 0 to 7", week: "From day 3 on", firstToThree: "Days 0 to 3", threeToSeven: "Days 3 to 7", last: "From day 14 on", standard: "Standard", note: "used to let such a window go", ramp: "A ramp starts at 1% to 99% and reaches 100% in 1 to 365 days", refused: "magpie didn't save the policies:", draw: "magpie couldn't draw this policy:", from: "from its first use" },
+  zh: { tab: "成长策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", standard: "标准", note: "以前会直接放开", ramp: "爬坡的起点为 1% 到 99%，在 1 到 365 天内到 100%", refused: "magpie 没有保存这些策略：", draw: "magpie 画不出这个策略：", from: "从首次使用算起" },
+  "zh-TW": { tab: "成長策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", standard: "標準", note: "以前會直接放開", ramp: "爬坡的起點為 1% 到 99%，在 1 到 365 天內到 100%", refused: "magpie 沒有儲存這些策略：", draw: "magpie 畫不出這個策略：", from: "從首次使用算起" },
+  ja: { tab: "成長ポリシー", first: "0〜7 日目", week: "3 日目から", firstToThree: "0〜3 日目", threeToSeven: "3〜7 日目", last: "14 日目から", standard: "標準", note: "制限を外していました", ramp: "ランプは 1%〜99% から始まり、1〜365 日で 100% に達します", refused: "magpie はポリシーを保存できませんでした：", draw: "magpie はこのポリシーを描けませんでした：", from: "初めて使った時点" },
+  de: { tab: "Wachstumsregel", first: "Tag 0 bis 7", week: "Ab Tag 3", firstToThree: "Tag 0 bis 3", threeToSeven: "Tag 3 bis 7", last: "Ab Tag 14", standard: "Standard", note: "Früher gab magpie", ramp: "Ein Anstieg beginnt bei 1 % bis 99 % und erreicht 100 % in 1 bis 365 Tagen", refused: "magpie hat die Regeln nicht gespeichert:", draw: "magpie konnte diese Regel nicht zeichnen:", from: "ab seiner ersten Nutzung" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -157,9 +160,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await list.locator(".growth-head .sub.err").waitFor();
         assert((await list.locator(".growth-head .sub.err").textContent()).includes(w.ramp));
         assert.deepEqual(saves, []);
+        // a chart the server can't draw says why, in the page's language
+        await list.locator(".growth-start").fill("41");
+        await page.waitForFunction((s) => document.querySelector("#growthList .growth-chart-err")?.textContent.startsWith(s), w.draw);
         // a share typed asks for its chart again
         await list.locator(".growth-start").fill("40");
         await until(() => previews.some((p) => p.start === 40 && p.days === 14));
+        await page.waitForFunction(() => !document.querySelector("#growthList .growth-chart-err"));
         await list.locator(".growth-make-default").click();
         assert.equal(await list.locator(".gp-item.on .gp-tag.def").count(), 1);
 
