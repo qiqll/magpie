@@ -2120,7 +2120,25 @@ refused too: only an origin listed in Settings, which `corsGuard` already
 held to a gateway key, may call it, as the MCP spec has a server check
 `Origin`. `keyLimited` passes `/mcp/` by, so each `tools/call` reserves the
 calling key's limit itself (`budget.Reserve`), and a spent key's call is a
-tool error with no search made. The search is marked `CallFor{Agent, MCP:
+tool error with no search made. A search or a picture described for a
+turn goes through `serve` past `keyLimited` too, so `searchWith` and
+`askVisionWith` reserve it against the turn's key (`reserveSide`); an MCP
+call's, reserved where it came in, isn't reserved twice. An image is
+reserved at an image's cost (`visionImageBytes`), not its base64's, and an
+ask refused only for what is in flight (the turn's own reservation counts
+its body's base64) is let in while what the key has used leaves it room
+(`roomFor`). Refused (`sideHeld`), it is the key's own and is skipped: no
+other searcher is asked (`webSearch`, `modelSearch`, `searchInTurn`) and no
+search API after it, the searcher Settings names isn't marked failed, the
+model's tool result says only that web search is unavailable (`sideSaid`,
+in a turn's search rounds, a Claude Code run's search tool and Codex's
+web.run: it goes on to the vendor, so it names neither the key nor
+magpie), and an image of the latest turn is left out as one that couldn't
+be described, rather than failing the turn (`seenBody`). `describe` asks
+once more, past the shared look, for a request whose key isn't the one
+refused. `TestKeyLimitHoldsTheTurnsWebSearch`,
+`TestKeyLimitHoldsTheTurnsImageDescription`,
+`TestKeyLimitDescribesALargeImageWithRoomLeft`. The search is marked `CallFor{Agent, MCP:
 true}`, so Routing says the agent called magpie's web_search MCP tool rather
 than that magpie searched for one of its models. With nothing that can
 search, the tool error says where to add a search API. Settings › Models ›

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/provider"
@@ -454,6 +455,12 @@ func (s *Server) describeKeyed(ctx context.Context, model, src, key string) (tex
 		s.sightMu.Lock()
 		e.waiting--
 		s.sightMu.Unlock()
+		// another key's limit is that key's own: asked once more, as
+		// this request's, past the shared look so it can't wait again
+		var held sideHeld
+		if errors.As(e.err, &held) && held.key != access.Caller(ctx).KeyID {
+			return s.describeWith(ctx, model, src, visionSystem, "Describe this image.")
+		}
 		if e.by == "" {
 			return e.text, model, e.err
 		}
@@ -664,6 +671,11 @@ func (s *Server) askVision(ctx context.Context, model, src string) (string, erro
 	return s.askVisionWith(ctx, model, src, visionSystem, "Describe this image.", visionWaitMost)
 }
 
+// visionImageBytes is what an image is reserved at against a key's limit
+// (reserveSide), as bytes a quarter of a token each: about what a
+// describer counts an image as, whatever its base64 runs to.
+const visionImageBytes = 4 * 1600
+
 // askVisionWith asks model about the image at src: system, and the user's
 // text beside the image. most is how long it may take, the waits for a
 // slot or a resting provider with it: what describeWith has left.
@@ -699,9 +711,20 @@ func (s *Server) askVisionWith(ctx context.Context, model, src, system, text str
 	}
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("User-Agent", VisionAgent)
-	if f, _ := ctx.Value(describeForKey{}).(describeFor); f.session != "" {
+	f, _ := ctx.Value(describeForKey{}).(describeFor)
+	if f.session != "" {
 		// in the Routing view beside the request it describes for
 		r.Header.Set(SessionHeader, f.session)
+	}
+	// serve is called past keyLimited, so the turn's key's limit holds
+	// the look here (sideHeld); an MCP call's is held where it came in
+	// (visionMCPRun)
+	if f.call == nil || !f.call.MCP {
+		release, err := reserveSide(ctx, int64(len(body)-len(src))+visionImageBytes, model)
+		if err != nil {
+			return "", err
+		}
+		defer release()
 	}
 	w := httptest.NewRecorder()
 	s.serve(w, r, provider.Chat, body)
@@ -745,7 +768,8 @@ func (s *Server) askVisionWith(ctx context.Context, model, src, system, text str
 // seenBody is the body with each of its images described by model in its
 // place. An image of the latest turn that can't be described is an error:
 // the model would be asked about what it isn't given. One in an older turn
-// or a tool's result is left out, as textOnlyBody leaves it.
+// or a tool's result is left out, as textOnlyBody leaves it, and so is one
+// of the latest turn whose look the turn's key's limit refused (sideHeld).
 func (s *Server) seenBody(ctx context.Context, proto provider.Protocol, body []byte, model string) ([]byte, error) {
 	// the images described before a route is begun: a wait magpie knows
 	// of (unrouted.go)
@@ -805,7 +829,9 @@ func (s *Server) seenBody(ctx context.Context, proto provider.Protocol, body []b
 		}
 		r := of[keyOf[im.Src]]
 		if r.err != nil {
-			if im.Current() {
+			// one the turn's key has nothing left for is skipped, the turn
+			// going on without it
+			if im.Current() && !errors.As(r.err, new(sideHeld)) {
 				return nil, r.err
 			}
 			return textBlock(proto, "[Image omitted: this model accepts text only, and the image couldn't be described.]"), nil

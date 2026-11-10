@@ -703,7 +703,13 @@ cache reads too** is on. Cost is an estimate at the Usage page's prices; a
 call with no known price adds none. A call counts in the window it started
 in. Once a key is spent, its requests are refused before any provider is
 asked, with a 429 in the API's own error shape that names the key, the
-limit and the reset time, plus `Retry-After`; other keys are unaffected. The
+limit and the reset time, plus `Retry-After`; other keys are unaffected. A web search or a
+picture described for the key's turn is held the same way: once the key,
+its turn counted, has nothing left, it isn't made and the turn goes on
+without it, the model told only that web search is unavailable or that
+the image couldn't be described. A turn's large image isn't dropped for
+its own size: it is counted at an image's cost, and described while what
+the key has used leaves it room. The
 counts are read from the usage log, so they survive a restart. A request in
 flight holds a reservation (its body's size in tokens plus the key's mean
 output per call), so requests sent at once overshoot by about one call; a

@@ -772,16 +772,24 @@ func (s *Server) webSearch(ctx context.Context, query string) (string, []Hit, er
 		}
 		errs = append(errs, err)
 	}
+	// a search the turn's key's limit refused (sideHeld) is skipped: the
+	// turn goes on without what it would have found
 	if p, ok := ownSearcher(ctx); ok {
 		said, hits, err := s.ownSearch(ctx, p, query)
 		if err == nil {
 			return said, hits, nil
+		}
+		if errors.As(err, new(sideHeld)) {
+			return "", nil, err
 		}
 		errs = append(errs, err)
 	}
 	said, hits, err := s.modelSearch(ctx, query)
 	if err == nil {
 		return said, hits, nil
+	}
+	if errors.As(err, new(sideHeld)) {
+		return "", nil, err
 	}
 	apis := len(provider.SearchAPIs()) > 0
 	// that no provider searches is news only when nothing else was tried
@@ -847,6 +855,11 @@ func (s *Server) modelSearch(ctx context.Context, query string) (string, []Hit, 
 	}
 	if err == nil {
 		said, hits, err = s.searchBy(ctx, p, model, query, searchEffort(p, model))
+	}
+	// the turn's key with nothing left is no searcher's failure, and every
+	// other searcher would be refused it too
+	if errors.As(err, new(sideHeld)) {
+		return "", nil, err
 	}
 	if named {
 		// those Settings names after it, in their order (SearcherThen),
@@ -957,6 +970,10 @@ func (s *Server) searchInTurn(ctx context.Context, query string, tried []searchP
 			var hits []Hit
 			if said, hits, next = s.searchBy(ctx, c.Provider, m, query, searchEffort(c.Provider, m)); next == nil {
 				return said, hits, searcherOf(c.Provider, m), nil
+			}
+			// the turn's key refused it: the next would be refused too
+			if errors.As(next, new(sideHeld)) {
+				return "", nil, "", next
 			}
 		}
 		err = errors.Join(err, next)
@@ -1112,6 +1129,16 @@ func (s *Server) searchWith(ctx context.Context, p provider.Provider, model, que
 	}
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("User-Agent", SearchAgent)
+	// serve is called past keyLimited, so the turn's key's limit holds
+	// the search here (sideHeld); an MCP call's is held where it came in
+	// (searchMCPRun)
+	if f := searchFor(ctx); f == nil || !f.MCP {
+		release, err := reserveSide(ctx, int64(len(body)), model)
+		if err != nil {
+			return "", nil, err
+		}
+		defer release()
+	}
 	w := httptest.NewRecorder()
 	s.serve(w, r, provider.Anthropic, body)
 	var out struct {
@@ -1413,7 +1440,7 @@ func (s *Server) searchRounds(ctx context.Context, q *Request, tool string, in <
 				}
 				found, hits, err := s.webSearch(context.WithValue(ctx, searchCallKey{}, c.ID), a.Query)
 				if err != nil {
-					results[i].Text, results[i].IsError = "search failed: "+err.Error(), true
+					results[i].Text, results[i].IsError = "search failed: "+sideSaid(err), true
 					return
 				}
 				results[i].Text = found

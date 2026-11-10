@@ -5935,7 +5935,7 @@ func (b *subscriptionBridge) mcpCall(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		found, hits, err := search(ctx, a.Query)
 		if err != nil {
-			writeJSON(w, 200, mcpToolResult{Content: []map[string]any{{"type": "text", "text": "search failed: " + err.Error()}}, IsError: true})
+			writeJSON(w, 200, mcpToolResult{Content: []map[string]any{{"type": "text", "text": "search failed: " + sideSaid(err)}}, IsError: true})
 			return
 		}
 		run.emit(Event{Kind: KSearch, Text: a.Query, Hits: hits})
