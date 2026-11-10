@@ -4668,6 +4668,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			skipped = append(skipped, c.label()+": "+call.Error)
 			continue
 		}
+		if !hw.passing && !hw.refused && hw.failed() && claudeAuthWalled(c, call.Usage.ErrType) {
+			// Anthropic answered the Claude account authentication_failed
+			// (claudeAuthWalled): as riskRefused's, none of the provider's
+			// other accounts is sent the request, now or in a later round,
+			// before the sign-in's lapse below passes it on. Another
+			// provider left is asked, else the agent is told
+			cands = append(cands[:i+1:i+1], elsewhere(cands[i+1:], c)...)
+			busyNow = slices.DeleteFunc(busyNow, func(b busyTry) bool { return b.c.p.ID == c.p.ID })
+			small, smallW = elsewhereWeighed(small, smallW, c)
+			last = i == len(cands)-1
+		}
 		if !last && hw.failed() && failureOf(c, hw.code(), hw.errBody()) == failAuth {
 			// the account's sign-in is gone, refused by Anthropic: no rest
 			// brings it back, so none is told; it is passed over until it
