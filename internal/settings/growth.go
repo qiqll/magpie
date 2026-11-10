@@ -4,10 +4,11 @@ package settings
 // lately is used to a share of its windows that grows with the days since
 // it was added, so a new account isn't run hard from its first day. A
 // stage starts on a day (From) and holds one window (5 hours, or the week)
-// at a share; stages that start on the same day are one stage. An account
-// is under the stage of the latest start its days have reached, and only
-// the windows that stage lists: stages don't add up. provider.CapsOf reads
-// it.
+// at a share; stages that start on the same day are one stage. Each window
+// of an account is held at the share of the latest stage its days have
+// reached that lists that window: a window a later stage leaves out keeps
+// the share it had (T-128; until then only the latest stage's windows were
+// held, and the others let go). provider.CapsOf reads it.
 
 import (
 	"fmt"
@@ -28,7 +29,8 @@ var GrowthWindows = []string{GrowthFiveHours, GrowthWeek}
 const GrowthDaysMost = 365
 
 // GrowthStage holds Window of an account at Cap percent (1–99) from day
-// From after the account was added, until the next stage starts.
+// From after the account was added, until the next stage that holds the
+// same window starts.
 type GrowthStage struct {
 	From   int    `json:"from"`
 	Window string `json:"window"`
@@ -36,8 +38,8 @@ type GrowthStage struct {
 }
 
 // DefaultGrowth is the policy of a user who set none: the 5 hours at 50%
-// for the first 3 days, the week at 80% to day 7, the 5 hours at 90% to
-// day 14 and at 95% after.
+// to day 7, at 90% to day 14 and at 95% after; the week at 80% from day 3
+// on.
 func DefaultGrowth() []GrowthStage {
 	return []GrowthStage{
 		{From: 0, Window: GrowthFiveHours, Cap: 50},

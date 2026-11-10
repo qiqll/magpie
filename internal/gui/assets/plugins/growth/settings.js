@@ -1,11 +1,11 @@
 // Settings › Growth policy (T-078): how far a subscription account added to
 // magpie lately is used, by the days since its first use (settings.Growth,
 // provider/growth.go). A row is a stage: the day it starts on, the window
-// it holds and the share; rows that start on one day are one stage, which
-// lasts until the next one starts. The rows are edited as a draft and
-// saved whole; Use default puts magpie's own back. Run after app.js,
-// whose helpers it shares (el, input, segs, api, writingPrefs, status),
-// and before start.js draws Settings.
+// it holds and the share; rows that start on one day are one stage. A
+// row's share lasts until the next row of the same window starts. The rows
+// are edited as a draft and saved whole; Use default puts magpie's own
+// back. Run after app.js, whose helpers it shares (el, input, segs, api,
+// writingPrefs, status), and before start.js draws Settings.
 
 // growthDraft is the stages as typed, null while they are the saved ones.
 let growthDraft = null, growthErr = "";
@@ -28,20 +28,22 @@ function renderGrowth(s) {
   const head = el("div", "row pref growth-head");
   const who = el("div", "who");
   who.append(el("div", "name", t("New accounts are used gently")),
-    el("div", "sub" + (growthErr ? " err" : ""), growthErr || t("A subscription account added to magpie is held at the share of a window its stage gives, counted in days from its first use (the first request its vendor served through magpie; one not used yet is on day 0), and routing goes on to your other accounts until that window renews. Stages don't add up: only the one for its day holds it, and only the windows that stage lists. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.")));
+    el("div", "sub" + (growthErr ? " err" : ""), growthErr || t("A subscription account added to magpie is held at the share of a window its stage gives, counted in days from its first use (the first request its vendor served through magpie; one not used yet is on day 0), and routing goes on to your other accounts until that window renews. Each window keeps the share of the latest stage that lists it: a stage that leaves a window out leaves it as it was. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.")));
   head.append(who);
   box.append(head);
 
-  // a stage's days, as the starts typed say them
+  // a stage's days, as the starts typed say them: its window's share lasts
+  // until the next stage that holds the same window (T-128)
   const starts = [...new Set(d.map((g) => Number(g.from)).filter((n) => Number.isInteger(n) && n >= 0))].sort((a, b) => a - b);
-  const days = (from) => {
-    const next = starts.find((n) => n > from);
+  const startsOf = (win) => d.filter((g) => g.window === win).map((g) => Number(g.from)).filter((n) => Number.isInteger(n) && n >= 0).sort((a, b) => a - b);
+  const days = (from, win) => {
+    const next = startsOf(win).find((n) => n > from);
     return next === undefined ? t("From day {from} on", { from }) : t("Days {from} to {to}", { from, to: next });
   };
   d.forEach((g, i) => {
     const r = el("div", "row pref growth-stage");
     const w = el("div", "who");
-    w.append(el("div", "name", Number.isInteger(Number(g.from)) && g.from !== "" ? days(Number(g.from)) : t("A stage with no start day")));
+    w.append(el("div", "name", Number.isInteger(Number(g.from)) && g.from !== "" ? days(Number(g.from), g.window) : t("A stage with no start day")));
     const val = el("div", "val");
     const from = input(g.from, "0");
     from.className = "words growth-from";

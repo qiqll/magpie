@@ -51,7 +51,7 @@ func TestGrowthCountsFromFirstUse(t *testing.T) {
 	if s := newFiveHours(t); s != 50 {
 		t.Fatalf("added long ago, never used: day 0 is 50%%, got %d%%", s)
 	}
-	used := time.Now().Add(-4 * 24 * time.Hour) // its fourth day: the week at 80%, the five hours free
+	used := time.Now().Add(-4 * 24 * time.Hour) // its fourth day: the week at 80%, the five hours still at 50%
 	NoteAccountUsed("codex", "NEW@example.com", used)
 	if at := AccountFirstUsedOf("codex", "new@example.com"); !at.Equal(used.UTC().Truncate(time.Second)) {
 		t.Fatalf("first use kept as %v", at)
@@ -65,8 +65,8 @@ func TestGrowthCountsFromFirstUse(t *testing.T) {
 	if s, _ := c.Of("Weekly"); s != 80 {
 		t.Fatalf("its fourth day from first use: the week at 80%%, got %d%%", s)
 	}
-	if s := newFiveHours(t); s != 0 {
-		t.Fatalf("its fourth day from first use: the five hours free, got %d%%", s)
+	if s := newFiveHours(t); s != 50 {
+		t.Fatalf("its fourth day from first use: the five hours kept at 50%% (T-128), got %d%%", s)
 	}
 	// a first use kept is never written over, asked straight
 	writeFirstUsed(loginAccount{"codex", "new@example.com"}, time.Now())

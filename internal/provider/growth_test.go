@@ -61,8 +61,9 @@ func growthReading(used, week float64) SubscriptionQuota {
 
 // An account added to magpie is held by the growth policy by its days: on
 // its second day the five hours at 50%, on its fourth the week at 80% and
-// the five hours free, on its eighth the five hours at 90% and the week
-// free again. The account magpie found as it started keeping accounts has
+// the five hours still at 50%, on its eighth the five hours at 90% and the
+// week still at 80% (T-128: a window a later stage leaves out keeps its
+// share). The account magpie found as it started keeping accounts has
 // no day and is never held.
 func TestGrowthHoldsANewAccountByItsDays(t *testing.T) {
 	home := signIn(t) // me@example.com on codex, the first write
@@ -102,25 +103,32 @@ func TestGrowthHoldsANewAccountByItsDays(t *testing.T) {
 			t.Errorf("the fourth day's %q at %d%%", w, s)
 		}
 	}
-	if s, _ := c.Of("5 hours"); s != 0 {
-		t.Fatalf("the fourth day's five hours held at %d%%: stages added up", s)
+	if s, _ := c.Of("5 hours"); s != 50 {
+		t.Fatalf("the fourth day's five hours at %d%%: let go by the week's stage", s)
 	}
 
 	addedAgo(t, "codex", "new@example.com", 7*24*time.Hour+12*time.Hour) // its eighth
 	c = AccountCapsOf("codex", "new@example.com")
-	if s, _ := c.Of("Weekly"); s != 0 {
-		t.Fatalf("the eighth day's week still held at %d%%", s)
+	if s, _ := c.Of("Weekly"); s != 80 {
+		t.Fatalf("the eighth day's week at %d%%: let go by the five hours' stage", s)
 	}
-	if capReached(growthReading(80, 85), c, now) {
-		t.Fatal("held at 85% of its week on its eighth day")
+	if !capReached(growthReading(80, 85), c, now) {
+		t.Fatal("at 85% of its week on its eighth day, not held")
+	}
+	if capReached(growthReading(80, 75), c, now) {
+		t.Fatal("held below 80% of its week and 90% of its five hours on its eighth day")
 	}
 	if s, _ := c.Of("5 hours"); s != 90 {
 		t.Fatalf("the eighth day's five hours at %d%%", s)
 	}
 
 	addedAgo(t, "codex", "new@example.com", 30*24*time.Hour)
-	if s, _ := AccountCapsOf("codex", "new@example.com").Of("5 hours"); s != 95 {
+	c = AccountCapsOf("codex", "new@example.com")
+	if s, _ := c.Of("5 hours"); s != 95 {
 		t.Fatalf("after 14 days the five hours at %d%%", s)
+	}
+	if s, _ := c.Of("Weekly"); s != 80 {
+		t.Fatalf("after 14 days the week at %d%%", s)
 	}
 }
 
@@ -269,18 +277,64 @@ func TestAddedIn(t *testing.T) {
 	}
 }
 
-// Stages don't add up: only the latest started one holds, and only the
-// windows it lists; none started, or a day not known, holds nothing.
+// Each window is held at the share of the latest started stage that lists
+// it: a window a later stage leaves out keeps its share (T-128), checked
+// day by day through the default's stages. None started, or a day not
+// known, holds nothing.
 func TestGrowthCaps(t *testing.T) {
 	now := time.Now()
 	stages := settings.DefaultGrowth()
+	at := func(days float64) map[string]int {
+		return growthCaps(stages, now.Add(-time.Duration(days*24*float64(time.Hour))), now)
+	}
 	for _, c := range []struct {
 		days       float64
 		five, week int
-	}{{0.5, 50, 0}, {2.9, 50, 0}, {3, 0, 80}, {6.9, 0, 80}, {7.5, 90, 0}, {13, 90, 0}, {40, 95, 0}} {
-		g := growthCaps(stages, now.Add(-time.Duration(c.days*24*float64(time.Hour))), now)
+	}{{0.5, 50, 0}, {2.9, 50, 0}, {3, 50, 80}, {6.9, 50, 80}, {7.5, 90, 80}, {13, 90, 80}, {14, 95, 80}, {40, 95, 80}} {
+		g := at(c.days)
 		if g["5 hours"] != c.five || g["weekly"] != c.week || g["7 days · opus"] != c.week {
 			t.Errorf("day %v: %v", c.days, g)
+		}
+	}
+	// every day from 0 to 20, each window on its own
+	for d := 0; d <= 20; d++ {
+		five, week := 50, 0
+		switch {
+		case d >= 14:
+			five = 95
+		case d >= 7:
+			five = 90
+		}
+		if d >= 3 {
+			week = 80
+		}
+		g := at(float64(d) + 0.5)
+		for _, w := range growthWindows[settings.GrowthFiveHours] {
+			if g[w] != five {
+				t.Errorf("day %d: %q at %d%%, not %d%%", d, w, g[w], five)
+			}
+		}
+		for _, w := range growthWindows[settings.GrowthWeek] {
+			if g[w] != week {
+				t.Errorf("day %d: %q at %d%%, not %d%%", d, w, g[w], week)
+			}
+		}
+	}
+	// a user's own stages carry the same way: the week set on day 2 is
+	// kept past the 5 hours' stage on day 5, and changed on day 9
+	own := []settings.GrowthStage{
+		{From: 0, Window: settings.GrowthFiveHours, Cap: 30},
+		{From: 2, Window: settings.GrowthWeek, Cap: 60},
+		{From: 5, Window: settings.GrowthFiveHours, Cap: 70},
+		{From: 9, Window: settings.GrowthWeek, Cap: 90},
+	}
+	for _, c := range []struct {
+		days       float64
+		five, week int
+	}{{1, 30, 0}, {2, 30, 60}, {5.5, 70, 60}, {9, 70, 90}, {100, 70, 90}} {
+		g := growthCaps(own, now.Add(-time.Duration(c.days*24*float64(time.Hour))), now)
+		if g["5 hours"] != c.five || g["7 days"] != c.week {
+			t.Errorf("own stages, day %v: %v", c.days, g)
 		}
 	}
 	if g := growthCaps(stages, time.Time{}, now); g != nil {

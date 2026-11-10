@@ -1,10 +1,10 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
 // Settings › Growth policy (T-078): magpie's default stages are shown, one
-// row each (the day it starts on, its window, its share); a stage's share
-// changed, one added and one removed are saved whole through
-// settings/growth, and Use default posts null. A share out of 1–99 is said
-// in the page and nothing is posted. Every language, Chromium and WebKit,
-// at a narrow and a wide window; no backend, the API is faked here.
+// row each (the days it holds, to the next row of its window; its window;
+// its share); a stage's share changed, one added and one removed are saved
+// whole through settings/growth, and Use default posts null. A share out of
+// 1–99 is said in the page and nothing is posted. Every language, Chromium
+// and WebKit, at a narrow and a wide window; no backend, the API is faked here.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -53,11 +53,11 @@ function server(lang, posted) {
 }
 
 const want = {
-  en: { tab: "Growth policy", first: "Days 0 to 3", last: "From day 14 on", five: "5 hours", week: "7 days", from: "from its first use" },
-  zh: { tab: "成长策略", first: "第 0–3 天", last: "第 14 天起", five: "5 小时", week: "7 天", from: "从首次使用算起" },
-  "zh-TW": { tab: "成長策略", first: "第 0–3 天", last: "第 14 天起", from: "從首次使用算起" },
-  ja: { tab: "成長ポリシー", first: "0〜3 日目", last: "14 日目から", from: "初めて使った時点" },
-  de: { tab: "Wachstumsregel", first: "Tag 0 bis 3", last: "Ab Tag 14", from: "ab seiner ersten Nutzung" },
+  en: { tab: "Growth policy", first: "Days 0 to 7", week: "From day 3 on", last: "From day 14 on", five: "5 hours", weekName: "7 days", from: "from its first use" },
+  zh: { tab: "成长策略", first: "第 0–7 天", week: "第 3 天起", last: "第 14 天起", five: "5 小时", weekName: "7 天", from: "从首次使用算起" },
+  "zh-TW": { tab: "成長策略", first: "第 0–7 天", week: "第 3 天起", last: "第 14 天起", from: "從首次使用算起" },
+  ja: { tab: "成長ポリシー", first: "0〜7 日目", week: "3 日目から", last: "14 日目から", from: "初めて使った時点" },
+  de: { tab: "Wachstumsregel", first: "Tag 0 bis 7", week: "Ab Tag 3", last: "Ab Tag 14", from: "ab seiner ersten Nutzung" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -83,11 +83,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await rows.count(), 4, "magpie's four default stages");
         // the days count from an account's first use, not from when it was added
         assert((await page.locator("#growthList .growth-head .sub").textContent()).includes(w.from), "the days aren't said to count from first use");
+        // a row's days run to the next row of its own window (T-128): the
+        // 5 hours' 50% to day 7, past the week's stage on day 3
         assert.equal((await rows.nth(0).locator(".name").textContent()).trim(), w.first);
+        assert.equal((await rows.nth(1).locator(".name").textContent()).trim(), w.week);
         assert.equal((await rows.nth(3).locator(".name").textContent()).trim(), w.last);
         if (w.five) {
           assert.equal((await rows.nth(0).locator(".segs .opt.on").textContent()).trim(), w.five);
-          assert.equal((await rows.nth(1).locator(".segs .opt.on").textContent()).trim(), w.week);
+          assert.equal((await rows.nth(1).locator(".segs .opt.on").textContent()).trim(), w.weekName);
         }
         assert.equal(await rows.nth(1).locator(".growth-cap").inputValue(), "80");
         assert(await page.locator("#growthList .growth-save").isDisabled(), "nothing to save before an edit");

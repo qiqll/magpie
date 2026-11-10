@@ -59,30 +59,32 @@ var addedBefore = time.Unix(0, 0).UTC()
 func addedKnown(added time.Time) bool { return added.After(addedBefore) }
 
 // growthCaps is the share of each window (WindowCapID) the policy stages
-// hold an account whose days count from added (growthFrom) to at now: the
-// windows of the stage of the latest start its days have reached, alone.
-// nil when no stage has started, or added is not known (an account from
-// before).
+// hold an account whose days count from added (growthFrom) to at now: each
+// window at the share of the latest started stage that lists it, so a
+// window a later stage doesn't name keeps the share it had (T-128: the
+// default's 5 hours stayed at 50% from day 3, where the week's stage
+// alone let it go). nil when no stage has started, or added is not known
+// (an account from before).
 func growthCaps(stages []settings.GrowthStage, added, now time.Time) map[string]int {
 	if !addedKnown(added) || len(stages) == 0 {
 		return nil
 	}
 	days := now.Sub(added).Hours() / 24
-	from := -1
+	latest := map[string]settings.GrowthStage{}
 	for _, g := range stages {
-		if float64(g.From) <= days && g.From > from {
-			from = g.From
+		if float64(g.From) > days {
+			continue
+		}
+		if l, ok := latest[g.Window]; !ok || g.From > l.From {
+			latest[g.Window] = g
 		}
 	}
-	if from < 0 {
+	if len(latest) == 0 {
 		return nil
 	}
 	out := map[string]int{}
-	for _, g := range stages {
-		if g.From != from {
-			continue
-		}
-		for _, w := range growthWindows[g.Window] {
+	for win, g := range latest {
+		for _, w := range growthWindows[win] {
 			out[w] = g.Cap
 		}
 	}

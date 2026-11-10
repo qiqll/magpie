@@ -64,8 +64,9 @@ func addedAgo(t *testing.T, id, user string, ago time.Duration) {
 // Codex's own account, found after the spare was kept, is new: on its
 // second day the growth policy holds it at 50% of its five hours, and a
 // request goes to the spare though the new one is first in the order. On
-// its eighth day the week is no longer held, and at 85% of it the new one
-// takes the request again.
+// its eighth day the week is still held at 80% (T-128: the five hours'
+// stage leaves it as it was), so at 85% of it the spare takes the request,
+// and at 70% the new one takes it again.
 func TestGrowthMovesOnFromANewAccount(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	growthDefault(t)
@@ -82,13 +83,18 @@ func TestGrowthMovesOnFromANewAccount(t *testing.T) {
 	}
 
 	addedAgo(t, "codex", "me@example.com", 7*24*time.Hour+12*time.Hour)
-	growthUsage(t, map[string]float64{"me@example.com": 55, "spare@example.com": 20}, map[string]float64{"me@example.com": 85})
-	b.mu.Lock()
-	b.tried = nil
-	b.mu.Unlock()
-	code, body = resetPost(t, New())
-	if tried, _ := b.seen(); code != 200 || !strings.Contains(body, "pong") || tried != "acct-1" {
-		t.Fatalf("eighth day at 85%% of its week: %d %s tried %s", code, body, tried)
+	for _, c := range []struct {
+		week  float64
+		tried string
+	}{{85, "acct-2"}, {70, "acct-1"}} {
+		growthUsage(t, map[string]float64{"me@example.com": 55, "spare@example.com": 20}, map[string]float64{"me@example.com": c.week})
+		b.mu.Lock()
+		b.tried = nil
+		b.mu.Unlock()
+		code, body = resetPost(t, New())
+		if tried, _ := b.seen(); code != 200 || !strings.Contains(body, "pong") || tried != c.tried {
+			t.Fatalf("eighth day at %v%% of its week: %d %s tried %s", c.week, code, body, tried)
+		}
 	}
 }
 
