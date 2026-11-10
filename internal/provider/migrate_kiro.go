@@ -152,6 +152,10 @@ func kiroOut(home, user, plan string) (map[string]any, error) {
 
 // setKiroKey sets (or, "", clears) the key saved on the Kiro provider.
 func setKiroKey(k string) error {
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err

@@ -26,6 +26,7 @@ import (
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/filelock"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/lastgood"
 	"github.com/yetone/magpie/internal/lazyre"
@@ -848,9 +849,40 @@ func Routings() ([]string, error) {
 	return out, nil
 }
 
+// providersMu is held for every read of providers.json a change is made
+// from, and the write: in this magpie, and across magpies, so that a
+// change made meanwhile is never written back over with what was read
+// before it — an account's day noted as logins.json is written
+// (noteAdded) and a cap the user sets (Save) among them. Taken, it has
+// providers.json read afresh.
+//
+// noteAdded and moveAccountSettings take it under loginsMu, so nothing
+// held under it reads the accounts (All, Find, Accounts, Logins, a
+// provider's Available), which can take loginsMu: what a change needs of
+// them is read before it is taken.
+//
+// It never goes on without the lock (filelock.Strict): held by another
+// magpie through a wait and one more, a change is refused unmade with
+// *filelock.BusyError, which asks the user to make it again.
+var providersMu = filelock.Strict{
+	Path:   func() string { return Path() + ".lock" },
+	Locked: func() { filememo.Look(Path()) },
+}
+
+// ClearLeftLock is called as magpie starts: what a magpie that ended
+// while holding providersMu (crashed, or was killed) left in
+// providers.json.lock is cleared. The lock itself went with it. left is
+// filelock.Clear's.
+func ClearLeftLock() (left int) { return filelock.Clear(Path() + ".lock") }
+
+// beforeProvidersWrite is called as providers.json is about to be
+// written: for a test to have another change come at that moment.
+var beforeProvidersWrite = func() {}
+
 // store replaces providers.json whole, through a file renamed over it, so
 // that a read at that moment sees the old catalog or the new one, never a
-// file cut short.
+// file cut short. The read the change was made from is made under
+// providersMu, held until store returns.
 func store(f file) error {
 	p := Path()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -866,6 +898,7 @@ func store(f file) error {
 	if err != nil {
 		return err
 	}
+	beforeProvidersWrite()
 	if err := lastgood.Keep(p, validProviders, 0o600); err != nil {
 		return err
 	}
@@ -1186,10 +1219,43 @@ func Slug(name string) string {
 
 // Save adds or replaces a provider.
 func Save(p Provider) error {
+	p, account, err := prepare(p)
+	if err != nil {
+		return err
+	}
+	// what it lists now, asked outside providersMu once the picks are
+	// found new (listedWith)
+	var now *listing
+	for {
+		wrote, asked, err := saveRead(&p, account, now)
+		if err != nil {
+			return err
+		}
+		if !asked {
+			now = listedNow(p)
+			continue
+		}
+		if !wrote {
+			return nil
+		}
+		break
+	}
+	if p.ID == "claude" {
+		// an account's proxy picked in the editor reaches Claude Code at
+		// once, not at the gateway's next look (#1807)
+		syncClaudeProxyEnvNow()
+	}
+	return nil
+}
+
+// prepare is p as Save writes it, normalized and checked, and whether it
+// is a signed-in account's; or why Save refuses it. It reads the accounts,
+// so it is never called under providersMu.
+func prepare(p Provider) (Provider, bool, error) {
 	// a key given a Vertex AI provider is refused here, before normalize
 	// drops it: it would never be sent
 	if p.IsVertex() && (strings.TrimSpace(p.Key) != "" || len(p.Keys) > 0) {
-		return errors.New("Google Vertex AI is asked with your Google credentials, not an API key")
+		return Provider{}, false, errVertexKey
 	}
 	p = normalize(p)
 	p.IconURL = "" // import-only: never stored
@@ -1205,27 +1271,28 @@ func Save(p Provider) error {
 	// editor could neither change it nor rename it to one that is right
 	// (01huadalang on Discord: 我不管改成什么都显示不能用 b.ai)
 	if p.ID == "" || p.ID != Slug(p.ID) && !stored(p.ID) {
-		return fmt.Errorf("provider id must be lowercase letters, digits and dashes, not %q", p.ID)
+		return Provider{}, false, fmt.Errorf("provider id must be lowercase letters, digits and dashes, not %q", p.ID)
 	}
 	if p.ID == "magpie" {
-		return errors.New(`"magpie" is what agents call the gateway itself; pick another id`)
+		return Provider{}, false, errors.New(`"magpie" is what agents call the gateway itself; pick another id`)
 	}
 	if p.ID == strings.TrimSuffix(GroupPrefix, "/") {
-		return errors.New(`"group" starts the ids of routing groups; pick another id`)
+		return Provider{}, false, errors.New(`"group" starts the ids of routing groups; pick another id`)
 	}
 	if p.ID == autoID && !stored(p.ID) { // one saved before keeps it (autoRefsOn)
-		return errAutoID
+		return Provider{}, false, errAutoID
 	}
 	if err := settings.CheckProxy(p.Proxy); err != nil {
-		return err
+		return Provider{}, false, err
 	}
 	if err := checkAccountProxies(p.AccountProxies); err != nil {
-		return err
+		return Provider{}, false, err
 	}
 	if p.Name == "" {
 		p.Name = p.ID
 	}
-	if _, ok := find(Accounts(), p.ID); ok || p.ID == "kiro" && (p.Key != "" || stored(p.ID)) {
+	_, account := find(Accounts(), p.ID)
+	if account || p.ID == "kiro" && (p.Key != "" || stored(p.ID)) {
 		// an account keeps only the user's model picks; the rest is the
 		// agent's own sign-in. One the user removed stays removed: only
 		// ShowAccount brings it back. Kiro's alone also keeps a key, which
@@ -1240,58 +1307,73 @@ func Save(p Provider) error {
 		p.AccountProxies = keyProxies(p) // a provider of keys proxies each key apart
 		if subscriptionID(p.ID) && !stored(p.ID) {
 			// taken, it would hide that subscription once signed in
-			return fmt.Errorf("%q is the id of the %s subscription; pick another name", p.ID, p.ID)
+			return Provider{}, false, fmt.Errorf("%q is the id of the %s subscription; pick another name", p.ID, p.ID)
 		}
 		if p.IsVertex() {
 			if err := p.Vertex.check(); err != nil {
-				return err
+				return Provider{}, false, err
 			}
 		} else if !hasEndpoint(p) {
 			if p.Preset == AzurePreset {
-				return errors.New("Azure OpenAI needs your resource's endpoint, e.g. https://<resource>.openai.azure.com")
+				return Provider{}, false, errors.New("Azure OpenAI needs your resource's endpoint, e.g. https://<resource>.openai.azure.com")
 			}
-			return errors.New("a provider needs a base URL")
+			return Provider{}, false, errors.New("a provider needs a base URL")
 		}
 		if p.InsecureTLS && !p.TakesInsecureTLS() {
-			return fmt.Errorf("%s is a preset's: only a provider you added with your own base URL can skip the certificate check", p.Name)
+			return Provider{}, false, fmt.Errorf("%s is a preset's: only a provider you added with your own base URL can skip the certificate check", p.Name)
 		}
 		if p.HTTP1 && !p.TakesInsecureTLS() {
-			return fmt.Errorf("%s is a preset's: only a provider you added with your own base URL can be held to HTTP/1.1", p.Name)
+			return Provider{}, false, fmt.Errorf("%s is a preset's: only a provider you added with your own base URL can be held to HTTP/1.1", p.Name)
 		}
 		if p.ClientCert != "" || p.ClientKey != "" || p.ServerCA != "" {
 			if !p.TakesClientCert() {
-				return fmt.Errorf("%s: a client certificate or server CA is only for a provider you added with a base URL of its own, or Remote magpie", p.ID)
+				return Provider{}, false, fmt.Errorf("%s: a client certificate or server CA is only for a provider you added with a base URL of its own, or Remote magpie", p.ID)
 			}
 			for _, f := range []*string{&p.ClientCert, &p.ClientKey, &p.ServerCA} {
 				v, err := CertPath(*f)
 				if err != nil {
-					return fmt.Errorf("%s: %w", p.ID, err)
+					return Provider{}, false, fmt.Errorf("%s: %w", p.ID, err)
 				}
 				*f = v
 			}
 			if err := netproxy.CheckClientCert(p.ClientCert, p.ClientKey, p.ServerCA); err != nil {
-				return fmt.Errorf("%s: %w", p.ID, err)
+				return Provider{}, false, fmt.Errorf("%s: %w", p.ID, err)
 			}
 		}
 		if strings.Contains(p.Decide, WorkspaceID) {
-			return errors.New("Bailian's decision model is asked at your workspace's host: give its workspace ID (workspace=… or the editor's Workspace ID), or pick the Token Plan")
+			return Provider{}, false, errors.New("Bailian's decision model is asked at your workspace's host: give its workspace ID (workspace=… or the editor's Workspace ID), or pick the Token Plan")
 		}
 		if p.Key == "" && !keyOptional(p) && !p.IsVertex() {
-			return fmt.Errorf("%s needs an API key", p.Name)
+			return Provider{}, false, fmt.Errorf("%s needs an API key", p.Name)
 		}
 	}
+	return p, account, nil
+}
+
+// saveRead is Save's change to providers.json, under providersMu: p as it
+// is saved with what it keeps of the provider there (*p is changed so),
+// written unless it is there alike. account is whether p is a signed-in
+// account's. asked is false, and nothing written, when the models the
+// provider lists now are needed and now hasn't them.
+func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err error) {
+	if err := providersMu.Take(); err != nil {
+		return false, false, err
+	}
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
-		return err
+		return false, true, err
 	}
 	i := slices.IndexFunc(f.Providers, func(q Provider) bool { return q.ID == p.ID })
 	var was *Provider
 	if i >= 0 {
 		was = &f.Providers[i]
 	}
-	p.PickedFrom = listedWith(p, was)
-	p.Delisted = delistedWith(p, was)
-	p.DelistedAt = delistedAtWith(p, was)
+	if p.PickedFrom, asked = listedWith(*p, was, account, now); !asked {
+		return false, false, nil
+	}
+	p.Delisted = delistedWith(*p, was)
+	p.DelistedAt = delistedAtWith(*p, was)
 	if was != nil {
 		if p.Was == nil {
 			p.Was = was.Was
@@ -1299,29 +1381,110 @@ func Save(p Provider) error {
 		if p.Gave == nil {
 			p.Gave = was.Gave
 		}
-		if sameStored(*was, p) {
+		if sameStored(*was, *p) {
 			// Save pressed on an editor left as it was: providers.json
 			// would be written byte for byte as it is, and its write
 			// handed the catalog to every agent again (agent.SyncCatalog),
 			// seconds of CPU with many agents set up (#1962, witt-bit)
-			return nil
+			return false, true, nil
 		}
-		f.Providers[i] = p
+		f.Providers[i] = *p
 	} else {
 		// a new provider under an id another had: what was recorded under
 		// it until now stays that one's
 		giveID(f.Providers, -1, p.ID, time.Now())
-		f.Providers = append(f.Providers, p)
+		f.Providers = append(f.Providers, *p)
 	}
-	if err := store(f); err != nil {
+	return true, true, store(f)
+}
+
+// errVertexKey refuses a key for Vertex AI.
+var errVertexKey = errors.New("Google Vertex AI is asked with your Google credentials, not an API key")
+
+// editStored has change make its change to the record providers.json keeps
+// of the provider id (made when there is none, as Save makes one for an
+// account), under providersMu, and writes it when change says it changed
+// it: for a setter of one setting, so that what changed in the record
+// since the setter read the provider (another setting set, an account's
+// day noted, its settings moved to its new name) is kept, as Save of the
+// provider read would write it over.
+func editStored(id string, change func(q *Provider) bool) error {
+	return editRecord(id, true, func(q *Provider) (bool, error) { return change(q), nil })
+}
+
+// editRecord is editStored with change able to refuse the change (its
+// error, nothing written); a record there is none of is made only when
+// made is true, else the provider is told gone.
+func editRecord(id string, made bool, change func(q *Provider) (bool, error)) error {
+	if err := providersMu.Take(); err != nil {
 		return err
 	}
-	if p.ID == "claude" {
-		// an account's proxy picked in the editor reaches Claude Code at
-		// once, not at the gateway's next look (#1807)
-		syncClaudeProxyEnvNow()
+	defer providersMu.Unlock()
+	f, err := read()
+	if err != nil {
+		return err
 	}
-	return nil
+	// an id written by hand in another case or with spaces is the one Find
+	// read, normalized
+	i := slices.IndexFunc(f.Providers, func(q Provider) bool { return strings.ToLower(strings.TrimSpace(q.ID)) == id })
+	if i < 0 {
+		if !made {
+			return fmt.Errorf("no provider %q: it was removed meanwhile", id)
+		}
+		f.Providers = append(f.Providers, Provider{ID: id})
+		i = len(f.Providers) - 1
+	}
+	changed, err := change(&f.Providers[i])
+	if err != nil || !changed {
+		return err
+	}
+	return store(f)
+}
+
+// editFound is editStored for a setter of the provider p, found before:
+// change makes its change to the record as it is under the lock, so what
+// another change wrote since p was read stays, and it is written when
+// change changed it. A provider of the user's own is changed as Find reads it (normalized, with each key's
+// proxy kept only while it has that key), as Save writes it; one gone from
+// providers.json meanwhile isn't made again. A signed-in account's record
+// is changed as it is, and made when it has none. The record is not
+// normalized again after change, nor checked as Save checks it: a setter
+// checks what it sets itself.
+func editFound(p *Provider, change func(q *Provider) error) error {
+	own := p.Account == nil
+	return editRecord(p.ID, !own, func(q *Provider) (bool, error) {
+		next := *q
+		if own {
+			next = normalize(next)
+			next.AccountProxies = keyProxies(next)
+		}
+		// a change that changes nothing writes nothing, a record not
+		// written normalized included
+		was, err := json.Marshal(next)
+		if err != nil {
+			return false, err
+		}
+		next = next.clone()
+		if err := change(&next); err != nil {
+			return false, err
+		}
+		if own && next.IsVertex() && (next.Key != "" || len(next.Keys) > 0) {
+			// as Save refuses it: normalize would drop the key unused
+			return false, errVertexKey
+		}
+		if own {
+			next.AccountProxies = keyProxies(next)
+		}
+		now, err := json.Marshal(next)
+		if err != nil {
+			return false, err
+		}
+		if bytes.Equal(was, now) {
+			return false, nil
+		}
+		*q = next
+		return true, nil
+	})
 }
 
 // sameStored is whether a and b are written to providers.json alike.
@@ -1378,25 +1541,28 @@ func delistedAtWith(p Provider, was *Provider) time.Time {
 // provider of keys saved before PickedFrom was kept is given it at its next
 // Save, the same picks too, as withNewlyListed serves those picks as they
 // are until it has one (TestLegacyPicksOfEveryModelGetPickedFromAtSave).
-func listedWith(p Provider, was *Provider) []string {
+//
+// account is whether p is a signed-in account's. The models listed now
+// are now, asked by listedNow; asked is false when they are needed and now
+// is nil.
+func listedWith(p Provider, was *Provider, account bool, now *listing) (picked []string, asked bool) {
 	if len(p.Models) == 0 {
-		return nil
+		return nil, true
 	}
 	same := was != nil && slices.Equal(normalModels(was.Models), normalModels(p.Models))
 	if same && was.PickedFrom != nil {
-		return was.PickedFrom
+		return was.PickedFrom, true
 	}
-	from := p
-	if q, err := Find(p.ID); err == nil {
-		from = *q // with its account, whose list it is
+	if same && (account || p.Account != nil) {
+		return was.PickedFrom, true // a subscription keeps the date rule
 	}
-	if same && (from.Account != nil || p.Account != nil) {
-		return was.PickedFrom // a subscription keeps the date rule
+	if now == nil {
+		return nil, false
 	}
-	var ids []string
-	for _, m := range from.Available() {
-		ids = append(ids, m.ID)
+	if same && now.account {
+		return was.PickedFrom, true
 	}
+	ids := slices.Clone(now.ids)
 	if was != nil && len(ids) > 0 && len(delistedWith(p, was)) > 0 {
 		for _, id := range was.PickedFrom {
 			if !slices.Contains(ids, id) {
@@ -1404,7 +1570,28 @@ func listedWith(p Provider, was *Provider) []string {
 			}
 		}
 	}
-	return ids
+	return ids, true
+}
+
+// listing is what a provider lists now, for listedWith: whether it is a
+// signed-in account's, and its models' ids.
+type listing struct {
+	account bool
+	ids     []string
+}
+
+// listedNow is what p lists now, read with its account, whose list it is:
+// a read of the accounts, never made under providersMu.
+func listedNow(p Provider) *listing {
+	from := p
+	if q, err := Find(p.ID); err == nil {
+		from = *q
+	}
+	l := &listing{account: from.Account != nil}
+	for _, m := range from.Available() {
+		l.ids = append(l.ids, m.ID)
+	}
+	return l
 }
 
 // Add saves a provider the user just added, beside those already here: an
@@ -1608,6 +1795,10 @@ func tuckedAccount(id string) bool {
 // magpie" too (on), or lists it there again (off). Tucked, it is quiet as
 // well: no reminder line either (#116).
 func TuckAccount(id string, on bool) error {
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
@@ -1627,6 +1818,10 @@ func TuckAccount(id string, on bool) error {
 // QuietAccount stops reminding the user of an account they removed: its
 // "Add it back" line goes, and it is offered only from the Add sheet.
 func QuietAccount(id string) error {
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
@@ -1643,6 +1838,10 @@ func QuietAccount(id string) error {
 // ShowAccount brings back the signed-in account of an agent the user had
 // removed from magpie.
 func ShowAccount(id string) error {
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
@@ -1660,11 +1859,26 @@ func ShowAccount(id string) error {
 // only hidden from magpie (its accounts and model picks kept, shown again
 // from Hidden or by signing in); signing out is each account's Remove.
 func Delete(id string) error {
+	_, account := find(Accounts(), id) // read before providersMu is taken
+	if err := deleteRead(id, account); err != nil || account {
+		return err
+	}
+	// its StepFun sign-in goes with it, not to a provider added later
+	// under the same id
+	return forgetStepFun(id)
+}
+
+// deleteRead is Delete's change to providers.json, under providersMu.
+func deleteRead(id string, account bool) error {
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
 	}
-	if _, ok := find(Accounts(), id); ok {
+	if account {
 		for i := range f.Providers {
 			if f.Providers[i].ID == id {
 				f.Providers[i].Hidden = true
@@ -1690,12 +1904,7 @@ func Delete(id string) error {
 		return fmt.Errorf("no provider %q", id)
 	}
 	f.Providers = keep
-	if err := store(f); err != nil {
-		return err
-	}
-	// its StepFun sign-in goes with it, not to a provider added later
-	// under the same id
-	return forgetStepFun(id)
+	return store(f)
 }
 
 // keyOptional is true for a server on this computer or on the user's own
@@ -1839,7 +2048,7 @@ func normalize(p Provider) Provider {
 	if p.Decide == "" {
 		p.Decide = p.arkSystemOne()
 	}
-	if p.Routing != Ordered && p.Routing != Rotate && p.Routing != LeastUsed && p.Routing != Pace && p.Routing != Weighted && p.Routing != FreeFirst && p.Routing != Fastest && p.Routing != Drain && !PluginRouting(p.Routing) {
+	if !KnownRouting(p.Routing) {
 		p.Routing = ""
 	}
 	if !slices.Contains(Affinities, p.Affinity) {
@@ -2452,8 +2661,10 @@ func SetOff(id string, off bool) error {
 	if err != nil {
 		return err
 	}
-	p.Off = off
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.Off = off
+		return nil
+	})
 }
 
 // SwitchedOff is the provider switched off in magpie that a model id

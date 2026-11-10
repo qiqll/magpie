@@ -35,6 +35,38 @@ func Rename(from, to string) error {
 	if to == from {
 		return nil
 	}
+	// read before providersMu is taken
+	_, signedIn := find(Accounts(), from)
+	if err := renameRead(from, to, signedIn, subscriptionID(from), subscriptionID(to)); err != nil {
+		return err
+	}
+	// so is its StepFun sign-in, kept by provider id
+	if err := renameStepFun(from, to); err != nil {
+		return err
+	}
+	s := settings.Load()
+	changed := renameModelPrefs(&s, from, to)
+	for a, names := range s.Visible {
+		for k, n := range names {
+			if strings.EqualFold(n, from) {
+				s.Visible[a][k], changed = to, true
+			}
+		}
+	}
+	if changed {
+		return settings.Save(s)
+	}
+	return nil
+}
+
+// renameRead is Rename's change to providers.json, under providersMu:
+// signedIn is whether from is an account signed in, sub and subTo whether
+// from and to are subscriptions' ids.
+func renameRead(from, to string, signedIn, sub, subTo bool) error {
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
@@ -44,8 +76,6 @@ func Rename(from, to string) error {
 	// (a "WorkBuddy" key before v0.1.261) can be moved off it; the
 	// subscription itself can't
 	custom := i >= 0 && hasEndpoint(f.Providers[i])
-	_, signedIn := find(Accounts(), from)
-	sub := subscriptionID(from)
 	if (signedIn || sub) && !custom {
 		return fmt.Errorf("%s is a subscription: its id is its agent's", from)
 	}
@@ -56,7 +86,7 @@ func Rename(from, to string) error {
 		return errors.New(`"group" starts the ids of routing groups; pick another id`)
 	case to == autoID:
 		return errAutoID
-	case subscriptionID(to):
+	case subTo:
 		return fmt.Errorf("%q is the id of the %s subscription; pick another", to, to)
 	}
 	if i < 0 {
@@ -97,26 +127,7 @@ func Rename(from, to string) error {
 	// the vendor's list last fetched goes with it
 	os.Rename(catalog.LivePath(from), catalog.LivePath(to))
 	os.Rename(catalog.LivePath(decisionsID(from)), catalog.LivePath(decisionsID(to)))
-	if err := store(f); err != nil {
-		return err
-	}
-	// so is its StepFun sign-in, kept by provider id
-	if err := renameStepFun(from, to); err != nil {
-		return err
-	}
-	s := settings.Load()
-	changed := renameModelPrefs(&s, from, to)
-	for a, names := range s.Visible {
-		for k, n := range names {
-			if strings.EqualFold(n, from) {
-				s.Visible[a][k], changed = to, true
-			}
-		}
-	}
-	if changed {
-		return settings.Save(s)
-	}
-	return nil
+	return store(f)
 }
 
 // mapModelRefs gives every model ref the file keeps for routing — the
@@ -591,6 +602,12 @@ func deletedAt(f *file, id string) (int, error) {
 // added later under the deleted one's id is not merged.
 func MergeDeleted(id, into string) error {
 	into = strings.ToLower(strings.TrimSpace(into))
+	// read before providersMu is taken
+	there := into == "" || slices.ContainsFunc(All(), func(p Provider) bool { return p.ID == into })
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err
@@ -604,7 +621,7 @@ func MergeDeleted(id, into string) error {
 		d.Into, d.MergedAt = "", time.Time{}
 		return store(f)
 	}
-	if !slices.ContainsFunc(All(), func(p Provider) bool { return p.ID == into }) {
+	if !there {
 		return fmt.Errorf("no provider %q to merge into", into)
 	}
 	d.Into, d.MergedAt = into, time.Now()
@@ -614,6 +631,10 @@ func MergeDeleted(id, into string) error {
 // NameDeleted names the deleted provider the Usage page lists under id
 // as the user wants it shown there; "" shows it by its own name again.
 func NameDeleted(id, name string) error {
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err

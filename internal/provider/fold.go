@@ -245,27 +245,49 @@ func copiesByName(ps []Provider) [][]int {
 // into providers.json's list in the order the user put them), those alike
 // but for their keys into the first of them that is on.
 func foldWhere(candidates func([]Provider) [][]int) (int, error) {
-	// read from its last good generation, the file is the user's to mend:
-	// a fold would write that generation over it
-	if b, err := os.ReadFile(Path()); err == nil && !validProviders(b) {
-		return 0, &unreadableError{Path(), errors.New("it doesn't parse")}
-	}
-	f, err := read()
-	if err != nil {
-		return 0, err
-	}
-	if len(f.Providers) < 2 {
-		return 0, nil
-	}
-	ps := ordered(slices.Clone(f.Providers), f.Order)
 	stepfunMu.Lock()
 	stepfun := loadStepFun()
 	stepfunMu.Unlock()
 	s := settings.Load()
-	refs := foldRefs(f, &s)
+	gone, folds, ps, ref, err := foldRead(candidates, stepfun, &s)
+	if err != nil || len(gone) == 0 {
+		return 0, err
+	}
+	for id := range gone {
+		// the list last fetched for it is the one it went into's
+		_ = os.Remove(catalog.LivePath(id))
+		_ = os.Remove(catalog.LivePath(decisionsID(id)))
+	}
+	foldSettings(&s, gone, ref)
+	foldHistories(folds, ps)
+	return len(gone), nil
+}
+
+// foldRead is foldWhere's change to providers.json, under providersMu:
+// gone is each folded provider's id with the one it went into, folds the
+// sets folded (indexes into ps, the providers as they were in the user's
+// order), and ref a model ref with the folded ones' ids moved.
+func foldRead(candidates func([]Provider) [][]int, stepfun map[string]stepfunSession, s *settings.Settings) (gone map[string]string, folds [][]int, ps []Provider, ref func(string) string, err error) {
+	if err := providersMu.Take(); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	defer providersMu.Unlock()
+	// read from its last good generation, the file is the user's to mend:
+	// a fold would write that generation over it
+	if b, err := os.ReadFile(Path()); err == nil && !validProviders(b) {
+		return nil, nil, nil, nil, &unreadableError{Path(), errors.New("it doesn't parse")}
+	}
+	f, err := read()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if len(f.Providers) < 2 {
+		return nil, nil, nil, nil, nil
+	}
+	ps = ordered(slices.Clone(f.Providers), f.Order)
+	refs := foldRefs(f, s)
 
 	// each set of copies alike, by its shape, in the order of ps
-	var folds [][]int
 	for _, set := range candidates(ps) {
 		byShape := map[string][]int{}
 		var shapes []string
@@ -274,7 +296,7 @@ func foldWhere(candidates func([]Provider) [][]int) (int, error) {
 			if !foldable(p, stepfun) {
 				continue
 			}
-			sh := foldShape(p, modelPrefs(&s, p.ID)+"\x00"+strings.Join(refs[p.ID], "\x02"))
+			sh := foldShape(p, modelPrefs(s, p.ID)+"\x00"+strings.Join(refs[p.ID], "\x02"))
 			if sh == "" {
 				continue
 			}
@@ -290,11 +312,11 @@ func foldWhere(candidates func([]Provider) [][]int) (int, error) {
 		}
 	}
 	if len(folds) == 0 {
-		return 0, nil
+		return nil, nil, nil, nil, nil
 	}
 
 	now := time.Now()
-	gone := map[string]string{} // a folded provider's id → the one it went into
+	gone = map[string]string{} // a folded provider's id → the one it went into
 	into := map[string]Provider{}
 	for _, set := range folds {
 		p, ids := foldSet(ps, set)
@@ -338,7 +360,7 @@ func foldWhere(candidates func([]Provider) [][]int) (int, error) {
 		}
 		return id
 	}
-	ref := func(m string) string { return foldedRef(m, to) }
+	ref = func(m string) string { return foldedRef(m, to) }
 	f.Order = compact(mapEach(f.Order, to))
 	for j := range f.Providers {
 		f.Providers[j].Fallback = compact(mapEach(f.Providers[j].Fallback, ref))
@@ -359,16 +381,9 @@ func foldWhere(candidates func([]Provider) [][]int) (int, error) {
 		g.Pick = ref(g.Pick)
 	}
 	if err := store(f); err != nil {
-		return 0, err
+		return nil, nil, nil, nil, err
 	}
-	for id := range gone {
-		// the list last fetched for it is the one it went into's
-		_ = os.Remove(catalog.LivePath(id))
-		_ = os.Remove(catalog.LivePath(decisionsID(id)))
-	}
-	foldSettings(&s, gone, ref)
-	foldHistories(folds, ps)
-	return len(gone), nil
+	return gone, folds, ps, ref, nil
 }
 
 // foldSet is the provider the copies ps[set…] fold into — the first of

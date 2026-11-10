@@ -372,6 +372,10 @@ func liveIDs(id string) map[string]bool {
 // not forgotten, and those of its Delisted now has go back among the picks
 // (relistPicks): a list that shrank for a while gives back what it took.
 func dropGonePicks(id string, before, now map[string]bool) ([]string, error) {
+	if err := providersMu.Take(); err != nil {
+		return nil, err
+	}
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return nil, err
@@ -1355,6 +1359,10 @@ func (p Provider) fixV1(base, at string) string {
 		return base
 	}
 	fixed := base + "/v1"
+	if err := providersMu.Take(); err != nil {
+		return base
+	}
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return base
@@ -4011,11 +4019,15 @@ func SetContext(p Provider, model string, n int) error {
 		return fmt.Errorf("%s has no model %s (magpie provider %s lists them)", p.ID, model, p.ID)
 	}
 	if n > 0 {
-		if p.Contexts == nil {
-			p.Contexts = map[string]int{}
-		}
-		p.Contexts[model] = n
-		return Save(p)
+		// on the windows as they are stored then: another set meanwhile
+		// stays
+		return editFound(&p, func(q *Provider) error {
+			if q.Contexts == nil {
+				q.Contexts = map[string]int{}
+			}
+			q.Contexts[model] = n
+			return nil
+		})
 	}
 	// a removal goes the way DropModelOutput's does: the provider is not
 	// saved over a window that is not there, so nothing is written and the
@@ -4039,9 +4051,15 @@ func DropContext(p Provider, model string) (bool, error) {
 	if _, ok := p.Contexts[model]; !ok {
 		return false, nil
 	}
-	delete(p.Contexts, model)
-	if err := Save(p); err != nil {
+	// taken off the windows as they are stored then: one taken
+	// off meanwhile was not there to take
+	had := false
+	if err := editFound(&p, func(q *Provider) error {
+		_, had = q.Contexts[model]
+		delete(q.Contexts, model)
+		return nil
+	}); err != nil {
 		return false, err
 	}
-	return true, nil
+	return had, nil
 }

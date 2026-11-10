@@ -11,6 +11,7 @@ package provider
 
 import (
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 )
@@ -42,20 +43,21 @@ func SetAccountWeight(id, ref string, weight int) error {
 		return fmt.Errorf("%s has no account %q", p.Name, ref)
 	}
 	k := accountKey(r)
-	if max(p.AccountWeights[k], 1) == max(weight, 1) {
+	// the weights as they are stored when this one is set: another set
+	// meanwhile stays
+	return editFound(p, func(q *Provider) error {
+		m := maps.Clone(q.AccountWeights)
+		if m == nil {
+			m = map[string]int{}
+		}
+		if weight <= 1 {
+			delete(m, k)
+		} else {
+			m[k] = weight
+		}
+		q.AccountWeights = normalAccountWeights(m)
 		return nil
-	}
-	m := map[string]int{}
-	for u, w := range p.AccountWeights {
-		m[u] = w
-	}
-	if weight <= 1 {
-		delete(m, k)
-	} else {
-		m[k] = weight
-	}
-	p.AccountWeights = m
-	return Save(*p)
+	})
 }
 
 // ParseWeight reads a weight as the CLI takes it: a whole number from 1

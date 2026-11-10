@@ -82,15 +82,30 @@ var pluginRouting = lazyre.New(`^[A-Za-z0-9._-]+/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 // its listed order.
 func PluginRouting(routing string) bool { return pluginRouting.MatchString(routing) }
 
+// KnownRouting says whether routing is one providers.json keeps: magpie's
+// own, a plugin's, or none ("", the default).
+func KnownRouting(routing string) bool {
+	switch routing {
+	case Ordered, Rotate, LeastUsed, Pace, Weighted, FreeFirst, Fastest, Drain:
+		return true
+	}
+	return PluginRouting(routing)
+}
+
 // SetRouting changes how a provider's requests spread over its keys or
 // accounts.
 func SetRouting(id, routing string) error {
+	if routing != "" && !KnownRouting(routing) {
+		return fmt.Errorf("unknown routing %q", routing)
+	}
 	p, err := Find(id)
 	if err != nil {
 		return err
 	}
-	p.Routing = routing
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.Routing = routing
+		return nil
+	})
 }
 
 // SetSink sends a provider's keys or accounts rate limited with quota
@@ -101,8 +116,10 @@ func SetSink(id string, sink bool) error {
 	if err != nil {
 		return err
 	}
-	p.Sink = sink
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.Sink = sink
+		return nil
+	})
 }
 
 // SetUseFirst puts a provider's keys or accounts ahead of the other
@@ -125,8 +142,10 @@ func SetCapStop(id string, on bool) error {
 	if err != nil {
 		return err
 	}
-	p.CapStop = on
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.CapStop = on
+		return nil
+	})
 }
 
 // SetCapCareful has a subscription's capped accounts read again near
@@ -137,8 +156,10 @@ func SetCapCareful(id string, on bool) error {
 	if err != nil {
 		return err
 	}
-	p.CapCareful = on
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.CapCareful = on
+		return nil
+	})
 }
 
 // SetCountFree has every model of a provider count as free for the
@@ -149,8 +170,10 @@ func SetCountFree(id string, on bool) error {
 	if err != nil {
 		return err
 	}
-	p.CountFree = on
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.CountFree = on
+		return nil
+	})
 }
 
 // SetKeepLogin keeps Codex or Claude Code signed in to the account the
@@ -169,8 +192,10 @@ func SetKeepLogin(id string, keep bool) error {
 		return errSwitchOnly(*p)
 	}
 	chosen := p.keepsLogin() && p.KeepLoginAs != ""
-	p.KeepLogin, p.KeepLoginAs = keep, ""
-	if err := Save(*p); err != nil {
+	if err := editFound(p, func(q *Provider) error {
+		q.KeepLogin, q.KeepLoginAs = keep, ""
+		return nil
+	}); err != nil {
 		return err
 	}
 	if chosen {
@@ -191,8 +216,10 @@ func SetSwitchOnly(id string, on bool) error {
 	if p.Account == nil || p.Account.Agent != p.ID || p.ID != "codex" && p.ID != "claude" {
 		return fmt.Errorf("magpie doesn't route %s's own requests for account failover", p.Name)
 	}
-	p.SwitchOnly = on
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.SwitchOnly = on
+		return nil
+	})
 }
 
 // SetRestartApp has magpie restart the Codex app's app-server when it
@@ -206,8 +233,10 @@ func SetRestartApp(id string, on bool) error {
 	if p.ID != "codex" || p.Account == nil || p.Account.Agent != p.ID {
 		return fmt.Errorf("magpie restarts no app of %s's", p.Name)
 	}
-	p.RestartApp = on
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.RestartApp = on
+		return nil
+	})
 }
 
 // codexRestartsApp is whether the user had magpie restart the Codex app's
@@ -248,12 +277,17 @@ func SwitchOnly(agent string) bool {
 // SetAffinity changes how long a provider's conversations stay with the key
 // or account that answered them.
 func SetAffinity(id, affinity string) error {
+	if !slices.Contains(Affinities, affinity) {
+		return fmt.Errorf("unknown affinity %q", affinity)
+	}
 	p, err := Find(id)
 	if err != nil {
 		return err
 	}
-	p.Affinity = affinity
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.Affinity = affinity
+		return nil
+	})
 }
 
 var usedCache struct {

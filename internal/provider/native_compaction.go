@@ -44,6 +44,8 @@ func SetNativeCompaction(id string, on bool) error {
 	if on && !p.CarriesCompaction() {
 		return fmt.Errorf("%s can't carry Codex's native compaction: only a provider with a Responses API, a ChatGPT account or GitHub Copilot can", p.Name)
 	}
-	p.NativeCompaction = on
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.NativeCompaction = on
+		return nil
+	})
 }

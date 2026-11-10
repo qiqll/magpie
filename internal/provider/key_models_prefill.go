@@ -17,6 +17,7 @@ package provider
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -148,23 +149,24 @@ func PrefillNewKeys(ctx context.Context, before map[string]map[string]bool, ids 
 		if err != nil {
 			continue
 		}
-		am := map[string][]string{}
-		for k, v := range p.AccountModels {
-			am[k] = v
-		}
+		// and again as stored when they are given
 		changed := 0
-		for kid, ms := range keys {
-			if am[accountKey(kid)] != nil || !p.HasKeyID(kid) {
-				continue
+		if editFound(p, func(q *Provider) error {
+			changed = 0
+			am := maps.Clone(q.AccountModels)
+			if am == nil {
+				am = map[string][]string{}
 			}
-			am[accountKey(kid)] = ms
-			changed++
-		}
-		if changed == 0 {
-			continue
-		}
-		p.AccountModels = am
-		if Save(*p) == nil {
+			for kid, ms := range keys {
+				if am[accountKey(kid)] != nil || !q.HasKeyID(kid) {
+					continue
+				}
+				am[accountKey(kid)] = ms
+				changed++
+			}
+			q.AccountModels = normalAccountModels(am)
+			return nil
+		}) == nil {
 			n += changed
 		}
 	}

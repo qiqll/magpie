@@ -18,29 +18,33 @@ func SetAccountOrder(id string, order []string) error {
 	if p.Account != nil {
 		return arrangeLogins(p.Account.Agent, order)
 	}
-	var available []string
-	keys := map[string]KeyAccount{}
-	if p.Key != "" {
-		keys[keyID(p.Key)] = p.first()
-	}
-	for _, k := range p.Keys {
-		keys[keyID(k.Key)] = k
-	}
-	for _, k := range p.KeyList() {
-		available = append(available, k.ID)
-	}
-	if err := validateAccountOrder(available, order); err != nil {
-		return err
-	}
-	if keys[order[0]].Off {
-		return fmt.Errorf("turn this account on before moving it first")
-	}
-	p.setFirst(keys[order[0]])
-	p.Keys = nil
-	for _, ref := range order[1:] {
-		p.Keys = append(p.Keys, keys[ref])
-	}
-	return Save(*p)
+	// the keys as they are stored when they are put in order: one
+	// changed meanwhile is put in order as it is now
+	return editFound(p, func(q *Provider) error {
+		var available []string
+		keys := map[string]KeyAccount{}
+		if q.Key != "" {
+			keys[keyID(q.Key)] = q.first()
+		}
+		for _, k := range q.Keys {
+			keys[keyID(k.Key)] = k
+		}
+		for _, k := range q.KeyList() {
+			available = append(available, k.ID)
+		}
+		if err := validateAccountOrder(available, order); err != nil {
+			return err
+		}
+		if keys[order[0]].Off {
+			return fmt.Errorf("turn this account on before moving it first")
+		}
+		q.setFirst(keys[order[0]])
+		q.Keys = nil
+		for _, ref := range order[1:] {
+			q.Keys = append(q.Keys, keys[ref])
+		}
+		return nil
+	})
 }
 
 func arrangeLogins(agent string, order []string) error {

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -74,8 +75,10 @@ func SetAtOnce(id string, n *int) error {
 	if err != nil {
 		return err
 	}
-	p.MaxAccounts = n
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.MaxAccounts = n
+		return nil
+	})
 }
 
 // One account's or key's own limit (#892: a Claude account kept to two
@@ -151,20 +154,22 @@ func SetAccountConcurrency(id, ref string, limit *int) error {
 		}
 		return fmt.Errorf("%s has no account %q", p.Name, ref)
 	}
-	m := map[string]int{}
-	for k, v := range p.AccountConcurrency {
-		m[k] = v
-	}
-	if limit == nil {
-		if _, had := m[accountKey(r)]; !had {
-			return nil
+	k := accountKey(r)
+	// the limits as they are stored when this one is set: another set
+	// meanwhile stays
+	return editFound(p, func(q *Provider) error {
+		m := maps.Clone(q.AccountConcurrency)
+		if m == nil {
+			m = map[string]int{}
 		}
-		delete(m, accountKey(r))
-	} else {
-		m[accountKey(r)] = *limit
-	}
-	p.AccountConcurrency = m
-	return Save(*p)
+		if limit == nil {
+			delete(m, k)
+		} else {
+			m[k] = *limit
+		}
+		q.AccountConcurrency = normalAccountConcurrency(m)
+		return nil
+	})
 }
 
 // CheckQueue says what is wrong with a queue's bound or wait, nil when
@@ -189,8 +194,10 @@ func SetQueue(id string, limit, wait int) error {
 	if err != nil {
 		return err
 	}
-	p.QueueLimit, p.QueueWait = limit, wait
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.QueueLimit, q.QueueWait = limit, wait
+		return nil
+	})
 }
 
 // ParseLimit reads a limit as the CLI takes it: a whole number, 0 or off
@@ -273,11 +280,13 @@ func SetQuotaRest(id string, minutes int) error {
 	if err != nil {
 		return err
 	}
-	p.QuotaRest = minutes
-	if minutes > 0 {
-		p.QuotaResetAt = "" // the one set last is the one that counts
-	}
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.QuotaRest = minutes
+		if minutes > 0 {
+			q.QuotaResetAt = "" // the one set last is the one that counts
+		}
+		return nil
+	})
 }
 
 // OwnQuotaRest is how long, from now, one of p's keys sits out of quota
@@ -361,11 +370,13 @@ func SetQuotaResetAt(id, at string) error {
 	if err != nil {
 		return err
 	}
-	p.QuotaResetAt = strings.TrimSpace(at)
-	if p.QuotaResetAt != "" {
-		p.QuotaRest = 0
-	}
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.QuotaResetAt = strings.TrimSpace(at)
+		if q.QuotaResetAt != "" {
+			q.QuotaRest = 0
+		}
+		return nil
+	})
 }
 
 // RestCapOff is RestCap set to off (`magpie provider rest-cap <id> off`):
@@ -403,8 +414,10 @@ func SetRestCap(id string, minutes int) error {
 	if err != nil {
 		return err
 	}
-	p.RestCap = minutes
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.RestCap = minutes
+		return nil
+	})
 }
 
 // SetRPM sets how many requests a minute each of the provider's keys or
@@ -417,6 +430,8 @@ func SetRPM(id string, n int) error {
 	if err != nil {
 		return err
 	}
-	p.MaxRPM = n
-	return Save(*p)
+	return editFound(p, func(q *Provider) error {
+		q.MaxRPM = n
+		return nil
+	})
 }

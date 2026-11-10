@@ -212,27 +212,32 @@ func SetAccountModels(id, ref string, models []string) error {
 	if len(ms) == 0 && p.AccountModels[accountKey(r)] == nil && (!all || p.AccountModelsAll[accountKey(r)]) {
 		return nil
 	}
-	am := map[string][]string{}
-	for k, v := range p.AccountModels {
-		am[k] = v
-	}
-	if len(ms) == 0 {
-		delete(am, accountKey(r))
-	} else {
-		am[accountKey(r)] = ms
-	}
-	p.AccountModels = am
-	ma := maps.Clone(p.AccountModelsAll)
-	if all {
-		if ma == nil {
-			ma = map[string]bool{}
+	k := accountKey(r)
+	// the models as they are stored when these are set: another account's
+	// set meanwhile stays
+	return editFound(p, func(q *Provider) error {
+		am := maps.Clone(q.AccountModels)
+		if am == nil {
+			am = map[string][]string{}
 		}
-		ma[accountKey(r)] = true
-	} else {
-		delete(ma, accountKey(r))
-	}
-	p.AccountModelsAll = ma
-	return Save(*p)
+		if len(ms) == 0 {
+			delete(am, k)
+		} else {
+			am[k] = ms
+		}
+		q.AccountModels = normalAccountModels(am)
+		ma := maps.Clone(q.AccountModelsAll)
+		if all {
+			if ma == nil {
+				ma = map[string]bool{}
+			}
+			ma[k] = true
+		} else {
+			delete(ma, k)
+		}
+		q.AccountModelsAll = ma
+		return nil
+	})
 }
 
 // AccountModelsOf is the models the account or key ref of the provider id

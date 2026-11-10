@@ -150,6 +150,10 @@ func moveAccountSettings(id string, moves map[string]string) error {
 	if len(moves) == 0 {
 		return nil
 	}
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err

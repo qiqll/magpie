@@ -18,6 +18,7 @@ package provider
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"strconv"
 	"strings"
@@ -86,28 +87,29 @@ func SetKeySpendCap(id, ref string, c *SpendCap) error {
 		return fmt.Errorf("%s has no key %q", p.Name, ref)
 	}
 	k := strings.ToLower(r)
-	m := map[string]SpendCap{}
-	for id, v := range p.KeySpendCaps {
-		m[id] = v
-	}
-	if c == nil {
-		if _, had := m[k]; !had {
-			return nil
+	// the caps as they are stored when this one is set: another set
+	// meanwhile stays
+	return editFound(p, func(q *Provider) error {
+		m := maps.Clone(q.KeySpendCaps)
+		if m == nil {
+			m = map[string]SpendCap{}
 		}
-		delete(m, k)
-	} else {
-		v := *c
-		v.Since = time.Time{}
-		if v.Period == SpendTotal {
-			v.Since = time.Now().UTC().Truncate(time.Second)
-			if was, had := m[k]; had && was.Period == SpendTotal && !was.Since.IsZero() {
-				v.Since = was.Since
+		if c == nil {
+			delete(m, k)
+		} else {
+			v := *c
+			v.Since = time.Time{}
+			if v.Period == SpendTotal {
+				v.Since = time.Now().UTC().Truncate(time.Second)
+				if was, had := m[k]; had && was.Period == SpendTotal && !was.Since.IsZero() {
+					v.Since = was.Since
+				}
 			}
+			m[k] = v
 		}
-		m[k] = v
-	}
-	p.KeySpendCaps = m
-	return Save(*p)
+		q.KeySpendCaps = normalKeySpendCaps(m)
+		return nil
+	})
 }
 
 // checkSpendCap says what is wrong with c, nil when nothing is.

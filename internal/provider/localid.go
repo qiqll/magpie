@@ -323,6 +323,10 @@ var ModelMoved func(from, to string) error
 // there only once the user has set something on it (withPicks): with
 // none kept (account), only the other providers' refs to it move.
 func moveModelRefs(pid, from, to string, account bool) error {
+	if err := providersMu.Take(); err != nil {
+		return err
+	}
+	defer providersMu.Unlock()
 	f, err := read()
 	if err != nil {
 		return err

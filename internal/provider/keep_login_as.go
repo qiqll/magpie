@@ -106,8 +106,10 @@ func SetKeepLoginAs(id, user string) error {
 			return err
 		}
 	}
-	p.KeepLogin, p.KeepLoginAs = true, to.User
-	if err := Save(*p); err != nil {
+	if err := editFound(p, func(q *Provider) error {
+		q.KeepLogin, q.KeepLoginAs = true, to.User
+		return nil
+	}); err != nil {
 		return err
 	}
 	if to.Active {

@@ -8,6 +8,7 @@ package tui
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -259,20 +260,24 @@ func reseatCmd(change func() error, done string) tea.Cmd {
 	}
 }
 
-// saveProvider changes one provider and saves it.
+// saveProvider changes one provider and saves what it changed, on
+// providers.json as it is then, so a change made meanwhile (the GUI,
+// another magpie) stays; one refused because another magpie holds
+// providers.json says so.
 func saveProvider(id string, change func(*provider.Provider), done string) tea.Cmd {
 	return func() tea.Msg {
-		p, err := provider.Find(id)
-		if err != nil {
-			return flashMsg{text: err.Error()}
-		}
-		change(p)
-		if err := provider.Save(*p); err != nil {
+		if _, _, err := editProvider(id, func(p *provider.Provider) error {
+			change(p)
+			return nil
+		}); err != nil {
 			return flashMsg{text: err.Error()}
 		}
 		return flashMsg{text: done, ok: true}
 	}
 }
+
+// editProvider is provider.Edit; a test puts a change meanwhile in.
+var editProvider = provider.Edit
 
 // refetchCmd asks the provider's vendor for its model list again and says
 // how many it has and how many agents are offered, or why there is none:
@@ -402,28 +407,27 @@ func (m *model) openProviderModels(id string) {
 		// (#2113), as m does on the providers list
 		refetch: func() tea.Cmd { return refetchCmd(id) },
 		toggle: func(model string) ([]agent.Option, string, bool) {
-			p, err := provider.Find(id)
-			if err != nil {
-				return nil, err.Error(), false
-			}
-			ids := p.Picks()
-			if len(ids) == 0 {
-				for _, x := range p.Exposed() {
-					ids = append(ids, x.ID)
-				}
-			}
+			// worked out on the picks read, and only the picks written
 			verb := "on"
-			if i := slices.Index(ids, model); i >= 0 {
-				if len(ids) == 1 {
-					return nil, "one model has to stay on", false
+			if _, _, err := editProvider(id, func(p *provider.Provider) error {
+				ids := p.Picks()
+				if len(ids) == 0 {
+					for _, x := range p.Exposed() {
+						ids = append(ids, x.ID)
+					}
 				}
-				ids = slices.Delete(slices.Clone(ids), i, i+1)
-				verb = "off"
-			} else {
-				ids = append(slices.Clone(ids), model)
-			}
-			p.Models = ids
-			if err := provider.Save(*p); err != nil {
+				if i := slices.Index(ids, model); i >= 0 {
+					if len(ids) == 1 {
+						return errors.New("one model has to stay on")
+					}
+					ids = slices.Delete(slices.Clone(ids), i, i+1)
+					verb = "off"
+				} else {
+					ids = append(slices.Clone(ids), model)
+				}
+				p.Models = ids
+				return nil
+			}); err != nil {
 				return nil, err.Error(), false
 			}
 			items := modelOptions(id)

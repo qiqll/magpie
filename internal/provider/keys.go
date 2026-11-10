@@ -192,27 +192,33 @@ func AddKey(id, name, key string, proto Protocol) error {
 	if p.Account != nil {
 		return errors.New("a signed-in account has no keys")
 	}
-	// nothing pasted: the key the provider is asked with when the user has
-	// none (OpenCode Zen's public, #1795); for any other, nothing to add
-	anon := false
-	if key == "" {
-		if key = p.AnonymousKey(); key == "" {
-			return errors.New("paste the key to add")
+	// added to the keys as they are stored then: one added or changed
+	// meanwhile stays
+	return editFound(p, func(q *Provider) error {
+		key := key
+		// nothing pasted: the key the provider is asked with when the user
+		// has none (OpenCode Zen's public, #1795); for any other, nothing
+		// to add
+		anon := false
+		if key == "" {
+			if key = q.AnonymousKey(); key == "" {
+				return errors.New("paste the key to add")
+			}
+			anon = true
 		}
-		anon = true
-	}
-	if p.HasKey(key) {
-		if anon {
-			return fmt.Errorf("%s already has %s, the key its free models answer with none of yours", p.Name, key)
+		if q.HasKey(key) {
+			if anon {
+				return fmt.Errorf("%s already has %s, the key its free models answer with none of yours", p.Name, key)
+			}
+			return fmt.Errorf("%s already has this key", p.Name)
 		}
-		return fmt.Errorf("%s already has this key", p.Name)
-	}
-	if p.Key == "" {
-		p.Key, p.KeyName, p.KeyProtocol = key, name, proto
-	} else {
-		p.Keys = append(p.Keys, KeyAccount{Name: name, Key: key, Protocol: proto})
-	}
-	return Save(*p)
+		if q.Key == "" {
+			q.Key, q.KeyName, q.KeyProtocol = key, name, proto
+		} else {
+			q.Keys = append(q.Keys, KeyAccount{Name: name, Key: key, Protocol: proto})
+		}
+		return nil
+	})
 }
 
 // AnonymousKey is the key the provider is asked with when the user has
@@ -268,34 +274,39 @@ func AddKeys(id string, keys []string, proto Protocol) (added, had int, err erro
 	if p.Account != nil {
 		return 0, 0, errors.New("a signed-in account has no keys")
 	}
-	seen := map[string]bool{}
-	for _, k := range p.KeyList() {
-		seen[k.ID] = true
-	}
-	for _, key := range keys {
-		key = strings.TrimSpace(key)
-		if key == "" {
-			continue
+	// added to the keys as they are stored then
+	err = editFound(p, func(q *Provider) error {
+		added, had = 0, 0
+		seen := map[string]bool{}
+		for _, k := range q.KeyList() {
+			seen[k.ID] = true
 		}
-		if seen[keyID(key)] {
-			had++
-			continue
+		for _, key := range keys {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			if seen[keyID(key)] {
+				had++
+				continue
+			}
+			seen[keyID(key)] = true
+			added++
+			if q.Key == "" {
+				q.Key, q.KeyName, q.KeyProtocol = key, "", proto
+			} else {
+				q.Keys = append(q.Keys, KeyAccount{Key: key, Protocol: proto})
+			}
 		}
-		seen[keyID(key)] = true
-		added++
-		if p.Key == "" {
-			p.Key, p.KeyName, p.KeyProtocol = key, "", proto
-		} else {
-			p.Keys = append(p.Keys, KeyAccount{Key: key, Protocol: proto})
+		if added == 0 {
+			if had > 0 {
+				return fmt.Errorf("%s already has these keys", p.Name)
+			}
+			return errors.New("paste the keys to add")
 		}
-	}
-	if added == 0 {
-		if had > 0 {
-			return 0, had, fmt.Errorf("%s already has these keys", p.Name)
-		}
-		return 0, 0, errors.New("paste the keys to add")
-	}
-	return added, had, Save(*p)
+		return nil
+	})
+	return added, had, err
 }
 
 // keyReadsAtOnce is how many of one provider's keys have their balance,
@@ -357,16 +368,20 @@ func SetKeyProtocol(id, keyRef string, proto Protocol) error {
 	if err != nil {
 		return err
 	}
-	i, ok := findKey(p, keyRef)
-	if !ok {
-		return fmt.Errorf("%s has no such key", p.Name)
-	}
-	if i < 0 {
-		p.KeyProtocol = proto
-	} else {
-		p.Keys[i].Protocol = proto
-	}
-	return Save(*p)
+	// set on the key as it is stored then: another key's setting, or a
+	// key added, meanwhile stays
+	return editFound(p, func(q *Provider) error {
+		i, ok := findKey(q, keyRef)
+		if !ok {
+			return fmt.Errorf("%s has no such key", p.Name)
+		}
+		if i < 0 {
+			q.KeyProtocol = proto
+		} else {
+			q.Keys[i].Protocol = proto
+		}
+		return nil
+	})
 }
 
 // SetKeyPlan says which of the preset's plans (a Region's id) a key is
@@ -392,16 +407,20 @@ func SetKeyPlan(id, keyRef, plan string) error {
 			plan = ""
 		}
 	}
-	i, ok := findKey(p, keyRef)
-	if !ok {
-		return fmt.Errorf("%s has no such key", p.Name)
-	}
-	if i < 0 {
-		p.KeyPlan = plan
-	} else {
-		p.Keys[i].Plan = plan
-	}
-	return Save(*p)
+	// set on the key as it is stored then: another key's setting, or a
+	// key added, meanwhile stays
+	return editFound(p, func(q *Provider) error {
+		i, ok := findKey(q, keyRef)
+		if !ok {
+			return fmt.Errorf("%s has no such key", p.Name)
+		}
+		if i < 0 {
+			q.KeyPlan = plan
+		} else {
+			q.Keys[i].Plan = plan
+		}
+		return nil
+	})
 }
 
 // MaxKeyWeight is the most a key's weight can be.
@@ -417,19 +436,23 @@ func SetKeyWeight(id, keyRef string, weight int) error {
 	if err != nil {
 		return err
 	}
-	i, ok := findKey(p, keyRef)
-	if !ok {
-		return fmt.Errorf("%s has no such key", p.Name)
-	}
-	if weight == 1 {
-		weight = 0 // the default: kept out of the file
-	}
-	if i < 0 {
-		p.KeyWeight = weight
-	} else {
-		p.Keys[i].Weight = weight
-	}
-	return Save(*p)
+	// set on the key as it is stored then: another key's setting, or a
+	// key added, meanwhile stays
+	return editFound(p, func(q *Provider) error {
+		i, ok := findKey(q, keyRef)
+		if !ok {
+			return fmt.Errorf("%s has no such key", p.Name)
+		}
+		if weight == 1 {
+			weight = 0 // the default: kept out of the file
+		}
+		if i < 0 {
+			q.KeyWeight = weight
+		} else {
+			q.Keys[i].Weight = weight
+		}
+		return nil
+	})
 }
 
 // WeightOf is the key's weight as Weighted routing counts it: 1 when none.
@@ -504,18 +527,21 @@ func UseKey(id, keyRef string) error {
 	if err != nil {
 		return err
 	}
-	i, ok := findKey(p, keyRef)
-	if !ok {
-		return fmt.Errorf("%s has no such key", p.Name)
-	}
-	if i < 0 {
+	// the keys as they are stored then
+	return editFound(p, func(q *Provider) error {
+		i, ok := findKey(q, keyRef)
+		if !ok {
+			return fmt.Errorf("%s has no such key", p.Name)
+		}
+		if i < 0 {
+			return nil
+		}
+		k := q.Keys[i]
+		rest := append([]KeyAccount{q.first()}, append(q.Keys[:i:i], q.Keys[i+1:]...)...)
+		q.setFirst(k)
+		q.Keys = rest
 		return nil
-	}
-	k := p.Keys[i]
-	rest := append([]KeyAccount{p.first()}, append(p.Keys[:i:i], p.Keys[i+1:]...)...)
-	p.setFirst(k)
-	p.Keys = rest
-	return Save(*p)
+	})
 }
 
 // promote takes the first key out of use: the next key that's on takes
@@ -538,24 +564,25 @@ func SetKeyOn(id, keyRef string, on bool) error {
 	if err != nil {
 		return err
 	}
-	i, ok := findKey(p, keyRef)
-	if !ok {
-		return fmt.Errorf("%s has no such key", p.Name)
-	}
-	switch {
-	case i >= 0:
-		p.Keys[i].Off = !on
-	case !on:
-		old, ok := promote(p)
+	// the keys as they are stored then
+	return editFound(p, func(q *Provider) error {
+		i, ok := findKey(q, keyRef)
 		if !ok {
-			return errors.New("that's the only key in use; turn another on first")
+			return fmt.Errorf("%s has no such key", p.Name)
 		}
-		old.Off = true
-		p.Keys = append([]KeyAccount{old}, p.Keys...)
-	default:
+		switch {
+		case i >= 0:
+			q.Keys[i].Off = !on
+		case !on:
+			old, ok := promote(q)
+			if !ok {
+				return errors.New("that's the only key in use; turn another on first")
+			}
+			old.Off = true
+			q.Keys = append([]KeyAccount{old}, q.Keys...)
+		}
 		return nil
-	}
-	return Save(*p)
+	})
 }
 
 // RemoveKey forgets a key. The last key in use stays: turn another on first.
@@ -564,16 +591,19 @@ func RemoveKey(id, keyRef string) error {
 	if err != nil {
 		return err
 	}
-	i, ok := findKey(p, keyRef)
-	if !ok {
-		return fmt.Errorf("%s has no such key", p.Name)
-	}
-	if i >= 0 {
-		p.Keys = append(p.Keys[:i], p.Keys[i+1:]...)
-	} else if _, ok := promote(p); !ok {
-		return errors.New("that's the only key in use; turn another on before removing it")
-	}
-	return Save(*p)
+	// taken from the keys as they are stored then
+	return editFound(p, func(q *Provider) error {
+		i, ok := findKey(q, keyRef)
+		if !ok {
+			return fmt.Errorf("%s has no such key", p.Name)
+		}
+		if i >= 0 {
+			q.Keys = append(q.Keys[:i:i], q.Keys[i+1:]...)
+		} else if _, ok := promote(q); !ok {
+			return errors.New("that's the only key in use; turn another on before removing it")
+		}
+		return nil
+	})
 }
 
 // RemoveKeys forgets several keys at once (361 on Discord: hundreds of
@@ -589,29 +619,37 @@ func RemoveKeys(id string, refs []string) (removed int, err error) {
 	for _, r := range refs {
 		gone[r] = true
 	}
-	var kept []KeyAccount
-	for _, k := range p.Keys {
-		if gone[keyID(k.Key)] {
+	// taken from the keys as they are stored then
+	err = editFound(p, func(q *Provider) error {
+		removed = 0
+		var kept []KeyAccount
+		for _, k := range q.Keys {
+			if gone[keyID(k.Key)] {
+				removed++
+				continue
+			}
+			kept = append(kept, k)
+		}
+		firstGone := q.Key != "" && gone[keyID(q.Key)]
+		if firstGone {
 			removed++
-			continue
 		}
-		kept = append(kept, k)
-	}
-	firstGone := p.Key != "" && gone[keyID(p.Key)]
-	if firstGone {
-		removed++
-	}
-	if removed == 0 {
-		return 0, fmt.Errorf("%s has none of these keys", p.Name)
-	}
-	p.Keys = kept
-	// the first key is always on: only its removal can leave none in use
-	if firstGone {
-		if _, ok := promote(p); !ok {
-			return 0, errors.New("those are all the keys in use; keep one on")
+		if removed == 0 {
+			return fmt.Errorf("%s has none of these keys", p.Name)
 		}
+		q.Keys = kept
+		// the first key is always on: only its removal can leave none in use
+		if firstGone {
+			if _, ok := promote(q); !ok {
+				return errors.New("those are all the keys in use; keep one on")
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	return removed, Save(*p)
+	return removed, nil
 }
 
 // RenameKey names one of a provider's keys, "Personal", "Team".
@@ -620,17 +658,21 @@ func RenameKey(id, keyRef, name string) error {
 	if err != nil {
 		return err
 	}
-	i, ok := findKey(p, keyRef)
-	if !ok {
-		return fmt.Errorf("%s has no such key", p.Name)
-	}
-	name = strings.TrimSpace(name)
-	if i < 0 {
-		p.KeyName = name
-	} else {
-		p.Keys[i].Name = name
-	}
-	return Save(*p)
+	// set on the key as it is stored then: another key's setting, or a
+	// key added, meanwhile stays
+	return editFound(p, func(q *Provider) error {
+		i, ok := findKey(q, keyRef)
+		if !ok {
+			return fmt.Errorf("%s has no such key", p.Name)
+		}
+		name = strings.TrimSpace(name)
+		if i < 0 {
+			q.KeyName = name
+		} else {
+			q.Keys[i].Name = name
+		}
+		return nil
+	})
 }
 
 // ReplaceKey puts a new value in place of one of a provider's keys (#1869:
@@ -648,29 +690,37 @@ func ReplaceKey(id, keyRef, key string) (was, now string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	i, ok := findKey(p, keyRef)
-	if !ok {
-		return "", "", fmt.Errorf("%s has no such key", p.Name)
-	}
 	now = keyID(key)
-	if now == keyRef {
-		return keyRef, now, nil
+	// put in place in the keys as they are stored then, with what is set
+	// for it as it is then
+	err = editFound(p, func(q *Provider) error {
+		i, ok := findKey(q, keyRef)
+		if !ok {
+			return fmt.Errorf("%s has no such key", p.Name)
+		}
+		if now == keyRef {
+			return nil
+		}
+		if q.HasKey(key) {
+			return fmt.Errorf("%s already has this key", p.Name)
+		}
+		if i < 0 {
+			q.Key = key
+		} else {
+			q.Keys[i].Key = key
+		}
+		moveKeyed(q.AccountModels, keyRef, now)
+		moveKeyed(q.AccountModelsAll, keyRef, now)
+		moveKeyed(q.AccountProxies, keyRef, now)
+		moveKeyed(q.AccountConcurrency, keyRef, now)
+		moveKeyed(q.KeySpendCaps, keyRef, now)
+		moveKeyed(q.KeyOwnBalances, keyRef, now)
+		return nil
+	})
+	if err != nil {
+		return "", "", err
 	}
-	if p.HasKey(key) {
-		return "", "", fmt.Errorf("%s already has this key", p.Name)
-	}
-	if i < 0 {
-		p.Key = key
-	} else {
-		p.Keys[i].Key = key
-	}
-	moveKeyed(p.AccountModels, keyRef, now)
-	moveKeyed(p.AccountModelsAll, keyRef, now)
-	moveKeyed(p.AccountProxies, keyRef, now)
-	moveKeyed(p.AccountConcurrency, keyRef, now)
-	moveKeyed(p.KeySpendCaps, keyRef, now)
-	moveKeyed(p.KeyOwnBalances, keyRef, now)
-	return keyRef, now, Save(*p)
+	return keyRef, now, nil
 }
 
 // moveKeyed moves m's entry for the key was, if it has one, to now.

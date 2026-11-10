@@ -225,6 +225,9 @@ func Main(v string) {
 	for _, v := range ignored {
 		fmt.Fprintf(os.Stderr, "magpie: ignoring %s: not an absolute path (the programs magpie starts still get it)\n", v)
 	}
+	// a magpie that crashed holding providers.json's lock left its pid
+	// in the lock file; the lock went with it
+	provider.ClearLeftLock()
 	if provider.TookOpenedURL(os.Args[1:]) {
 		// Claude Code, signing in for magpie, handed over the page to open
 		return

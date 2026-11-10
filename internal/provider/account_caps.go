@@ -228,29 +228,33 @@ func SetWindowCaps(id, ref string, windows []string, cap int) error {
 		return fmt.Errorf("%s has no account %q", p.Name, ref)
 	}
 	k := accountKey(r)
-	if !slices.ContainsFunc(ws, func(w string) bool { return p.AccountWindowCaps[k][w] != cap || p.AccountWindowAmounts[k][w] > 0 }) {
-		return nil
-	}
-	p.AccountWindowAmounts = withoutAmounts(p.AccountWindowAmounts, k, ws)
-	all := map[string]map[string]int{}
-	for u, m := range p.AccountWindowCaps {
-		all[u] = maps.Clone(m)
-	}
-	if all[k] == nil {
-		all[k] = map[string]int{}
-	}
-	for _, w := range ws {
-		if cap == 0 {
-			delete(all[k], w)
-		} else {
-			all[k][w] = cap
+	// the windows' caps as they are stored when the cap is set, not as
+	// they were read: another set meanwhile stays
+	return editStored(p.ID, func(q *Provider) bool {
+		if !slices.ContainsFunc(ws, func(w string) bool { return q.AccountWindowCaps[k][w] != cap || q.AccountWindowAmounts[k][w] > 0 }) {
+			return false
 		}
-	}
-	if len(all[k]) == 0 {
-		delete(all, k)
-	}
-	p.AccountWindowCaps = all
-	return Save(*p)
+		q.AccountWindowAmounts = withoutAmounts(q.AccountWindowAmounts, k, ws)
+		all := map[string]map[string]int{}
+		for u, m := range q.AccountWindowCaps {
+			all[u] = maps.Clone(m)
+		}
+		if all[k] == nil {
+			all[k] = map[string]int{}
+		}
+		for _, w := range ws {
+			if cap == 0 {
+				delete(all[k], w)
+			} else {
+				all[k][w] = cap
+			}
+		}
+		if len(all[k]) == 0 {
+			delete(all, k)
+		}
+		q.AccountWindowCaps = normalWindowCaps(all)
+		return true
+	})
 }
 
 // SetWindowAmount caps the windows named windows of the account ref of the
@@ -283,42 +287,46 @@ func SetWindowAmount(id, ref string, windows []string, amount float64) error {
 		return fmt.Errorf("%s has no account %q", p.Name, ref)
 	}
 	k := accountKey(r)
-	if !slices.ContainsFunc(ws, func(w string) bool {
-		_, own := p.AccountWindowCaps[k][w]
-		return p.AccountWindowAmounts[k][w] != amount || own
-	}) {
-		return nil
-	}
-	amts := withoutAmounts(p.AccountWindowAmounts, k, nil)
-	if amount > 0 {
-		if amts == nil {
-			amts = map[string]map[string]float64{}
+	// on the windows' caps and amounts as they are stored then, not as
+	// they were read: another set meanwhile stays
+	return editStored(p.ID, func(q *Provider) bool {
+		if !slices.ContainsFunc(ws, func(w string) bool {
+			_, own := q.AccountWindowCaps[k][w]
+			return q.AccountWindowAmounts[k][w] != amount || own
+		}) {
+			return false
 		}
-		if amts[k] == nil {
-			amts[k] = map[string]float64{}
+		amts := withoutAmounts(q.AccountWindowAmounts, k, nil)
+		if amount > 0 {
+			if amts == nil {
+				amts = map[string]map[string]float64{}
+			}
+			if amts[k] == nil {
+				amts[k] = map[string]float64{}
+			}
+			for _, w := range ws {
+				amts[k][w] = amount
+			}
+		} else {
+			amts = withoutAmounts(amts, k, ws)
 		}
-		for _, w := range ws {
-			amts[k][w] = amount
+		q.AccountWindowAmounts = normalWindowAmounts(amts)
+		// an amount stands in for the window's own share
+		if own := q.AccountWindowCaps[k]; own != nil {
+			all := map[string]map[string]int{}
+			for u, m := range q.AccountWindowCaps {
+				all[u] = maps.Clone(m)
+			}
+			for _, w := range ws {
+				delete(all[k], w)
+			}
+			if len(all[k]) == 0 {
+				delete(all, k)
+			}
+			q.AccountWindowCaps = normalWindowCaps(all)
 		}
-	} else {
-		amts = withoutAmounts(amts, k, ws)
-	}
-	p.AccountWindowAmounts = amts
-	// an amount stands in for the window's own share
-	if own := p.AccountWindowCaps[k]; own != nil {
-		all := map[string]map[string]int{}
-		for u, m := range p.AccountWindowCaps {
-			all[u] = maps.Clone(m)
-		}
-		for _, w := range ws {
-			delete(all[k], w)
-		}
-		if len(all[k]) == 0 {
-			delete(all, k)
-		}
-		p.AccountWindowCaps = all
-	}
-	return Save(*p)
+		return true
+	})
 }
 
 // withoutAmounts is a copy of m with account k's amounts on windows ws
@@ -360,20 +368,25 @@ func SetAccountCap(id, ref string, cap int) error {
 	if !ok {
 		return fmt.Errorf("%s has no account %q", p.Name, ref)
 	}
-	if cap == 0 && p.AccountCaps[accountKey(r)] == 0 {
-		return nil
-	}
-	caps := map[string]int{}
-	for k, v := range p.AccountCaps {
-		caps[k] = v
-	}
-	if cap == 0 {
-		delete(caps, accountKey(r))
-	} else {
-		caps[accountKey(r)] = cap
-	}
-	p.AccountCaps = caps
-	return Save(*p)
+	k := accountKey(r)
+	// the caps as they are stored when the cap is set, not as they were
+	// read: another set meanwhile stays
+	return editStored(p.ID, func(q *Provider) bool {
+		if q.AccountCaps[k] == cap {
+			return false
+		}
+		caps := maps.Clone(q.AccountCaps)
+		if caps == nil {
+			caps = map[string]int{}
+		}
+		if cap == 0 {
+			delete(caps, k)
+		} else {
+			caps[k] = cap
+		}
+		q.AccountCaps = normalAccountCaps(caps)
+		return true
+	})
 }
 
 // ParseCap reads a cap as the CLI takes it: "70", "70%", or off (none, 0,
@@ -514,6 +527,40 @@ func (a Allowance) CapHeld(model string, caps WindowCaps, now time.Time) *CapHol
 	}
 	h.Credits = !byCap
 	return h
+}
+
+// Room is how many points of its allowance, as last known, an account has
+// for model at now before something holds it: of every window that
+// counts model, its own share of caps (WindowCaps.Of), else 100, less
+// what it has used, the least of those; a pool's window holds at a cap
+// only. A window whose reset has passed is empty again.
+func (a Allowance) Room(model string, caps WindowCaps, now time.Time) float64 {
+	model = strings.ToLower(model)
+	room := 100.0
+	at := func(l Limit, pool bool) {
+		share, _ := caps.Of(l.Name)
+		limit := 100.0
+		if share > 0 {
+			limit = float64(share)
+		} else if pool {
+			return
+		}
+		used := l.Used
+		if !l.Resets.IsZero() && !l.Resets.After(now) {
+			used = 0
+		}
+		room = min(room, limit-used)
+	}
+	for _, l := range a {
+		if !l.applies(model) {
+			continue
+		}
+		at(l, false)
+		for _, q := range l.pool {
+			at(q, true)
+		}
+	}
+	return max(room, 0)
 }
 
 // NearCap says whether an allowance, as last known, has some window

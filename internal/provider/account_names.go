@@ -14,6 +14,7 @@ package provider
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -212,20 +213,21 @@ func SetAccountName(id, ref, name string) error {
 		return fmt.Errorf("%s has no account %q", p.Name, ref)
 	}
 	k := accountKey(r)
-	if p.AccountNames[k] == name {
+	// the names as they are stored when this one is given: another given
+	// meanwhile stays
+	return editFound(p, func(q *Provider) error {
+		names := maps.Clone(q.AccountNames)
+		if names == nil {
+			names = map[string]string{}
+		}
+		if name == "" {
+			delete(names, k)
+		} else {
+			names[k] = name
+		}
+		q.AccountNames = normalAccountNames(names)
 		return nil
-	}
-	names := map[string]string{}
-	for u, v := range p.AccountNames {
-		names[u] = v
-	}
-	if name == "" {
-		delete(names, k)
-	} else {
-		names[k] = name
-	}
-	p.AccountNames = names
-	return Save(*p)
+	})
 }
 
 // withAccountNames is qs with each account's name of the user's own on
