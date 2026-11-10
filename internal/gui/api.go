@@ -1822,6 +1822,38 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		writeJSON(rw, settingsState())
 	})
+	// Settings › Growth policy's chart (T-130): the shares a policy, as the
+	// page has it, holds an account to on each day, read through the
+	// gateway's own function (provider.GrowthCurve), and each account with
+	// a day: its subscription, its name and its day, nothing of its sign-in
+	mux.HandleFunc("POST /api/growth/preview", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Policy *settings.GrowthPolicy `json:"policy"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if in.Policy == nil {
+			http.Error(rw, "the policy to draw is sent", http.StatusBadRequest)
+			return
+		}
+		p := *in.Policy
+		if p.Kind != settings.GrowthOff {
+			if err := settings.CheckGrowthShape(p); err != nil {
+				fail(rw, err)
+				return
+			}
+		}
+		accounts := provider.GrowthAccounts(time.Now())
+		if accounts == nil {
+			accounts = []provider.GrowthAccount{}
+		}
+		writeJSON(rw, struct {
+			Points   []provider.GrowthPoint   `json:"points"`
+			Accounts []provider.GrowthAccount `json:"accounts"`
+		}{provider.GrowthCurve(p, provider.GrowthHorizon(p)), accounts})
+	})
 	// whether Codex's OpenAI models say multi-agent V1 (#141): Codex's lists
 	// are written again and asked for again
 	mux.HandleFunc("POST /api/settings/codex-agents-v1", func(rw http.ResponseWriter, r *http.Request) {

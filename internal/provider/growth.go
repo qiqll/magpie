@@ -31,6 +31,7 @@ package provider
 // only the windows the user left alone.
 
 import (
+	"cmp"
 	"log"
 	"maps"
 	"reflect"
@@ -157,6 +158,92 @@ func (c WindowCaps) withGrowth(added, now time.Time) WindowCaps {
 	}
 	c.Windows = wins
 	return c
+}
+
+// GrowthPoint is the share of the 5 hours and of the week a policy holds an
+// account to on its day Day, 100 where it holds nothing.
+type GrowthPoint struct {
+	Day       int `json:"day"`
+	FiveHours int `json:"fiveHours"`
+	Week      int `json:"week"`
+}
+
+// GrowthCurve is p's shares on each day from 0 to last, read through
+// policyCaps, which the gateway's holds read too (withGrowth): Settings ›
+// Growth policy draws its chart from it, never from a formula of its own
+// (T-130).
+func GrowthCurve(p settings.GrowthPolicy, last int) []GrowthPoint {
+	added := time.Unix(1<<30, 0).UTC()
+	share := func(caps map[string]int, w string) int {
+		if s, ok := caps[growthWindows[w][0]]; ok {
+			return s
+		}
+		return 100
+	}
+	out := make([]GrowthPoint, 0, last+1)
+	for d := 0; d <= last; d++ {
+		caps := policyCaps(p, added, added.Add(time.Duration(d)*24*time.Hour))
+		out = append(out, GrowthPoint{Day: d, FiveHours: share(caps, settings.GrowthFiveHours), Week: share(caps, settings.GrowthWeek)})
+	}
+	return out
+}
+
+// GrowthHorizon is the last day GrowthCurve is read to for p: a quarter
+// past the day p last changes a share (a ramp's Days, its latest stage's
+// From), so the chart shows it level after; 7 at least, GrowthDaysMost
+// at most.
+func GrowthHorizon(p settings.GrowthPolicy) int {
+	last := 0
+	switch p.Kind {
+	case settings.GrowthRamp:
+		last = p.Days
+	case settings.GrowthStaged:
+		for _, g := range p.Stages {
+			last = max(last, g.From)
+		}
+	}
+	return min(max(last+(last+3)/4, 7), settings.GrowthDaysMost)
+}
+
+// GrowthAccount is an account the growth policy counts the days of, as
+// Settings › Growth policy marks it on its chart: its subscription's id
+// and name, its own name and its day (growthFrom, as the gateway counts
+// it). Waiting is one not used yet, on day 0 until its first use. Nothing
+// of its sign-in is in it.
+type GrowthAccount struct {
+	Provider string `json:"provider"`
+	Name     string `json:"name"`
+	Account  string `json:"account"`
+	Day      int    `json:"day"`
+	Waiting  bool   `json:"waiting,omitempty"`
+}
+
+// GrowthAccounts are the accounts with a day at now, by subscription and
+// name. One from before AccountAdded was kept has none and isn't listed.
+func GrowthAccounts(now time.Time) []GrowthAccount {
+	all, f := sharedAll(), storedFile()
+	var out []GrowthAccount
+	for _, s := range f.Providers {
+		name := s.ID
+		if p := lookIn(all, s.ID); p != nil && p.Name != "" {
+			name = p.Name
+		}
+		for u := range s.AccountAdded {
+			from := growthFrom(s.ID, u, now)
+			if !addedKnown(from) {
+				continue
+			}
+			out = append(out, GrowthAccount{
+				Provider: s.ID, Name: name, Account: u,
+				Day:     max(int(now.Sub(from).Hours()/24), 0),
+				Waiting: gatewayServed(s) && f.FirstUsedRead && !addedKnown(s.AccountFirstUsed[u]),
+			})
+		}
+	}
+	slices.SortFunc(out, func(a, b GrowthAccount) int {
+		return cmp.Or(cmp.Compare(a.Provider, b.Provider), cmp.Compare(a.Account, b.Account))
+	})
+	return out
 }
 
 // growthFrom is when the growth policy counts the days of the account

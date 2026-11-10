@@ -290,24 +290,33 @@ func CheckGrowthPolicies(own []GrowthPolicy, def string) error {
 			return fmt.Errorf("two growth policies are named %q", name)
 		}
 		names[strings.ToLower(name)] = true
-		switch p.Kind {
-		case GrowthRamp:
-			if p.Start < 1 || p.Start > 99 {
-				return fmt.Errorf("a growth ramp starts at 1%% to 99%%, not %d%%", p.Start)
-			}
-			if p.Days < 1 || p.Days > GrowthDaysMost {
-				return fmt.Errorf("a growth ramp reaches 100%% in 1 to %d days, not %d", GrowthDaysMost, p.Days)
-			}
-		case GrowthStaged:
-			if err := CheckGrowth(p.Stages); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("a growth policy ramps (%q) or has stages (%q), not %q", GrowthRamp, GrowthStaged, p.Kind)
+		if err := CheckGrowthShape(p); err != nil {
+			return err
 		}
 	}
 	if def != "" && !ids[def] {
 		return fmt.Errorf("no growth policy has the id %q", def)
+	}
+	return nil
+}
+
+// CheckGrowthShape says what is wrong with how p holds an account, nil
+// when nothing is: a ramp starts at 1–99% and reaches 100% in
+// 1–GrowthDaysMost days, and stages pass CheckGrowth. A user's policy is
+// one or the other; Off is magpie's alone.
+func CheckGrowthShape(p GrowthPolicy) error {
+	switch p.Kind {
+	case GrowthRamp:
+		if p.Start < 1 || p.Start > 99 {
+			return fmt.Errorf("a growth ramp starts at 1%% to 99%%, not %d%%", p.Start)
+		}
+		if p.Days < 1 || p.Days > GrowthDaysMost {
+			return fmt.Errorf("a growth ramp reaches 100%% in 1 to %d days, not %d", GrowthDaysMost, p.Days)
+		}
+	case GrowthStaged:
+		return CheckGrowth(p.Stages)
+	default:
+		return fmt.Errorf("a growth policy ramps (%q) or has stages (%q), not %q", GrowthRamp, GrowthStaged, p.Kind)
 	}
 	return nil
 }
