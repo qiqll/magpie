@@ -1813,11 +1813,17 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			http.Error(rw, "the growth policies are sent whole: policies and default", http.StatusBadRequest)
 			return
 		}
-		err := settings.EditGrowth(func([]settings.GrowthPolicy, string) ([]settings.GrowthPolicy, string, error) {
+		err := settings.EditGrowth(func(was []settings.GrowthPolicy, _ string) ([]settings.GrowthPolicy, string, error) {
+			// a policy a subscription picked stays until it picks another
+			// (T-131): deleted, its accounts would go to the default unseen
+			if err := growthPickedKept(was, *in.Policies); err != nil {
+				return nil, "", err
+			}
 			return *in.Policies, *in.Default, nil
 		})
 		if err != nil {
-			fail(rw, err)
+			// the subscriptions named once the settings' lock is let go
+			fail(rw, namePickedSubs(err))
 			return
 		}
 		writeJSON(rw, settingsState())
@@ -1845,14 +1851,22 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 				return
 			}
 		}
-		accounts := provider.GrowthAccounts(time.Now())
+		// the accounts and subscriptions the saved policy of that id holds
+		// now (T-131): a subscription's pick, or the default it follows
+		now := time.Now()
+		accounts := provider.GrowthAccountsOf(p.ID, now)
 		if accounts == nil {
 			accounts = []provider.GrowthAccount{}
+		}
+		uses := provider.GrowthUses(p.ID, now)
+		if uses == nil {
+			uses = []provider.GrowthUse{}
 		}
 		writeJSON(rw, struct {
 			Points   []provider.GrowthPoint   `json:"points"`
 			Accounts []provider.GrowthAccount `json:"accounts"`
-		}{provider.GrowthCurve(p, provider.GrowthHorizon(p)), accounts})
+			Uses     []provider.GrowthUse     `json:"uses"`
+		}{provider.GrowthCurve(p, provider.GrowthHorizon(p)), accounts, uses})
 	})
 	// whether Codex's OpenAI models say multi-agent V1 (#141): Codex's lists
 	// are written again and asked for again

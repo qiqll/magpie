@@ -116,3 +116,50 @@ func TestGrowthLeavesAnOldAccount(t *testing.T) {
 		t.Fatalf("an old account at 70%%: %d %s tried %s", code, body, tried)
 	}
 }
+
+// The gateway holds a new account by the growth policy its subscription
+// picked (T-131): Codex's own, at 40% of its five hours, is under
+// Standard's 53% on its second day (the default it follows) and takes the
+// request, its first use, which puts it on day 0. Codex set to Cautious
+// holds it at 30% there, so the spare takes the request; a pick no policy
+// has (one deleted since) is the default's again, Standard's 50%.
+func TestGrowthFollowsTheSubscriptionsPolicy(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	growthDefault(t)
+	b := newResetBackend(t)
+	if err := provider.SetRouting("codex", provider.Ordered); err != nil {
+		t.Fatal(err)
+	}
+	provider.All() // logins.json written with Codex's own account
+	addedAgo(t, "codex", "me@example.com", 36*time.Hour)
+	growthUsage(t, map[string]float64{"me@example.com": 40, "spare@example.com": 20}, map[string]float64{"me@example.com": 10})
+	try := func(want, at string) {
+		t.Helper()
+		b.mu.Lock()
+		b.tried = nil
+		b.mu.Unlock()
+		code, body := resetPost(t, New())
+		if tried, _ := b.seen(); code != 200 || !strings.Contains(body, "pong") || tried != want {
+			t.Fatalf("%s: %d %s tried %s, want %s", at, code, body, tried, want)
+		}
+	}
+	try("acct-1", "following the default, Standard")
+	if err := provider.SetGrowthPolicy("codex", settings.GrowthCautious); err != nil {
+		t.Fatal(err)
+	}
+	try("acct-2", "Cautious picked")
+
+	ps, err := provider.Stored()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range ps {
+		if ps[i].ID == "codex" {
+			ps[i].GrowthPolicy = "deleted-since"
+			if _, _, err := provider.Restore(ps[i : i+1]); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	try("acct-1", "a policy no longer there")
+}

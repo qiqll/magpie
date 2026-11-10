@@ -507,6 +507,13 @@ type Provider struct {
 	// it. Kept beside AccountAdded and gone with it; magpie's own, the
 	// editor's Save keeps what the file has.
 	AccountFirstUsed map[string]time.Time `json:"accountFirstUsed,omitempty"`
+	// GrowthPolicy is, for a subscription, the id of the growth policy its
+	// accounts are held by (T-131, settings.GrowthOf): "" follows the
+	// default, and an id no policy has (deleted since, or another
+	// magpie's) is held by the default too. Set on its own, with
+	// growthpolicy (SetGrowthPolicy); the editor's Save keeps what the
+	// file has.
+	GrowthPolicy string `json:"growthPolicy,omitempty"`
 	// AccountWindowAmounts is, for a subscription, the fixed amount of a
 	// window's own unit (credits, requests, tokens) an account is used to
 	// at most where the user set one in place of a share (9won_25273 on
@@ -1108,6 +1115,7 @@ func accountSettings(a, pk Provider) Provider {
 	a.Proxy, a.AccountProxies, a.AccountModels, a.AccountModelsAll = pk.Proxy, pk.AccountProxies, pk.AccountModels, pk.AccountModelsAll
 	a.AccountCaps, a.AccountWindowCaps, a.AccountWindowAmounts = pk.AccountCaps, pk.AccountWindowCaps, pk.AccountWindowAmounts
 	a.CapStop, a.CapCareful = pk.CapStop, pk.CapCareful
+	a.GrowthPolicy = pk.GrowthPolicy
 	a.UseFirst = pk.UseFirst
 	a.AccountNames = pk.AccountNames
 	a.MaxConcurrency, a.PinUpstream = pk.MaxConcurrency, pk.PinUpstream
@@ -1378,6 +1386,8 @@ func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err e
 		// when its accounts were added and first used is magpie's, never
 		// the editor's
 		p.AccountAdded, p.AccountFirstUsed = was.AccountAdded, was.AccountFirstUsed
+		// and its growth policy is set on its own (SetGrowthPolicy)
+		p.GrowthPolicy = was.GrowthPolicy
 		if p.Was == nil {
 			p.Was = was.Was
 		}
@@ -1969,6 +1979,7 @@ func normalize(p Provider) Provider {
 	p.AccountWindowCaps = normalWindowCaps(p.AccountWindowCaps)
 	p.AccountAdded = normalAccountAdded(p.AccountAdded)
 	p.AccountFirstUsed = normalAccountAdded(p.AccountFirstUsed)
+	p.GrowthPolicy = strings.TrimSpace(p.GrowthPolicy)
 	p.AccountWindowAmounts = normalWindowAmounts(p.AccountWindowAmounts)
 	p.AccountNames = normalAccountNames(p.AccountNames)
 	p.KeySpendCaps = normalKeySpendCaps(p.KeySpendCaps)

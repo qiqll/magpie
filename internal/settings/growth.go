@@ -179,6 +179,55 @@ func (s Settings) GrowthInEffect() GrowthPolicy {
 	return builtinGrowth(GrowthStandard)
 }
 
+// GrowthOf is the policy a subscription that picked id is held by (T-131):
+// the user's own of that id, before a built-in one a later magpie may
+// add; the built-in one; the default (GrowthInEffect) for "" (follow the
+// default) and for an id no policy has, one deleted since it was picked or
+// written by another magpie. withGrowth asks it on every request: it makes
+// nothing on the heap.
+func (s Settings) GrowthOf(id string) GrowthPolicy {
+	if p, ok := s.growthPicked(id); ok {
+		return p
+	}
+	if s.Growth != nil && id != "" {
+		// the stages from before policies were kept, picked as
+		// GrowthPoliciesAll lists them before MigrateGrowth has run
+		if mine, name := migratedID(s.GrowthPolicies); id == mine {
+			return GrowthPolicy{ID: mine, Name: name, Kind: GrowthStaged, Stages: *s.Growth}
+		}
+	}
+	return s.GrowthInEffect()
+}
+
+// GrowthKnows says a policy has the id, so a subscription can pick it: a
+// built-in one, the user's own, or their stages from before policies were
+// kept (as GrowthPoliciesAll lists them).
+func (s Settings) GrowthKnows(id string) bool {
+	if _, ok := s.growthPicked(id); ok {
+		return true
+	}
+	if s.Growth != nil {
+		mine, _ := migratedID(s.GrowthPolicies)
+		return id == mine
+	}
+	return false
+}
+
+func (s Settings) growthPicked(id string) (GrowthPolicy, bool) {
+	if id == "" {
+		return GrowthPolicy{}, false
+	}
+	for _, p := range s.GrowthPolicies {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	if p := builtinGrowth(id); p.ID != "" {
+		return p, true
+	}
+	return GrowthPolicy{}, false
+}
+
 // GrowthPoliciesAll are the built-in policies, then the user's own, as
 // MigrateGrowth would keep them. The list is the caller's own.
 func (s Settings) GrowthPoliciesAll() []GrowthPolicy {
