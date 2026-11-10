@@ -139,16 +139,16 @@ func rampCaps(start, days int, added, now time.Time) map[string]int {
 	return out
 }
 
-// withGrowth is c with the shares of the policy the subscription id is
-// held by (growthPolicyOf) for an account added at added, at now, on the
-// windows the user set nothing on (no share, no amount); c as it is when
-// the account has a cap of its own, which holds every window. c's map is
-// never written: one with growth is a copy.
-func (c WindowCaps) withGrowth(id string, added, now time.Time) WindowCaps {
+// withGrowth is c with the shares of the policy the account user of the
+// subscription id is held by (growthPolicyFor) for an account added at
+// added, at now, on the windows the user set nothing on (no share, no
+// amount); c as it is when the account has a cap of its own, which holds
+// every window. c's map is never written: one with growth is a copy.
+func (c WindowCaps) withGrowth(id, user string, added, now time.Time) WindowCaps {
 	if !addedKnown(added) || c.All > 0 {
 		return c
 	}
-	return c.withPolicy(growthPolicyOf(id), added, now)
+	return c.withPolicy(growthPolicyFor(id, user), added, now)
 }
 
 // growthPolicyOf is the policy the accounts of the subscription id are
@@ -160,6 +160,72 @@ func (c WindowCaps) withGrowth(id string, added, now time.Time) WindowCaps {
 func growthPolicyOf(id string) settings.GrowthPolicy {
 	s, _ := storedPicks(id)
 	return settings.Shared().GrowthOf(s.GrowthPolicy)
+}
+
+// growthPolicyFor is the policy the account user of the subscription id
+// is held by (T-133): the one it picked itself (AccountGrowthPolicy),
+// before its subscription's (growthPolicyOf), before the default
+// (settings.GrowthFor). Every hold, switch, row and chart reads it.
+func growthPolicyFor(id, user string) settings.GrowthPolicy {
+	s, _ := storedPicks(id)
+	return settings.Shared().GrowthFor(s.AccountGrowthPolicy[accountKey(user)], s.GrowthPolicy)
+}
+
+// SetAccountGrowthPolicy has the account ref of the subscription id held
+// by the growth policy policy (T-133), or by its subscription's for "":
+// one no policy has is refused, as SetGrowthPolicy refuses it. Written on
+// the record as it is under the lock (editFound).
+func SetAccountGrowthPolicy(id, ref, policy string) error {
+	p, err := Find(id)
+	if err != nil {
+		return err
+	}
+	if p.Account == nil {
+		return fmt.Errorf("%s has keys, not subscription accounts for a growth policy to hold", p.Name)
+	}
+	r, ok := p.accountRef(ref)
+	if !ok {
+		return fmt.Errorf("%s has no account %q", p.Name, ref)
+	}
+	k := accountKey(r)
+	policy = strings.TrimSpace(policy)
+	if policy != "" && !settings.Shared().GrowthKnows(policy) {
+		return fmt.Errorf("no growth policy has the id %q", policy)
+	}
+	return editFound(p, func(q *Provider) error {
+		// asked again under the lock, as SetGrowthPolicy does
+		if policy != "" && !settings.Shared().GrowthKnows(policy) {
+			return fmt.Errorf("no growth policy has the id %q", policy)
+		}
+		m := maps.Clone(q.AccountGrowthPolicy)
+		if policy == "" {
+			delete(m, k)
+		} else {
+			if m == nil {
+				m = map[string]string{}
+			}
+			m[k] = policy
+		}
+		q.AccountGrowthPolicy = normalAccountGrowthPolicy(m)
+		return nil
+	})
+}
+
+// normalAccountGrowthPolicy is m as it is kept: keys in lower case, ids
+// trimmed, accounts with none left out; nil for none.
+func normalAccountGrowthPolicy(m map[string]string) map[string]string {
+	var out map[string]string
+	for u, id := range m {
+		u, id = accountKey(u), strings.TrimSpace(id)
+		if u == "" || id == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[u] = id
+	}
+	return out
 }
 
 // SetGrowthPolicy has the subscription id's accounts held by the growth
@@ -190,22 +256,38 @@ func SetGrowthPolicy(id, policy string) error {
 	})
 }
 
-// GrowthPicks is each subscription that picked a growth policy, by its
-// id, with the policy's id as it was picked: one no policy has among
-// them. A policy one picked is not deleted until it picks another
-// (Settings › Growth policy, T-131). A providers.json that can't be read
-// is an error, never "none picked".
-func GrowthPicks() (map[string]string, error) {
+// GrowthPick is a growth policy picked: by the subscription Provider for
+// its accounts (T-131), or by its account Account alone (T-133), with the
+// policy's id as it was picked.
+type GrowthPick struct {
+	Provider string
+	Account  string
+	Policy   string
+}
+
+// GrowthPicks is each pick of a growth policy, by a subscription or by one
+// of its accounts, one no policy has among them. A policy picked is not
+// deleted until it is picked no more (Settings › Growth policy). A
+// providers.json that can't be read is an error, never "none picked".
+func GrowthPicks() ([]GrowthPick, error) {
 	f, err := read()
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]string{}
+	var out []GrowthPick
 	for _, s := range f.Providers {
 		if s.GrowthPolicy != "" {
-			out[s.ID] = s.GrowthPolicy
+			out = append(out, GrowthPick{Provider: s.ID, Policy: s.GrowthPolicy})
+		}
+		for u, id := range s.AccountGrowthPolicy {
+			if id != "" {
+				out = append(out, GrowthPick{Provider: s.ID, Account: u, Policy: id})
+			}
 		}
 	}
+	slices.SortFunc(out, func(a, b GrowthPick) int {
+		return cmp.Or(cmp.Compare(a.Provider, b.Provider), cmp.Compare(a.Account, b.Account))
+	})
 	return out, nil
 }
 
@@ -301,20 +383,21 @@ func GrowthAccounts(now time.Time) []GrowthAccount {
 	return growthAccounts(now, nil)
 }
 
-// GrowthAccountsOf is GrowthAccounts of the subscriptions the policy id
-// holds (growthPolicyOf): the accounts its chart marks (T-131).
+// GrowthAccountsOf is GrowthAccounts the policy id holds (growthPolicyFor:
+// the account's own pick, its subscription's, the default): the accounts
+// its chart marks (T-131, T-133).
 func GrowthAccountsOf(id string, now time.Time) []GrowthAccount {
-	return growthAccounts(now, func(sub string) bool { return growthPolicyOf(sub).ID == id })
+	return growthAccounts(now, func(sub, user string) bool { return growthPolicyFor(sub, user).ID == id })
 }
 
-// growthAccounts is GrowthAccounts of the subscriptions held reports true
-// of, every one for nil.
-func growthAccounts(now time.Time, held func(sub string) bool) []GrowthAccount {
+// growthAccounts is GrowthAccounts of the accounts held reports true of,
+// every one for nil.
+func growthAccounts(now time.Time, held func(sub, user string) bool) []GrowthAccount {
 	all, f := sharedAll(), storedFile()
 	var out []GrowthAccount
 	for _, s := range f.Providers {
 		p := lookIn(all, s.ID)
-		if p == nil || p.Account == nil || p.Off || len(s.AccountAdded) == 0 || held != nil && !held(s.ID) {
+		if p == nil || p.Account == nil || p.Off || len(s.AccountAdded) == 0 {
 			continue
 		}
 		name := cmp.Or(p.Name, s.ID)
@@ -327,7 +410,7 @@ func growthAccounts(now time.Time, held func(sub string) bool) []GrowthAccount {
 		}
 		for u := range s.AccountAdded {
 			from := growthFrom(s.ID, u, now)
-			if !listed[u] || s.AccountCaps[u] > 0 || !addedKnown(from) {
+			if !listed[u] || s.AccountCaps[u] > 0 || !addedKnown(from) || held != nil && !held(s.ID, u) {
 				continue
 			}
 			out = append(out, GrowthAccount{
@@ -347,17 +430,22 @@ func growthAccounts(now time.Time, held func(sub string) bool) []GrowthAccount {
 // Settings › Growth policy's In use lists it (T-131): its id and name,
 // whether it picked the policy (else it follows the default, or picked one
 // no policy has), and how many of its accounts the policy counts the days
-// of now (GrowthAccounts').
+// of now (GrowthAccounts'). AccountsPicked is how many of its accounts
+// picked the policy themselves (T-133); AccountsOnly says the
+// subscription itself is held by another, and is listed for those alone.
 type GrowthUse struct {
-	Provider string `json:"provider"`
-	Name     string `json:"name"`
-	Picked   bool   `json:"picked,omitempty"`
-	Accounts int    `json:"accounts"`
+	Provider       string `json:"provider"`
+	Name           string `json:"name"`
+	Picked         bool   `json:"picked,omitempty"`
+	Accounts       int    `json:"accounts"`
+	AccountsPicked int    `json:"accountsPicked,omitempty"`
+	AccountsOnly   bool   `json:"accountsOnly,omitempty"`
 }
 
-// GrowthUses are the subscriptions the policy id holds the accounts of
-// (growthPolicyOf), by name: each signed-in subscription that isn't off,
-// with or without accounts of a day yet.
+// GrowthUses are the subscriptions the policy id holds the accounts of,
+// by name: each signed-in subscription that isn't off held by it
+// (growthPolicyOf), with or without accounts of a day yet, and each with
+// an account that picked it itself (T-133).
 func GrowthUses(id string, now time.Time) []GrowthUse {
 	counts := map[string]int{}
 	for _, a := range GrowthAccountsOf(id, now) {
@@ -368,11 +456,20 @@ func GrowthUses(id string, now time.Time) []GrowthUse {
 		if p.Account == nil || p.Off || slices.ContainsFunc(out, func(u GrowthUse) bool { return u.Provider == p.ID }) {
 			continue
 		}
-		if growthPolicyOf(p.ID).ID != id {
+		s, _ := storedPicks(p.ID)
+		// as GrowthPicks counts them, so the In use the page shows is
+		// what keeps the policy from being deleted
+		mine := 0
+		for _, pick := range s.AccountGrowthPolicy {
+			if pick == id {
+				mine++
+			}
+		}
+		held := growthPolicyOf(p.ID).ID == id
+		if !held && mine == 0 {
 			continue
 		}
-		s, _ := storedPicks(p.ID)
-		out = append(out, GrowthUse{Provider: p.ID, Name: cmp.Or(p.Name, p.ID), Picked: s.GrowthPolicy == id, Accounts: counts[p.ID]})
+		out = append(out, GrowthUse{Provider: p.ID, Name: cmp.Or(p.Name, p.ID), Picked: s.GrowthPolicy == id, Accounts: counts[p.ID], AccountsPicked: mine, AccountsOnly: !held})
 	}
 	slices.SortFunc(out, func(a, b GrowthUse) int {
 		return cmp.Or(cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)), cmp.Compare(a.Provider, b.Provider))
@@ -406,8 +503,9 @@ type AccountGrowth struct {
 	ByAdded       bool   `json:"byAdded,omitempty"`
 }
 
-// AccountGrowthOf is how the growth policy its subscription is held by
-// (growthPolicyOf) holds the account user of the subscription id at now, nil when it holds none of its windows: one from
+// AccountGrowthOf is how the growth policy the account is held by
+// (growthPolicyFor: its own pick, its subscription's, the default) holds
+// the account user of the subscription id at now, nil when it holds none of its windows: one from
 // before, one past its last day, a policy that is Off, a subscription
 // turned off, a cap of the account's own, or every window it has the
 // user's (a ramp-up skipped). Its shares are those AccountCapsOf adds to
@@ -425,7 +523,7 @@ func AccountGrowthOf(id, user string, now time.Time) *AccountGrowth {
 	if !addedKnown(from) {
 		return nil
 	}
-	p := growthPolicyOf(id)
+	p := growthPolicyFor(id, user)
 	own, names := ownCapsOf(id, user), growthNamesOf(id, user)
 	// the policy's shares on the windows it holds at the time at, and
 	// whether it holds any
@@ -1028,10 +1126,20 @@ func forgetAdded(agent string, users ...string) {
 		return
 	}
 	p := &f.Providers[i]
-	changed := false
+	changed, cloned := false, false
 	for _, u := range users {
+		// the growth policy it picked goes with it too (T-133)
+		if _, ok := p.AccountGrowthPolicy[accountKey(u)]; ok {
+			p.AccountGrowthPolicy = maps.Clone(p.AccountGrowthPolicy)
+			delete(p.AccountGrowthPolicy, accountKey(u))
+			if len(p.AccountGrowthPolicy) == 0 {
+				p.AccountGrowthPolicy = nil
+			}
+			changed = true
+		}
 		if _, ok := p.AccountAdded[accountKey(u)]; ok {
-			if !changed {
+			if !cloned {
+				cloned = true
 				p.AccountAdded = maps.Clone(p.AccountAdded)
 				p.AccountFirstUsed = maps.Clone(p.AccountFirstUsed)
 			}

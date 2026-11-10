@@ -52,3 +52,24 @@ func TestGrowthOf(t *testing.T) {
 		t.Errorf("following the default: %q", got.ID)
 	}
 }
+
+// An account's pick (T-133) comes before its subscription's, which comes
+// before the default: each level taken away hands the account to the
+// next. An account's pick that is gone falls to its subscription's.
+func TestGrowthForAccountThenSubscriptionThenDefault(t *testing.T) {
+	own := []GrowthPolicy{{ID: "slow", Name: "Slow", Kind: GrowthRamp, Start: 20, Days: 60}}
+	s := Settings{GrowthPolicies: own, GrowthDefault: GrowthGentle}
+	for _, c := range []struct{ account, sub, want string }{
+		{"slow", GrowthCautious, "slow"},         // the account's own
+		{"", GrowthCautious, GrowthCautious},     // none: the subscription's
+		{"", "", GrowthGentle},                   // neither: the default
+		{"gone", GrowthCautious, GrowthCautious}, // the account's gone: the subscription's
+		{"gone", "", GrowthGentle},               // both gone or none: the default
+		{GrowthNone, GrowthCautious, GrowthNone}, // Off picked for the account alone
+		{GrowthCautious, GrowthNone, GrowthCautious},
+	} {
+		if got := s.GrowthFor(c.account, c.sub); got.ID != c.want {
+			t.Errorf("account %q, subscription %q: held by %q, want %q", c.account, c.sub, got.ID, c.want)
+		}
+	}
+}

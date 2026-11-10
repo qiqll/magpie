@@ -514,6 +514,16 @@ type Provider struct {
 	// growthpolicy (SetGrowthPolicy); the editor's Save keeps what the
 	// file has.
 	GrowthPolicy string `json:"growthPolicy,omitempty"`
+	// AccountGrowthPolicy is, for a subscription, the growth policy an
+	// account picked for itself (T-133), by its name in lower case: it
+	// comes before GrowthPolicy, which comes before the default
+	// (settings.GrowthFor). An account with none follows its subscription,
+	// as does one whose pick no policy has. Set on its own, with
+	// accountgrowthpolicy (SetAccountGrowthPolicy); the editor's Save keeps
+	// what the file has. It moves with an account renamed
+	// (moveAccountSettings) and goes when the user removes the account
+	// (forgetAdded).
+	AccountGrowthPolicy map[string]string `json:"accountGrowthPolicy,omitempty"`
 	// AccountWindowAmounts is, for a subscription, the fixed amount of a
 	// window's own unit (credits, requests, tokens) an account is used to
 	// at most where the user set one in place of a share (9won_25273 on
@@ -990,6 +1000,7 @@ func (p Provider) clone() Provider {
 	p.AccountCaps = maps.Clone(p.AccountCaps)
 	p.AccountAdded = maps.Clone(p.AccountAdded)
 	p.AccountFirstUsed = maps.Clone(p.AccountFirstUsed)
+	p.AccountGrowthPolicy = maps.Clone(p.AccountGrowthPolicy)
 	p.AccountNames = maps.Clone(p.AccountNames)
 	p.KeySpendCaps = maps.Clone(p.KeySpendCaps)
 	p.KeyOwnBalances = maps.Clone(p.KeyOwnBalances)
@@ -1115,7 +1126,7 @@ func accountSettings(a, pk Provider) Provider {
 	a.Proxy, a.AccountProxies, a.AccountModels, a.AccountModelsAll = pk.Proxy, pk.AccountProxies, pk.AccountModels, pk.AccountModelsAll
 	a.AccountCaps, a.AccountWindowCaps, a.AccountWindowAmounts = pk.AccountCaps, pk.AccountWindowCaps, pk.AccountWindowAmounts
 	a.CapStop, a.CapCareful = pk.CapStop, pk.CapCareful
-	a.GrowthPolicy = pk.GrowthPolicy
+	a.GrowthPolicy, a.AccountGrowthPolicy = pk.GrowthPolicy, pk.AccountGrowthPolicy
 	a.UseFirst = pk.UseFirst
 	a.AccountNames = pk.AccountNames
 	a.MaxConcurrency, a.PinUpstream = pk.MaxConcurrency, pk.PinUpstream
@@ -1387,7 +1398,7 @@ func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err e
 		// the editor's
 		p.AccountAdded, p.AccountFirstUsed = was.AccountAdded, was.AccountFirstUsed
 		// and its growth policy is set on its own (SetGrowthPolicy)
-		p.GrowthPolicy = was.GrowthPolicy
+		p.GrowthPolicy, p.AccountGrowthPolicy = was.GrowthPolicy, was.AccountGrowthPolicy
 		if p.Was == nil {
 			p.Was = was.Was
 		}
@@ -1980,6 +1991,7 @@ func normalize(p Provider) Provider {
 	p.AccountAdded = normalAccountAdded(p.AccountAdded)
 	p.AccountFirstUsed = normalAccountAdded(p.AccountFirstUsed)
 	p.GrowthPolicy = strings.TrimSpace(p.GrowthPolicy)
+	p.AccountGrowthPolicy = normalAccountGrowthPolicy(p.AccountGrowthPolicy)
 	p.AccountWindowAmounts = normalWindowAmounts(p.AccountWindowAmounts)
 	p.AccountNames = normalAccountNames(p.AccountNames)
 	p.KeySpendCaps = normalKeySpendCaps(p.KeySpendCaps)

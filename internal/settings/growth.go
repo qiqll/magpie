@@ -199,6 +199,19 @@ func (s Settings) GrowthOf(id string) GrowthPolicy {
 	return s.GrowthInEffect()
 }
 
+// GrowthFor is the policy an account that picked account, of a
+// subscription that picked sub, is held by (T-133): the account's own pick
+// first, while a policy has it; else the subscription's, as GrowthOf reads
+// it (the default for none, or for one no policy has). An account's pick
+// that is gone falls to its subscription's, not to the default. Asked on
+// every request as GrowthOf is: nothing on the heap.
+func (s Settings) GrowthFor(account, sub string) GrowthPolicy {
+	if account != "" && s.GrowthKnows(account) {
+		return s.GrowthOf(account)
+	}
+	return s.GrowthOf(sub)
+}
+
 // GrowthKnows says a policy has the id, so a subscription can pick it: a
 // built-in one, the user's own, or their stages from before policies were
 // kept (as GrowthPoliciesAll lists them).

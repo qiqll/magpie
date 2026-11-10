@@ -262,7 +262,7 @@ func TestGrowthUsesAndAccountsOf(t *testing.T) {
 	if u := use(GrowthUses("before", now), "copilot"); u == nil || u.Picked {
 		t.Errorf("Copilot, following the default: %+v", GrowthUses("before", now))
 	}
-	if picks, err := GrowthPicks(); err != nil || picks["codex"] != settings.GrowthCautious || len(picks) != 1 {
+	if picks, err := GrowthPicks(); err != nil || !slices.Equal(picks, []GrowthPick{{Provider: "codex", Policy: settings.GrowthCautious}}) {
 		t.Fatalf("picks: %v %v", picks, err)
 	}
 }

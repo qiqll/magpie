@@ -1,0 +1,279 @@
+package provider
+
+import (
+	"encoding/json"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/yetone/magpie/internal/settings"
+)
+
+// accountPickFixture is growthPicksFixture with a second Codex account of
+// the same day, other@example.com, and new@example.com's own pick.
+func accountPickFixture(t *testing.T, sub, account string) {
+	t.Helper()
+	growthPicksFixture(t, sub)
+	f, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &f.Providers[0]
+	c.AccountAdded["other@example.com"] = c.AccountAdded["new@example.com"]
+	if account != "" {
+		c.AccountGrowthPolicy = map[string]string{"new@example.com": account}
+	}
+	if err := store(f); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An account's own pick (T-133) comes before its subscription's, which
+// comes before the default, in the gateway's holds (CapsOf), switching
+// (AccountCapsOf) and the account's row (AccountGrowthOf) alike. On day 1
+// Gentle holds at 74%, Cautious at 32% and Standard, the default, at 53%.
+// Each level taken away hands the account to the next; the other account
+// of the subscription keeps the subscription's all along; a pick no policy
+// has is its subscription's, not the default's.
+func TestGrowthPolicyByAccount(t *testing.T) {
+	accountPickFixture(t, settings.GrowthCautious, settings.GrowthGentle)
+	row := func(want string) {
+		t.Helper()
+		if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g == nil || g.Policy != want {
+			t.Errorf("the row says %+v, want %s", g, want)
+		}
+	}
+	if f, w := pickedShare(t, "codex", "new@example.com"); f != 74 || w != 74 {
+		t.Fatalf("Gentle picked for the account, Cautious for Codex: 5 hours %d%%, week %d%%", f, w)
+	}
+	row(settings.GrowthGentle)
+	if f, _ := pickedShare(t, "codex", "other@example.com"); f != 32 {
+		t.Errorf("the other account, following Codex's Cautious: %d%%", f)
+	}
+
+	set := func(sub string, account map[string]string) {
+		t.Helper()
+		f, err := read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Providers[0].GrowthPolicy, f.Providers[0].AccountGrowthPolicy = sub, account
+		if err := store(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(settings.GrowthCautious, map[string]string{"new@example.com": "gone"})
+	if f, _ := pickedShare(t, "codex", "new@example.com"); f != 32 {
+		t.Errorf("the account's pick gone: held by Codex's Cautious, got %d%%", f)
+	}
+	row(settings.GrowthCautious)
+	set(settings.GrowthCautious, nil)
+	if f, _ := pickedShare(t, "codex", "new@example.com"); f != 32 {
+		t.Errorf("no pick of its own: Codex's Cautious, got %d%%", f)
+	}
+	set("", nil)
+	if f, _ := pickedShare(t, "codex", "new@example.com"); f != 53 {
+		t.Errorf("no pick at all: the default Standard, got %d%%", f)
+	}
+	row(settings.GrowthStandard)
+	set("", map[string]string{"new@example.com": settings.GrowthNone})
+	if f, _ := pickedShare(t, "codex", "new@example.com"); f != 0 {
+		t.Errorf("Off picked for the account alone: held at %d%%", f)
+	}
+	if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g != nil {
+		t.Errorf("Off picked, the row still says %+v", g)
+	}
+	if f, _ := pickedShare(t, "codex", "other@example.com"); f != 53 {
+		t.Errorf("the other account moved with new@example.com's Off: %d%%", f)
+	}
+}
+
+// SetAccountGrowthPolicy writes the account's pick on the record as it is
+// under the lock, by the account's name in lower case, so a setting set
+// since stays; a policy there is none of, or an account the subscription
+// hasn't, is refused and changes nothing. The editor's Save keeps the
+// picks the file has, and "" has the account follow its subscription.
+func TestSetAccountGrowthPolicy(t *testing.T) {
+	firstUsedFixture(t, 36*time.Hour)
+	picks := func() map[string]string {
+		t.Helper()
+		s, ok := storedPicks("codex")
+		if !ok {
+			t.Fatal("no record of Codex's")
+		}
+		return s.AccountGrowthPolicy
+	}
+	if err := SetAccountGrowthPolicy("codex", "NEW@example.com ", " cautious "); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetCapStop("codex", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetGrowthPolicy("codex", settings.GrowthGentle); err != nil {
+		t.Fatal(err)
+	}
+	if got := picks(); len(got) != 1 || got["new@example.com"] != settings.GrowthCautious {
+		t.Fatalf("after the account's pick and two more settings: %v", got)
+	}
+	if s, _ := storedPicks("codex"); !s.CapStop || s.GrowthPolicy != settings.GrowthGentle {
+		t.Fatalf("the settings set after it: %+v", s)
+	}
+	if err := SetAccountGrowthPolicy("codex", "new@example.com", "nope"); err == nil {
+		t.Fatal("took a policy there is none of")
+	}
+	if err := SetAccountGrowthPolicy("codex", "nobody@example.com", settings.GrowthGentle); err == nil {
+		t.Fatal("took an account Codex hasn't")
+	}
+	if got := picks(); len(got) != 1 || got["new@example.com"] != settings.GrowthCautious {
+		t.Fatalf("a refused pick changed them: %v", got)
+	}
+	if f, _ := pickedShare(t, "codex", "new@example.com"); f != 32 {
+		t.Errorf("picked Cautious, under Codex's Gentle: %d%%", f)
+	}
+
+	p, err := Find("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := *p
+	q.AccountGrowthPolicy = map[string]string{"me@example.com": settings.GrowthNone}
+	if err := Save(q); err != nil {
+		t.Fatal(err)
+	}
+	if got := picks(); len(got) != 1 || got["new@example.com"] != settings.GrowthCautious {
+		t.Fatalf("Save of a form carrying other picks: %v", got)
+	}
+	if err := SetAccountGrowthPolicy("codex", "new@example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := picks(); got != nil {
+		t.Fatalf("following its subscription again: %v", got)
+	}
+	if f, _ := pickedShare(t, "codex", "new@example.com"); f != 74 {
+		t.Errorf("following Codex's Gentle again: %d%%", f)
+	}
+}
+
+// An account's pick moves with it to its new name (moveAccountSettings,
+// as AccountAdded does), and goes when the user removes the account
+// (forgetAdded, through ForgetLogin): signed in again, it follows its
+// subscription. A record left with nothing else goes too.
+func TestAccountGrowthPolicyMovesAndGoes(t *testing.T) {
+	accountPickFixture(t, "", settings.GrowthCautious)
+	if err := moveAccountSettings("codex", map[string]string{"new@example.com": "Renamed@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := storedPicks("codex"); s.AccountGrowthPolicy["renamed@example.com"] != settings.GrowthCautious || len(s.AccountGrowthPolicy) != 1 {
+		t.Fatalf("after the rename: %v", s.AccountGrowthPolicy)
+	}
+	if f, _ := pickedShare(t, "codex", "renamed@example.com"); f != 32 {
+		t.Errorf("held under its new name at %d%%", f)
+	}
+
+	// a pick on an account with no day kept goes with it all the same
+	f, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Providers[0].AccountGrowthPolicy["nobody@example.com"] = settings.GrowthGentle
+	f.Providers = append(f.Providers, Provider{ID: "pickonly", AccountGrowthPolicy: map[string]string{"x@example.com": settings.GrowthGentle}})
+	if err := store(f); err != nil {
+		t.Fatal(err)
+	}
+	forgetAdded("codex", "NOBODY@example.com")
+	if s, _ := storedPicks("codex"); s.AccountGrowthPolicy["nobody@example.com"] != "" || s.AccountGrowthPolicy["renamed@example.com"] != settings.GrowthCautious {
+		t.Fatalf("after removing nobody@example.com: %v", s.AccountGrowthPolicy)
+	}
+	forgetAdded("pickonly", "x@example.com")
+	if _, ok := storedPicks("pickonly"); ok {
+		t.Error("a record kept for its pick alone stayed once the pick went")
+	}
+
+	firstUsedFixture(t, 36*time.Hour)
+	if err := SetAccountGrowthPolicy("codex", "new@example.com", settings.GrowthCautious); err != nil {
+		t.Fatal(err)
+	}
+	if err := ForgetLogin("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := storedPicks("codex"); s.AccountGrowthPolicy != nil {
+		t.Fatalf("removed by the user, its pick stayed: %v", s.AccountGrowthPolicy)
+	}
+}
+
+// An account's pick goes with providers.json to another computer (sync's
+// Stored and Mirror) and with a backup (Restore), so the account there is
+// held by the same policy; the field is accountGrowthPolicy.
+func TestAccountGrowthPolicyThroughASync(t *testing.T) {
+	accountPickFixture(t, "", settings.GrowthCautious)
+	ps, err := Stored()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(ps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := raw[0]["accountGrowthPolicy"].(map[string]any); m["new@example.com"] != settings.GrowthCautious {
+		t.Fatalf("written as %v", raw[0])
+	}
+
+	accountPickFixture(t, "", "") // the other computer
+	var there []Provider
+	if err := json.Unmarshal(b, &there); err != nil {
+		t.Fatal(err)
+	}
+	if err := Mirror(there, nil); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := storedPicks("codex"); s.AccountGrowthPolicy["new@example.com"] != settings.GrowthCautious {
+		t.Fatalf("after a sync: %v", s.AccountGrowthPolicy)
+	}
+	if f, _ := pickedShare(t, "codex", "new@example.com"); f != 32 {
+		t.Errorf("held after a sync at %d%%", f)
+	}
+
+	accountPickFixture(t, "", "")
+	if _, _, err := Restore(there); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := storedPicks("codex"); s.AccountGrowthPolicy["new@example.com"] != settings.GrowthCautious {
+		t.Fatalf("after a restore: %v", s.AccountGrowthPolicy)
+	}
+}
+
+// A policy an account picked for itself marks it on its chart and lists
+// its subscription in its In use, with how many of its accounts picked it,
+// though the subscription follows another (AccountsOnly); the policy the
+// subscription follows no longer marks it. GrowthPicks names the account,
+// so the page's delete refuses the policy.
+func TestGrowthUsesCountAnAccountsPick(t *testing.T) {
+	firstUsedFixture(t, 3*24*time.Hour+time.Hour) // the default is "before"
+	has := func(as []GrowthAccount, user string) bool {
+		return slices.ContainsFunc(as, func(a GrowthAccount) bool { return a.Provider == "codex" && a.Account == user })
+	}
+	now := time.Now()
+	if err := SetAccountGrowthPolicy("codex", "new@example.com", settings.GrowthCautious); err != nil {
+		t.Fatal(err)
+	}
+	if !has(GrowthAccountsOf(settings.GrowthCautious, now), "new@example.com") || has(GrowthAccountsOf("before", now), "new@example.com") {
+		t.Fatalf("picked Cautious: its chart %+v, the default's %+v", GrowthAccountsOf(settings.GrowthCautious, now), GrowthAccountsOf("before", now))
+	}
+	us := GrowthUses(settings.GrowthCautious, now)
+	i := slices.IndexFunc(us, func(u GrowthUse) bool { return u.Provider == "codex" })
+	if i < 0 || !us[i].AccountsOnly || us[i].Picked || us[i].AccountsPicked != 1 || us[i].Accounts != 1 {
+		t.Fatalf("Cautious's In use: %+v", us)
+	}
+	us = GrowthUses("before", now)
+	if i := slices.IndexFunc(us, func(u GrowthUse) bool { return u.Provider == "codex" }); i < 0 || us[i].AccountsOnly || us[i].AccountsPicked != 0 || us[i].Accounts != 0 {
+		t.Fatalf("the default's In use, Codex following it with its account picked away: %+v", us)
+	}
+	picks, err := GrowthPicks()
+	if err != nil || !slices.Equal(picks, []GrowthPick{{Provider: "codex", Account: "new@example.com", Policy: settings.GrowthCautious}}) {
+		t.Fatalf("picks: %v %v", picks, err)
+	}
+}
