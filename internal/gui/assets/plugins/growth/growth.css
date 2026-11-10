@@ -66,3 +66,9 @@
 .gp-table th, .gp-table td { padding: 2px 12px 2px 0; text-align: left; }
 .gp-table th { font-weight: 500; color: var(--muted); }
 .gp-table td { color: var(--fg-2); }
+/* In use's subscriptions, and a subscription editor's pick (T-131) */
+.growth-foot .growth-uses { display: flex; flex-direction: column; gap: 1px; margin-top: 4px; overflow-wrap: anywhere; }
+.growth-pick { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.growth-pick .growth-pill { max-width: 100%; }
+.growth-pick .growth-pill > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.growth-pick .growth-gone { color: var(--warn, var(--fg-2)); overflow-wrap: anywhere; }

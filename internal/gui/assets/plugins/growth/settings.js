@@ -163,7 +163,9 @@ function renderGrowth(s) {
   const foot = el("div", "row pref growth-foot");
   const fw = el("div", "who");
   const inUse = all.find((p) => p.id === d.def);
-  fw.append(el("div", "name", t("In use")), el("div", "gp-note growth-inuse", t("{name}, the default, holds every account", { name: inUse ? growthName(inUse) : t("Standard") })));
+  // the subscriptions the policy shown holds, as growth/preview tells them
+  // (T-131): filled in as its chart comes back (growthUseFill)
+  fw.append(el("div", "name", t("In use")), el("div", "gp-note growth-inuse", t("{name} is the default: a subscription that picked no policy follows it", { name: inUse ? growthName(inUse) : t("Standard") })), el("div", "gp-note growth-uses"));
   const fv = el("div", "val");
   const save = el("button", "text growth-save", t("Save"));
   save.type = "button";
@@ -325,7 +327,7 @@ function growthEditor(p, d, all, edit, redraw) {
 // faded
 function growthAsk(p) {
   const [out] = growthOut(p);
-  const key = out ? JSON.stringify({ kind: out.kind, start: out.start, days: out.days, stages: out.stages }) : "";
+  const key = out ? JSON.stringify({ id: out.id, kind: out.kind, start: out.start, days: out.days, stages: out.stages }) : "";
   growthChart.want = key;
   growthChart.err = "";
   clearTimeout(growthChart.timer);
@@ -458,6 +460,24 @@ function growthDraw() {
   if (growthChart.err && growthChart.key !== growthChart.want) box.append(el("div", "gp-note err growth-chart-err", growthChart.err));
   if (had >= 0) { chart.focus(NO_SCROLL); show(had); }
   growthTableFill();
+  growthUseFill();
+}
+
+// growthUseFill says which subscriptions the policy shown holds and how
+// many of their accounts ramp up now; a policy one picked can't be
+// deleted until it picks another (T-131), as the server refuses too
+function growthUseFill() {
+  const box = growthChart.box?.closest("#growthList"), say = box?.querySelector(".growth-uses");
+  if (!say) return;
+  const uses = growthChart.key === growthChart.want ? growthChart.data?.uses : null;
+  if (!uses) return say.replaceChildren();
+  say.replaceChildren(...(uses.length ? uses.map((u) => el("div", "growth-use", t(u.picked ? "{name} picked it · {n} ramping up" : "{name} follows the default · {n} ramping up", { name: u.name, n: u.accounts })))
+    : [el("div", "growth-use", t("No subscription is held by it"))]));
+  const picked = uses.filter((u) => u.picked).map((u) => u.name), del = box.querySelector(".growth-delete");
+  if (del && picked.length) {
+    del.disabled = true;
+    del.title = t("{names} picked it: pick another policy in its editor first", { names: picked.join(", ") });
+  }
 }
 
 function growthLegend() {
