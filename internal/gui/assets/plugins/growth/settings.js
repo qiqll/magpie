@@ -7,7 +7,9 @@
 // and the share). Its chart is each day's shares as the gateway holds an
 // account to them, asked of POST /api/growth/preview (the same function
 // the gateway reads), never worked out here, with each account marked on
-// its day. Every change is a draft, saved whole through
+// its day. A policy of the user's counts its days on the calendar or by
+// use (countDays "used", T-134: only the days the gateway served the
+// account). Every change is a draft, saved whole through
 // settings/growth-policies. Run after app.js, whose helpers it shares
 // (el, input, segs, api, writingPrefs, status), and before start.js draws
 // Settings.
@@ -27,7 +29,7 @@ const GROWTH_SAYS = "A subscription account added to magpie is held to a share o
 const growthName = (p) => (p.builtin ? t(GROWTH_BUILTIN[p.id] || p.name) : p.name);
 // a policy of the user's as the inputs hold it: numbers as typed
 const growthEditable = (p) => ({
-  id: p.id, name: p.name, kind: p.kind, start: String(p.start ?? ""), days: String(p.days ?? ""),
+  id: p.id, name: p.name, kind: p.kind, start: String(p.start ?? ""), days: String(p.days ?? ""), countDays: p.countDays || "",
   stages: (p.stages || []).map((g) => ({ from: String(g.from), window: g.window, cap: String(g.cap) })),
 });
 
@@ -35,6 +37,11 @@ function growthSaved(s) {
   const all = s.growthPolicyList || [];
   return { own: all.filter((p) => !p.builtin).map(growthEditable), def: s.growthInEffect || "standard" };
 }
+
+// growthCounted is how p counts its days, as the API takes it: countDays
+// "used" for the days used, nothing for the calendar's, as every policy
+// saved before T-134 has it
+const growthCounted = (p) => (p.countDays === "used" ? { countDays: "used" } : {});
 
 // growthOut is a policy as the API takes it, or the reason it can't be,
 // in the page's language
@@ -47,7 +54,7 @@ function growthOut(p) {
     if (!/^\d+$/.test(p.start) || +p.start < 1 || +p.start > 99 || !/^\d+$/.test(p.days) || +p.days < 1 || +p.days > 365) {
       return [null, t("A ramp starts at 1% to 99% and reaches 100% in 1 to 365 days")];
     }
-    return [{ id: p.id, name, kind: "ramp", start: +p.start, days: +p.days }];
+    return [{ id: p.id, name, kind: "ramp", start: +p.start, days: +p.days, ...growthCounted(p) }];
   }
   const stages = [], seen = new Set();
   for (const g of p.stages) {
@@ -58,13 +65,14 @@ function growthOut(p) {
     seen.add(+g.from + g.window);
     stages.push({ from: +g.from, window: g.window, cap: +g.cap });
   }
-  return [{ id: p.id, name, kind: "stages", stages }];
+  return [{ id: p.id, name, kind: "stages", stages, ...growthCounted(p) }];
 }
 
 function growthSummary(p) {
-  if (p.kind === "ramp") return t("{start}% to 100% in {days} days", { start: p.start, days: p.days });
-  if (p.kind === "stages") return p.stages.length === 1 ? t("1 stage") : t("{n} stages", { n: p.stages.length });
-  return t("Holds nothing");
+  const said = p.kind === "ramp" ? t("{start}% to 100% in {days} days", { start: p.start, days: p.days })
+    : p.kind === "stages" ? (p.stages.length === 1 ? t("1 stage") : t("{n} stages", { n: p.stages.length }))
+    : t("Holds nothing");
+  return p.kind !== "off" && p.countDays === "used" ? t("{said} · days used", { said }) : said;
 }
 
 // a name no policy has: name, or name 2, name 3…
@@ -259,6 +267,7 @@ function growthEditor(p, d, all, edit, redraw) {
   });
   kind.setAttribute("aria-label", t("How it grows"));
   ed.append(kind);
+  ed.append(...growthCountLine(p, edit, redraw));
 
   if (p.kind === "ramp") {
     const line = el("div", "gp-line gp-ramp");
@@ -322,12 +331,27 @@ function growthEditor(p, d, all, edit, redraw) {
   return ed;
 }
 
+// growthCountLine is how the policy p counts an account's days (T-134):
+// every day since its first use, or only the days the gateway served a
+// request of it, with what that means for an account the gateway doesn't
+// serve
+function growthCountLine(p, edit, redraw) {
+  const line = el("div", "gp-line growth-count");
+  const pick = segs([["", t("Calendar days")], ["used", t("Days used")]], p.countDays || "", (v) => { p.countDays = v; edit(); redraw(); });
+  pick.setAttribute("aria-label", t("How its days are counted"));
+  line.append(el("span", "gp-lab", t("Days counted")), pick);
+  const note = el("div", "gp-note growth-count-note", p.countDays === "used"
+    ? t("Only a day the gateway served a request of the account counts, so an idle account stays on its day. An account magpie doesn't send requests for (Claude Code kept to the agent, Codex switch-only) counts calendar days.")
+    : t("Every day since its first use counts, used or not."));
+  return [line, note];
+}
+
 // growthAsk asks for the chart of p as the page has it, once its numbers
 // are a policy; until then, and while it is asked, the last chart stays,
 // faded
 function growthAsk(p) {
   const [out] = growthOut(p);
-  const key = out ? JSON.stringify({ id: out.id, kind: out.kind, start: out.start, days: out.days, stages: out.stages }) : "";
+  const key = out ? JSON.stringify({ id: out.id, kind: out.kind, start: out.start, days: out.days, stages: out.stages, countDays: out.countDays }) : "";
   growthChart.want = key;
   growthChart.err = "";
   clearTimeout(growthChart.timer);

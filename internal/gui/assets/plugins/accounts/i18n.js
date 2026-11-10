@@ -71,6 +71,9 @@ magpie.strings({
     "Not held to accounts": "不限账号",
     "Plan ends": "套餐到期",
     "Couldn't read the gateway keys": "读取网关 key 失败",
+    "counting days used": "按使用天数",
+    "Only the days magpie served a request of it count: a day it isn't used doesn't move it on": "只算 magpie 为它转发过请求的日子：没用的那天不往前走",
+    "Its policy counts the days used, but magpie doesn't send this account's requests, so every day counts": "它的策略按有使用的天计，但 magpie 不替这个账号发请求，所以每天都算",
   },
   "zh-TW": {
     "Search accounts": "搜尋帳號",
@@ -142,6 +145,9 @@ magpie.strings({
     "Not held to accounts": "不限帳號",
     "Plan ends": "方案到期",
     "Couldn't read the gateway keys": "讀取閘道 key 失敗",
+    "counting days used": "按使用天數",
+    "Only the days magpie served a request of it count: a day it isn't used doesn't move it on": "只算 magpie 為它轉發過請求的日子：沒用的那天不往前走",
+    "Its policy counts the days used, but magpie doesn't send this account's requests, so every day counts": "它的策略按有使用的天計，但 magpie 不替這個帳號發請求，所以每天都算",
   },
   ja: {
     "Search accounts": "アカウントを検索",
@@ -213,6 +219,9 @@ magpie.strings({
     "Not held to accounts": "アカウント制限なし",
     "Plan ends": "プラン終了",
     "Couldn't read the gateway keys": "ゲートウェイキーを読み取れませんでした",
+    "counting days used": "使った日数",
+    "Only the days magpie served a request of it count: a day it isn't used doesn't move it on": "magpie がリクエストを処理した日だけを数えます：使わない日は進みません",
+    "Its policy counts the days used, but magpie doesn't send this account's requests, so every day counts": "ポリシーは使った日を数えますが、magpie はこのアカウントのリクエストを送らないため、毎日数えます",
   },
   de: {
     "Search accounts": "Konten durchsuchen",
@@ -284,5 +293,8 @@ magpie.strings({
     "Not held to accounts": "Nicht auf Konten beschränkt",
     "Plan ends": "Tarif endet",
     "Couldn't read the gateway keys": "Gateway-Schlüssel konnten nicht gelesen werden",
+    "counting days used": "Nutzungstage",
+    "Only the days magpie served a request of it count: a day it isn't used doesn't move it on": "Nur die Tage, an denen magpie eine Anfrage ausgeliefert hat, zählen: ein Tag ohne Nutzung bringt es nicht weiter",
+    "Its policy counts the days used, but magpie doesn't send this account's requests, so every day counts": "Seine Regel zählt Nutzungstage, aber magpie sendet die Anfragen dieses Kontos nicht, daher zählt jeder Tag",
   },
 });
