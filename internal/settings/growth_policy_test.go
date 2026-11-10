@@ -235,3 +235,40 @@ func TestEditGrowth(t *testing.T) {
 		t.Fatalf("written over: %v %v", fi, err)
 	}
 }
+
+// A policy counts its days on the calendar ("") or by use
+// (GrowthUsedDays, T-134): every built-in one and one saved before counts
+// the calendar's, as before; one of the user's keeps what it was saved
+// with; any other way is refused.
+func TestGrowthCountDays(t *testing.T) {
+	growthHome(t)
+	for _, p := range BuiltinGrowth() {
+		if p.CountDays != "" {
+			t.Errorf("%s counts %q", p.ID, p.CountDays)
+		}
+	}
+	if g := (Settings{}).GrowthInEffect(); g.CountDays != "" {
+		t.Fatalf("a user who set nothing counts %q", g.CountDays)
+	}
+	use := GrowthPolicy{ID: "use", Name: "By use", Kind: GrowthStaged, Stages: []GrowthStage{{From: 0, Window: GrowthWeek, Cap: 60}}, CountDays: GrowthUsedDays}
+	if err := CheckGrowthPolicies([]GrowthPolicy{use, {ID: "climb", Name: "Climb", Kind: GrowthRamp, Start: 40, Days: 9, CountDays: GrowthUsedDays}}, "use"); err != nil {
+		t.Fatal(err)
+	}
+	bad := use
+	bad.CountDays = "weekdays"
+	if err := CheckGrowthPolicies([]GrowthPolicy{bad}, ""); err == nil || !strings.Contains(err.Error(), "weekdays") {
+		t.Fatalf("a way to count no magpie has: %v", err)
+	}
+	if err := EditGrowth(func([]GrowthPolicy, string) ([]GrowthPolicy, string, error) {
+		return []GrowthPolicy{use}, "use", nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if g := Load().GrowthInEffect(); g.CountDays != GrowthUsedDays {
+		t.Fatalf("saved by use, read back %+v", g)
+	}
+	b, _ := os.ReadFile(Path())
+	if !strings.Contains(string(b), `"countDays": "used"`) {
+		t.Fatalf("settings.json: %s", b)
+	}
+}

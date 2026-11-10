@@ -112,17 +112,26 @@ const GrowthMine = "mine"
 // GrowthNameMost is the longest a policy's id or name is, in characters.
 const GrowthNameMost = 64
 
+// How a policy counts an account's days (GrowthPolicy.CountDays, T-134):
+// "" the calendar's, every 24 hours since its first use; GrowthUsedDays
+// only the days the gateway served a request of it, so an idle account
+// doesn't move on.
+const GrowthUsedDays = "used"
+
 // GrowthPolicy is a growth policy: a ramp from Start% on day 0 to 100% on
-// day Days, or stages, or none. Builtin is set on magpie's own, which are
+// day Days, or stages, or none. CountDays is how its days are counted: ""
+// (calendar days, every built-in policy's and every one saved before
+// T-134) or GrowthUsedDays. Builtin is set on magpie's own, which are
 // never saved and can't be changed or removed.
 type GrowthPolicy struct {
-	ID      string        `json:"id"`
-	Name    string        `json:"name"`
-	Kind    string        `json:"kind"`
-	Start   int           `json:"start,omitempty"`
-	Days    int           `json:"days,omitempty"`
-	Stages  []GrowthStage `json:"stages,omitempty"`
-	Builtin bool          `json:"builtin,omitempty"`
+	ID        string        `json:"id"`
+	Name      string        `json:"name"`
+	Kind      string        `json:"kind"`
+	Start     int           `json:"start,omitempty"`
+	Days      int           `json:"days,omitempty"`
+	Stages    []GrowthStage `json:"stages,omitempty"`
+	CountDays string        `json:"countDays,omitempty"`
+	Builtin   bool          `json:"builtin,omitempty"`
 }
 
 // BuiltinGrowth are magpie's own policies, read only: Standard (50% to
@@ -364,9 +373,13 @@ func CheckGrowthPolicies(own []GrowthPolicy, def string) error {
 
 // CheckGrowthShape says what is wrong with how p holds an account, nil
 // when nothing is: a ramp starts at 1–99% and reaches 100% in
-// 1–GrowthDaysMost days, and stages pass CheckGrowth. A user's policy is
-// one or the other; Off is magpie's alone.
+// 1–GrowthDaysMost days, and stages pass CheckGrowth; its days are counted
+// on the calendar ("") or by use (GrowthUsedDays). A user's policy is one
+// or the other; Off is magpie's alone.
 func CheckGrowthShape(p GrowthPolicy) error {
+	if p.CountDays != "" && p.CountDays != GrowthUsedDays {
+		return fmt.Errorf("a growth policy counts calendar days (\"\") or the days used (%q), not %q", GrowthUsedDays, p.CountDays)
+	}
 	switch p.Kind {
 	case GrowthRamp:
 		if p.Start < 1 || p.Start > 99 {

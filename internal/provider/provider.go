@@ -507,6 +507,16 @@ type Provider struct {
 	// it. Kept beside AccountAdded and gone with it; magpie's own, the
 	// editor's Save keeps what the file has.
 	AccountFirstUsed map[string]time.Time `json:"accountFirstUsed,omitempty"`
+	// AccountUsedDays is, for a subscription, how many days each account
+	// was used on since its first use (T-134), by its name in lower case:
+	// a growth policy that counts the days used (settings.GrowthUsedDays)
+	// reads it (growth.go usedFrom). Each day is a 24 hours from the first
+	// use the count is kept against (UsedDays.From); a count against
+	// another first use, or none, is not known, and those days are the
+	// calendar's until the ledger is read again (BackfillUsedDays). Kept
+	// beside AccountFirstUsed and gone with it; magpie's own, the
+	// editor's Save keeps what the file has.
+	AccountUsedDays map[string]UsedDays `json:"accountUsedDays,omitempty"`
 	// GrowthPolicy is, for a subscription, the id of the growth policy its
 	// accounts are held by (T-131, settings.GrowthOf): "" follows the
 	// default, and an id no policy has (deleted since, or another
@@ -1000,6 +1010,7 @@ func (p Provider) clone() Provider {
 	p.AccountCaps = maps.Clone(p.AccountCaps)
 	p.AccountAdded = maps.Clone(p.AccountAdded)
 	p.AccountFirstUsed = maps.Clone(p.AccountFirstUsed)
+	p.AccountUsedDays = maps.Clone(p.AccountUsedDays)
 	p.AccountGrowthPolicy = maps.Clone(p.AccountGrowthPolicy)
 	p.AccountNames = maps.Clone(p.AccountNames)
 	p.KeySpendCaps = maps.Clone(p.KeySpendCaps)
@@ -1397,6 +1408,7 @@ func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err e
 		// when its accounts were added and first used is magpie's, never
 		// the editor's
 		p.AccountAdded, p.AccountFirstUsed = was.AccountAdded, was.AccountFirstUsed
+		p.AccountUsedDays = was.AccountUsedDays
 		// and its growth policy is set on its own (SetGrowthPolicy)
 		p.GrowthPolicy, p.AccountGrowthPolicy = was.GrowthPolicy, was.AccountGrowthPolicy
 		if p.Was == nil {
@@ -1415,6 +1427,7 @@ func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err e
 		f.Providers[i] = *p
 	} else {
 		p.AccountFirstUsed = nil // magpie's own, never the editor's
+		p.AccountUsedDays = nil
 		// a new provider under an id another had: what was recorded under
 		// it until now stays that one's
 		giveID(f.Providers, -1, p.ID, time.Now())
@@ -1990,6 +2003,7 @@ func normalize(p Provider) Provider {
 	p.AccountWindowCaps = normalWindowCaps(p.AccountWindowCaps)
 	p.AccountAdded = normalAccountAdded(p.AccountAdded)
 	p.AccountFirstUsed = normalAccountAdded(p.AccountFirstUsed)
+	p.AccountUsedDays = normalUsedDays(p.AccountUsedDays)
 	p.GrowthPolicy = strings.TrimSpace(p.GrowthPolicy)
 	p.AccountGrowthPolicy = normalAccountGrowthPolicy(p.AccountGrowthPolicy)
 	p.AccountWindowAmounts = normalWindowAmounts(p.AccountWindowAmounts)

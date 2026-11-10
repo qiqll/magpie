@@ -66,3 +66,59 @@ func FirstServed(want map[[2]string]time.Time) (map[[2]string]time.Time, error) 
 	})
 	return out, nil
 }
+
+// ServedDays is provider.ServedDays over usage.jsonl (T-134): for each
+// account of want (a provider's id and an account's name in lower case),
+// the days since the time want gives it (its first use), each 24 hours
+// from it, that a served row of it (ServedOn) falls in: how many, and when
+// the latest starts. An account with none isn't in it. A ledger that isn't
+// there has none served; one that can't be opened is an error, never "not
+// used". Read once at a start (provider.BackfillUsedDays), never on a
+// request.
+func ServedDays(want map[[2]string]time.Time) (map[[2]string]provider.UsedDays, error) {
+	out := map[[2]string]provider.UsedDays{}
+	if len(want) == 0 {
+		return out, nil
+	}
+	f, err := os.Open(Path())
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return out, nil
+	case err != nil:
+		return nil, err
+	}
+	f.Close()
+	since := time.Time{}
+	for _, at := range want {
+		if since.IsZero() || at.Before(since) {
+			since = at
+		}
+	}
+	renames := provider.UsageRenames()
+	days := map[[2]string]map[int64]bool{}
+	Visit(since, func(r Record) {
+		if !r.ServedOn() {
+			return
+		}
+		k := [2]string{renames.Of(r.Provider, r.Time), strings.ToLower(strings.TrimSpace(r.ProviderAccount))}
+		from, ok := want[k]
+		if !ok || r.Time.Before(from) {
+			return
+		}
+		if days[k] == nil {
+			days[k] = map[int64]bool{}
+		}
+		days[k][int64(r.Time.Sub(from)/(24*time.Hour))] = true
+	})
+	for k, ds := range days {
+		c := provider.UsedDays{From: want[k], Last: want[k]}
+		for d := range ds {
+			c.Count++
+			if at := want[k].Add(time.Duration(d) * 24 * time.Hour); at.After(c.Last) {
+				c.Last = at
+			}
+		}
+		out[k] = c
+	}
+	return out, nil
+}

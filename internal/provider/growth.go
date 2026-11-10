@@ -25,6 +25,12 @@ package provider
 // the user removing it (forgetAdded) lets it go, its first use with it, and
 // one removed and added again is new again.
 //
+// A policy counts those days on the calendar, or by use (T-134,
+// settings.GrowthUsedDays): only the days the gateway served a request of
+// the account (AccountUsedDays, a count kept a day at a time as requests
+// are served, never read from the ledger on a request), so an idle account
+// doesn't move on. One the gateway doesn't serve counts calendar days.
+//
 // The user's word comes first: an account with a cap of its own
 // (AccountCaps) holds every window at it, and a window with a share of its
 // own (AccountWindowCaps, 100 among them) or an amount (AccountWindowAmounts)
@@ -492,7 +498,9 @@ func GrowthUses(id string, now time.Time) []GrowthUse {
 // the shares from then (stages only: a ramp rises every day). Waiting is
 // one not used yet, on day 0 until its first use; ByAdded one whose days
 // count from when it was added, the gateway not serving it
-// (gatewayServed).
+// (gatewayServed). UsedDays says its days are the days it was used on
+// (T-134); CalendarOnly that its policy counts those, but the gateway
+// doesn't serve it, so its days are the calendar's.
 type AccountGrowth struct {
 	Policy        string `json:"policy"`
 	Name          string `json:"name"`
@@ -507,6 +515,8 @@ type AccountGrowth struct {
 	NextWeek      int    `json:"nextWeek,omitempty"`
 	Waiting       bool   `json:"waiting,omitempty"`
 	ByAdded       bool   `json:"byAdded,omitempty"`
+	UsedDays      bool   `json:"usedDays,omitempty"`
+	CalendarOnly  bool   `json:"calendarOnly,omitempty"`
 }
 
 // AccountGrowthOf is how the growth policy the account is held by
@@ -525,7 +535,7 @@ func AccountGrowthOf(id, user string, now time.Time) *AccountGrowth {
 	if !ok || s.Off {
 		return nil
 	}
-	from := growthFrom(id, user, now)
+	from, byUse := growthCount(id, user, now)
 	if !addedKnown(from) {
 		return nil
 	}
@@ -557,8 +567,10 @@ func AccountGrowthOf(id, user string, now time.Time) *AccountGrowth {
 	g := &AccountGrowth{
 		Policy: p.ID, Name: p.Name, Builtin: p.Builtin, Kind: p.Kind,
 		Day: day, FiveHours: f, Week: w,
-		Waiting: gatewayServed(s) && storedFile().FirstUsedRead && !addedKnown(s.AccountFirstUsed[accountKey(user)]),
-		ByAdded: !gatewayServed(s),
+		Waiting:      gatewayServed(s) && storedFile().FirstUsedRead && !addedKnown(s.AccountFirstUsed[accountKey(user)]),
+		ByAdded:      !gatewayServed(s),
+		UsedDays:     byUse,
+		CalendarOnly: !gatewayServed(s) && p.CountDays == settings.GrowthUsedDays,
 	}
 	var days []int
 	switch p.Kind {
@@ -673,29 +685,129 @@ func SkipGrowth(id, ref string) error {
 // (gatewayServed) counts from AccountAdded always: its agent asks its
 // vendor itself, so its first use is never seen, and day 0 would hold it at
 // the first stage for good. Zero for one whose AccountAdded isn't known
-// (from before), which is never held. CapsOf (the gateway's holds) and
-// AccountCapsOf (switching the agent's own sign-in) both read it, so the
-// two never disagree.
+// (from before), which is never held. For a policy that counts the days
+// used (settings.GrowthUsedDays) it is as many days before today as the
+// account was used on before it (usedFrom), so a day's count is the days
+// used; calendar days while that count isn't known (BackfillUsedDays).
+// CapsOf (the gateway's holds) and AccountCapsOf (switching the agent's
+// own sign-in) both read it, so the two never disagree.
 func growthFrom(id, user string, now time.Time) time.Time {
+	from, _ := growthCount(id, user, now)
+	return from
+}
+
+// growthCount is growthFrom, and whether its days are the days used.
+func growthCount(id, user string, now time.Time) (time.Time, bool) {
 	s, ok := storedPicks(id)
 	if !ok {
-		return time.Time{}
+		return time.Time{}, false
 	}
 	k := accountKey(user)
 	added := s.AccountAdded[k]
 	if !addedKnown(added) {
-		return time.Time{}
+		return time.Time{}, false
 	}
 	if !gatewayServed(s) {
-		return added
+		return added, false
 	}
 	if used := s.AccountFirstUsed[k]; addedKnown(used) {
-		return used
+		if c, ok := s.AccountUsedDays[k]; ok && c.From.Equal(used) && growthPolicyFor(id, user).CountDays == settings.GrowthUsedDays {
+			return usedFrom(c, now), true
+		}
+		return used, false
 	}
 	if storedFile().FirstUsedRead {
-		return now
+		return now, false
 	}
-	return added
+	return added, false
+}
+
+// UsedDays is how many days an account was used on (T-134): Count days,
+// each the 24 hours from From (its first use) plus a whole number of days
+// that a request of it was served in, the latest starting at Last. A
+// day's start is from its first use, as a calendar day's is (growthCaps
+// counts 24 hours from it), so no clock's zone moves it.
+type UsedDays struct {
+	From  time.Time `json:"from"`
+	Last  time.Time `json:"last"`
+	Count int       `json:"count"`
+}
+
+// usedDaysMost is the most days used are counted to: past it, no policy
+// holds an account (no stage starts after GrowthDaysMost, no ramp is
+// longer), so its count is no longer written.
+const usedDaysMost = settings.GrowthDaysMost + 1
+
+const growthDay = 24 * time.Hour
+
+// usedDay is the start of the day, counted from from, that at is in: from
+// and a whole number of days, before from for a time before it.
+func usedDay(from, at time.Time) time.Time {
+	d := at.Sub(from)
+	n := d / growthDay
+	if d < 0 && d%growthDay != 0 {
+		n--
+	}
+	return from.Add(n * growthDay)
+}
+
+// usedFrom is when the days of an account used on the days c counts start
+// at now: as many days before today as it was used on before today, so
+// growthCaps' day is the days used. Never before its first use, for a
+// clock set back past a day counted.
+func usedFrom(c UsedDays, now time.Time) time.Time {
+	today := usedDay(c.From, now)
+	d := c.Count
+	if !today.After(c.Last) {
+		d-- // today is counted already
+	}
+	from := today.Add(-time.Duration(max(d, 0)) * growthDay)
+	if from.Before(c.From) {
+		return c.From
+	}
+	return from
+}
+
+// normalUsedDays is m as it is kept: keys in lower case, a count against
+// no first use left out; nil for none.
+func normalUsedDays(m map[string]UsedDays) map[string]UsedDays {
+	var out map[string]UsedDays
+	for u, c := range m {
+		u = accountKey(u)
+		if u == "" || !addedKnown(c.From) || c.Count <= 0 {
+			continue
+		}
+		if out == nil {
+			out = map[string]UsedDays{}
+		}
+		c.From, c.Last = c.From.UTC(), c.Last.UTC()
+		out[u] = c
+	}
+	return out
+}
+
+// keptUsedDays are the days used of here and there, as a sync brings
+// there's: for each account, the count against its first use as it is
+// kept (firstUsed), the larger of the two when both are; one against
+// another first use is left out, and counted again from the ledger
+// (BackfillUsedDays).
+func keptUsedDays(here, there map[string]UsedDays, firstUsed map[string]time.Time) map[string]UsedDays {
+	var out map[string]UsedDays
+	for _, m := range []map[string]UsedDays{here, there} {
+		for u, c := range m {
+			if !addedKnown(c.From) || !c.From.Equal(firstUsed[u]) {
+				continue
+			}
+			if had, ok := out[u]; ok && (had.Count > c.Count || had.Count == c.Count && !c.Last.After(had.Last)) {
+				continue
+			}
+			if out == nil {
+				out = map[string]UsedDays{}
+			}
+			out[u] = c
+		}
+	}
+	return out
 }
 
 // gatewayServed says the accounts of s (a subscription's stored entry) are
@@ -743,6 +855,9 @@ func forgetFirstUsedSeen() {
 	firstUsedSeen.Lock()
 	firstUsedSeen.m = nil
 	firstUsedSeen.Unlock()
+	usedDaySeen.Lock()
+	usedDaySeen.m = nil
+	usedDaySeen.Unlock()
 }
 
 // NoteAccountUsed notes that the vendor of the subscription id served a
@@ -762,6 +877,10 @@ func NoteAccountUsed(id, user string, at time.Time) {
 	if !addedKnown(added) {
 		return // no account of the policy's, or not listed yet: looked at again
 	}
+	if used := s.AccountFirstUsed[a.user]; addedKnown(used) {
+		noteUsedDay(a, s.AccountUsedDays[a.user], used, at)
+		return
+	}
 	firstUsedSeen.Lock()
 	if seen, ok := firstUsedSeen.m[a]; ok && seen.Equal(added) {
 		firstUsedSeen.Unlock()
@@ -772,9 +891,6 @@ func NoteAccountUsed(id, user string, at time.Time) {
 	}
 	firstUsedSeen.m[a] = added // claimed: a request beside this one writes nothing
 	firstUsedSeen.Unlock()
-	if addedKnown(s.AccountFirstUsed[a.user]) {
-		return // kept already
-	}
 	if !writeFirstUsed(a, at) {
 		// not written: the next request of the account tries again
 		firstUsedSeen.Lock()
@@ -782,6 +898,91 @@ func NoteAccountUsed(id, user string, at time.Time) {
 		firstUsedSeen.Unlock()
 	}
 }
+
+// usedDaySeen is, for each account, the latest day of its use (usedDay)
+// this magpie is writing or wrote: a request beside the first of a day
+// writes nothing.
+var usedDaySeen struct {
+	sync.Mutex
+	m map[loginAccount]time.Time
+}
+
+// noteUsedDay counts the day at is in as a day account a was used on
+// (T-134), c being its count as stored and used its first use: written
+// once a day, by the day's first request, so every other request reads
+// only providers.json's memo. A count against another first use, or none,
+// is not known and is left to the ledger's read at a start
+// (BackfillUsedDays); one past every policy's last day isn't written.
+func noteUsedDay(a loginAccount, c UsedDays, used, at time.Time) {
+	if !c.From.Equal(used) || c.Count >= usedDaysMost {
+		return
+	}
+	day := usedDay(c.From, at)
+	if !day.After(c.Last) {
+		return // counted already, or a request of a day before
+	}
+	usedDaySeen.Lock()
+	if seen, ok := usedDaySeen.m[a]; ok && !day.After(seen) {
+		usedDaySeen.Unlock()
+		return
+	}
+	if usedDaySeen.m == nil {
+		usedDaySeen.m = map[loginAccount]time.Time{}
+	}
+	usedDaySeen.m[a] = day // claimed: a request beside this one writes nothing
+	usedDaySeen.Unlock()
+	if !writeUsedDay(a, used, at) {
+		// not written: the next request of the day tries again
+		usedDaySeen.Lock()
+		if seen := usedDaySeen.m[a]; seen.Equal(day) {
+			delete(usedDaySeen.m, a)
+		}
+		usedDaySeen.Unlock()
+	}
+}
+
+// writeUsedDay counts the day at is in for account a, whose first use is
+// used, when its count is against it and hasn't that day; false when
+// providers.json couldn't be read or written, which keeps nothing.
+func writeUsedDay(a loginAccount, used, at time.Time) bool {
+	beforeUsedDayWrite()
+	if err := providersMu.Take(); err != nil {
+		log.Printf("%v; a day %s was used on isn't counted yet", err, a.user)
+		return false
+	}
+	defer providersMu.Unlock()
+	f, err := read()
+	if err != nil {
+		log.Printf("providers.json: %v; a day %s was used on isn't counted yet", err, a.user)
+		return false
+	}
+	i := slices.IndexFunc(f.Providers, func(p Provider) bool { return p.ID == a.id })
+	if i < 0 {
+		return true
+	}
+	p := &f.Providers[i]
+	c, ok := p.AccountUsedDays[a.user]
+	if !ok || !p.AccountFirstUsed[a.user].Equal(used) || !c.From.Equal(used) || c.Count >= usedDaysMost {
+		return true
+	}
+	day := usedDay(c.From, at)
+	if !day.After(c.Last) {
+		return true
+	}
+	c.Count, c.Last = c.Count+1, day
+	p.AccountUsedDays = maps.Clone(p.AccountUsedDays)
+	p.AccountUsedDays[a.user] = c
+	// what agents were handed of the catalog is no different
+	if err := storeQuiet(f); err != nil {
+		log.Printf("providers.json: %v; a day %s was used on isn't counted yet", err, a.user)
+		return false
+	}
+	return true
+}
+
+// beforeUsedDayWrite is called as a day used is about to be written, for
+// a test to count the writes.
+var beforeUsedDayWrite = func() {}
 
 // beforeFirstUsedWrite is called as a first use is about to be written,
 // for a test to hold it there.
@@ -821,6 +1022,13 @@ func writeFirstUsed(a loginAccount, at time.Time) bool {
 		p.AccountFirstUsed = map[string]time.Time{}
 	}
 	p.AccountFirstUsed[a.user] = at.UTC().Truncate(time.Second)
+	// its first day of use, the day its count of days used starts on
+	p.AccountUsedDays = maps.Clone(p.AccountUsedDays)
+	if p.AccountUsedDays == nil {
+		p.AccountUsedDays = map[string]UsedDays{}
+	}
+	fu := p.AccountFirstUsed[a.user]
+	p.AccountUsedDays[a.user] = UsedDays{From: fu, Last: fu, Count: 1}
 	// what agents were handed of the catalog is no different
 	if err := storeQuiet(f); err != nil {
 		log.Printf("providers.json: %v; %s's first use isn't kept yet", err, a.user)
@@ -896,6 +1104,86 @@ func BackfillFirstUsed(served FirstServed) {
 	f.FirstUsedRead = true
 	if err := store(f); err != nil {
 		log.Printf("providers.json: %v; the accounts' first use is read at a later start", err)
+	}
+}
+
+// ServedDays is, for each account of want, the days used (UsedDays) the
+// ledger's served rows of it fall on since the time want gives it (its
+// first use), an account with none left out. An error is a ledger that
+// couldn't be read, never "not used". usage.ServedDays reads it.
+type ServedDays func(want map[[2]string]time.Time) (map[[2]string]UsedDays, error)
+
+// BackfillUsedDays counts, from the ledger's served rows (served), the
+// days each account with a first use was used on (T-134) when its count
+// isn't known: none kept (an account first used before the count was
+// kept), or one kept against another first use (an earlier one the
+// ledger or a sync brought since). A ledger that can't be read counts
+// nothing, logged: those accounts' days are the calendar's (growthFrom)
+// until a later start reads it, never none. Run at the gateway's start
+// after BackfillFirstUsed; providers.json is not held while the ledger is
+// read. A day first used in the moment between the read and the write is
+// counted by its next request.
+func BackfillUsedDays(served ServedDays) {
+	f, err := read()
+	if err != nil {
+		return
+	}
+	want := map[[2]string]time.Time{}
+	for _, p := range f.Providers {
+		for u, used := range p.AccountFirstUsed {
+			if c, ok := p.AccountUsedDays[u]; !addedKnown(used) || ok && c.From.Equal(used) {
+				continue
+			}
+			want[[2]string{p.ID, u}] = used
+		}
+	}
+	if len(want) == 0 {
+		return
+	}
+	found, err := served(want)
+	if err != nil {
+		log.Printf("usage ledger: %v; the days %d accounts were used on are read at a later start, their days counted on the calendar till then", err, len(want))
+		return
+	}
+	if err := providersMu.Take(); err != nil {
+		log.Printf("%v; the days the accounts were used on are read at a later start", err)
+		return
+	}
+	defer providersMu.Unlock()
+	if f, err = read(); err != nil {
+		log.Printf("providers.json: %v; the days the accounts were used on are read at a later start", err)
+		return
+	}
+	changed := false
+	for i := range f.Providers {
+		p := &f.Providers[i]
+		for u, used := range p.AccountFirstUsed {
+			k := [2]string{p.ID, u}
+			if w, ok := want[k]; !ok || !w.Equal(used) {
+				continue // first used again meanwhile: counted from then
+			}
+			if c, ok := p.AccountUsedDays[u]; ok && c.From.Equal(used) {
+				continue // counted meanwhile, as its first use was written
+			}
+			c := found[k]
+			if c.Count <= 0 || !c.From.Equal(used) {
+				// its first day at least: its rows may be gone from the ledger
+				c = UsedDays{From: used, Last: used, Count: 1}
+			}
+			c.Count = min(c.Count, usedDaysMost)
+			p.AccountUsedDays = maps.Clone(p.AccountUsedDays)
+			if p.AccountUsedDays == nil {
+				p.AccountUsedDays = map[string]UsedDays{}
+			}
+			p.AccountUsedDays[u] = c
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	if err := storeQuiet(f); err != nil {
+		log.Printf("providers.json: %v; the days the accounts were used on are read at a later start", err)
 	}
 }
 
@@ -1067,6 +1355,7 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount, left
 			continue
 		}
 		used, wasUsed := f.Providers[i].AccountFirstUsed[old.user]
+		days, hadDays := f.Providers[i].AccountUsedDays[old.user]
 		delete(entry(old.id).AccountAdded, old.user)
 		entry(now.id).AccountAdded[now.user] = t
 		if wasUsed {
@@ -1080,6 +1369,18 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount, left
 				n.AccountFirstUsed = map[string]time.Time{}
 			}
 			n.AccountFirstUsed[now.user] = used
+		}
+		if hadDays {
+			// and its days used
+			o := entry(old.id)
+			o.AccountUsedDays = maps.Clone(o.AccountUsedDays)
+			delete(o.AccountUsedDays, old.user)
+			n := entry(now.id)
+			n.AccountUsedDays = maps.Clone(n.AccountUsedDays)
+			if n.AccountUsedDays == nil {
+				n.AccountUsedDays = map[string]UsedDays{}
+			}
+			n.AccountUsedDays[now.user] = days
 		}
 		changed = true
 	}
@@ -1148,10 +1449,13 @@ func forgetAdded(agent string, users ...string) {
 				cloned = true
 				p.AccountAdded = maps.Clone(p.AccountAdded)
 				p.AccountFirstUsed = maps.Clone(p.AccountFirstUsed)
+				p.AccountUsedDays = maps.Clone(p.AccountUsedDays)
 			}
 			delete(p.AccountAdded, accountKey(u))
-			// its first use goes with it: added again, it is new again
+			// its first use goes with it, and its days used: added again,
+			// it is new again
 			delete(p.AccountFirstUsed, accountKey(u))
+			delete(p.AccountUsedDays, accountKey(u))
 			changed = true
 		}
 	}
@@ -1160,6 +1464,9 @@ func forgetAdded(agent string, users ...string) {
 	}
 	if len(p.AccountFirstUsed) == 0 {
 		p.AccountFirstUsed = nil
+	}
+	if len(p.AccountUsedDays) == 0 {
+		p.AccountUsedDays = nil
 	}
 	if len(p.AccountAdded) == 0 {
 		p.AccountAdded = nil

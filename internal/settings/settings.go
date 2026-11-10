@@ -563,7 +563,11 @@ type Settings struct {
 	Growth *[]GrowthStage `json:"growth,omitempty"`
 	// GrowthPolicies are the user's own growth policies, beside the
 	// built-in ones (BuiltinGrowth), and GrowthDefault the id of the one
-	// accounts are held by: "" for Standard (GrowthInEffect).
+	// accounts are held by: "" for Standard (GrowthInEffect). A policy's
+	// countDays (T-134) is how its days are counted: absent or "" for
+	// calendar days since the account's first use, as every built-in one
+	// and every one saved before counts them; "used" for only the days the
+	// gateway served a request of the account.
 	GrowthPolicies []GrowthPolicy `json:"growthPolicies,omitempty"`
 	GrowthDefault  string         `json:"growthDefault,omitempty"`
 	// Searcher is the provider that searches the web for a model that
