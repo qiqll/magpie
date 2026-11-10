@@ -554,7 +554,8 @@ type Settings struct {
 	// load reported, or one older than plugin.LoadFresh, keeps its place.
 	BusyLoad int `json:"busyLoad,omitempty"`
 	// Growth is the growth policy: how far a subscription account added
-	// lately is used, by how many days ago it was added (growth.go). nil
+	// lately is used, by the days since its first use (growth.go,
+	// provider/growth.go growthFrom). nil
 	// is DefaultGrowth; an empty list, saved on purpose, is none.
 	Growth *[]GrowthStage `json:"growth,omitempty"`
 	// Searcher is the provider that searches the web for a model that

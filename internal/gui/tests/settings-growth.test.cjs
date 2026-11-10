@@ -53,11 +53,11 @@ function server(lang, posted) {
 }
 
 const want = {
-  en: { tab: "Growth policy", first: "Days 0 to 7", week: "From day 3 on", last: "From day 14 on", five: "5 hours", weekName: "7 days", from: "from its first use" },
-  zh: { tab: "成长策略", first: "第 0–7 天", week: "第 3 天起", last: "第 14 天起", five: "5 小时", weekName: "7 天", from: "从首次使用算起" },
-  "zh-TW": { tab: "成長策略", first: "第 0–7 天", week: "第 3 天起", last: "第 14 天起", from: "從首次使用算起" },
-  ja: { tab: "成長ポリシー", first: "0〜7 日目", week: "3 日目から", last: "14 日目から", from: "初めて使った時点" },
-  de: { tab: "Wachstumsregel", first: "Tag 0 bis 7", week: "Ab Tag 3", last: "Ab Tag 14", from: "ab seiner ersten Nutzung" },
+  en: { tab: "Growth policy", first: "Days 0 to 7", week: "From day 3 on", firstToThree: "Days 0 to 3", threeToSeven: "Days 3 to 7", last: "From day 14 on", five: "5 hours", weekName: "7 days", from: "from its first use" },
+  zh: { tab: "成长策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", five: "5 小时", weekName: "7 天", from: "从首次使用算起" },
+  "zh-TW": { tab: "成長策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", from: "從首次使用算起" },
+  ja: { tab: "成長ポリシー", first: "0〜7 日目", week: "3 日目から", firstToThree: "0〜3 日目", threeToSeven: "3〜7 日目", last: "14 日目から", from: "初めて使った時点" },
+  de: { tab: "Wachstumsregel", first: "Tag 0 bis 7", week: "Ab Tag 3", firstToThree: "Tag 0 bis 3", threeToSeven: "Tag 3 bis 7", last: "Ab Tag 14", from: "ab seiner ersten Nutzung" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -94,6 +94,15 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         }
         assert.equal(await rows.nth(1).locator(".growth-cap").inputValue(), "80");
         assert(await page.locator("#growthList .growth-save").isDisabled(), "nothing to save before an edit");
+
+        // the day-3 row turned to the 5 hours: the first row's days now run
+        // to it, and its own to day 7; turned back, as they were
+        await rows.nth(1).locator(".segs .opt").nth(0).click();
+        assert.equal((await rows.nth(0).locator(".name").textContent()).trim(), w.firstToThree);
+        assert.equal((await rows.nth(1).locator(".name").textContent()).trim(), w.threeToSeven);
+        await rows.nth(1).locator(".segs .opt").nth(1).click();
+        assert.equal((await rows.nth(0).locator(".name").textContent()).trim(), w.first);
+        assert.equal((await rows.nth(1).locator(".name").textContent()).trim(), w.week);
         assert(await page.locator("#view-settings").evaluate((v) => v.scrollWidth <= v.clientWidth + 1), "the settings scroll sideways");
 
         // a share out of range is said, and nothing is posted; typing it
