@@ -405,6 +405,7 @@ function acxGrowth(r) {
     + (g.byAdded ? "\n" + t("Its days count from when it was added: its agent asks its vendor itself, so magpie never sees its first use") : "")
     + (g.usedDays ? "\n" + t("Only the days magpie served a request of it count: a day it isn't used doesn't move it on") : "")
     + (g.calendarOnly ? "\n" + t("Its policy counts the days used, but magpie doesn't send this account's requests, so every day counts") : "")
+    + (g.usedDaysUnknown ? "\n" + t("Its policy counts the days used, but magpie hasn't read them from its usage yet, so every day counts till then") : "")
     + (g.waiting ? "\n" + t("Its days start on the first request its vendor serves through magpie") : "")
     + (choices ? "\n" + t("Its growth policy can be picked here too, for this account alone") : "")
     : t("Picked for this account alone, before its subscription's. Click to pick another"))

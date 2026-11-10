@@ -500,23 +500,26 @@ func GrowthUses(id string, now time.Time) []GrowthUse {
 // count from when it was added, the gateway not serving it
 // (gatewayServed). UsedDays says its days are the days it was used on
 // (T-134); CalendarOnly that its policy counts those, but the gateway
-// doesn't serve it, so its days are the calendar's.
+// doesn't serve it, so its days are the calendar's; UsedDaysUnknown that
+// its policy counts those, but how many isn't known yet (BackfillUsedDays),
+// so its days are the calendar's till then.
 type AccountGrowth struct {
-	Policy        string `json:"policy"`
-	Name          string `json:"name"`
-	Builtin       bool   `json:"builtin,omitempty"`
-	Kind          string `json:"kind"`
-	Day           int    `json:"day"`
-	Days          int    `json:"days,omitempty"`
-	FiveHours     int    `json:"fiveHours"`
-	Week          int    `json:"week"`
-	Next          int    `json:"next,omitempty"`
-	NextFiveHours int    `json:"nextFiveHours,omitempty"`
-	NextWeek      int    `json:"nextWeek,omitempty"`
-	Waiting       bool   `json:"waiting,omitempty"`
-	ByAdded       bool   `json:"byAdded,omitempty"`
-	UsedDays      bool   `json:"usedDays,omitempty"`
-	CalendarOnly  bool   `json:"calendarOnly,omitempty"`
+	Policy          string `json:"policy"`
+	Name            string `json:"name"`
+	Builtin         bool   `json:"builtin,omitempty"`
+	Kind            string `json:"kind"`
+	Day             int    `json:"day"`
+	Days            int    `json:"days,omitempty"`
+	FiveHours       int    `json:"fiveHours"`
+	Week            int    `json:"week"`
+	Next            int    `json:"next,omitempty"`
+	NextFiveHours   int    `json:"nextFiveHours,omitempty"`
+	NextWeek        int    `json:"nextWeek,omitempty"`
+	Waiting         bool   `json:"waiting,omitempty"`
+	ByAdded         bool   `json:"byAdded,omitempty"`
+	UsedDays        bool   `json:"usedDays,omitempty"`
+	CalendarOnly    bool   `json:"calendarOnly,omitempty"`
+	UsedDaysUnknown bool   `json:"usedDaysUnknown,omitempty"`
 }
 
 // AccountGrowthOf is how the growth policy the account is held by
@@ -571,6 +574,8 @@ func AccountGrowthOf(id, user string, now time.Time) *AccountGrowth {
 		ByAdded:      !gatewayServed(s),
 		UsedDays:     byUse,
 		CalendarOnly: !gatewayServed(s) && p.CountDays == settings.GrowthUsedDays,
+		UsedDaysUnknown: !byUse && gatewayServed(s) && p.CountDays == settings.GrowthUsedDays &&
+			addedKnown(s.AccountFirstUsed[accountKey(user)]),
 	}
 	var days []int
 	switch p.Kind {
@@ -790,7 +795,9 @@ func normalUsedDays(m map[string]UsedDays) map[string]UsedDays {
 // there's: for each account, the count against its first use as it is
 // kept (firstUsed), the larger of the two when both are; one against
 // another first use is left out, and counted again from the ledger
-// (BackfillUsedDays).
+// (BackfillUsedDays). Days each computer served on its own are not
+// added: the account counts fewer days than it was used on, so is held
+// longer, never shorter.
 func keptUsedDays(here, there map[string]UsedDays, firstUsed map[string]time.Time) map[string]UsedDays {
 	var out map[string]UsedDays
 	for _, m := range []map[string]UsedDays{here, there} {
@@ -1109,8 +1116,9 @@ func BackfillFirstUsed(served FirstServed) {
 
 // ServedDays is, for each account of want, the days used (UsedDays) the
 // ledger's served rows of it fall on since the time want gives it (its
-// first use), an account with none left out. An error is a ledger that
-// couldn't be read, never "not used". usage.ServedDays reads it.
+// first use), an account whose first day the ledger doesn't have left
+// out. An error is a ledger that couldn't be read, never "not used".
+// usage.ServedDays reads it.
 type ServedDays func(want map[[2]string]time.Time) (map[[2]string]UsedDays, error)
 
 // BackfillUsedDays counts, from the ledger's served rows (served), the
@@ -1119,7 +1127,9 @@ type ServedDays func(want map[[2]string]time.Time) (map[[2]string]UsedDays, erro
 // kept), or one kept against another first use (an earlier one the
 // ledger or a sync brought since). A ledger that can't be read counts
 // nothing, logged: those accounts' days are the calendar's (growthFrom)
-// until a later start reads it, never none. Run at the gateway's start
+// until a later start reads it, never none; so is one whose first day the
+// ledger doesn't have (trimmed, or a first use from another computer),
+// whose days aren't known. Run at the gateway's start
 // after BackfillFirstUsed; providers.json is not held while the ledger is
 // read. A day first used in the moment between the read and the write is
 // counted by its next request.
@@ -1154,7 +1164,7 @@ func BackfillUsedDays(served ServedDays) {
 		log.Printf("providers.json: %v; the days the accounts were used on are read at a later start", err)
 		return
 	}
-	changed := false
+	changed, unknown := false, 0
 	for i := range f.Providers {
 		p := &f.Providers[i]
 		for u, used := range p.AccountFirstUsed {
@@ -1165,10 +1175,10 @@ func BackfillUsedDays(served ServedDays) {
 			if c, ok := p.AccountUsedDays[u]; ok && c.From.Equal(used) {
 				continue // counted meanwhile, as its first use was written
 			}
-			c := found[k]
-			if c.Count <= 0 || !c.From.Equal(used) {
-				// its first day at least: its rows may be gone from the ledger
-				c = UsedDays{From: used, Last: used, Count: 1}
+			c, ok := found[k]
+			if !ok || c.Count <= 0 || !c.From.Equal(used) {
+				unknown++
+				continue
 			}
 			c.Count = min(c.Count, usedDaysMost)
 			p.AccountUsedDays = maps.Clone(p.AccountUsedDays)
@@ -1178,6 +1188,9 @@ func BackfillUsedDays(served ServedDays) {
 			p.AccountUsedDays[u] = c
 			changed = true
 		}
+	}
+	if unknown > 0 {
+		log.Printf("usage ledger: it doesn't reach back to the first use of %d accounts; the days they were used on aren't known, their days counted on the calendar", unknown)
 	}
 	if !changed {
 		return

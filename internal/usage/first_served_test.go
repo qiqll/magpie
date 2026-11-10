@@ -46,7 +46,8 @@ func TestFirstServedEarliestServedRow(t *testing.T) {
 // account's served rows fall in: not a failed row, a probe's or one from
 // before its first use; no ledger is none, an unreadable one an error.
 // The days start at the first use, half an hour before midnight in UTC,
-// whatever the clock's zone.
+// whatever the clock's zone. One whose first day has no row (the ledger
+// doesn't reach back to it) isn't known, so isn't in it.
 func TestServedDaysCountsEachDayOnce(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -72,7 +73,9 @@ func TestServedDaysCountsEachDayOnce(t *testing.T) {
 	} {
 		Append(r)
 	}
-	got, err := ServedDays(map[[2]string]time.Time{k: from})
+	// first used, by another computer, a day before this ledger has it
+	k2 := [2]string{"codex", "other@example.com"}
+	got, err := ServedDays(map[[2]string]time.Time{k: from, k2: at(2, 0)})
 	if c := got[k]; err != nil || c.Count != 4 || !c.From.Equal(from) || !c.Last.Equal(at(8, 0)) || len(got) != 1 {
 		t.Fatalf("served days %+v (%v), want 4 to day 8", got, err)
 	}

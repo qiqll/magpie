@@ -2,7 +2,8 @@
 // T-134: an account whose growth policy counts the days used says so on its
 // row and card in Models › Accounts ("days used"), and its title says a day
 // it isn't used doesn't move it on; one the gateway doesn't serve under
-// such a policy says every day counts for it. The numbers are the
+// such a policy says every day counts for it, and one whose days used
+// aren't read yet says every day counts till then. The numbers are the
 // server's (provider.AccountGrowthOf), never worked out in the page. Every
 // language, at a wide and a phone's width, nothing cut or wider than the
 // window; no backend, the API is faked here. SHOTS=<dir> keeps a
@@ -25,7 +26,10 @@ const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString();
 // days, idle 5), and a switch-only Codex account under it, by its adding
 const byUse = { policy: "idle", name: "By use", kind: "ramp" };
 const growthOf = () => ({
-  claude: { "new@example.com": { ...byUse, day: 3, days: 20, fiveHours: 23, week: 23, usedDays: true } },
+  claude: {
+    "new@example.com": { ...byUse, day: 3, days: 20, fiveHours: 23, week: 23, usedDays: true },
+    "idle@example.com": { ...byUse, day: 8, days: 20, fiveHours: 46, week: 46, usedDaysUnknown: true },
+  },
   codex: { "ops@example.com": { ...byUse, day: 8, days: 20, fiveHours: 46, week: 46, byAdded: true, calendarOnly: true } },
 });
 const prov = (id, name, agent, logins, growth, extra = {}) => ({ id, name, icon: id + "-color", chat: "", responses: "", anthropic: "", catalog: "", models: [], agents: [], fallback: [], headers: {}, keyList: [], account: { agent, agentName: name, user: logins[0].user, plan: logins[0].plan, logins }, proxy: "", accountGrowth: growth, ...extra });
@@ -33,8 +37,8 @@ const providersOf = (seen) => {
   const g = growthOf();
   return {
     providers: [
-      prov("claude", "Claude", "claude", [{ user: "new@example.com", plan: "max", active: true, on: true }], g.claude,
-        { accountAdded: { "new@example.com": daysAgo(9) }, accountFirstUsed: { "new@example.com": daysAgo(8) }, firstUsedKnown: true }),
+      prov("claude", "Claude", "claude", [{ user: "new@example.com", plan: "max", active: true, on: true }, { user: "idle@example.com", plan: "pro", on: true }], g.claude,
+        { accountAdded: { "new@example.com": daysAgo(9), "idle@example.com": daysAgo(9) }, accountFirstUsed: { "new@example.com": daysAgo(8), "idle@example.com": daysAgo(8) }, firstUsedKnown: true }),
       prov("codex", "Codex", "codex", [{ user: "ops@example.com", plan: "pro", active: true, on: true }], g.codex, { accountAdded: { "ops@example.com": daysAgo(8) } }),
     ],
     presets: [], excluded: [], gateway: { running: true, window: true },
@@ -107,17 +111,18 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.route("**/*", serve(lang, seen));
         await page.addInitScript(() => { try { if (!sessionStorage.getItem("set")) { localStorage.clear(); sessionStorage.setItem("set", "1"); } } catch {} });
         await page.goto("http://magpie.test/?view=accounts");
-        await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 2 && document.querySelectorAll("#acxList .acx-grow").length === 2);
+        await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 3 && document.querySelectorAll("#acxList .acx-grow").length === 3);
 
         const said = (...parts) => parts.join(" · ");
         const expect = {
           "new@example.com": said(x("Ramping up"), x("day {day} of {days}", { day: 3, days: 20 }), x("counting days used"), x("now {n}%", { n: 23 })),
+          "idle@example.com": said(x("Ramping up"), x("day {day} of {days}", { day: 8, days: 20 }), x("now {n}%", { n: 46 })),
           "ops@example.com": said(x("Ramping up"), x("day {day} of {days} since added", { day: 8, days: 20 }), x("now {n}%", { n: 46 })),
         };
         for (const sel of ["#acxList .row.acx", "#acxList .acx-card"]) {
           if (sel.endsWith("card")) {
             await page.locator("#acxView button", { hasText: x("Card view") }).click();
-            await page.waitForFunction(() => document.querySelectorAll("#acxList .acx-card").length === 2);
+            await page.waitForFunction(() => document.querySelectorAll("#acxList .acx-card").length === 3);
           }
           const m = await marks(page, sel);
           assert.deepEqual(Object.fromEntries(Object.entries(m).map(([u, g]) => [u, g && g.text])), expect);
@@ -125,6 +130,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.ok(!m["new@example.com"].title.includes(x("Its policy counts the days used, but magpie doesn't send this account's requests, so every day counts")));
           assert.ok(m["ops@example.com"].title.includes(x("Its days count from when it was added: its agent asks its vendor itself, so magpie never sees its first use")));
           assert.ok(m["ops@example.com"].title.includes(x("Its policy counts the days used, but magpie doesn't send this account's requests, so every day counts")), m["ops@example.com"].title);
+          assert.ok(m["idle@example.com"].title.includes(x("Its policy counts the days used, but magpie hasn't read them from its usage yet, so every day counts till then")), m["idle@example.com"].title);
+          assert.ok(!m["new@example.com"].title.includes(x("Its policy counts the days used, but magpie hasn't read them from its usage yet, so every day counts till then")));
           assert.ok(await wider(page) <= 0.5, `a marker reaches ${await wider(page)}px past the window`);
           assert.deepEqual(await cut(page), [], "every marker says all its words");
           if (process.env.SHOTS) await page.screenshot({ path: path.join(process.env.SHOTS, `used-days-${sel.endsWith("card") ? "cards" : "rows"}-${engine}-${lang}-${width}.png`), fullPage: true });
