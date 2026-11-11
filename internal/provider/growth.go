@@ -813,6 +813,51 @@ func SkipGrowth(id, ref string) error {
 	})
 }
 
+// ResumeGrowth undoes SkipGrowth for the account ref of the subscription
+// id (T-158): its AccountGrowthSkipped entry goes, so the growth policy
+// holds it again from the day its days count from, as if never skipped.
+// Nothing else is written: a share, an amount or a cap the user set stays
+// theirs. An account that isn't skipped is left as it is. One the
+// subscription no longer lists is cleared by its name, so a skip is never
+// stuck on the record.
+func ResumeGrowth(id, ref string) error {
+	p, err := Find(id)
+	if err != nil {
+		return err
+	}
+	if p.Account == nil {
+		return fmt.Errorf("%s has keys, not subscription accounts for a growth policy to hold", p.Name)
+	}
+	k := accountKey(ref)
+	if r, ok := p.accountRef(ref); ok {
+		k = accountKey(r)
+	}
+	// on the record as it is stored then (T-079); a record there is none
+	// of is not written, as nothing changed
+	return editStored(p.ID, func(q *Provider) bool {
+		// keys as they are kept: one written by hand in another case is
+		// the account's too
+		m := normalAccountAdded(q.AccountGrowthSkipped)
+		if _, had := m[k]; !had {
+			return false
+		}
+		delete(m, k)
+		q.AccountGrowthSkipped = normalAccountAdded(m)
+		return true
+	})
+}
+
+// AccountGrowthSkippedOf is when the user skipped the ramp-up of the
+// account user of the subscription id (AccountGrowthSkipped, T-140), zero
+// for none, for its row to say (T-158). Read by the key letGo reads, so
+// the row says skipped only of an account the gateway lets go of.
+func AccountGrowthSkippedOf(id, user string) time.Time {
+	if s, ok := storedPicks(id); ok {
+		return s.AccountGrowthSkipped[accountKey(user)]
+	}
+	return time.Time{}
+}
+
 // growthFrom is when the growth policy counts the days of the account
 // user of the subscription id from: its first use; now (day 0) for one not
 // used yet, once the ledger was read for it (FirstUsedRead); its

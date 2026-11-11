@@ -289,3 +289,65 @@ func TestSkipGrowthRecordGoesWithIt(t *testing.T) {
 		t.Error("a record kept for a day and a skip alone stayed")
 	}
 }
+
+// Resume ramp-up (T-158) undoes a skip: the entry goes, the gateway holds
+// the account by its policy again from the day its days count from, and
+// the row says so; a share the user set meanwhile stays theirs. Resuming
+// one not skipped, or an account by its name in another case, writes
+// nothing more.
+func TestResumeGrowth(t *testing.T) {
+	firstUsedFixture(t, time.Hour)
+	freshReadings(t)
+	growthDefault(t, settings.GrowthStandard)
+	keepLast(SubscriptionQuota{Provider: "codex", User: "new@example.com", Windows: []QuotaWindow{
+		{Name: "5 hours", Used: 10, Span: 5 * time.Hour}, {Name: "7 days", Used: 10, Span: 7 * 24 * time.Hour},
+	}}, "")
+	if err := SkipGrowth("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if at := AccountGrowthSkippedOf("codex", "NEW@example.com"); at.IsZero() {
+		t.Fatal("skipped, AccountGrowthSkippedOf says none")
+	}
+	if err := SetWindowCap("codex", "new@example.com", "7 days", 70); err != nil {
+		t.Fatal(err)
+	}
+	if s := heldAt(t, "5 hours"); s != 100 {
+		t.Fatalf("skipped, the 5 hours held at %d%%", s)
+	}
+	if err := ResumeGrowth("codex", "NEW@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := storedPicks("codex"); s.AccountGrowthSkipped != nil {
+		t.Fatalf("resumed, the skip stayed: %v", s.AccountGrowthSkipped)
+	}
+	if at := AccountGrowthSkippedOf("codex", "new@example.com"); !at.IsZero() {
+		t.Errorf("resumed, AccountGrowthSkippedOf says %v", at)
+	}
+	p, err := Find("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := p.CapsOf("new@example.com").Of("5 hours"); s != 50 {
+		t.Errorf("resumed, the gateway holds the 5 hours at %d%%, not Standard's day-0 50%%", s)
+	}
+	if s, _ := p.CapsOf("new@example.com").Of("7 days"); s != 70 {
+		t.Errorf("resumed, the user's own week at %d%%", s)
+	}
+	if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g == nil || g.FiveHours != 50 {
+		t.Errorf("resumed, the row says %+v", g)
+	}
+	// resumed again: nothing written
+	before, err := os.ReadFile(Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ResumeGrowth("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.ReadFile(Path()); string(after) != string(before) {
+		t.Errorf("resuming one not skipped rewrote providers.json")
+	}
+	if err := ResumeGrowth("codex", "nobody@example.com"); err != nil {
+		t.Errorf("resuming an account it has no skip of: %v", err)
+	}
+}

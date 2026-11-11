@@ -123,7 +123,9 @@ function acxRows() {
       const pick = p.accountGrowthPolicy?.[acxLow(l.user)] || "";
       // its ramp-up found done as its policy began counting the days used (T-150)
       const graduated = p.accountGraduated?.[acxLow(l.user)] || "";
-      out.push({ p, a, l, sub, state, banned, disabled, off, authFailed, again, act, q, added, firstUsed, growth, pick, graduated, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
+      // its ramp-up skipped, till resumed (provider.AccountGrowthSkippedOf, T-158)
+      const skipped = p.accountGrowthSkipped?.[acxLow(l.user)] || "";
+      out.push({ p, a, l, sub, state, banned, disabled, off, authFailed, again, act, q, added, firstUsed, growth, pick, graduated, skipped, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
     }
   }
   return out;
@@ -439,6 +441,27 @@ async function acxGrowthMenu(e, b, r, skip) {
   }, head);
 }
 
+// acxSkipped: an account whose ramp-up the user skipped (T-158), as a
+// button offering Resume ramp-up (provider/resumegrowth): its skip goes,
+// and its growth policy holds it again from the day its days count from
+function acxSkipped(r) {
+  const { p, l } = r;
+  const b = el("button", "acx-grow acx-skipped", t("Ramp-up skipped"));
+  b.type = "button";
+  b.title = t("Its growth policy holds none of its windows: you skipped its ramp-up. Click to resume it");
+  b.setAttribute("aria-haspopup", "menu");
+  b.onclick = (e) => {
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    const opts = [{ v: "!resume", name: "Resume ramp-up", note: "Its growth policy holds it again, from the day its days count from" }];
+    openProtoMenu(b, opts, "", () => {
+      b.classList.add("busy");
+      accountAction("provider/resumegrowth", { id: p.id, account: l.user }, t("{who} resumed its ramp-up", { who: accountNameOf(p, l.user) || l.user })).then(() => acxDraw());
+    }, "Ramp-up skipped");
+  };
+  return b;
+}
+
 // acxGrowthFact: a card's Growth policy, for every account the policy
 // counts the days of: the one it picked, or its subscription's followed
 function acxGrowthFact(r) {
@@ -466,7 +489,10 @@ function acxWho(r) {
   name.append(badge);
   // both marks: both said
   if (r.banned && r.disabled) name.append(el("span", "acx-state disabled", t("Disabled")));
-  if (r.growth || r.pick) name.append(acxGrowth(r));
+  // skipped: the policy holds none of it till resumed; one ramped up is
+  // held no more either way, so it says that alone
+  if (r.skipped && !r.growth && !r.graduated) name.append(acxSkipped(r));
+  else if (r.growth || r.pick) name.append(acxGrowth(r));
   if (r.graduated && !r.growth) {
     const done = el("span", "acx-grow acx-grad", t("Ramped up"));
     done.title = t("Its ramp-up was done by the calendar when its growth policy began counting only the days used, so the policy holds it no more");

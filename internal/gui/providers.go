@@ -224,6 +224,11 @@ type providerJSON struct {
 	// lower case (provider.AccountGraduatedOf, T-150): the growth policy
 	// holds it no more. Shown only, as AccountAdded is
 	AccountGraduated map[string]time.Time `json:"accountGraduated,omitempty"`
+	// when the user skipped each account's ramp-up, by its name in lower
+	// case (provider.AccountGrowthSkippedOf, T-158): the growth policy holds
+	// it no more till it is resumed (provider/resumegrowth). Shown only, as
+	// AccountAdded is
+	AccountGrowthSkipped map[string]time.Time `json:"accountGrowthSkipped,omitempty"`
 	// where a custom provider's balance is asked (see provider.Balance)
 	BalanceURL    string `json:"balanceURL,omitempty"`
 	BalancePath   string `json:"balancePath,omitempty"`
@@ -885,6 +890,12 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 					out.AccountGraduated = map[string]time.Time{}
 				}
 				out.AccountGraduated[strings.ToLower(strings.TrimSpace(r))] = at
+			}
+			if at := provider.AccountGrowthSkippedOf(p.ID, r); !at.IsZero() {
+				if out.AccountGrowthSkipped == nil {
+					out.AccountGrowthSkipped = map[string]time.Time{}
+				}
+				out.AccountGrowthSkipped[strings.ToLower(strings.TrimSpace(r))] = at
 			}
 		}
 	}
@@ -2516,6 +2527,13 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// the growth policy lets the account go, kept skipped apart
 			// from its windows' caps (T-132, AccountGrowthSkipped T-140)
 			if err := provider.SkipGrowth(in.ID, req.Account); err != nil {
+				fail(rw, err)
+				return
+			}
+		case "resumegrowth":
+			// the skip undone: the growth policy holds the account again
+			// (T-158)
+			if err := provider.ResumeGrowth(in.ID, req.Account); err != nil {
 				fail(rw, err)
 				return
 			}
