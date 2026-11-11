@@ -36,7 +36,7 @@
 .acx-calls b { font-size: 13px; font-weight: 550; color: var(--fg); font-variant-numeric: tabular-nums; }
 /* the actions wrap onto a second line rather than run past the row, as
    a phone's width and a long language make them (T-142) */
-.row.acx .acts { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; flex: none; max-width: 100%; margin-left: auto; min-width: var(--acx-acts, auto); }
+.row.acx .acts { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; flex: none; max-width: 100%; margin-left: auto; min-width: min(var(--acx-acts, 0px), 100%); }
 /* each row has room for its Read again, always in sight */
 .row.acx .quota-refresh { width: 22px; height: 22px; margin: 0; opacity: 1; }
 .acx-sk { min-height: 48px; }

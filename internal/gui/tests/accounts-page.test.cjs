@@ -168,7 +168,8 @@ const actsOut = (page, sel) => page.evaluate((sel) => [...document.querySelector
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   for (const lang of LANGS) {
     const x = (s, a) => tr(lang, s, a);
-    for (const width of [1000, 380]) {
+    // 700: over the narrow rule, where the actions' measured width holds them (review M1 of T-142)
+    for (const width of [1000, 700, 380]) {
       test(`${engine} ${lang} ${width}: Models › Accounts lists every account and acts on it`, async (t) => {
         const seen = { posts: [], starts: [], usage: [], on: new Set(), off: new Set() };
         const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));

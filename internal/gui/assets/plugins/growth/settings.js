@@ -28,7 +28,7 @@ const GROWTH_BUILTIN = { standard: "Standard", gentle: "Gentle", cautious: "Caut
 const GROWTH_SVG = "http://www.w3.org/2000/svg";
 // what the page says under its name, in each language through t(); it
 // says magpie's own count the days used (T-151)
-const GROWTH_SAYS = "A subscription account added to magpie is held to a share of its windows that grows with its days, counted from its first use (the first request its vendor served through magpie; one not used yet is on day 0), and routing goes on to your other accounts until the window renews. magpie's own policies count only the days the gateway served the account, so an idle one stays on its day; one of yours counts as it says. The default policy holds every subscription that picked none; a subscription can pick another in its editor. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.";
+const GROWTH_SAYS = "A subscription account added to magpie is held to a share of its windows that grows with its days, counted from its first use (the first request its vendor served through magpie; one not used yet is on day 0), and routing goes on to your other accounts until the window renews. magpie's own policies count only the days the gateway served the account (one magpie sends no requests for counts calendar days), so an idle one stays on its day; one of yours counts as it says. The default policy holds every subscription that picked none; a subscription can pick another in its editor. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.";
 
 const growthName = (p) => (p.builtin ? t(GROWTH_BUILTIN[p.id] || p.name) : p.name);
 // a policy of the user's as the inputs hold it: numbers as typed
@@ -279,6 +279,7 @@ function growthEditor(p, d, all, edit, redraw) {
     del.type = "button";
     if (p.id === d.def) {
       del.disabled = true;
+      del.dataset.def = "1";
       del.title = t("Make another policy the default first");
     } else if (growthChart.usesOf.has(p.id)) growthDelHeld(del, growthChart.usesOf.get(p.id));
     del.onclick = () => { d.own = d.own.filter((x) => x !== p); growthSel = d.def; edit(); redraw(); };
@@ -598,8 +599,9 @@ function growthUseFill() {
 // account picked the policy, with what to change first: as the editor
 // builds it, from the last In use of the same policy, and again as each
 // one comes back (T-144); on again once nothing picks it, as after Clear
-// the pick
+// the pick. The default's stays off whatever picks it.
 function growthDelHeld(del, uses) {
+  if (del.dataset.def) return;
   const picked = uses.filter((u) => u.picked || u.accountsPicked).map((u) => u.name);
   if (!picked.length) {
     if (del.dataset.held) { delete del.dataset.held; del.disabled = false; del.removeAttribute("title"); }

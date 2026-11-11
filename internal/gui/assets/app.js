@@ -6247,9 +6247,8 @@ function renderProviders(quiet) {
     row.append(p.off ? icon(p.icon || "generic") : providerHandle(p, row), who, uses, key, providerSwitch(p), chev);
     // right-click: Move to Top, Up, Down, to Bottom (#1614)
     if (!p.off) row.oncontextmenu = (ev) => { ev.preventDefault(); openProviderMenu(row.querySelector(".pv-handle"), p); };
-    row.onclick = async () => {
-      const sel = getSelection(); // words being selected (T-156)
-      if (!sel.isCollapsed && row.contains(sel.anchorNode)) return;
+    row.onclick = async (ev) => {
+      if (dragSel(ev)) return;
       if (providerDirty() && !(await confirmDiscard())) return;
       // the kept list (#1519) lacks proxies and headers: opens on the fresh
       const last = providers.last;
@@ -22882,6 +22881,8 @@ addEventListener("touchend", flings, { capture: true, passive: true });
 addEventListener("scroll", () => { if (performance.now() < flingUntil) flings(); }, { capture: true, passive: true });
 // a drag, not the tremble of a click
 let downAt = null;
+// a click ending a word drag (T-156)
+const dragSel = (e) => !getSelection().isCollapsed && Math.hypot(e.clientX - downAt?.[0], e.clientY - downAt?.[1]) > 6;
 // A scrollbar drag is the reader's, but Chromium and WebView2 send no
 // pointermove: a press in the bar band holds its scrolls as the reader's
 // till the lift (emo172, #1089), and lets go of the last click's hold, which

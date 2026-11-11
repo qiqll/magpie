@@ -7422,6 +7422,9 @@ magpie.plugin("library", (ctx) => {
     mount(main) {
       page = main;
       wireLists();
+      // a click that ends a drag across a row's or a card's words opens
+      // nothing, now that the page's text can be selected (T-156)
+      main.addEventListener("click", (e) => { if (e.target.closest?.(".click") && dragSel(e)) e.stopPropagation(); }, true);
       // The dialog is the providers page's; while the library has it, its
       // backdrop and Escape close it here.
       $("#modal").addEventListener("click", (e) => {

@@ -3,9 +3,10 @@
 // copied, not only a request's story (user-select.test.cjs): an account's
 // name, state and requests on Accounts, a provider's name on Providers, a
 // row's name in Settings, what Growth policy says of a policy, a
-// Usage figure. Its controls still can't: buttons, the policy list, the
-// view switch. A drag across a provider's name selects it and leaves its
-// editor shut; a click still opens it. Every language, wide and narrow, in
+// Usage figure, a skill in Library, a plugin on Plugins. Its controls
+// still can't: buttons, the policy list, the view switch. A drag across a
+// provider's, a skill's or a plugin's name selects it and leaves what its
+// row opens shut; a click still opens it. Every language, wide and narrow, in
 // each engine asked for; no backend, the API is faked here.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
@@ -27,6 +28,11 @@ const users = ["alice@example.com", "bob@example.com"];
 const quotas = users.map((user, i) => ({ provider: "claude", name: "Claude", user, windows: [
   { name: "5 hours", used: [42, 7][i], resetsAt: later(2) }, { name: "7 days", used: [18, 3][i], resetsAt: later(50) },
 ] }));
+const library = {
+  dir: "/Users/me/.magpie/library", backups: "/Users/me/.magpie/backups", home: "/Users/me",
+  agents: [{ id: "claude", name: "Claude Code", icon: "", skills: "/Users/me/.claude/skills" }],
+  instructions: { agents: [] }, servers: [], skills: [{ name: "grill-me", description: "Asks hard questions about a plan", kind: "folder", agents: ["claude"] }], foundServers: [], projects: [], foundSkills: [],
+};
 const usage = { calls: 1234, errors: 5, input: 987654, output: 12345, cache_read: 0, cache_write: 0, reasoning: 0, cost: 4.5, unpriced: 0, accounts: [], callerKeys: [], agents: [], models: [], series: [], bucket: "day", path: "~/.config/magpie/usage.jsonl" };
 
 function serve(lang) {
@@ -54,7 +60,10 @@ function serve(lang) {
     if (url.pathname === "/api/usage") return json(usage);
     if (url.pathname === "/api/growth/preview") return json({ points: POINTS, accounts: [], uses: [] });
     if (url.pathname === "/api/groups") return json({ groups: [], models: [] });
-    if (url.pathname === "/api/plugins") return json({ plugins: [] });
+    if (url.pathname === "/api/plugins") return json({ bun: true, bunVersion: "1.3.0", plugins: [{ spec: "opencode-copilot-auth", version: "0.0.7", providers: [] }] });
+    if (url.pathname === "/api/plugins/npm") return json({ npm: { "opencode-copilot-auth": { version: "0.0.7" } } });
+    if (url.pathname === "/api/plugins/listings") return json({ listings: [] });
+    if (url.pathname === "/api/library") return json(library);
     if (url.pathname.startsWith("/api/")) return json({});
     const file = path.join(assets, url.pathname === "/" ? "index.html" : url.pathname);
     const contentType = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png" }[path.extname(file)];
@@ -162,6 +171,30 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await selectOf(kpi), "text");
         assert.equal(await drag(page, kpi), await kpi.textContent());
         assert.deepEqual(await loose(page), []);
+
+        // Library: a drag across a skill's name opens nothing; a click reads it
+        await page.goto("http://magpie.test/");
+        await page.evaluate(() => show("library"));
+        // its Skills tab
+        const kinds = page.locator("#view-library .lib-tabs");
+        await kinds.waitFor();
+        await kinds.locator(".opt").nth((await kinds.getAttribute("data-kind")).split("|").indexOf("skills")).click();
+        const skill = page.locator("#view-library .lib-row.lib-skill .who .name").first();
+        await skill.waitFor();
+        assert.match(await drag(page, skill), /^grill-me/);
+        assert.equal(await page.locator(".lib-skillfile").count(), 0, "a drag across a skill's name opened it");
+        await skill.click();
+        await page.locator(".lib-skillfile").waitFor();
+
+        // Plugins: the same for an installed plugin's row and its detail
+        await page.goto("http://magpie.test/?view=plugins");
+        await page.locator('#view-plugins .lib-tabs .opt[data-sub="installed"]').click();
+        const plugin = page.locator("#view-plugins .pm-row .name").first();
+        await plugin.waitFor();
+        assert.match(await drag(page, plugin), /opencode-copilot-auth/);
+        assert.equal(await page.locator(".pm-detail").count(), 0, "a drag across a plugin's name opened its detail");
+        await plugin.click();
+        await page.locator(".pm-detail").waitFor();
         assert.deepEqual(errors, []);
       });
     }

@@ -33,7 +33,7 @@ const POINTS = Array.from({ length: 61 }, (_, d) => ({ day: d, fiveHours: Math.m
 
 function serve(lang, ctl) {
   const settings = () => ({ lang, theme: "light", tray: "panel", currency: "usd", textSize: 100, proxy: "", version: "test", dir: "/test", lanURLs: [], proxies: [],
-    fx: { rate: 7.2, at: new Date().toISOString(), stale: false }, growthPolicyList: [...BUILTINS, SLOW], growthInEffect: "standard" });
+    fx: { rate: 7.2, at: new Date().toISOString(), stale: false }, growthPolicyList: [...BUILTINS, SLOW], growthInEffect: ctl.def || "standard" });
   return async (route) => {
     const req = route.request(), url = new URL(req.url());
     const json = (data) => route.fulfill({ json: data });
@@ -59,7 +59,7 @@ function serve(lang, ctl) {
       const goneOf = (sub) => ctl.gone.filter((g) => g.id === sub).map((g) => g.account);
       const uses = [];
       if (id === "slow") {
-        uses.push({ provider: "codex", name: "Codex", picked: true, accounts: 0, accountsPicked: goneOf("codex").length || undefined, off: true, gone: goneOf("codex") });
+        if (!ctl.noCodex) uses.push({ provider: "codex", name: "Codex", picked: true, accounts: 0, accountsPicked: goneOf("codex").length || undefined, off: true, gone: goneOf("codex") });
         const claude = goneOf("claude");
         if (ctl.claudePicked || claude.length) uses.push({ provider: "claude", name: "Claude", picked: ctl.claudePicked || undefined, accounts: 0, accountsPicked: claude.length || undefined, accountsOnly: !ctl.claudePicked || undefined, unlisted: true, gone: claude });
       }
@@ -187,5 +187,40 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(errors, []);
       });
     }
+  }
+}
+
+// the default's Delete stays off with its own reason, whatever picks it
+// and once nothing does (review H2 of T-144: Clear the pick turned it on)
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  for (const lang of LANGS) {
+    const x = (s, a) => tr(lang, s, a);
+    test(`${engine} ${lang}: the default policy's Delete stays off after its picks are cleared`, async (t) => {
+      const ctl = { posts: [], previews: 0, refuse: false, claudePicked: true, def: "slow", noCodex: true, gone: [{ id: "claude", account: "old@example.com" }] };
+      const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+      t.after(() => { ctl.release?.(); return browser.close(); });
+      const page = await (await browser.newContext({ viewport: { width: 1000, height: 900 }, reducedMotion: "reduce" })).newPage();
+      page.setDefaultTimeout(5000);
+      page.setDefaultNavigationTimeout(60000);
+      const errors = [];
+      page.on("pageerror", (e) => errors.push(e.message));
+      await page.route("**/*", serve(lang, ctl));
+      await page.goto("http://magpie.test/?view=settings&tab=growth");
+      await page.locator("#setTab-growth").click();
+      const list = page.locator("#growthList");
+      await list.locator('.gp-item[data-id="slow"]').click();
+      await list.locator(".growth-uses .growth-gone-pick").waitFor();
+      const del = list.locator(".growth-delete");
+      const why = x("Make another policy the default first");
+      assert.equal(await del.isDisabled(), true);
+      assert.equal(await del.getAttribute("title"), why);
+      await list.locator(".growth-use", { hasText: x("{name} (not in Providers)", { name: "Claude" }) }).locator(".growth-clear").first().click();
+      await page.waitForFunction(() => ![...document.querySelectorAll("#growthList .growth-uses .growth-use:not(.growth-gone-pick) .growth-clear")].length);
+      await list.locator(".growth-gone-pick .growth-clear").click();
+      await page.waitForFunction((none) => [...document.querySelectorAll("#growthList .growth-uses .growth-use")].map((e) => e.textContent.trim()).join() === none, x("No subscription is held by it"));
+      assert.equal(await del.isDisabled(), true, "the default's Delete could be pressed");
+      assert.equal(await del.getAttribute("title"), why);
+      assert.deepEqual(errors, []);
+    });
   }
 }
