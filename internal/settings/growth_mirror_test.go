@@ -205,3 +205,86 @@ func TestGrowthMirrorSkipsStagesItRefuses(t *testing.T) {
 		t.Fatalf("mirrored stages it refuses: %+v", o)
 	}
 }
+
+// A mirror left beside a default changed outside EditGrowth (by hand, or
+// a default gone) is still a mirror: never moved again as "mine-2", and
+// cleared by the next save of any setting, as the default isn't one a
+// magpie from before can read.
+func TestGrowthStaleMirrorIsNoSecondPolicy(t *testing.T) {
+	growthHome(t)
+	stages := []GrowthStage{{From: 0, Window: GrowthFiveHours, Cap: 30}}
+	if err := Save(Settings{Growth: &stages}); err != nil {
+		t.Fatal(err)
+	}
+	if err := EditGrowth(func(own []GrowthPolicy, def string) ([]GrowthPolicy, string, error) { return own, def, nil }); err != nil {
+		t.Fatal(err)
+	}
+	for _, def := range []string{GrowthGentle, "gone"} {
+		s := Load()
+		s.GrowthDefault = def // as a hand edit leaves it, the mirror kept
+		s.Growth = &stages
+		if s.GrowthKnows("mine-2") || len(s.GrowthPoliciesAll()) != len(BuiltinGrowth())+1 {
+			t.Fatalf("default %q: the stale mirror is a second policy: %+v", def, s.GrowthPoliciesAll())
+		}
+		if err := Save(s); err != nil {
+			t.Fatal(err)
+		}
+		if o := readBefore(t); o.Growth != nil {
+			t.Fatalf("default %q: a save kept the stale mirror %+v", def, *o.Growth)
+		}
+		if err := EditGrowth(func(own []GrowthPolicy, def string) ([]GrowthPolicy, string, error) {
+			if len(own) != 1 {
+				t.Fatalf("default %q: handed %+v", def, own)
+			}
+			return own, GrowthMine, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A mirror a later magpie wrote of stages this one refuses (a window it
+// doesn't know) never blocks a save: it is a mirror, cleared, not checked.
+func TestGrowthMirrorItRefusesBlocksNoSave(t *testing.T) {
+	growthHome(t)
+	odd := []GrowthStage{{From: 0, Window: "1d", Cap: 50}}
+	b, _ := json.Marshal(map[string]any{
+		"growth":         odd,
+		"growthPolicies": []GrowthPolicy{{ID: "odd", Name: "Odd", Kind: GrowthStaged, Stages: odd}},
+		"growthDefault":  "odd",
+	})
+	if err := os.MkdirAll(Dir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := Load()
+	s.Theme = "dark"
+	if err := Save(s); err != nil {
+		t.Fatalf("a later magpie's mirror blocked a save: %v", err)
+	}
+	if o := readBefore(t); o.Growth != nil || o.Theme != "dark" {
+		t.Fatalf("saved: %+v", o)
+	}
+	if s := Load(); len(s.GrowthPolicies) != 1 || s.GrowthDefault != "odd" {
+		t.Fatalf("the policies: %+v", s)
+	}
+}
+
+// withGrowth asks GrowthFor on every request: beside a mirror of many
+// stages, a pick gone included, it makes nothing on the heap.
+func TestGrowthForBesideAMirrorMakesNothing(t *testing.T) {
+	var stages []GrowthStage
+	for d := range 12 {
+		stages = append(stages, GrowthStage{From: d, Window: GrowthFiveHours, Cap: 20 + d})
+	}
+	mirror := slices.Clone(stages)
+	s := Settings{Growth: &mirror, GrowthPolicies: []GrowthPolicy{{ID: GrowthMine, Name: "Mine", Kind: GrowthStaged, Stages: stages}}, GrowthDefault: GrowthMine}
+	if n := testing.AllocsPerRun(100, func() { _ = s.GrowthFor("gone", "gone-too") }); n != 0 {
+		t.Fatalf("GrowthFor made %v on the heap", n)
+	}
+	if g := s.GrowthFor("gone", "gone-too"); g.ID != GrowthMine {
+		t.Fatalf("held by %+v", g)
+	}
+}

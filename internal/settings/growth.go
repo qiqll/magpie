@@ -320,8 +320,7 @@ func migratedGrowth(stages []GrowthStage, id, name string) GrowthPolicy {
 // MigrateGrowth moves the stages s set before policies were kept (Growth)
 // to a stages policy of the user's own, which becomes the default unless
 // another is already: each account is held day by day as it was. Growth
-// is cleared, the mirror of the default too (GrowthMirror), which moves
-// nothing. false when there was nothing to move. s.GrowthPolicies is
+// is cleared, a mirror too (stagesToMove), which moves nothing. false when there was nothing to move. s.GrowthPolicies is
 // appended to: a caller holding a shared list clones it first.
 func MigrateGrowth(s *Settings) bool {
 	st := s.stagesToMove()
@@ -346,11 +345,11 @@ func MigrateGrowth(s *Settings) bool {
 // growthPolicies and growthDefault). They are the default's when it is a
 // stages policy of the user's that counts calendar days, as the one
 // migrated is, so that magpie holds every account day by day as this one
-// does; nil (Growth cleared) for any other default, which that magpie
-// can't read, so it holds by its old default stages. Stages CheckGrowth
-// refuses are never mirrored, so Save doesn't refuse what it didn't check.
-// This magpie reads the policies, never the mirror: a Growth that is the
-// default's stages is not moved again (stagesToMove).
+// does; none (every save clears Growth) for any other default, which that
+// magpie can't read, so it holds by its old default stages. Stages
+// CheckGrowth refuses are never mirrored, so Save doesn't refuse what it
+// didn't check. Asked by a save only. This magpie reads the policies,
+// never the mirror (stagesToMove).
 func (s Settings) GrowthMirror() ([]GrowthStage, bool) {
 	if s.GrowthDefault == "" {
 		return nil, false
@@ -367,15 +366,24 @@ func (s Settings) GrowthMirror() ([]GrowthStage, bool) {
 }
 
 // stagesToMove is Growth while it holds stages from before policies were
-// kept, nil when it is none or the default's mirror (GrowthMirror), a
-// copy of what the policies hold already. It makes nothing on the heap:
-// GrowthOf asks it on every request.
+// kept, nil when it is none or a mirror: beside a default, the stages of
+// a stages policy of the user's that counts calendar days, as a save
+// mirrors them (GrowthMirror). That is the default's, or the one that was
+// the default when another magpie wrote the file (a default changed by
+// hand, or one gone, or stages a later magpie checks and this one
+// doesn't): what the policies hold already, never moved again as a
+// second policy, and written again or cleared by the next save. It makes
+// nothing on the heap: GrowthOf asks it on every request.
 func (s Settings) stagesToMove() *[]GrowthStage {
 	if s.Growth == nil {
 		return nil
 	}
-	if m, ok := s.GrowthMirror(); ok && slices.Equal(m, *s.Growth) {
-		return nil
+	if s.GrowthDefault != "" {
+		for _, p := range s.GrowthPolicies {
+			if p.Kind == GrowthStaged && p.CountDays == "" && slices.Equal(p.Stages, *s.Growth) {
+				return nil
+			}
+		}
 	}
 	return s.Growth
 }
