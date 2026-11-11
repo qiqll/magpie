@@ -36,6 +36,16 @@ func fromT134(t *testing.T) {
 	}
 }
 
+// usedDaysBeganAt has the built-ins begin counting the days used at at
+// (usedDaysBegan) for the test: one whose first uses are on the real clock
+// has them before it.
+func usedDaysBeganAt(t *testing.T, at time.Time) {
+	t.Helper()
+	was := usedDaysBegan
+	usedDaysBegan = at
+	t.Cleanup(func() { usedDaysBegan = was })
+}
+
 // graduated is when the account was found done with its ramp-up, zero for
 // not.
 func graduated() time.Time { return AccountGraduatedOf("codex", "new@example.com") }
@@ -148,6 +158,7 @@ func TestGraduatedOnlyByUse(t *testing.T) {
 	t.Run("first uses not read", func(t *testing.T) {
 		firstUsedFixture(t, time.Hour)
 		growthDefault(t, settings.GrowthStandard)
+		usedDaysBeganAt(t, time.Now().Add(time.Hour))
 		// added an hour ago: its first use is now, on the real clock
 		NoteAccountUsed("codex", "new@example.com", time.Now())
 		later := time.Now().Add(20 * growthDay)
@@ -304,6 +315,7 @@ func TestGraduatedFromBefore(t *testing.T) {
 func TestGraduatedWithTheFirstUseRead(t *testing.T) {
 	firstUsedFixture(t, 30*24*time.Hour)
 	growthDefault(t, settings.GrowthStandard)
+	usedDaysBeganAt(t, time.Now())
 	codexSignIn(t, os.Getenv("HOME"), "late@example.com", "r-late")
 	rememberLogins(true)
 	addedAgo(t, "codex", "late@example.com", 30*24*time.Hour)
@@ -485,5 +497,51 @@ func TestGraduatedNotOnResumeWhileRamping(t *testing.T) {
 	}
 	if s := fiveHoursAt(now); s >= 100 {
 		t.Errorf("resumed while ramping up, the gateway holds it at %d%%", s)
+	}
+}
+
+// Only an account first used before the built-ins counted the days used
+// (usedDaysBegan) is marked (T-162): a ledger read for first uses long
+// after the upgrade, unreadable till then, finds one first used since
+// with its calendar's 14 days past, and leaves it ramping up by its days
+// used. One first used a minute before is marked, and so is it when
+// resumed (ResumeGrowth asks the same).
+func TestGraduatedOnlyFromBefore(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		began  time.Duration // usedDaysBegan, from the first use
+		marked bool
+	}{
+		{"first used before", time.Minute, true},
+		{"first used then", 0, false},
+		{"first used after", -2 * growthDay, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			usedDaysFixture(t, "")
+			fromT134(t)
+			usedDaysBeganAt(t, day(0, time.Hour+c.began))
+			for d := range 3 {
+				NoteAccountUsed("codex", "new@example.com", day(d, time.Hour))
+			}
+			graduateOnce(day(25, 0))
+			if marked := !graduated().IsZero(); marked != c.marked || !storedFile().GraduatedRead {
+				t.Fatalf("marked %v (%v), want %v; done %v", marked, graduated(), c.marked, storedFile().GraduatedRead)
+			}
+			if c.marked {
+				return
+			}
+			if s := fiveHoursAt(day(25, time.Hour)); s != 60 {
+				t.Errorf("not marked, 3 days used: held at %d%%, want 60%%", s)
+			}
+			if err := SkipGrowth("codex", "new@example.com"); err != nil {
+				t.Fatal(err)
+			}
+			if err := ResumeGrowth("codex", "new@example.com"); err != nil {
+				t.Fatal(err)
+			}
+			if !graduated().IsZero() {
+				t.Errorf("resumed, marked %v", graduated())
+			}
+		})
 	}
 }

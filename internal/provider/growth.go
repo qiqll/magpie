@@ -1549,7 +1549,8 @@ func BackfillUsedDays(served ServedDays) {
 // policy's days alone: the mark is done (GraduatedRead) whether any was
 // marked or not, and never made again. Only an account the gateway serves
 // is asked (one it doesn't counts the calendar's days anyway), with a
-// first use kept, no ramp-up skipped, under a ramp or stages. Run at the
+// first use kept from before the built-ins counted the days used
+// (usedDaysBegan, T-162), no ramp-up skipped, under a ramp or stages. Run at the
 // gateway's start after BackfillFirstUsed; until that read has gone
 // through, the first uses aren't known, and nothing is marked till a
 // later start. A file BackfillFirstUsed reads first uses into is marked in
@@ -1619,14 +1620,22 @@ func graduate(f *file, now time.Time) int {
 	return marked
 }
 
+// usedDaysBegan is when the built-ins began counting the days used
+// (T-134, 37239b99): an account first used since was never ramped up by
+// the calendar, so it is never marked done by it (T-162). Without it, a
+// ledger read for first uses only long after the upgrade (unreadable till
+// then) would mark an account added after it, its calendar days past, as
+// at 100% before.
+var usedDaysBegan = time.Date(2026, 11, 11, 3, 25, 13, 0, time.UTC)
+
 // doneByCalendar is whether the account u (its key) of the record p,
-// served by the gateway, has a policy counting the days used that holds
-// none of its windows on the calendar from its first use at now, as it was
-// held before: what graduate marks, and ResumeGrowth after the mark was
-// made (T-158).
+// served by the gateway and first used before usedDaysBegan, has a policy
+// counting the days used that holds none of its windows on the calendar
+// from its first use at now, as it was held before: what graduate marks,
+// and ResumeGrowth after the mark was made (T-158).
 func doneByCalendar(st settings.Settings, p Provider, u string, now time.Time) bool {
 	used := p.AccountFirstUsed[u]
-	if !gatewayServed(p) || !addedKnown(used) || !addedKnown(p.AccountAdded[u]) {
+	if !gatewayServed(p) || !addedKnown(used) || !addedKnown(p.AccountAdded[u]) || !used.Before(usedDaysBegan) {
 		return false
 	}
 	pol := st.GrowthFor(p.AccountGrowthPolicy[u], p.GrowthPolicy)
