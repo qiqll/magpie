@@ -133,6 +133,8 @@ func Mirror(ps []Provider, gs []Group) error {
 			p.AccountFirstUsed = earlierFirstUsed(h.AccountFirstUsed, p.AccountFirstUsed)
 			// and its days used, counted against that first use (T-134)
 			p.AccountUsedDays = keptUsedDays(h.AccountUsedDays, p.AccountUsedDays, p.AccountFirstUsed)
+			// and a ramp-up found done on either computer, the earlier (T-150)
+			p.AccountGraduated = earlierFirstUsed(h.AccountGraduated, p.AccountGraduated)
 			p.KeepLogin, p.KeepLoginAs, p.SwitchOnly, p.RestartApp = h.KeepLogin, h.KeepLoginAs, h.SwitchOnly, h.RestartApp
 			p.KeepSelf = h.KeepSelf
 		} else {

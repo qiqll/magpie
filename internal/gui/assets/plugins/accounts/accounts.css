@@ -13,6 +13,7 @@
 .acx-grow { flex: 0 1 auto; min-width: 0; max-width: 100%; padding: 1px 7px; border: 0; border-radius: 9px; font: inherit; font-size: 11px; font-weight: 500; color: var(--accent); background: var(--pill); cursor: pointer; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .acx-grow:hover, .acx-grow.open { background: var(--line); }
 .acx-grow.busy { opacity: .6; }
+.acx-grad, .acx-grad:hover { cursor: default; background: var(--pill); }
 .acx-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .acx-state { flex: none; padding: 1px 7px; border-radius: 9px; font-size: 11px; font-weight: 500; color: var(--muted); background: var(--pill); }
 .acx-state.on { color: var(--green); background: var(--green-soft); }

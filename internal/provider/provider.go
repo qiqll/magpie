@@ -544,6 +544,18 @@ type Provider struct {
 	// (moveAccountSettings) and goes when the user removes the account
 	// (forgetAdded).
 	AccountGrowthSkipped map[string]time.Time `json:"accountGrowthSkipped,omitempty"`
+	// AccountGraduated is, for a subscription, when magpie found each
+	// account's ramp-up done (T-150), by its name in lower case: written
+	// once, as the built-ins began counting the days used
+	// (GraduateOnce), for each account whose policy counts those but
+	// whose calendar days from its first use had reached the policy's
+	// last day already. The growth policy holds none of its windows from
+	// then, so an account long out of its ramp-up isn't held again for
+	// the days it was idle. magpie's own: the editor's Save keeps what the
+	// file has. It moves with an account renamed, goes when the user
+	// removes the account (forgetAdded), and a sync keeps both
+	// computers', the earlier time.
+	AccountGraduated map[string]time.Time `json:"accountGraduated,omitempty"`
 	// AccountWindowAmounts is, for a subscription, the fixed amount of a
 	// window's own unit (credits, requests, tokens) an account is used to
 	// at most where the user set one in place of a share (9won_25273 on
@@ -759,6 +771,11 @@ type file struct {
 	// (BackfillFirstUsed): from then, an account with no first use has
 	// not been used. Until then its days count from AccountAdded.
 	FirstUsedRead bool `json:"firstUsedRead,omitempty"`
+	// GraduatedRead says the accounts whose ramp-up was done by the
+	// calendar were marked once (GraduateOnce, AccountGraduated, T-150):
+	// from then, an account ramps up by its policy's days alone, and no
+	// account is marked again. A sync leaves it as it is here.
+	GraduatedRead bool `json:"graduatedRead,omitempty"`
 	// Deleted are the providers the user deleted, so the calls made to
 	// one stay its own when another is added under its id (Renames).
 	Deleted []Deleted `json:"deleted,omitempty"`
@@ -1023,6 +1040,7 @@ func (p Provider) clone() Provider {
 	p.AccountUsedDays = maps.Clone(p.AccountUsedDays)
 	p.AccountGrowthPolicy = maps.Clone(p.AccountGrowthPolicy)
 	p.AccountGrowthSkipped = maps.Clone(p.AccountGrowthSkipped)
+	p.AccountGraduated = maps.Clone(p.AccountGraduated)
 	p.AccountNames = maps.Clone(p.AccountNames)
 	p.KeySpendCaps = maps.Clone(p.KeySpendCaps)
 	p.KeyOwnBalances = maps.Clone(p.KeyOwnBalances)
@@ -1424,6 +1442,8 @@ func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err e
 		// is a skipped ramp-up (SkipGrowth)
 		p.GrowthPolicy, p.AccountGrowthPolicy = was.GrowthPolicy, was.AccountGrowthPolicy
 		p.AccountGrowthSkipped = was.AccountGrowthSkipped
+		// and a ramp-up found done is magpie's (T-150)
+		p.AccountGraduated = was.AccountGraduated
 		if p.Was == nil {
 			p.Was = was.Was
 		}
@@ -2020,6 +2040,7 @@ func normalize(p Provider) Provider {
 	p.GrowthPolicy = strings.TrimSpace(p.GrowthPolicy)
 	p.AccountGrowthPolicy = normalAccountGrowthPolicy(p.AccountGrowthPolicy)
 	p.AccountGrowthSkipped = normalAccountAdded(p.AccountGrowthSkipped)
+	p.AccountGraduated = normalAccountAdded(p.AccountGraduated)
 	p.AccountWindowAmounts = normalWindowAmounts(p.AccountWindowAmounts)
 	p.AccountNames = normalAccountNames(p.AccountNames)
 	p.KeySpendCaps = normalKeySpendCaps(p.KeySpendCaps)

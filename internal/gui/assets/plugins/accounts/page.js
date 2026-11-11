@@ -121,7 +121,9 @@ function acxRows() {
       const growth = p.accountGrowth?.[acxLow(l.user)] || null;
       // the growth policy it picked itself, "" when it follows its subscription's (T-133)
       const pick = p.accountGrowthPolicy?.[acxLow(l.user)] || "";
-      out.push({ p, a, l, sub, state, banned, disabled, off, authFailed, again, act, q, added, firstUsed, growth, pick, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
+      // its ramp-up found done as its policy began counting the days used (T-150)
+      const graduated = p.accountGraduated?.[acxLow(l.user)] || "";
+      out.push({ p, a, l, sub, state, banned, disabled, off, authFailed, again, act, q, added, firstUsed, growth, pick, graduated, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
     }
   }
   return out;
@@ -465,6 +467,11 @@ function acxWho(r) {
   // both marks: both said
   if (r.banned && r.disabled) name.append(el("span", "acx-state disabled", t("Disabled")));
   if (r.growth || r.pick) name.append(acxGrowth(r));
+  if (r.graduated && !r.growth) {
+    const done = el("span", "acx-grow acx-grad", t("Ramped up"));
+    done.title = t("Its ramp-up was done by the calendar when its growth policy began counting only the days used, so the policy holds it no more");
+    name.append(done);
+  }
   who.append(name);
   return [who, alias];
 }

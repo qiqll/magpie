@@ -42,6 +42,12 @@ package provider
 // share of 100 on each window the policy held, which reads as the user's
 // own 100 still: those windows stay out of an account cap until set back
 // to follow it.
+//
+// An account whose ramp-up was done by the calendar when the built-ins
+// began counting the days used (2026-11-11) is kept graduated
+// (AccountGraduated, T-150), marked once (GraduateOnce): the policy holds
+// none of its windows, so one used on fewer days than it is old isn't held
+// again. An account after that ramps up by its policy's days alone.
 
 import (
 	"cmp"
@@ -158,19 +164,25 @@ func rampCaps(start, days int, added, now time.Time) map[string]int {
 // amount); c as it is when the account has a cap of its own, which holds
 // every window. c's map is never written: one with growth is a copy.
 func (c WindowCaps) withGrowth(id, user string, added, now time.Time) WindowCaps {
-	if !addedKnown(added) || c.All > 0 || growthSkipped(id, user) {
+	if !addedKnown(added) || c.All > 0 || growthLetGo(id, user) {
 		return c
 	}
 	return c.withPolicy(growthPolicyFor(id, user), added, now)
 }
 
-// growthSkipped is whether the user skipped the ramp-up of the account
-// user of the subscription id (SkipGrowth): the policy holds none of its
-// windows.
-func growthSkipped(id, user string) bool {
+// growthLetGo is whether the policy holds none of the windows of the
+// account user of the subscription id: the user skipped its ramp-up
+// (SkipGrowth), or it was found done (AccountGraduated, T-150).
+func growthLetGo(id, user string) bool {
 	s, _ := storedPicks(id)
-	_, ok := s.AccountGrowthSkipped[accountKey(user)]
-	return ok
+	return letGo(s, accountKey(user))
+}
+
+// letGo is growthLetGo of the record s and the account's key k.
+func letGo(s Provider, k string) bool {
+	_, skipped := s.AccountGrowthSkipped[k]
+	_, graduated := s.AccountGraduated[k]
+	return skipped || graduated
 }
 
 // growthPolicyOf is the policy the accounts of the subscription id are
@@ -463,7 +475,7 @@ type GrowthAccount struct {
 // day, by subscription and name: those its subscription lists now (as the
 // Providers page does, AccountRefs), on a subscription that isn't off,
 // with no cap of their own (which holds every window, withGrowth) and no
-// ramp-up skipped (AccountGrowthSkipped). A day
+// ramp-up skipped (AccountGrowthSkipped) or done (AccountGraduated). A day
 // is kept for an account gone from the list a while, so the day alone
 // doesn't say it is held. One from before AccountAdded was kept has no
 // day and isn't listed.
@@ -501,8 +513,7 @@ func growthAccounts(now time.Time, held func(s *Provider, user string) bool) []G
 		}
 		for u := range s.AccountAdded {
 			from := growthFrom(s.ID, u, now)
-			_, skipped := s.AccountGrowthSkipped[u]
-			if !listed[u] || s.AccountCaps[u] > 0 || skipped || !addedKnown(from) || held != nil && !held(&s, u) {
+			if !listed[u] || s.AccountCaps[u] > 0 || letGo(s, u) || !addedKnown(from) || held != nil && !held(&s, u) {
 				continue
 			}
 			out = append(out, GrowthAccount{
@@ -661,7 +672,7 @@ type AccountGrowth struct {
 // the account user of the subscription id at now, nil when it holds none of its windows: one from
 // before, one past its last day, a policy that is Off, a subscription
 // turned off, a cap of the account's own, a ramp-up skipped
-// (AccountGrowthSkipped), or every window it has the user's (one skipped
+// (AccountGrowthSkipped) or done (AccountGraduated, T-150), or every window it has the user's (one skipped
 // before T-140 among them). Its shares are those AccountCapsOf adds to
 // the user's own caps, through the same withGrowth (withPolicy, the
 // policy read once) and growthFrom the gateway's holds read, on the
@@ -670,7 +681,7 @@ type AccountGrowth struct {
 // change on are asked: a ramp's each day to its last, a stage's start.
 func AccountGrowthOf(id, user string, now time.Time) *AccountGrowth {
 	s, ok := storedPicks(id)
-	if _, skipped := s.AccountGrowthSkipped[accountKey(user)]; !ok || s.Off || skipped {
+	if !ok || s.Off || letGo(s, accountKey(user)) {
 		return nil
 	}
 	from, byUse := growthCount(id, user, now)
@@ -1453,6 +1464,96 @@ func BackfillUsedDays(served ServedDays) {
 	}
 }
 
+// GraduateOnce marks, once, each account whose ramp-up the calendar had
+// done when the built-ins began counting the days used (T-150, 需求方
+// 2026-11-11 A1): its policy counts the days used, and the calendar days
+// from its first use have reached the day it holds nothing more. Such an
+// account was at 100% before, and is kept so (AccountGraduated), where its
+// days used alone would hold it again (one added 20 days ago and used on
+// 8, under Standard, back at 78%). Every account after it ramps up by its
+// policy's days alone: the mark is done (GraduatedRead) whether any was
+// marked or not, and never made again. Only an account the gateway serves
+// is asked (one it doesn't counts the calendar's days anyway), with a
+// first use kept, no ramp-up skipped, under a ramp or stages. Run at the
+// gateway's start after BackfillFirstUsed; until that read has gone
+// through, the first uses aren't known, and nothing is marked till a
+// later start.
+func GraduateOnce() { graduateOnce(time.Now()) }
+
+// graduateOnce is GraduateOnce at now.
+func graduateOnce(now time.Time) {
+	if f, err := read(); err != nil || f.GraduatedRead || !f.FirstUsedRead {
+		return
+	}
+	if err := providersMu.Take(); err != nil {
+		log.Printf("%v; the accounts whose ramp-up is done are marked at a later start", err)
+		return
+	}
+	defer providersMu.Unlock()
+	f, err := read()
+	if err != nil {
+		log.Printf("providers.json: %v; the accounts whose ramp-up is done are marked at a later start", err)
+		return
+	}
+	if f.GraduatedRead || !f.FirstUsedRead {
+		return
+	}
+	at, marked := now.UTC().Truncate(time.Second), 0
+	for i := range f.Providers {
+		p := &f.Providers[i]
+		if !gatewayServed(*p) {
+			continue
+		}
+		for u, used := range p.AccountFirstUsed {
+			if !addedKnown(used) || !addedKnown(p.AccountAdded[u]) || letGo(*p, u) {
+				continue
+			}
+			pol := settings.Shared().GrowthFor(p.AccountGrowthPolicy[u], p.GrowthPolicy)
+			if pol.CountDays != settings.GrowthUsedDays || pol.Kind != settings.GrowthRamp && pol.Kind != settings.GrowthStaged {
+				continue
+			}
+			// on the calendar from its first use, as it was held before
+			if holdsAny(policyCaps(pol, used, now)) {
+				continue
+			}
+			p.AccountGraduated = maps.Clone(p.AccountGraduated)
+			if p.AccountGraduated == nil {
+				p.AccountGraduated = map[string]time.Time{}
+			}
+			p.AccountGraduated[u] = at
+			marked++
+		}
+	}
+	f.GraduatedRead = true
+	if err := storeQuiet(f); err != nil {
+		log.Printf("providers.json: %v; the accounts whose ramp-up is done are marked at a later start", err)
+		return
+	}
+	if marked > 0 {
+		log.Printf("growth: %d accounts had their ramp-up done by the calendar and are held no more, now their policy counts the days used", marked)
+	}
+}
+
+// holdsAny is whether caps holds a window under 100%.
+func holdsAny(caps map[string]int) bool {
+	for _, share := range caps {
+		if share < 100 {
+			return true
+		}
+	}
+	return false
+}
+
+// AccountGraduatedOf is when the account user of the subscription id was
+// found done with its ramp-up (AccountGraduated, T-150), zero for none,
+// for its row to say.
+func AccountGraduatedOf(id, user string) time.Time {
+	if s, ok := storedPicks(id); ok {
+		return s.AccountGraduated[accountKey(user)]
+	}
+	return time.Time{}
+}
+
 // earlierFirstUsed is the first uses of here and there, each account's
 // earlier; a sync from another computer never takes one away.
 func earlierFirstUsed(here, there map[string]time.Time) map[string]time.Time {
@@ -1622,6 +1723,7 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount, left
 		}
 		used, wasUsed := f.Providers[i].AccountFirstUsed[old.user]
 		days, hadDays := f.Providers[i].AccountUsedDays[old.user]
+		grad, wasGrad := f.Providers[i].AccountGraduated[old.user]
 		delete(entry(old.id).AccountAdded, old.user)
 		entry(now.id).AccountAdded[now.user] = t
 		if wasUsed {
@@ -1647,6 +1749,18 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount, left
 				n.AccountUsedDays = map[string]UsedDays{}
 			}
 			n.AccountUsedDays[now.user] = days
+		}
+		if wasGrad {
+			// and its ramp-up found done (T-150)
+			o := entry(old.id)
+			o.AccountGraduated = maps.Clone(o.AccountGraduated)
+			delete(o.AccountGraduated, old.user)
+			n := entry(now.id)
+			n.AccountGraduated = maps.Clone(n.AccountGraduated)
+			if n.AccountGraduated == nil {
+				n.AccountGraduated = map[string]time.Time{}
+			}
+			n.AccountGraduated[now.user] = grad
 		}
 		changed = true
 	}
@@ -1716,6 +1830,15 @@ func forgetAdded(agent string, users ...string) {
 			delete(p.AccountGrowthSkipped, accountKey(u))
 			if len(p.AccountGrowthSkipped) == 0 {
 				p.AccountGrowthSkipped = nil
+			}
+			changed = true
+		}
+		// and its ramp-up found done (T-150)
+		if _, ok := p.AccountGraduated[accountKey(u)]; ok {
+			p.AccountGraduated = maps.Clone(p.AccountGraduated)
+			delete(p.AccountGraduated, accountKey(u))
+			if len(p.AccountGraduated) == 0 {
+				p.AccountGraduated = nil
 			}
 			changed = true
 		}

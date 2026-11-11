@@ -220,6 +220,10 @@ type providerJSON struct {
 	// case (provider.AccountGrowthOf, the gateway's own hold): its day,
 	// last day and shares, for its row to say; none for one it doesn't hold
 	AccountGrowth map[string]*provider.AccountGrowth `json:"accountGrowth,omitempty"`
+	// when each account was found done with its ramp-up, by its name in
+	// lower case (provider.AccountGraduatedOf, T-150): the growth policy
+	// holds it no more. Shown only, as AccountAdded is
+	AccountGraduated map[string]time.Time `json:"accountGraduated,omitempty"`
 	// where a custom provider's balance is asked (see provider.Balance)
 	BalanceURL    string `json:"balanceURL,omitempty"`
 	BalancePath   string `json:"balancePath,omitempty"`
@@ -875,6 +879,12 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 					out.AccountGrowth = map[string]*provider.AccountGrowth{}
 				}
 				out.AccountGrowth[strings.ToLower(strings.TrimSpace(r))] = g
+			}
+			if at := provider.AccountGraduatedOf(p.ID, r); !at.IsZero() {
+				if out.AccountGraduated == nil {
+					out.AccountGraduated = map[string]time.Time{}
+				}
+				out.AccountGraduated[strings.ToLower(strings.TrimSpace(r))] = at
 			}
 		}
 	}

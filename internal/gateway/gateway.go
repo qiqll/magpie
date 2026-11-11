@@ -882,10 +882,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	go provider.KeepLoginsAlive(ctx)
 	// and reads once from the ledger when each account added before its
 	// first use was kept was first used (the growth policy's days), then
-	// the days each was used on that aren't counted yet (T-134)
+	// the days each was used on that aren't counted yet (T-134), and marks
+	// once the accounts whose ramp-up the calendar had done (T-150)
 	go func() {
 		provider.BackfillFirstUsed(usage.FirstServed)
 		provider.BackfillUsedDays(usage.ServedDays)
+		provider.GraduateOnce()
 	}()
 	// and tells the request hooks of an account to sign in again
 	go keepHooksToldOfSignIns(ctx)
