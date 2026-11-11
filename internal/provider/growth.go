@@ -845,8 +845,9 @@ func growthCount(id, user string, now time.Time) (time.Time, bool) {
 // (the d-th 24 hours from From) bit d%8 of byte d/8, in base64 with no
 // padding; a sync takes the union of two computers' (keptUsedDays). A
 // count kept before it (no Days) knows only its first day and Last, so
-// Count may be more than the days Days has, never fewer: the days it
-// counts that Days doesn't name are days not known.
+// Count may be more than the days Days has, never fewer but at
+// usedDaysMost (a union names every day it knows, its count kept to
+// that): the days it counts that Days doesn't name are days not known.
 type UsedDays struct {
 	From  time.Time `json:"from"`
 	Last  time.Time `json:"last"`
@@ -860,15 +861,17 @@ type UsedDays struct {
 const usedDaysSpan = 10 * 366
 
 // UsedDaysOf is the days used, from from (an account's first use), the
-// days days names, each once, from it (0 its first): usage.ServedDays'
-// count of the ledger's served rows.
+// days days names from it, day 0 (its first use) always among them and
+// each counted once: usage.ServedDays' count of the ledger's served rows.
 func UsedDaysOf(from time.Time, days []int) UsedDays {
 	c := UsedDays{From: from, Last: from}
 	var set []byte
-	for _, d := range days {
-		if d < 0 {
+	seen := map[int]bool{}
+	for _, d := range append([]int{0}, days...) {
+		if d < 0 || seen[d] {
 			continue
 		}
+		seen[d] = true
 		c.Count++
 		set = withDay(set, d)
 		if at := from.Add(time.Duration(d) * growthDay); at.After(c.Last) {
@@ -911,6 +914,23 @@ func knownDays(c UsedDays) []byte {
 		if b, err := base64.RawStdEncoding.DecodeString(c.Days); err == nil {
 			set = b
 		}
+	}
+	// a synced file's days are never more than its record could have been
+	// used on: none past Last, and no more than Count (but at
+	// usedDaysMost, where a union may name more than the count is kept to)
+	last := 0
+	if d := c.Last.Sub(c.From) / growthDay; d > 0 {
+		last = int(min(d, usedDaysSpan))
+	}
+	for i := range set {
+		if i*8 > last {
+			set[i] = 0
+		} else if i*8+7 > last {
+			set[i] &= byte(1<<(last-i*8+1) - 1)
+		}
+	}
+	if daysNamed(set) > c.Count && c.Count < usedDaysMost {
+		set = nil
 	}
 	if c.Count >= 1 {
 		set = withDay(set, 0)

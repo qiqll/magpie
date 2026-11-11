@@ -517,6 +517,26 @@ func TestGrowthUsedDaysOldCountMerges(t *testing.T) {
 	if got := keptUsedDays(map[string]UsedDays{"a": bad}, map[string]UsedDays{"a": UsedDaysOf(usedDaysT0, []int{0, 1})}, fu)["a"]; got.Count != 3 || got.Days != UsedDaysOf(usedDaysT0, []int{0, 1, 2}).Days {
 		t.Fatalf("days unreadable: %+v", got)
 	}
+	// a synced file's days past its Last, or more than its count, aren't
+	// taken: the account is never counted more days than it could have
+	// been used on (review M, T-148)
+	past := UsedDays{From: usedDaysT0, Last: day(1, 0), Count: 2, Days: "//////8"}
+	if got := keptUsedDays(map[string]UsedDays{"a": past}, map[string]UsedDays{"a": UsedDaysOf(usedDaysT0, []int{0})}, fu)["a"]; got.Count != 2 || got.Days != UsedDaysOf(usedDaysT0, []int{0, 1}).Days {
+		t.Fatalf("days past Last: %+v", got)
+	}
+	many := UsedDays{From: usedDaysT0, Last: day(39, 0), Count: 2, Days: "//////8"}
+	if got := keptUsedDays(map[string]UsedDays{"a": many}, map[string]UsedDays{"a": UsedDaysOf(usedDaysT0, []int{0})}, fu)["a"]; got.Count != 2 || got.Days != UsedDaysOf(usedDaysT0, []int{0, 39}).Days {
+		t.Fatalf("more days than counted: %+v", got)
+	}
+	// days longer than usedDaysSpan names are not read at all
+	huge := UsedDays{From: usedDaysT0, Last: day(400, 0), Count: 300, Days: strings.Repeat("AQ", 1000)}
+	if got := knownDays(huge); daysNamed(got) != 2 {
+		t.Fatalf("days too long read: %d named", daysNamed(got))
+	}
+	// day 0 is always one, and a day named twice counted once
+	if c := UsedDaysOf(usedDaysT0, []int{3, 3}); c.Count != 2 || c.Days != UsedDaysOf(usedDaysT0, []int{0, 3}).Days {
+		t.Fatalf("UsedDaysOf without day 0: %+v", c)
+	}
 	// a day past usedDaysSpan is counted, not named, so no file grows large
 	if c := UsedDaysOf(usedDaysT0, []int{0, usedDaysSpan + 5}); c.Count != 2 || len(c.Days) > 4 {
 		t.Fatalf("a day far on: %+v", c)
