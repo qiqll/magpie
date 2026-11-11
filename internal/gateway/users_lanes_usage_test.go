@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +22,8 @@ import (
 // key, user and session in it. It is told the lanes of the accounts and
 // keys it is on alone, as its quotas (T-090), and of the usage its own
 // calls on them: another user's, another key's alice's (T-089) and its
-// own on an account it isn't on are left out. No user named, or bound by
+// own on an account it isn't on are left out. No user named is
+// DefaultUser's (T-163), told its own alone as any user; bound by
 // session: everything, as before.
 func TestBoundUserToldItsOwnLanesAndUsage(t *testing.T) {
 	fresh(t)
@@ -34,7 +36,8 @@ func TestBoundUserToldItsOwnLanesAndUsage(t *testing.T) {
 			"alpha": {"alice": {Who: one, Account: "One", At: now}, "bob": {Who: two, Account: "Two", At: now}},
 			"beta":  {"alice": {Who: beta, Account: provider.Mask("beta-key"), At: now}},
 			"codex": {"alice": {Who: "codex@gone@example.com", Account: "gone@example.com", At: now,
-				More: []userSeat{{Who: "codex@me@example.com", Account: "me@example.com", At: now}}}},
+				More: []userSeat{{Who: "codex@me@example.com", Account: "me@example.com", At: now}}},
+				DefaultUser: {Who: "codex@spare@example.com", Account: "spare@example.com", At: now}},
 		},
 		// another key's alice, apart from Full's: its users aren't shared
 		keys[1].ID: {"alpha": {"alice": {Who: two, Account: "Two", At: now}}},
@@ -64,6 +67,9 @@ func TestBoundUserToldItsOwnLanesAndUsage(t *testing.T) {
 	call(keys[0].ID, "alice", "codex", "", "spare@example.com", "alice-off-seat")
 	call(keys[1].ID, "alice", "alpha", provider.KeyID("alpha-two"), "", "other-alice")
 	call(keys[0].ID, "", "codex", "", "me@example.com", "nobody-1")
+	// one of DefaultUser's on its own seat, as a request naming no user is
+	// logged since T-157
+	call(keys[0].ID, DefaultUser, "codex", "", "spare@example.com", "default-1")
 	// a request of bob's in flight, its session named
 	in := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 	in.Header.Set(UserHeader, "bob")
@@ -128,12 +134,15 @@ func TestBoundUserToldItsOwnLanesAndUsage(t *testing.T) {
 		return got
 	}
 	all := slices.Sorted(slices.Values(every))
-	allSessions := []string{"alice-1", "alice-2", "alice-off-seat", "bob-1", "nobody-1", "other-alice"}
+	allSessions := []string{"alice-1", "alice-2", "alice-off-seat", "bob-1", "default-1", "nobody-1", "other-alice"}
 
 	want := map[string]struct{ lanes, sessions []string }{
 		"alice": {[]string{one, beta, "codex@me@example.com"}, []string{"alice-1", "alice-2"}},
 		"bob":   {[]string{two}, []string{"bob-1"}},
 		"carol": {[]string{}, []string{}}, // bound to nothing
+		// no user named: DefaultUser's, as naming it
+		"":          {[]string{"codex@spare@example.com"}, []string{"default-1"}},
+		DefaultUser: {[]string{"codex@spare@example.com"}, []string{"default-1"}},
 	}
 	for user, w := range want {
 		slices.Sort(w.lanes)
@@ -145,7 +154,7 @@ func TestBoundUserToldItsOwnLanesAndUsage(t *testing.T) {
 			t.Errorf("%s told calls %d of sessions %v, want %v", user, u.Calls, got, w.sessions)
 		}
 		for _, g := range u.Users {
-			if g.User != user {
+			if g.User != cmp.Or(user, DefaultUser) {
 				t.Errorf("%s told user %q's calls", user, g.User)
 			}
 		}
@@ -170,11 +179,11 @@ func TestBoundUserToldItsOwnLanesAndUsage(t *testing.T) {
 	if u, _ := summary(bound, "alice"); !slices.Equal(sessionsOf(u), []string{"alice-1", "alice-2", "alice-3"}) {
 		t.Errorf("alice after her third call told sessions %v", sessionsOf(u))
 	}
-	// no user named, and bound by session: everything
+	// bound by session: everything
 	for _, c := range []struct {
 		h    http.Handler
 		user string
-	}{{bound, ""}, {bySession, "alice"}} {
+	}{{bySession, ""}, {bySession, "alice"}} {
 		if got := lanes(c.h, c.user, true); !slices.Equal(got, all) {
 			t.Errorf("%q told lanes %v, want %v", c.user, got, all)
 		}
@@ -202,8 +211,10 @@ func TestBoundUserToldItsOwnLanesAndUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{"/v1/magpie/concurrency", "/v1/magpie/usage?period=all"} {
-		if c, b := do(bound, path, "alice"); c != http.StatusServiceUnavailable || strings.Contains(b, "example.com") || strings.Contains(b, "alpha#") {
-			t.Errorf("unread %s: %d %s", path, c, b)
+		for _, user := range []string{"alice", ""} {
+			if c, b := do(bound, path, user); c != http.StatusServiceUnavailable || strings.Contains(b, "example.com") || strings.Contains(b, "alpha#") {
+				t.Errorf("unread %s, %q: %d %s", path, user, c, b)
+			}
 		}
 	}
 }

@@ -20,8 +20,9 @@ import (
 // reads, and could have any of them read again. It is told, and has read
 // again, the cards of the accounts and keys it is on alone, as its group
 // shares them (T-089): alice of a key that doesn't share its users is not
-// the alice of another key. No user named, or bound by session: every
-// card, as before.
+// the alice of another key. No user named is DefaultUser's (T-163), told
+// its own cards alone as any user; bound by session: every card, as
+// before.
 func TestBoundUserToldItsOwnQuotas(t *testing.T) {
 	fresh(t)
 	t.Setenv("MAGPIE_ADDR", "")
@@ -52,7 +53,8 @@ func TestBoundUserToldItsOwnQuotas(t *testing.T) {
 			"beta":  {"alice": {Who: beta, Account: provider.Mask("beta-key"), At: now}},
 			// me@ her spare, beside an account that is gone
 			"codex": {"alice": {Who: "codex@gone@example.com", Account: "gone@example.com", At: now,
-				More: []userSeat{{Who: "codex@me@example.com", Account: "me@example.com", At: now}}}},
+				More: []userSeat{{Who: "codex@me@example.com", Account: "me@example.com", At: now}}},
+				DefaultUser: {Who: "codex@spare@example.com", Account: "spare@example.com", At: now}},
 		},
 		// another key's alice, apart from Full's: its users aren't shared
 		keys[1].ID: {"alpha": {"alice": {Who: two, Account: "Two", At: now}}},
@@ -97,10 +99,13 @@ func TestBoundUserToldItsOwnQuotas(t *testing.T) {
 		"alice": {"alpha:one", "beta:", "codex:me@example.com"},
 		"bob":   {"alpha:two"},
 		"carol": {}, // bound to nothing
+		// no user named: DefaultUser's, as naming it
+		"":          {"codex:spare@example.com"},
+		DefaultUser: {"codex:spare@example.com"},
 	}
 	every := []string{"alpha:one", "alpha:two", "beta:", "codex:me@example.com", "codex:spare@example.com"}
 	for _, path := range reads {
-		for _, user := range []string{"alice", "bob", "carol"} {
+		for _, user := range []string{"alice", "bob", "carol", "", DefaultUser} {
 			c, b := do(bound, "GET", path, user)
 			if c != 200 {
 				t.Fatalf("%s %s: %d %s", user, path, c, b)
@@ -118,11 +123,11 @@ func TestBoundUserToldItsOwnQuotas(t *testing.T) {
 				t.Errorf("alice %s: not told her own cards: %v", path, got)
 			}
 		}
-		// no user named, and bound by session: every card
+		// bound by session: every card
 		for _, c := range []struct {
 			h    http.Handler
 			user string
-		}{{bound, ""}, {bySession, "alice"}} {
+		}{{bySession, "alice"}, {bySession, ""}} {
 			code, b := do(c.h, "GET", path, c.user)
 			if code != 200 {
 				t.Fatalf("%q %s: %d %s", c.user, path, code, b)
@@ -165,7 +170,8 @@ func TestBoundUserToldItsOwnQuotas(t *testing.T) {
 			}
 		}
 	}
-	if c, b := do(bound, "POST", provider.RemoteRefreshPath+"?provider=alpha&user=Two", ""); c != 200 {
+	// nor for a request naming no user, DefaultUser's (T-163)
+	if c, b := do(bound, "POST", provider.RemoteRefreshPath+"?provider=alpha&user=Two", ""); c != http.StatusForbidden || strings.Contains(b, "alpha-two") {
 		t.Errorf("no user refreshing Two: %d %s", c, b)
 	}
 	if c, b := do(bound, "GET", "/v1/magpie/quotas?kept=1", "al ice\x00"); c != http.StatusBadRequest {
@@ -177,8 +183,10 @@ func TestBoundUserToldItsOwnQuotas(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range reads {
-		if c, b := do(bound, "GET", path, "alice"); c != http.StatusServiceUnavailable || strings.Contains(b, "alpha:") {
-			t.Errorf("unread %s: %d %s", path, c, b)
+		for _, user := range []string{"alice", ""} {
+			if c, b := do(bound, "GET", path, user); c != http.StatusServiceUnavailable || strings.Contains(b, "alpha:") {
+				t.Errorf("unread %s, %q: %d %s", path, user, c, b)
+			}
 		}
 	}
 }
@@ -235,8 +243,9 @@ func TestBoundUserToldItsOwnStatusline(t *testing.T) {
 	if cards, model := do("bob"); slices.Contains(cards, "alpha:one") || slices.Contains(cards, "beta:") || model != "" {
 		t.Errorf("bob: told %v and model %q, want none of alice's cards and no model", cards, model)
 	}
-	// no user named: every card, and the session's route, as before
-	if cards, model := do(""); !slices.Contains(cards, "alpha:one") || !slices.Contains(cards, "alpha:two") || model != "alpha/m-alice" {
-		t.Errorf("no user: told %v and model %q, want every card and the route's model", cards, model)
+	// no user named: DefaultUser's cards, none here (T-163), and the
+	// session's model as /v1/magpie/route tells it, as before
+	if cards, model := do(""); len(cards) != 0 || model != "alpha/m-alice" {
+		t.Errorf("no user: told %v and model %q, want no card and the route's model", cards, model)
 	}
 }

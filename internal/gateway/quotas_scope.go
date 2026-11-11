@@ -27,8 +27,9 @@ import (
 //     name; a card no account of the provider is known by is told to no
 //     such key.
 //
-// Bound by user, a request that names its user (UserHeader) is told, of
-// those, only the cards of the accounts and keys the user is on (T-090),
+// Bound by user, a request is told, of those, only the cards of the
+// accounts and keys its user (UserHeader; DefaultUser when it names
+// none, T-163) is on (T-090),
 // as it spends only their Codex resets (resetNotUsers): another user's
 // card names its account and what is left of it.
 //
@@ -95,13 +96,25 @@ type usersOwn struct {
 // usersSeats is, bound by user, every account and key r's user
 // (UserHeader) is on, of every provider, as its group shares them
 // (sharedOf, userGroup; T-089), as resetNotUsers reads its Codex ones.
-// own is nil for a request that names no user, the key's owner's, and
+// A request that names no user is DefaultUser's, told that user's alone
+// as its requests are bound as that user's (T-157, T-163); own is nil
 // bound by session: told every card, as before. A user header that
 // can't be taken is answered 400; a user-accounts.json that can't be
 // read, or changed and doesn't read now (stale), 503: which seats are the
 // user's is unknown, so it is told none.
 func (s *Server) usersSeats(w http.ResponseWriter, r *http.Request) (own *usersOwn, ok bool) {
-	own, code, msg := s.usersOwnOf(r)
+	return s.seatsOf(w, r, true)
+}
+
+// namedSeats is usersSeats for the routes views, /v1/magpie/route and
+// the route-events feed: a request that names no user is told every
+// route, as before (T-163 left them as they were).
+func (s *Server) namedSeats(w http.ResponseWriter, r *http.Request) (own *usersOwn, ok bool) {
+	return s.seatsOf(w, r, false)
+}
+
+func (s *Server) seatsOf(w http.ResponseWriter, r *http.Request, defaulted bool) (own *usersOwn, ok bool) {
+	own, code, msg := s.usersOwnOf(r, defaulted)
 	if code != 0 {
 		writeError(w, provider.Chat, code, msg)
 		return nil, false
@@ -110,9 +123,10 @@ func (s *Server) usersSeats(w http.ResponseWriter, r *http.Request) (own *usersO
 }
 
 // usersOwnOf is usersSeats' answer without writing it: the status and
-// message a request is refused with, code 0 when it isn't. A stream
-// reads it again as it goes (routeEvents).
-func (s *Server) usersOwnOf(r *http.Request) (own *usersOwn, code int, msg string) {
+// message a request is refused with, code 0 when it isn't. A request
+// that names no user is DefaultUser's when defaulted, else own is nil.
+// A stream reads it again as it goes (routeEvents).
+func (s *Server) usersOwnOf(r *http.Request, defaulted bool) (own *usersOwn, code int, msg string) {
 	if !s.bind.byUser() {
 		return nil, 0, ""
 	}
@@ -120,8 +134,11 @@ func (s *Server) usersOwnOf(r *http.Request) (own *usersOwn, code int, msg strin
 	if bad != "" {
 		return nil, http.StatusBadRequest, bad
 	}
-	if user == "" {
+	if user == "" && !defaulted {
 		return nil, 0, ""
+	}
+	if user == "" {
+		user = DefaultUser // a request naming none is its user's (T-163)
 	}
 	own = &usersOwn{user: user}
 	key := userKey(r)

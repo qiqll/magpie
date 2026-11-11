@@ -85,6 +85,11 @@ func (s *Server) statusline(w http.ResponseWriter, r *http.Request) {
 		if scope != nil {
 			own = scope.own
 		}
+		// a request naming no user is told the model as /v1/magpie/route
+		// tells it (namedSeats), its cards DefaultUser's (T-163)
+		if user, _ := userOf(r.Header); user == "" {
+			own = nil
+		}
 		keep := func(rt *Route) bool {
 			return (only == "" || rt.CallerKey == only) && (own == nil || own.owns(rt.caller))
 		}

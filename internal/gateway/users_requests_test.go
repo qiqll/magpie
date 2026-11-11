@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -23,7 +24,8 @@ import (
 // (T-093): another user's, another key's alice's (T-089), its own on an
 // account it isn't on and a call naming no user are left out, of the
 // rows and of every list beside them. A held key's user is narrowed the
-// same, within the key's own calls. No user named, or bound by session:
+// same, within the key's own calls. No user named is DefaultUser's
+// (T-163), told its own calls alone as any user; bound by session:
 // everything, as before.
 func TestBoundUserToldItsOwnRequests(t *testing.T) {
 	fresh(t)
@@ -39,7 +41,8 @@ func TestBoundUserToldItsOwnRequests(t *testing.T) {
 			"alpha": {"alice": {Who: one, Account: "One", At: now}, "bob": {Who: two, Account: "Two", At: now}},
 			"beta":  {"alice": {Who: beta, Account: provider.Mask("beta-key"), At: now}},
 			"codex": {"alice": {Who: "codex@gone@example.com", Account: "gone@example.com", At: now,
-				More: []userSeat{{Who: "codex@me@example.com", Account: "me@example.com", At: now}}}},
+				More: []userSeat{{Who: "codex@me@example.com", Account: "me@example.com", At: now}}},
+				DefaultUser: {Who: "codex@spare@example.com", Account: "spare@example.com", At: now}},
 		},
 		// another key's alice, apart from Full's: its users aren't shared
 		keys[1].ID: {"alpha": {"alice": {Who: two, Account: "Two", At: now}}},
@@ -60,6 +63,7 @@ func TestBoundUserToldItsOwnRequests(t *testing.T) {
 	call(keys[0].ID, "alice", "codex", "codex", "", "spare@example.com", "alice-off-seat")
 	call(keys[1].ID, "alice", "codex", "alpha", provider.KeyID("alpha-two"), "", "other-alice")
 	call(keys[0].ID, "", "opencode", "codex", "", "me@example.com", "nobody-1")
+	call(keys[0].ID, DefaultUser, "codex", "codex", "", "spare@example.com", "default-1")
 	call(keys[2].ID, "alice", "codex", "codex", "", "held@example.com", "held-alice")
 	call(keys[2].ID, "bob", "codex", "codex", "", "spare@example.com", "held-bob")
 
@@ -93,18 +97,21 @@ func TestBoundUserToldItsOwnRequests(t *testing.T) {
 		slices.Sort(got)
 		return got
 	}
-	everyone := []string{"alice-1", "alice-2", "alice-off-seat", "bob-1", "held-alice", "held-bob", "nobody-1", "other-alice"}
+	everyone := []string{"alice-1", "alice-2", "alice-off-seat", "bob-1", "default-1", "held-alice", "held-bob", "nobody-1", "other-alice"}
 	for user, want := range map[string][]string{
 		"alice": {"alice-1", "alice-2"},
 		"bob":   {"bob-1"},
 		"carol": {}, // bound to nothing
+		// no user named: DefaultUser's, as naming it
+		"":          {"default-1"},
+		DefaultUser: {"default-1"},
 	} {
 		l, b := page(bound, user)
 		if got := sessionsOf(l); !slices.Equal(got, want) || l.Total != len(want) || l.Totals.Calls != len(want) {
 			t.Errorf("%s told %d rows (%d calls) of sessions %v, want %v", user, l.Total, l.Totals.Calls, got, want)
 		}
 		for _, r := range l.Rows {
-			if r.User != user {
+			if r.User != cmp.Or(user, DefaultUser) {
 				t.Errorf("%s told user %q's row", user, r.User)
 			}
 		}
@@ -132,11 +139,11 @@ func TestBoundUserToldItsOwnRequests(t *testing.T) {
 			t.Errorf("alice told the split of %d keys: %+v", got, l.By["callerKey"])
 		}
 	}
-	// no user named, and bound by session: everything
+	// bound by session: everything
 	for _, c := range []struct {
 		h    http.Handler
 		user string
-	}{{bound, ""}, {bySession, "alice"}} {
+	}{{bySession, ""}, {bySession, "alice"}} {
 		if l, _ := page(c.h, c.user); !slices.Equal(sessionsOf(l), everyone) {
 			t.Errorf("%q told sessions %v, want %v", c.user, sessionsOf(l), everyone)
 		}
@@ -148,7 +155,11 @@ func TestBoundUserToldItsOwnRequests(t *testing.T) {
 	}
 	// a held key: its own calls, and of them its user's alone
 	secret = secrets[2]
-	if l, _ := page(bound, ""); !slices.Equal(sessionsOf(l), []string{"held-alice", "held-bob"}) {
+	// naming no user, DefaultUser's, on no seat under it (T-163)
+	if l, _ := page(bound, ""); len(sessionsOf(l)) != 0 {
+		t.Errorf("the held key, no user, told sessions %v", sessionsOf(l))
+	}
+	if l, _ := page(bySession, ""); !slices.Equal(sessionsOf(l), []string{"held-alice", "held-bob"}) {
 		t.Errorf("the held key told sessions %v", sessionsOf(l))
 	}
 	if l, b := page(bound, "alice"); !slices.Equal(sessionsOf(l), []string{"held-alice"}) || strings.Contains(b, "held-bob") {

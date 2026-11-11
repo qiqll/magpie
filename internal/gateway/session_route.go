@@ -130,7 +130,7 @@ func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
 	wait := min(time.Duration(secs*float64(time.Second)), routeWaitMax)
 	// a user header that can't be taken 400, its seats unread 503, as
 	// every other read of the user's
-	own, ok := s.usersSeats(w, r)
+	own, ok := s.namedSeats(w, r)
 	if !ok {
 		return
 	}

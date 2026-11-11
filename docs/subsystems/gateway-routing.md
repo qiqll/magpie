@@ -714,7 +714,15 @@ user's seats of every provider, read through `sharedOf` as
 account list is (`quotaScope.onSeat`). A card that isn't the user's is
 refused a refresh 403; a user header that can't be taken is 400, and a
 users file that can't be read, or doesn't read since it changed, 503. A
-request naming no user, or bound by session, is told what it was.
+request naming no user is `DefaultUser`'s (`other10000`, T-163), as its
+model requests are (T-157): `usersOwnOf` reads that user's seats, so the
+quotas, `/v1/magpie/concurrency`, `/v1/magpie/usage` and its requests
+tell it that user's alone, the users file unread 503 for it too. Bound by
+session a request is told what it was. The GUI's own `/api/*` views
+don't go through `usersSeats` and still show the whole pool.
+`/v1/magpie/route` and the route-events feed read `namedSeats`, which
+leaves a request naming no user told every route, as before, and the
+status line's model follows them while its cards are `DefaultUser`'s.
 `TestBoundUserToldItsOwnQuotas` in
 [`quotas_users_test.go`](../../internal/gateway/quotas_users_test.go)
 covers the five routes, another key's user of the same name and the
@@ -827,8 +835,9 @@ ask per account run at a time (409). Bound by user, a request that
 names its user (`UserHeader`) spends only the resets of the Codex
 accounts that user is on (`resetNotUsers`, T-088, read through
 `sharedOf`): any other account is 403, alike for another user's and one
-nobody is on, with nothing spent; a request naming no user is the key's
-owner's, as before. The header is the caller's word: a key's users are
+nobody is on, with nothing spent; a request naming no user is
+`DefaultUser`'s (T-163), held to that user's Codex accounts the same
+way. The header is the caller's word: a key's users are
 its own (`userGroup`, T-089), so a key can name only its own users, and
 the keys that share their users (`access.Key.SharesUsers`) with callers
 without a key are one namespace, safe only while each such key is held

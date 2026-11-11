@@ -177,8 +177,9 @@ func TestRemoteCodexResetThroughTheGateway(t *testing.T) {
 // Bound by user (T-088), a request naming its user (UserHeader) spends
 // only the resets of the Codex accounts that user is on: another user's
 // account, or one nobody is on, is refused 403 alike with nothing spent,
-// whatever case it is named in. A request naming no user is the full
-// key's owner's, as before, and bound by session the user isn't read.
+// whatever case it is named in. A request naming no user is DefaultUser's
+// (T-163), as its requests are (T-157): it spends its own accounts'
+// resets alone, never the pool's. Bound by session the user isn't read.
 func TestCodexResetBoundByUserOnlyItsOwn(t *testing.T) {
 	setup := func(t *testing.T, bySeat bool) (*resetBackend, func(account, user string) (int, string)) {
 		t.Helper()
@@ -191,8 +192,8 @@ func TestCodexResetBoundByUserOnlyItsOwn(t *testing.T) {
 		shareUsers(t, keys[0].ID)
 		now := time.Now().UTC()
 		writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
-			"alice": {Who: "codex@me@example.com", Account: "me@example.com", At: now, Tier: "free"},
-			"bob":   {Who: "codex@spare@example.com", Account: "spare@example.com", At: now, Tier: "free"},
+			"alice":     {Who: "codex@me@example.com", Account: "me@example.com", At: now, Tier: "free"},
+			DefaultUser: {Who: "codex@spare@example.com", Account: "spare@example.com", At: now, Tier: "free"},
 		}}})
 		srv := New()
 		if bySeat {
@@ -239,9 +240,16 @@ func TestCodexResetBoundByUserOnlyItsOwn(t *testing.T) {
 		if _, spent := b.seen(); spent != "acct-1" {
 			t.Fatalf("alice's own spent %q, want acct-1", spent)
 		}
-		// no user named: the key's owner's, any account
+		// no user named: DefaultUser's, refused alice's account, nothing
+		// spent, and spends its own
+		if code, body := do("me@example.com", ""); code != http.StatusForbidden || strings.Contains(body, `"code":"reset"`) {
+			t.Fatalf("no user asking alice's: %d %s", code, body)
+		}
+		if _, spent := b.seen(); spent != "acct-1" {
+			t.Fatalf("no user asking alice's spent %q", spent)
+		}
 		if code, body := do("spare@example.com", ""); code != 200 || json.Unmarshal([]byte(body), &out) != nil || out.Code != "reset" {
-			t.Fatalf("no user: %d %s", code, body)
+			t.Fatalf("no user, its own: %d %s", code, body)
 		}
 		if _, spent := b.seen(); spent != "acct-1,acct-2" {
 			t.Fatalf("spent %q, want acct-1,acct-2", spent)
@@ -251,7 +259,7 @@ func TestCodexResetBoundByUserOnlyItsOwn(t *testing.T) {
 		b, do := setup(t, true)
 		// read once, then written over with what doesn't read (stale)
 		if code, body := do("spare@example.com", "alice"); code != http.StatusForbidden {
-			t.Fatalf("bob's: %d %s", code, body)
+			t.Fatalf("%s's: %d %s", DefaultUser, code, body)
 		}
 		if err := os.WriteFile(usersPath(), []byte(`{"users":`), 0o600); err != nil {
 			t.Fatal(err)

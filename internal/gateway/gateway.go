@@ -1365,7 +1365,7 @@ var codexResetsAsked = struct {
 // refused, as is a request with no key at all. The account is named
 // (?user=), never "whichever is signed in", which a caller elsewhere
 // can't see; ?credit= picks one of its resets.each. Bound by user, a
-// user named spends only its own accounts' (resetNotUsers).
+// request spends only its user's own accounts' (resetNotUsers).
 func (s *Server) codexReset(w http.ResponseWriter, r *http.Request) {
 	if !local(r) && !sharedWith(r) {
 		writeError(w, provider.Chat, http.StatusForbidden, "magpie's quotas are told to another machine only when magpie is shared on the local network (Settings → Network and sharing → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
@@ -1427,8 +1427,9 @@ func (s *Server) codexReset(w http.ResponseWriter, r *http.Request) {
 // isn't one of the seats r's user (UserHeader) is bound to (sharedOf):
 // a user spends its own accounts' resets, never another user's (T-088).
 // It is 403 alike for another user's account, one nobody is bound to and
-// one that isn't signed in. A request that names no user is the key's
-// owner's, as before; bound by session nothing is refused. A
+// one that isn't signed in. A request that names no user is DefaultUser's
+// (T-163), as its requests are (T-157); bound by session nothing is
+// refused. A
 // user-accounts.json that can't be read, or changed and doesn't read now
 // (stale), is unknown: refused, nothing spent.
 func (s *Server) resetNotUsers(w http.ResponseWriter, r *http.Request, account string) bool {
@@ -1441,7 +1442,7 @@ func (s *Server) resetNotUsers(w http.ResponseWriter, r *http.Request, account s
 		return true
 	}
 	if user == "" {
-		return false
+		user = DefaultUser
 	}
 	userBinds.Lock()
 	err := loadUsers()

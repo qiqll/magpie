@@ -3156,8 +3156,12 @@ window's whole is left out as it is for a held key. A card that isn't
 its own is refused a refresh (403), and a refresh that names none reads
 again only its own. A user on no account is told an empty list. A user
 header that can't be taken is 400, and a `user-accounts.json` that can't
-be read 503, with no card told. A request without the header is the key
-owner's, as before. `/v1/magpie/concurrency` tells such a request the
+be read 503, with no card told. A request without the header (or with a
+blank one) is `other10000`'s, as its model requests are: it is told the
+cards of that user's accounts alone, and refused a refresh of any other
+(the status line's cards too; its model is told as `/v1/magpie/route`
+tells it). magpie's own pages (the GUI's Usage and Providers) still
+show every account. `/v1/magpie/concurrency` tells such a request the
 lanes (`data`) of that user's accounts and keys alone, with the
 gateway's counts as before and `active` empty, `/v1/magpie/usage`
 the summary of its own calls answered by those accounts and keys, and
@@ -3165,7 +3169,11 @@ the summary of its own calls answered by those accounts and keys, and
 totals and splits counted of them alone: another user's calls, the same
 name under a key that doesn't share its users, a call naming no user and
 its own calls on an account it isn't on now are left out. A held key's
-user is told its own of the key's calls. The same 400 and 503 apply.
+user is told its own of the key's calls. A request without the header is
+`other10000`'s on these three routes too, and `/v1/magpie/concurrency`'s
+`keys` are its key's group's alone. The same 400 and 503 apply.
+`/v1/magpie/route` and the route-events feed still tell a request without
+the header every route, as before.
 
 A Codex account's rate-limit reset can be used through the gateway as
 the Usage page's **Use a reset** does (#3850, the same code):
@@ -3184,8 +3192,9 @@ names its user in `X-Magpie-User` spends only the resets of the Codex
 accounts that user is bound to: any other account is refused 403 with
 nothing spent. The user is the key's own unless the key shares its users
 (above), so a key that doesn't can't name another key's user to spend
-that user's resets. A request without the header is the key owner's, as
-before. A second ask for the same account
+that user's resets. A request without the header is `other10000`'s: it
+spends only the resets of the Codex accounts `other10000` is bound to,
+any other 403 with nothing spent. A second ask for the same account
 while one is out is answered 409. Another magpie's Codex card uses this,
 and so can an app reading `/v1/magpie/quotas/cards`, such as a DSH
 provider plugin, with a key of full access.

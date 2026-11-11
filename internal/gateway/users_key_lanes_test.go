@@ -12,7 +12,9 @@ import (
 // tells a user naming itself the lanes of its own group's keys alone
 // (groupOf): every key that shares its users when its own does, else its
 // own key alone. Before, it was told every sharing key's lane whatever
-// key it came by, and never its own key's when that key didn't share.
+// key it came by, and never its own key's when that key didn't share. A
+// request naming no user is DefaultUser's (T-163): told its group's keys
+// alone as any user, never every key.
 func TestBoundUserToldItsOwnKeyLanes(t *testing.T) {
 	fresh(t)
 	t.Setenv("MAGPIE_ADDR", "")
@@ -52,13 +54,13 @@ func TestBoundUserToldItsOwnKeyLanes(t *testing.T) {
 		slices.Sort(got)
 		return got
 	}
-	all := slices.Sorted(slices.Values([]string{keys[0].ID, keys[1].ID, keys[2].ID}))
 	shared := slices.Sorted(slices.Values([]string{keys[1].ID, keys[2].ID}))
 	for _, c := range []struct {
 		name, secret, user string
 		want               []string
 	}{
-		{"no user: every key, as before", secrets[0], "", all},
+		{"no user: DefaultUser's, its own key alone", secrets[0], "", []string{keys[0].ID}},
+		{"no user, a key that shares: the sharing keys", secrets[1], "", shared},
 		{"a key that doesn't share: its own alone", secrets[0], "alice", []string{keys[0].ID}},
 		{"a key that shares: the sharing keys", secrets[1], "alice", shared},
 	} {
