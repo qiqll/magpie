@@ -19,8 +19,10 @@
 // while they are the saved ones; growthSel the policy shown.
 let growthDraft = null, growthErr = "", growthSel = null;
 // growthChart is the last chart asked for: its policy (key), what came
-// back, and the box it is drawn in
-const growthChart = { key: "", want: "", data: null, err: "", box: null, timer: 0, ro: null, day: -1, asked: 0 };
+// back, and the box it is drawn in; usesOf each policy's In use as it
+// last came back, by its id, kept while its numbers are edited or another
+// is shown, as what picked it doesn't change with them (T-144)
+const growthChart = { key: "", want: "", data: null, err: "", box: null, timer: 0, ro: null, day: -1, asked: 0, usesOf: new Map() };
 const GROWTH_WINDOWS = [["5h", "5 hours"], ["7d", "7 days"]];
 const GROWTH_BUILTIN = { standard: "Standard", gentle: "Gentle", cautious: "Cautious", off: "Off" };
 const GROWTH_SVG = "http://www.w3.org/2000/svg";
@@ -278,7 +280,7 @@ function growthEditor(p, d, all, edit, redraw) {
     if (p.id === d.def) {
       del.disabled = true;
       del.title = t("Make another policy the default first");
-    }
+    } else if (growthChart.usesOf.has(p.id)) growthDelHeld(del, growthChart.usesOf.get(p.id));
     del.onclick = () => { d.own = d.own.filter((x) => x !== p); growthSel = d.def; edit(); redraw(); };
     acts.append(del);
   }
@@ -410,6 +412,7 @@ function growthAsk(p) {
       if (growthChart.want !== key || growthChart.asked !== asked) return;
       growthChart.key = key;
       growthChart.data = data;
+      if (data?.uses) growthChart.usesOf.set(out.id, data.uses);
       growthChart.err = "";
       growthDraw();
     }).catch((e) => {
@@ -587,15 +590,28 @@ function growthUseFill() {
     }
   }
   say.replaceChildren(...(rows.length ? rows : [el("div", "growth-use", t("No subscription is held by it"))]));
-  const picked = uses.filter((u) => u.picked || u.accountsPicked).map((u) => u.name), del = box.querySelector(".growth-delete");
-  if (del && picked.length) {
-    del.disabled = true;
-    del.title = uses.some((u) => u.unlisted || u.gone?.length)
-      ? t("{names} picked it: clear what is left here, or pick another policy in its editor or on its accounts' rows, first", { names: picked.join(", ") })
-      : uses.some((u) => u.accountsPicked)
-        ? t("{names} picked it: pick another policy in its editor or on its accounts' rows first", { names: picked.join(", ") })
-        : t("{names} picked it: pick another policy in its editor first", { names: picked.join(", ") });
+  const del = box.querySelector(".growth-delete");
+  if (del) growthDelHeld(del, uses);
+}
+
+// growthDelHeld turns Delete off while uses says a subscription or an
+// account picked the policy, with what to change first: as the editor
+// builds it, from the last In use of the same policy, and again as each
+// one comes back (T-144); on again once nothing picks it, as after Clear
+// the pick
+function growthDelHeld(del, uses) {
+  const picked = uses.filter((u) => u.picked || u.accountsPicked).map((u) => u.name);
+  if (!picked.length) {
+    if (del.dataset.held) { delete del.dataset.held; del.disabled = false; del.removeAttribute("title"); }
+    return;
   }
+  del.disabled = true;
+  del.dataset.held = "1";
+  del.title = uses.some((u) => u.unlisted || u.gone?.length)
+    ? t("{names} picked it: clear what is left here, or pick another policy in its editor or on its accounts' rows, first", { names: picked.join(", ") })
+    : uses.some((u) => u.accountsPicked)
+      ? t("{names} picked it: pick another policy in its editor or on its accounts' rows first", { names: picked.join(", ") })
+      : t("{names} picked it: pick another policy in its editor first", { names: picked.join(", ") });
 }
 
 function growthLegend() {

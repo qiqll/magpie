@@ -8,7 +8,8 @@
 // chart is asked again, whose In use then leaves them out; an answer
 // asked before the clear that comes back after it is not drawn. Every
 // language, at a wide and a narrow width; no backend, the API is faked
-// here. SHOTS=<dir> keeps a screenshot of each.
+// here. SHOTS=<dir> keeps a screenshot of each. A policy shown again has
+// Delete off from the start, from the In use that came back before (T-144).
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -124,6 +125,21 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           await list.locator(".growth-foot").screenshot({ path: path.join(process.env.SHOTS, `uses-${engine}-${lang}-${width}.png`) });
           await page.setViewportSize({ width, height: 900 });
         }
+
+        // shown again after another, its Delete is built off from the In use
+        // that came back before, while its chart is still being asked (T-144)
+        await list.locator('.gp-item[data-id="standard"]').click();
+        await page.waitForFunction(() => !document.querySelector("#growthList .growth-uses .growth-gone-pick"));
+        const again = new Promise((r) => { ctl.onHeld = r; });
+        ctl.hold = true;
+        await list.locator('.gp-item[data-id="slow"]').click();
+        await Promise.race([again, new Promise((_, no) => setTimeout(() => no(new Error("Slow's chart wasn't asked again")), 5000))]);
+        assert.equal(await list.locator(".growth-uses .growth-use").count(), 0, "In use is still being asked");
+        assert.equal(await del.isDisabled(), true, "Delete could be pressed before In use came back");
+        assert.equal(await del.getAttribute("title"), x("{names} picked it: clear what is left here, or pick another policy in its editor or on its accounts' rows, first", { names: "Codex, Claude" }));
+        ctl.release();
+        await list.locator(".growth-uses .growth-gone-pick").first().waitFor();
+        assert.equal(await del.isDisabled(), true);
 
         // a clear the server refuses says so, and stays to be tried again
         ctl.refuse = true;
