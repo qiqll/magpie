@@ -6199,8 +6199,7 @@ function renderProviders(quiet) {
     // a provider that only draws images (Settings → Image generation) says so
     const models = n ? t(n === 1 ? "{n} model" : "{n} models", { n })
       : p.draws ? t(p.draws === 1 ? "{n} image model" : "{n} image models", { n: p.draws }) : t(p.noModels ? "usage only" : "no models exposed");
-    // every account in use refused by its vendor: signed out, as the
-    // accounts list says of each, not a green "signed in"
+    // every account in use refused by its vendor: signed out, not a green "signed in"
     const inUse = (p.account?.logins || []).filter((l) => l.on || l.active);
     const lapsed = inUse.length > 0 && inUse.every((l) => l.lapsed);
     const sub = el("div", "sub", (p.account ? t(lapsed ? "{user} is signed out" : "signed in as {user}", { user: p.account.user }) : p.host) + " · " + models), ru = p.remoteUpdate;
@@ -6226,9 +6225,8 @@ function renderProviders(quiet) {
       key = el("span", "key acct acct-plan", bare && plan.length > 15 ? bare : plan);
       key.title = t("{agent} is signed in; its models are here for every other agent", { agent: p.account.agentName });
     } else if (p.vertex) {
-      // Vertex AI signs with the user's Google credentials, never a key;
-      // the pill says which: the service account it acts as, else the
-      // credentials file, else Application Default Credentials (ADC)
+      // Vertex AI signs with Google credentials, never a key; the pill says
+      // which: its service account, else the file, else ADC
       const v = p.vertex;
       key = el("span", "key " + (p.ready ? "acct" : "none"), !p.ready ? t("needs a project") : v.impersonate || (v.credentials ? baseName(v.credentials) : t("Google ADC")));
       key.title = !p.ready ? t("Open the row and give your Google Cloud project's id")
@@ -6237,7 +6235,7 @@ function renderProviders(quiet) {
       key = el("span", "key " + (p.key.set ? (keyPill(p) === p.key.masked ? "on" : "on acct") : p.ready ? "free" : "none"), p.key.set ? keyPill(p) : p.ready ? t("no key") : t("needs a key"));
       key.title = p.key.set ? t("API key {masked}", { masked: p.key.masked }) : p.ready ? t("Local servers need no key") : t("Open the row and paste an API key");
     }
-    // every pill is one width so the dots line up down the list; a label too long for it ends in "…" and is said whole on hover
+    // every pill is one width, so the dots line up; a long label ends in "…", said whole on hover
     const label = key.textContent;
     key.textContent = "";
     key.append(el("span", "", label));
@@ -6247,9 +6245,11 @@ function renderProviders(quiet) {
     // a provider on is listed, and tried, in the order the user puts it in
     // (#499): its logo is the handle, as an agent row's is
     row.append(p.off ? icon(p.icon || "generic") : providerHandle(p, row), who, uses, key, providerSwitch(p), chev);
-    // right-click: Move to Top, Move Up, Move Down, Move to Bottom (#1614)
+    // right-click: Move to Top, Up, Down, to Bottom (#1614)
     if (!p.off) row.oncontextmenu = (ev) => { ev.preventDefault(); openProviderMenu(row.querySelector(".pv-handle"), p); };
     row.onclick = async () => {
+      const sel = getSelection(); // words being selected (T-156)
+      if (!sel.isCollapsed && row.contains(sel.anchorNode)) return;
       if (providerDirty() && !(await confirmDiscard())) return;
       // the kept list (#1519) lacks proxies and headers: opens on the fresh
       const last = providers.last;

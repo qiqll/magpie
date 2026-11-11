@@ -244,7 +244,7 @@ i.dot.free { background: var(--k-free); box-shadow: inset 0 0 0 1px color-mix(in
 .ctx-sess-head .segs .opt { height: 20px; padding: 0 9px; font-size: 11px; }
 .ctx-sess-list { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 .ctx-sess + .ctx-sess { border-top: 1px solid var(--line-2, var(--line)); }
-.ctx-sess-row { all: unset; box-sizing: border-box; width: 100%; display: grid; grid-template-columns: 20px minmax(0, 1.3fr) minmax(80px, 1fr) 44px minmax(0, auto) 92px; align-items: center; gap: 12px; padding: 8px 14px; cursor: pointer; font-size: 12px; font-variant-numeric: tabular-nums; }
+.ctx-sess-row { all: unset; user-select: none; -webkit-user-select: none; box-sizing: border-box; width: 100%; display: grid; grid-template-columns: 20px minmax(0, 1.3fr) minmax(80px, 1fr) 44px minmax(0, auto) 92px; align-items: center; gap: 12px; padding: 8px 14px; cursor: pointer; font-size: 12px; font-variant-numeric: tabular-nums; }
 .ctx-sess-row:hover { background: var(--pill); }
 .ctx-sess-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .ctx-sess-row .ic { width: 18px; height: 18px; }

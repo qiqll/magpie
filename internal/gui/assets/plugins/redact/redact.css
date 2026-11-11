@@ -280,7 +280,7 @@ body.window .msk-onebar::before { inset: -6px calc(var(--bar, 0px) - 16px) -6px 
    stage is laid out at 1000×420 and scaled to the card */
 .msk-demo { flex: none; margin-top: 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--card); overflow: hidden; }
 .msk-demo[hidden], .md-body[hidden] { display: none; }
-.md-row { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 9px 16px 9px 12px; cursor: pointer; }
+.md-row { all: unset; user-select: none; -webkit-user-select: none; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 9px 16px 9px 12px; cursor: pointer; }
 .md-row:hover { background: var(--pill-hover); }
 .md-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 14px; }
 .md-thumb { flex: none; width: 32px; height: 32px; border-radius: 9px; background: url(xq_light.jpg) -33px -5px / 98px auto no-repeat var(--card); box-shadow: inset 0 0 0 1px var(--line-2); }
@@ -374,12 +374,12 @@ body.window .msk-onebar::before { inset: -6px calc(var(--bar, 0px) - 16px) -6px 
 .xq-cap-t .n { margin-right: 6px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--muted); }
 .xq-cap-b { min-height: 18px; margin-top: 1px; font-size: 12px; color: var(--fg-2); }
 .xq-ctrl { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-.xq-play { all: unset; flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: var(--pill); color: var(--fg); cursor: pointer; }
+.xq-play { all: unset; user-select: none; -webkit-user-select: none; flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: var(--pill); color: var(--fg); cursor: pointer; }
 .xq-play:hover { background: var(--pill-hover); }
 .xq-play:focus-visible, .xq-steps button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .xq-scrub { flex: 1; min-width: 60px; accent-color: var(--accent); }
 .xq-steps { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
-.xq-steps button { all: unset; padding: 3px 8px; border-radius: 6px; font-size: 11px; color: var(--muted); cursor: pointer; }
+.xq-steps button { all: unset; user-select: none; -webkit-user-select: none; padding: 3px 8px; border-radius: 6px; font-size: 11px; color: var(--muted); cursor: pointer; }
 .xq-steps button:hover { background: var(--pill); }
 .xq-steps button.on { background: var(--accent-soft); font-weight: 600; color: var(--accent); }
 .xq-steps button.done { color: var(--fg-2); }
