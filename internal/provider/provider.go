@@ -785,6 +785,13 @@ type file struct {
 	// from then, an account ramps up by its policy's days alone, and no
 	// account is marked again. A sync leaves it as it is here.
 	GraduatedRead bool `json:"graduatedRead,omitempty"`
+	// UsedDaysSince is when this magpie began counting the days used: the
+	// start that made the mark (graduate), or the one before it that found
+	// the first uses not read yet (GraduateOnce, T-162). Only an account
+	// first used before it is marked done by the calendar. Zero in a file
+	// marked before T-162, which ResumeGrowth reads as no bound. A sync
+	// leaves it as it is here.
+	UsedDaysSince time.Time `json:"usedDaysSince,omitzero"`
 	// Deleted are the providers the user deleted, so the calls made to
 	// one stay its own when another is added under its id (Renames).
 	Deleted []Deleted `json:"deleted,omitempty"`

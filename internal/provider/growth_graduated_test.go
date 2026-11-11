@@ -36,14 +36,18 @@ func fromT134(t *testing.T) {
 	}
 }
 
-// usedDaysBeganAt has the built-ins begin counting the days used at at
-// (usedDaysBegan) for the test: one whose first uses are on the real clock
-// has them before it.
-func usedDaysBeganAt(t *testing.T, at time.Time) {
+// usedDaysSinceAt has providers.json say this magpie began counting the
+// days used at at (UsedDaysSince).
+func usedDaysSinceAt(t *testing.T, at time.Time) {
 	t.Helper()
-	was := usedDaysBegan
-	usedDaysBegan = at
-	t.Cleanup(func() { usedDaysBegan = was })
+	f, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.UsedDaysSince = at
+	if err := store(f); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // graduated is when the account was found done with its ramp-up, zero for
@@ -158,7 +162,6 @@ func TestGraduatedOnlyByUse(t *testing.T) {
 	t.Run("first uses not read", func(t *testing.T) {
 		firstUsedFixture(t, time.Hour)
 		growthDefault(t, settings.GrowthStandard)
-		usedDaysBeganAt(t, time.Now().Add(time.Hour))
 		// added an hour ago: its first use is now, on the real clock
 		NoteAccountUsed("codex", "new@example.com", time.Now())
 		later := time.Now().Add(20 * growthDay)
@@ -315,7 +318,6 @@ func TestGraduatedFromBefore(t *testing.T) {
 func TestGraduatedWithTheFirstUseRead(t *testing.T) {
 	firstUsedFixture(t, 30*24*time.Hour)
 	growthDefault(t, settings.GrowthStandard)
-	usedDaysBeganAt(t, time.Now())
 	codexSignIn(t, os.Getenv("HOME"), "late@example.com", "r-late")
 	rememberLogins(true)
 	addedAgo(t, "codex", "late@example.com", 30*24*time.Hour)
@@ -500,16 +502,16 @@ func TestGraduatedNotOnResumeWhileRamping(t *testing.T) {
 	}
 }
 
-// Only an account first used before the built-ins counted the days used
-// (usedDaysBegan) is marked (T-162): a ledger read for first uses long
-// after the upgrade, unreadable till then, finds one first used since
+// Only an account first used before this magpie began counting the days
+// used (UsedDaysSince) is marked (T-162): a ledger read for first uses
+// long after the upgrade, unreadable till then, finds one first used since
 // with its calendar's 14 days past, and leaves it ramping up by its days
-// used. One first used a minute before is marked, and so is it when
-// resumed (ResumeGrowth asks the same).
+// used, nor marks it when resumed (ResumeGrowth asks the same). One first
+// used a minute before is marked.
 func TestGraduatedOnlyFromBefore(t *testing.T) {
 	for _, c := range []struct {
 		name   string
-		began  time.Duration // usedDaysBegan, from the first use
+		began  time.Duration // UsedDaysSince, from the first use
 		marked bool
 	}{
 		{"first used before", time.Minute, true},
@@ -519,7 +521,7 @@ func TestGraduatedOnlyFromBefore(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			usedDaysFixture(t, "")
 			fromT134(t)
-			usedDaysBeganAt(t, day(0, time.Hour+c.began))
+			usedDaysSinceAt(t, day(0, time.Hour+c.began))
 			for d := range 3 {
 				NoteAccountUsed("codex", "new@example.com", day(d, time.Hour))
 			}
@@ -543,5 +545,53 @@ func TestGraduatedOnlyFromBefore(t *testing.T) {
 				t.Errorf("resumed, marked %v", graduated())
 			}
 		})
+	}
+}
+
+// The start of the upgrade finds the ledger unreadable: nothing is marked,
+// but its time is kept (UsedDaysSince), and the mark a later start makes,
+// once the first uses are read, is bounded by it, not by when that later
+// start was (T-162). An account first used between the two, its calendar
+// days past by then, isn't marked; one first used before the upgrade, on
+// a magpie that counted the calendar's days, is (review H1: not by a date
+// fixed in the code, which a user upgrading later is past).
+func TestGraduatedBoundByTheUpgradesStart(t *testing.T) {
+	firstUsedFixture(t, 40*growthDay)
+	growthDefault(t, settings.GrowthStandard)
+	codexSignIn(t, os.Getenv("HOME"), "late@example.com", "r-late")
+	rememberLogins(true)
+	addedAgo(t, "codex", "late@example.com", 40*growthDay)
+	now := time.Now()
+	upgrade := now.Add(-20 * growthDay).UTC().Truncate(time.Second)
+	graduateOnce(upgrade)
+	if f := storedFile(); f.GraduatedRead || f.FirstUsedRead || !f.UsedDaysSince.Equal(upgrade) {
+		t.Fatalf("first uses unread at the upgrade: marked %v, read %v, since %v", f.GraduatedRead, f.FirstUsedRead, f.UsedDaysSince)
+	}
+	// a later start, the ledger still unread: the upgrade's time stays
+	graduateOnce(upgrade.Add(growthDay))
+	if f := storedFile(); !f.UsedDaysSince.Equal(upgrade) {
+		t.Fatalf("a later start moved the time to %v", f.UsedDaysSince)
+	}
+	BackfillFirstUsed(func(map[[2]string]time.Time) (map[[2]string]time.Time, error) {
+		return map[[2]string]time.Time{
+			{"codex", "new@example.com"}:  now.Add(-30 * growthDay),
+			{"codex", "late@example.com"}: now.Add(-18 * growthDay),
+		}, nil
+	})
+	f := storedFile()
+	if !f.FirstUsedRead || !f.GraduatedRead || !f.UsedDaysSince.Equal(upgrade) {
+		t.Fatalf("read %v, marked %v, since %v", f.FirstUsedRead, f.GraduatedRead, f.UsedDaysSince)
+	}
+	s, _ := storedPicks("codex")
+	if s.AccountGraduated["new@example.com"].IsZero() || !s.AccountGraduated["late@example.com"].IsZero() {
+		t.Fatalf("marked: %v", s.AccountGraduated)
+	}
+	// used on its first day alone: held at day 1 of Standard's 14
+	BackfillUsedDays(func(want map[[2]string]time.Time) (map[[2]string]UsedDays, error) {
+		k := [2]string{"codex", "late@example.com"}
+		return map[[2]string]UsedDays{k: UsedDaysOf(want[k], []int{0})}, nil
+	})
+	if s, _ := AccountCapsOf("codex", "late@example.com").Of("5 hours"); s != 53 {
+		t.Fatalf("first used after the upgrade, used 1 day: held at %d%%, want 53%%", s)
 	}
 }

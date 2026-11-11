@@ -864,7 +864,8 @@ func ResumeGrowth(id, ref string) error {
 		k, listed = accountKey(r), true
 	}
 	st, stErr := settings.SharedChecked()
-	marked, now := storedFile().GraduatedRead, time.Now()
+	stored, now := storedFile(), time.Now()
+	marked, since := stored.GraduatedRead, stored.UsedDaysSince
 	gone := false
 	// on the record as it is stored then (T-079); a record there is none
 	// of is not written, as nothing changed
@@ -878,7 +879,7 @@ func ResumeGrowth(id, ref string) error {
 		}
 		delete(m, k)
 		q.AccountGrowthSkipped = normalAccountAdded(m)
-		if _, done := q.AccountGraduated[k]; marked && stErr == nil && !done && doneByCalendar(st, *q, k, now) {
+		if _, done := q.AccountGraduated[k]; marked && stErr == nil && !done && doneByCalendar(st, *q, k, since, now) {
 			q.AccountGraduated = maps.Clone(q.AccountGraduated)
 			if q.AccountGraduated == nil {
 				q.AccountGraduated = map[string]time.Time{}
@@ -1582,18 +1583,21 @@ func BackfillUsedDays(served ServedDays) {
 // policy's days alone: the mark is done (GraduatedRead) whether any was
 // marked or not, and never made again. Only an account the gateway serves
 // is asked (one it doesn't counts the calendar's days anyway), with a
-// first use kept from before the built-ins counted the days used
-// (usedDaysBegan, T-162), no ramp-up skipped, under a ramp or stages. Run at the
-// gateway's start after BackfillFirstUsed; until that read has gone
+// first use kept from before this magpie began counting the days used
+// (UsedDaysSince, T-162), no ramp-up skipped, under a ramp or stages. Run
+// at the gateway's start after BackfillFirstUsed; until that read has gone
 // through, the first uses aren't known, and nothing is marked till a
-// later start. A file BackfillFirstUsed reads first uses into is marked in
-// that write (graduate), so GraduateOnce writes only a file whose first
-// uses were read before T-150.
+// later start: that start's time is kept then (UsedDaysSince), so an
+// account first used after it, while the ledger couldn't be read, is
+// never marked for its calendar days. A file BackfillFirstUsed reads first
+// uses into is marked in that write (graduate), so GraduateOnce writes
+// only a file whose first uses were read before T-150, or once, the
+// time alone, while they can't be.
 func GraduateOnce() { graduateOnce(time.Now()) }
 
 // graduateOnce is GraduateOnce at now.
 func graduateOnce(now time.Time) {
-	if f, err := read(); err != nil || f.GraduatedRead || !f.FirstUsedRead {
+	if f, err := read(); err != nil || f.GraduatedRead || !f.FirstUsedRead && !f.UsedDaysSince.IsZero() {
 		return
 	}
 	if err := providersMu.Take(); err != nil {
@@ -1606,7 +1610,16 @@ func graduateOnce(now time.Time) {
 		log.Printf("providers.json: %v; the accounts whose ramp-up is done are marked at a later start", err)
 		return
 	}
-	if f.GraduatedRead || !f.FirstUsedRead {
+	if f.GraduatedRead || !f.FirstUsedRead && !f.UsedDaysSince.IsZero() {
+		return
+	}
+	if !f.FirstUsedRead {
+		// the first uses aren't known: when this magpie began counting the
+		// days used is, for the mark a later start makes (T-162)
+		f.UsedDaysSince = now.UTC().Truncate(time.Second)
+		if err := storeQuiet(f); err != nil {
+			log.Printf("providers.json: %v; the accounts whose ramp-up is done are marked at a later start", err)
+		}
 		return
 	}
 	marked := graduate(&f, now)
@@ -1626,19 +1639,22 @@ func graduate(f *file, now time.Time) int {
 	if f.GraduatedRead {
 		return 0
 	}
+	at, marked := now.UTC().Truncate(time.Second), 0
+	if f.UsedDaysSince.IsZero() {
+		f.UsedDaysSince = at
+	}
 	st, err := settings.SharedChecked()
 	if err != nil {
 		log.Printf("settings: %v; the accounts whose ramp-up is done are marked at a later start", err)
 		return 0
 	}
-	at, marked := now.UTC().Truncate(time.Second), 0
 	for i := range f.Providers {
 		p := &f.Providers[i]
 		if !gatewayServed(*p) {
 			continue
 		}
 		for u := range p.AccountFirstUsed {
-			if letGo(*p, u) || !doneByCalendar(st, *p, u, now) {
+			if letGo(*p, u) || !doneByCalendar(st, *p, u, f.UsedDaysSince, now) {
 				continue
 			}
 			p.AccountGraduated = maps.Clone(p.AccountGraduated)
@@ -1653,22 +1669,18 @@ func graduate(f *file, now time.Time) int {
 	return marked
 }
 
-// usedDaysBegan is when the built-ins began counting the days used
-// (T-134, 37239b99): an account first used since was never ramped up by
-// the calendar, so it is never marked done by it (T-162). Without it, a
-// ledger read for first uses only long after the upgrade (unreadable till
-// then) would mark an account added after it, its calendar days past, as
-// at 100% before.
-var usedDaysBegan = time.Date(2026, 11, 11, 3, 25, 13, 0, time.UTC)
-
 // doneByCalendar is whether the account u (its key) of the record p,
-// served by the gateway and first used before usedDaysBegan, has a policy
-// counting the days used that holds none of its windows on the calendar
-// from its first use at now, as it was held before: what graduate marks,
-// and ResumeGrowth after the mark was made (T-158).
-func doneByCalendar(st settings.Settings, p Provider, u string, now time.Time) bool {
+// served by the gateway and first used before since (when this magpie
+// began counting the days used, UsedDaysSince; none for zero), has a
+// policy counting the days used that holds none of its windows on the
+// calendar from its first use at now, as it was held before: what
+// graduate marks, and ResumeGrowth after the mark was made (T-158). One
+// first used since was never ramped up by the calendar (T-162): a ledger
+// read for first uses only long after the upgrade would otherwise mark an
+// account added after it, its calendar days past, as at 100% before.
+func doneByCalendar(st settings.Settings, p Provider, u string, since, now time.Time) bool {
 	used := p.AccountFirstUsed[u]
-	if !gatewayServed(p) || !addedKnown(used) || !addedKnown(p.AccountAdded[u]) || !used.Before(usedDaysBegan) {
+	if !gatewayServed(p) || !addedKnown(used) || !addedKnown(p.AccountAdded[u]) || !since.IsZero() && !used.Before(since) {
 		return false
 	}
 	pol := st.GrowthFor(p.AccountGrowthPolicy[u], p.GrowthPolicy)
