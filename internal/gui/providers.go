@@ -2503,8 +2503,8 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				return
 			}
 		case "skipgrowth":
-			// the growth policy lets the account go: 100 on each window
-			// the user set nothing on (T-132)
+			// the growth policy lets the account go, kept skipped apart
+			// from its windows' caps (T-132, AccountGrowthSkipped T-140)
 			if err := provider.SkipGrowth(in.ID, req.Account); err != nil {
 				fail(rw, err)
 				return

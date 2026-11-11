@@ -274,7 +274,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(errors, []);
       });
 
-      // 100 on every window, as Skip ramp-up leaves an account, is no cap (T-141)
+      // 100 on every window, as a Skip ramp-up from before T-140 left an account, is no cap (T-141)
       test(`${label}: windows lifted to 100% are no caps by window`, async (t) => {
         const { page, errors, posts } = await open(t, "lifted", under);
         for (const [i, name] of ["5 hours", "weekly"].entries()) {

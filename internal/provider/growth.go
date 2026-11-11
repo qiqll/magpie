@@ -244,6 +244,15 @@ func SetAccountGrowthPolicy(id, ref, policy string) error {
 				m = map[string]string{}
 			}
 			m[k] = policy
+			// a policy picked for the account holds it again: a skipped
+			// ramp-up is let go of (T-140 review M1)
+			if _, skipped := q.AccountGrowthSkipped[k]; skipped {
+				q.AccountGrowthSkipped = maps.Clone(q.AccountGrowthSkipped)
+				delete(q.AccountGrowthSkipped, k)
+				if len(q.AccountGrowthSkipped) == 0 {
+					q.AccountGrowthSkipped = nil
+				}
+			}
 		}
 		q.AccountGrowthPolicy = normalAccountGrowthPolicy(m)
 		return nil

@@ -210,4 +210,82 @@ func TestSkipGrowthThroughASync(t *testing.T) {
 	if s, _ := storedPicks("codex"); s.AccountGrowthSkipped["new@example.com"].IsZero() {
 		t.Errorf("after a restore: %v", s.AccountGrowthSkipped)
 	}
+	if s := heldAt(t, "5 hours"); s != 100 {
+		t.Errorf("after a restore, the 5 hours held at %d%%", s)
+	}
+}
+
+// A sync onto a computer that has the record already (KeepSecrets' side of
+// Mirror) carries the skip too.
+func TestSkipGrowthSyncOntoARecord(t *testing.T) {
+	firstUsedFixture(t, time.Hour)
+	freshReadings(t)
+	growthDefault(t, settings.GrowthStandard)
+	if err := SkipGrowth("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := Stored()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(ps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var there []Provider
+	if err := json.Unmarshal(b, &there); err != nil {
+		t.Fatal(err)
+	}
+	firstUsedFixture(t, time.Hour) // the other computer, with its own record
+	freshReadings(t)
+	growthDefault(t, settings.GrowthStandard)
+	if _, ok := storedPicks("codex"); !ok {
+		t.Fatal("the other computer has no record of Codex's")
+	}
+	if err := Mirror(there, nil); err != nil {
+		t.Fatal(err)
+	}
+	if s := heldAt(t, "5 hours"); s != 100 {
+		t.Errorf("synced onto a record, the 5 hours held at %d%%", s)
+	}
+}
+
+// A policy the user picks for the account holds it again: the skip is let
+// go of (T-140 review M1), and the account's other settings stay.
+func TestSkipGrowthEndsWithAPick(t *testing.T) {
+	firstUsedFixture(t, time.Hour)
+	freshReadings(t)
+	growthDefault(t, settings.GrowthStandard)
+	if err := SkipGrowth("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAccountGrowthPolicy("codex", "new@example.com", settings.GrowthStandard); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := storedPicks("codex"); s.AccountGrowthSkipped != nil {
+		t.Fatalf("picked a policy, the skip stayed: %v", s.AccountGrowthSkipped)
+	}
+	if s := heldAt(t, "5 hours"); s != 50 {
+		t.Errorf("picked a policy, the 5 hours held at %d%%", s)
+	}
+}
+
+// A record kept for an account's day and its skip alone goes when the user
+// removes the account (forgetAdded's empty record).
+func TestSkipGrowthRecordGoesWithIt(t *testing.T) {
+	firstUsedFixture(t, time.Hour)
+	f, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Providers = append(f.Providers, Provider{ID: "skiponly",
+		AccountAdded:         map[string]time.Time{"x@example.com": time.Now().UTC()},
+		AccountGrowthSkipped: map[string]time.Time{"x@example.com": time.Now().UTC()}})
+	if err := store(f); err != nil {
+		t.Fatal(err)
+	}
+	forgetAdded("skiponly", "x@example.com")
+	if _, ok := storedPicks("skiponly"); ok {
+		t.Error("a record kept for a day and a skip alone stayed")
+	}
 }
