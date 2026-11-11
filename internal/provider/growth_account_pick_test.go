@@ -301,3 +301,80 @@ func TestAccountGrowthPolicyOfAGoneAccountClears(t *testing.T) {
 		t.Fatalf("picks after clearing it: %v %v", picks, err)
 	}
 }
+
+// Every pick GrowthPicks counts, and the page's delete is refused by, is
+// in the policy's In use (T-145): a subscription turned off that picked
+// it, an account gone from the list that picked it (Gone, by name), and
+// a record the Providers page has no row of (Unlisted). Each one is
+// cleared by its setter's "", the record unlisted too, and then neither
+// lists it nor refuses the delete. One turned off that follows the policy
+// as the default holds nothing and isn't listed.
+func TestGrowthUsesListWhatRefusesTheDelete(t *testing.T) {
+	firstUsedFixture(t, 3*24*time.Hour+time.Hour) // the default is "before"
+	f, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(f.Providers, func(p Provider) bool { return p.ID == "codex" })
+	f.Providers[i].GrowthPolicy = settings.GrowthCautious
+	f.Providers[i].AccountGrowthPolicy = map[string]string{"gone@example.com": settings.GrowthCautious}
+	f.Providers = append(f.Providers, Provider{ID: "claude", GrowthPolicy: settings.GrowthCautious, AccountGrowthPolicy: map[string]string{"old@example.com": settings.GrowthCautious}})
+	if err := store(f); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(sharedAll(), func(p Provider) bool { return p.ID == "claude" }) {
+		t.Fatal("the fixture's Claude is listed: it is meant to have no row")
+	}
+	if err := SetOff("codex", true); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	use := func(sub string) *GrowthUse {
+		us := GrowthUses(settings.GrowthCautious, now)
+		i := slices.IndexFunc(us, func(u GrowthUse) bool { return u.Provider == sub })
+		if i < 0 {
+			return nil
+		}
+		return &us[i]
+	}
+	picks, err := GrowthPicks()
+	if err != nil || len(picks) != 4 {
+		t.Fatalf("picks: %v %v", picks, err)
+	}
+	if u := use("codex"); u == nil || !u.Off || !u.Picked || u.AccountsOnly || u.Accounts != 0 || u.AccountsPicked != 1 || !slices.Equal(u.Gone, []string{"gone@example.com"}) {
+		t.Fatalf("Codex, turned off, in Cautious's In use: %+v", u)
+	}
+	if u := use("claude"); u == nil || !u.Unlisted || !u.Picked || u.AccountsPicked != 1 || !slices.Equal(u.Gone, []string{"old@example.com"}) {
+		t.Fatalf("Claude, with no row, in Cautious's In use: %+v", u)
+	}
+	if us := GrowthUses("before", now); slices.ContainsFunc(us, func(u GrowthUse) bool { return u.Provider == "codex" }) {
+		t.Fatalf("Codex, turned off, listed under the default it holds nothing by: %+v", us)
+	}
+
+	for _, clear := range []func() error{
+		func() error { return SetAccountGrowthPolicy("codex", "gone@example.com", "") },
+		func() error { return SetGrowthPolicy("codex", "") },
+		func() error { return SetAccountGrowthPolicy("claude", "Old@example.com", "") },
+		func() error { return SetGrowthPolicy("claude", "") },
+	} {
+		if err := clear(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if picks, err := GrowthPicks(); err != nil || len(picks) != 0 {
+		t.Fatalf("picks after clearing each: %v %v", picks, err)
+	}
+	if us := GrowthUses(settings.GrowthCautious, now); len(us) != 0 {
+		t.Fatalf("Cautious's In use after clearing each: %+v", us)
+	}
+	// a record of none, or one with nothing left to clear, is Find's error
+	if err := SetGrowthPolicy("claude", ""); err == nil {
+		t.Fatal("cleared Claude's pick twice")
+	}
+	if err := SetGrowthPolicy("nobody", ""); err == nil {
+		t.Fatal("cleared the pick of a provider there is no record of")
+	}
+	if f, err := read(); err != nil || slices.ContainsFunc(f.Providers, func(p Provider) bool { return p.ID == "nobody" }) {
+		t.Fatalf("a record made for nobody: %v", err)
+	}
+}
