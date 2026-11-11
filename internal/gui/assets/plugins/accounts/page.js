@@ -392,9 +392,9 @@ function acxGrowthSaid(g) {
 // acxGrowth: an account's ramp-up as a button, or the growth policy it
 // picked itself while that holds none of its windows (T-133). It offers
 // the policies to pick for the account alone (growthAccountOpts, none
-// until they are read) and, while ramping up, Skip ramp-up: 100 on each
-// window the policy holds that the user set nothing on
-// (provider.SkipGrowth), so a cap set later is the user's
+// until they are read) and, while ramping up, Skip ramp-up: the account
+// kept skipped apart from its windows' caps (provider.SkipGrowth, T-140),
+// so a cap set later on a window or the account holds as the user's
 function acxGrowth(r) {
   const { p, l, growth: g } = r;
   const picked = growthAccountPicked(p, l.user);
@@ -425,7 +425,7 @@ async function acxGrowthMenu(e, b, r, skip) {
   await growthListLoad();
   const picked = growthAccountPicked(p, l.user);
   const opts = growthAccountOpts(p);
-  if (skip) opts.push({ v: "!skip", name: "Skip ramp-up", note: "Its windows go to 100%, or to a cap you set on one. An account cap set later leaves them out: cap a window instead" });
+  if (skip) opts.push({ v: "!skip", name: "Skip ramp-up", note: "Its windows go to 100%, or to a cap you set on one or on the account" });
   if (!opts.length) return;
   const head = skip && opts.length === 1 ? "Ramping up" : "Growth policy this account is held by";
   openProtoMenu(b, opts, picked.gone ? "!gone" : picked.id, (v) => {

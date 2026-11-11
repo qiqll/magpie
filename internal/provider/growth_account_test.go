@@ -159,8 +159,12 @@ func TestSkipGrowth(t *testing.T) {
 	if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g != nil {
 		t.Fatalf("skipped, the row says %+v", g)
 	}
-	if s, _ := storedPicks("codex"); !maps.Equal(s.AccountWindowCaps["new@example.com"], map[string]int{"5 hours": 100, "7 days": 70}) {
+	// kept apart (T-140): no window is written, the user's own week stays
+	if s, _ := storedPicks("codex"); !maps.Equal(s.AccountWindowCaps["new@example.com"], map[string]int{"7 days": 70}) {
 		t.Fatalf("skipped, the windows kept: %v", s.AccountWindowCaps)
+	}
+	if s, _ := storedPicks("codex"); s.AccountGrowthSkipped["new@example.com"].IsZero() || len(s.AccountGrowthSkipped) != 1 {
+		t.Fatalf("skipped, kept as: %v", s.AccountGrowthSkipped)
 	}
 	p, err := Find("codex")
 	if err != nil {
@@ -182,11 +186,13 @@ func TestSkipGrowth(t *testing.T) {
 	if err := SetWindowCap("codex", "new@example.com", "5 hours", 0); err != nil {
 		t.Fatal(err)
 	}
-	if s := heldAt(t, "5 hours"); s != 50 {
-		t.Errorf("set back to follow the account, the policy's again: %d%%", s)
+	// the skip is the account's, not the window's (T-140): set back to
+	// follow the account, the window is still let go
+	if s := heldAt(t, "5 hours"); s != 100 {
+		t.Errorf("set back to follow the account, skipped still: %d%%", s)
 	}
-	if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g == nil || g.FiveHours != 50 || g.Week != 100 {
-		t.Errorf("the five hours the policy's again: %+v", g)
+	if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g != nil {
+		t.Errorf("set back to follow the account, the row says %+v", g)
 	}
 	// the subscription turned off: no row is held
 	if err := editStored("codex", func(q *Provider) bool { q.Off = true; return true }); err != nil {
@@ -217,8 +223,8 @@ func TestSkipGrowth(t *testing.T) {
 	}
 }
 
-// An account never read: the skip writes each of the policy's windows,
-// whichever its vendor names.
+// An account never read: the skip lets go of each of the policy's
+// windows, whichever its vendor names, and writes none of them (T-140).
 func TestSkipGrowthNeverRead(t *testing.T) {
 	firstUsedFixture(t, time.Hour)
 	freshReadings(t)
@@ -227,10 +233,13 @@ func TestSkipGrowthNeverRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	s, _ := storedPicks("codex")
+	if s.AccountWindowCaps != nil {
+		t.Errorf("never read, windows written: %v", s.AccountWindowCaps)
+	}
 	for _, ws := range growthWindows {
 		for _, w := range ws {
-			if s.AccountWindowCaps["new@example.com"][w] != 100 {
-				t.Errorf("never read, %s left to the policy: %v", w, s.AccountWindowCaps)
+			if h := heldAt(t, w); h != 100 {
+				t.Errorf("never read, %s held at %d%%", w, h)
 			}
 		}
 	}

@@ -35,8 +35,13 @@ package provider
 // (AccountCaps) holds every window at it, and a window with a share of its
 // own (AccountWindowCaps, 100 among them) or an amount (AccountWindowAmounts)
 // keeps it. The policy fills in only the windows the user left alone.
-// Skipping the warm-up (SkipGrowth, T-132) is a share of 100 on each of
-// those, so a share the user sets on one later is theirs as any other.
+// Skipping the warm-up (SkipGrowth, T-132) is kept apart, per account
+// (AccountGrowthSkipped, T-140): the policy holds none of its windows
+// after, and its caps are the user's alone, an account cap set later
+// holding every window as on any account. A skip from before T-140 was a
+// share of 100 on each window the policy held, which reads as the user's
+// own 100 still: those windows stay out of an account cap until set back
+// to follow it.
 
 import (
 	"cmp"
@@ -153,10 +158,19 @@ func rampCaps(start, days int, added, now time.Time) map[string]int {
 // amount); c as it is when the account has a cap of its own, which holds
 // every window. c's map is never written: one with growth is a copy.
 func (c WindowCaps) withGrowth(id, user string, added, now time.Time) WindowCaps {
-	if !addedKnown(added) || c.All > 0 {
+	if !addedKnown(added) || c.All > 0 || growthSkipped(id, user) {
 		return c
 	}
 	return c.withPolicy(growthPolicyFor(id, user), added, now)
+}
+
+// growthSkipped is whether the user skipped the ramp-up of the account
+// user of the subscription id (SkipGrowth): the policy holds none of its
+// windows.
+func growthSkipped(id, user string) bool {
+	s, _ := storedPicks(id)
+	_, ok := s.AccountGrowthSkipped[accountKey(user)]
+	return ok
 }
 
 // growthPolicyOf is the policy the accounts of the subscription id are
@@ -439,7 +453,8 @@ type GrowthAccount struct {
 // GrowthAccounts are the accounts the policy holds at now, each with its
 // day, by subscription and name: those its subscription lists now (as the
 // Providers page does, AccountRefs), on a subscription that isn't off,
-// with no cap of their own (which holds every window, withGrowth). A day
+// with no cap of their own (which holds every window, withGrowth) and no
+// ramp-up skipped (AccountGrowthSkipped). A day
 // is kept for an account gone from the list a while, so the day alone
 // doesn't say it is held. One from before AccountAdded was kept has no
 // day and isn't listed.
@@ -477,7 +492,8 @@ func growthAccounts(now time.Time, held func(s *Provider, user string) bool) []G
 		}
 		for u := range s.AccountAdded {
 			from := growthFrom(s.ID, u, now)
-			if !listed[u] || s.AccountCaps[u] > 0 || !addedKnown(from) || held != nil && !held(&s, u) {
+			_, skipped := s.AccountGrowthSkipped[u]
+			if !listed[u] || s.AccountCaps[u] > 0 || skipped || !addedKnown(from) || held != nil && !held(&s, u) {
 				continue
 			}
 			out = append(out, GrowthAccount{
@@ -635,8 +651,9 @@ type AccountGrowth struct {
 // (growthPolicyFor: its own pick, its subscription's, the default) holds
 // the account user of the subscription id at now, nil when it holds none of its windows: one from
 // before, one past its last day, a policy that is Off, a subscription
-// turned off, a cap of the account's own, or every window it has the
-// user's (a ramp-up skipped). Its shares are those AccountCapsOf adds to
+// turned off, a cap of the account's own, a ramp-up skipped
+// (AccountGrowthSkipped), or every window it has the user's (one skipped
+// before T-140 among them). Its shares are those AccountCapsOf adds to
 // the user's own caps, through the same withGrowth (withPolicy, the
 // policy read once) and growthFrom the gateway's holds read, on the
 // windows the account was last read with (growthNamesOf), so the row
@@ -644,7 +661,7 @@ type AccountGrowth struct {
 // change on are asked: a ramp's each day to its last, a stage's start.
 func AccountGrowthOf(id, user string, now time.Time) *AccountGrowth {
 	s, ok := storedPicks(id)
-	if !ok || s.Off {
+	if _, skipped := s.AccountGrowthSkipped[accountKey(user)]; !ok || s.Off || skipped {
 		return nil
 	}
 	from, byUse := growthCount(id, user, now)
@@ -740,16 +757,13 @@ func growthNamesOf(id, user string) map[string][]string {
 }
 
 // SkipGrowth lets the growth policy go of the account ref of the
-// subscription id (T-132), as the backlog's 需求方 asked: a share of 100,
-// none, on each window it would hold that the account has (growthNamesOf)
-// and the user set nothing on, so the gateway holds it at the user's own
-// caps alone. A window with a share or an amount of the user's keeps it,
-// and a share the user sets later is theirs, as on any window
-// (SetWindowCaps); one set back to follow the account's cap is the
-// policy's again. Those 100s are a window's own, so an account cap set
-// later leaves those windows out, as a 100 the user set does (Of); the
-// Skip menu says so. An account with a cap of its own, which the policy
-// never holds, is left as it is.
+// subscription id (T-132), as the backlog's 需求方 asked: it is kept
+// skipped (AccountGrowthSkipped, T-140), so the gateway holds it at the
+// user's own caps alone. Its windows' shares and amounts are left as they
+// are: one the user set is theirs before and after, and an account cap set
+// later holds every window the user set nothing on, as on any account
+// (TestSkipGrowth). An account with a cap of its own, which the policy
+// never holds, is left as it is, as is one skipped already.
 func SkipGrowth(id, ref string) error {
 	p, err := Find(id)
 	if err != nil {
@@ -762,33 +776,20 @@ func SkipGrowth(id, ref string) error {
 	if !ok {
 		return fmt.Errorf("%s has no account %q", p.Name, ref)
 	}
-	k, names := accountKey(r), growthNamesOf(p.ID, r)
-	// on the caps as they are stored then, not as they were read: another
-	// set meanwhile stays (T-079)
+	k, now := accountKey(r), time.Now().UTC()
+	// on the record as it is stored then, not as it was read: another set
+	// meanwhile stays (T-079)
 	return editStored(p.ID, func(q *Provider) bool {
-		if q.AccountCaps[k] > 0 {
+		m := normalAccountAdded(q.AccountGrowthSkipped)
+		if _, had := m[k]; had || q.AccountCaps[k] > 0 {
 			return false
 		}
-		all := map[string]map[string]int{}
-		for u, m := range q.AccountWindowCaps {
-			all[u] = maps.Clone(m)
+		if m == nil {
+			m = map[string]time.Time{}
 		}
-		if all[k] == nil {
-			all[k] = map[string]int{}
-		}
-		changed := false
-		for _, wins := range names {
-			for _, w := range wins {
-				if _, mine := all[k][w]; mine || q.AccountWindowAmounts[k][w] > 0 {
-					continue
-				}
-				all[k][w], changed = 100, true
-			}
-		}
-		if changed {
-			q.AccountWindowCaps = normalWindowCaps(all)
-		}
-		return changed
+		m[k] = now
+		q.AccountGrowthSkipped = m
+		return true
 	})
 }
 
@@ -1697,6 +1698,15 @@ func forgetAdded(agent string, users ...string) {
 			delete(p.AccountGrowthPolicy, accountKey(u))
 			if len(p.AccountGrowthPolicy) == 0 {
 				p.AccountGrowthPolicy = nil
+			}
+			changed = true
+		}
+		// and its ramp-up skipped: added again, it is new again (T-140)
+		if _, ok := p.AccountGrowthSkipped[accountKey(u)]; ok {
+			p.AccountGrowthSkipped = maps.Clone(p.AccountGrowthSkipped)
+			delete(p.AccountGrowthSkipped, accountKey(u))
+			if len(p.AccountGrowthSkipped) == 0 {
+				p.AccountGrowthSkipped = nil
 			}
 			changed = true
 		}

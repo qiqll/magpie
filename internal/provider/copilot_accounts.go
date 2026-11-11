@@ -174,6 +174,7 @@ func moveAccountSettings(id string, moves map[string]string) error {
 			moved = moveKey(p.AccountFirstUsed, from, to) || moved
 			moved = moveKey(p.AccountUsedDays, from, to) || moved
 			moved = moveKey(p.AccountGrowthPolicy, from, to) || moved
+			moved = moveKey(p.AccountGrowthSkipped, from, to) || moved
 			moved = moveKey(p.AccountWindowAmounts, from, to) || moved
 			moved = moveKey(p.AccountConcurrency, from, to) || moved
 			moved = moveKey(p.AccountWeights, from, to) || moved

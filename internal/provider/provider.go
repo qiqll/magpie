@@ -534,6 +534,16 @@ type Provider struct {
 	// (moveAccountSettings) and goes when the user removes the account
 	// (forgetAdded).
 	AccountGrowthPolicy map[string]string `json:"accountGrowthPolicy,omitempty"`
+	// AccountGrowthSkipped is, for a subscription, when the user skipped
+	// each account's ramp-up (T-140, SkipGrowth), by its name in lower
+	// case: the growth policy holds none of its windows from then, and its
+	// windows are the user's caps alone, an account cap set later among
+	// them. Kept apart from AccountWindowCaps, so a skip is no window's
+	// own 100. Set on its own (provider/skipgrowth); the editor's Save
+	// keeps what the file has. It moves with an account renamed
+	// (moveAccountSettings) and goes when the user removes the account
+	// (forgetAdded).
+	AccountGrowthSkipped map[string]time.Time `json:"accountGrowthSkipped,omitempty"`
 	// AccountWindowAmounts is, for a subscription, the fixed amount of a
 	// window's own unit (credits, requests, tokens) an account is used to
 	// at most where the user set one in place of a share (9won_25273 on
@@ -1012,6 +1022,7 @@ func (p Provider) clone() Provider {
 	p.AccountFirstUsed = maps.Clone(p.AccountFirstUsed)
 	p.AccountUsedDays = maps.Clone(p.AccountUsedDays)
 	p.AccountGrowthPolicy = maps.Clone(p.AccountGrowthPolicy)
+	p.AccountGrowthSkipped = maps.Clone(p.AccountGrowthSkipped)
 	p.AccountNames = maps.Clone(p.AccountNames)
 	p.KeySpendCaps = maps.Clone(p.KeySpendCaps)
 	p.KeyOwnBalances = maps.Clone(p.KeyOwnBalances)
@@ -1137,7 +1148,7 @@ func accountSettings(a, pk Provider) Provider {
 	a.Proxy, a.AccountProxies, a.AccountModels, a.AccountModelsAll = pk.Proxy, pk.AccountProxies, pk.AccountModels, pk.AccountModelsAll
 	a.AccountCaps, a.AccountWindowCaps, a.AccountWindowAmounts = pk.AccountCaps, pk.AccountWindowCaps, pk.AccountWindowAmounts
 	a.CapStop, a.CapCareful = pk.CapStop, pk.CapCareful
-	a.GrowthPolicy, a.AccountGrowthPolicy = pk.GrowthPolicy, pk.AccountGrowthPolicy
+	a.GrowthPolicy, a.AccountGrowthPolicy, a.AccountGrowthSkipped = pk.GrowthPolicy, pk.AccountGrowthPolicy, pk.AccountGrowthSkipped
 	a.UseFirst = pk.UseFirst
 	a.AccountNames = pk.AccountNames
 	a.MaxConcurrency, a.PinUpstream = pk.MaxConcurrency, pk.PinUpstream
@@ -1409,8 +1420,10 @@ func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err e
 		// the editor's
 		p.AccountAdded, p.AccountFirstUsed = was.AccountAdded, was.AccountFirstUsed
 		p.AccountUsedDays = was.AccountUsedDays
-		// and its growth policy is set on its own (SetGrowthPolicy)
+		// and its growth policy is set on its own (SetGrowthPolicy), as
+		// is a skipped ramp-up (SkipGrowth)
 		p.GrowthPolicy, p.AccountGrowthPolicy = was.GrowthPolicy, was.AccountGrowthPolicy
+		p.AccountGrowthSkipped = was.AccountGrowthSkipped
 		if p.Was == nil {
 			p.Was = was.Was
 		}
@@ -2006,6 +2019,7 @@ func normalize(p Provider) Provider {
 	p.AccountUsedDays = normalUsedDays(p.AccountUsedDays)
 	p.GrowthPolicy = strings.TrimSpace(p.GrowthPolicy)
 	p.AccountGrowthPolicy = normalAccountGrowthPolicy(p.AccountGrowthPolicy)
+	p.AccountGrowthSkipped = normalAccountAdded(p.AccountGrowthSkipped)
 	p.AccountWindowAmounts = normalWindowAmounts(p.AccountWindowAmounts)
 	p.AccountNames = normalAccountNames(p.AccountNames)
 	p.KeySpendCaps = normalKeySpendCaps(p.KeySpendCaps)
