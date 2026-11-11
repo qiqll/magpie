@@ -40,9 +40,11 @@ package provider
 
 import (
 	"cmp"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"maps"
+	"math/bits"
 	"reflect"
 	"slices"
 	"strings"
@@ -838,11 +840,118 @@ func growthCount(id, user string, now time.Time) (time.Time, bool) {
 // each the 24 hours from From (its first use) plus a whole number of days
 // that a request of it was served in, the latest starting at Last. A
 // day's start is from its first use, as a calendar day's is (growthCaps
-// counts 24 hours from it), so no clock's zone moves it.
+// counts 24 hours from it), so no clock's zone moves it. Days (T-148) is
+// which days those are, as far as they are known: a bit for each, day d
+// (the d-th 24 hours from From) bit d%8 of byte d/8, in base64 with no
+// padding; a sync takes the union of two computers' (keptUsedDays). A
+// count kept before it (no Days) knows only its first day and Last, so
+// Count may be more than the days Days has, never fewer: the days it
+// counts that Days doesn't name are days not known.
 type UsedDays struct {
 	From  time.Time `json:"from"`
 	Last  time.Time `json:"last"`
 	Count int       `json:"count"`
+	Days  string    `json:"days,omitempty"`
+}
+
+// usedDaysSpan bounds the days Days names, from From: a day past it (an
+// account used on and off for longer, or a Last set wrong) is counted
+// but not named, as a day not known, so no file makes a large one.
+const usedDaysSpan = 10 * 366
+
+// UsedDaysOf is the days used, from from (an account's first use), the
+// days days names, each once, from it (0 its first): usage.ServedDays'
+// count of the ledger's served rows.
+func UsedDaysOf(from time.Time, days []int) UsedDays {
+	c := UsedDays{From: from, Last: from}
+	var set []byte
+	for _, d := range days {
+		if d < 0 {
+			continue
+		}
+		c.Count++
+		set = withDay(set, d)
+		if at := from.Add(time.Duration(d) * growthDay); at.After(c.Last) {
+			c.Last = at
+		}
+	}
+	c.Days = daysString(set)
+	return c
+}
+
+// withDay is set with day d (from From) named; one past usedDaysSpan
+// isn't.
+func withDay(set []byte, d int) []byte {
+	if d < 0 || d >= usedDaysSpan {
+		return set
+	}
+	if n := d/8 + 1; len(set) < n {
+		set = append(set, make([]byte, n-len(set))...)
+	}
+	set[d/8] |= 1 << (d % 8)
+	return set
+}
+
+// daysString is set as Days keeps it: its trailing empty bytes dropped,
+// "" for none.
+func daysString(set []byte) string {
+	for len(set) > 0 && set[len(set)-1] == 0 {
+		set = set[:len(set)-1]
+	}
+	return base64.RawStdEncoding.EncodeToString(set)
+}
+
+// knownDays are the days c names as used (Days), with its first day and
+// Last, which every count has: a count kept before Days was (T-148) knows
+// those two only. Days that can't be read are taken as none named, as
+// such a count's; past usedDaysSpan nothing is named.
+func knownDays(c UsedDays) []byte {
+	var set []byte
+	if c.Days != "" && base64.RawStdEncoding.DecodedLen(len(c.Days)) <= usedDaysSpan/8+1 {
+		if b, err := base64.RawStdEncoding.DecodeString(c.Days); err == nil {
+			set = b
+		}
+	}
+	if c.Count >= 1 {
+		set = withDay(set, 0)
+	}
+	if c.Count >= 2 {
+		if d := c.Last.Sub(c.From) / growthDay; d > 0 {
+			set = withDay(set, int(min(d, usedDaysSpan)))
+		}
+	}
+	return set
+}
+
+// daysNamed is how many days set names.
+func daysNamed(set []byte) int {
+	n := 0
+	for _, b := range set {
+		n += bits.OnesCount8(b)
+	}
+	return n
+}
+
+// unionUsedDays is the days used of a and b, two counts against the same
+// first use (a sync's two computers'): the union of the days each names,
+// and as many as the larger count at least, since a count's days not
+// named (one kept before T-148) may be days the other names. Never more
+// than the days either could have been used on, so an account is held
+// longer than it was used for, never shorter.
+func unionUsedDays(a, b UsedDays) UsedDays {
+	x, y := knownDays(a), knownDays(b)
+	if len(x) < len(y) {
+		x, y = y, x
+	}
+	set := slices.Clone(x)
+	for i, v := range y {
+		set[i] |= v
+	}
+	c := UsedDays{From: a.From, Last: a.Last, Count: min(max(daysNamed(set), a.Count, b.Count), usedDaysMost), Days: daysString(set)}
+	if b.Last.After(c.Last) {
+		c.Last = b.Last
+	}
+	return c
 }
 
 // usedDaysMost is the most days used are counted to: past it, no policy
@@ -900,11 +1009,14 @@ func normalUsedDays(m map[string]UsedDays) map[string]UsedDays {
 
 // keptUsedDays are the days used of here and there, as a sync brings
 // there's: for each account, the count against its first use as it is
-// kept (firstUsed), the larger of the two when both are; one against
-// another first use is left out, and counted again from the ledger
-// (BackfillUsedDays). Days each computer served on its own are not
-// added: the account counts fewer days than it was used on, so is held
-// longer, never shorter.
+// kept (firstUsed), the union of the two when both are (unionUsedDays,
+// T-148: two computers that each served it on days of their own count
+// both's days, each once); one against another first use is left out,
+// and counted again from the ledger (BackfillUsedDays). A count kept
+// before T-148 names only its first day and its last, so beside it the
+// union counts as many days as the larger count at least, and fewer than
+// it was used on when its other days were the other computer's: such an
+// account is held longer, never shorter.
 func keptUsedDays(here, there map[string]UsedDays, firstUsed map[string]time.Time) map[string]UsedDays {
 	var out map[string]UsedDays
 	for _, m := range []map[string]UsedDays{here, there} {
@@ -912,8 +1024,8 @@ func keptUsedDays(here, there map[string]UsedDays, firstUsed map[string]time.Tim
 			if !addedKnown(c.From) || !c.From.Equal(firstUsed[u]) {
 				continue
 			}
-			if had, ok := out[u]; ok && (had.Count > c.Count || had.Count == c.Count && !c.Last.After(had.Last)) {
-				continue
+			if had, ok := out[u]; ok {
+				c = unionUsedDays(had, c)
 			}
 			if out == nil {
 				out = map[string]UsedDays{}
@@ -1083,7 +1195,11 @@ func writeUsedDay(a loginAccount, used, at time.Time) bool {
 	if !day.After(c.Last) {
 		return true
 	}
+	// the day named too (T-148), beside the days known before it (an old
+	// count's Last among them, read before Last moves)
+	known := knownDays(c)
 	c.Count, c.Last = c.Count+1, day
+	c.Days = daysString(withDay(known, int(min(day.Sub(c.From)/growthDay, usedDaysSpan))))
 	p.AccountUsedDays = maps.Clone(p.AccountUsedDays)
 	p.AccountUsedDays[a.user] = c
 	// what agents were handed of the catalog is no different
@@ -1142,7 +1258,7 @@ func writeFirstUsed(a loginAccount, at time.Time) bool {
 		p.AccountUsedDays = map[string]UsedDays{}
 	}
 	fu := p.AccountFirstUsed[a.user]
-	p.AccountUsedDays[a.user] = UsedDays{From: fu, Last: fu, Count: 1}
+	p.AccountUsedDays[a.user] = UsedDaysOf(fu, []int{0})
 	// what agents were handed of the catalog is no different
 	if err := storeQuiet(f); err != nil {
 		log.Printf("providers.json: %v; %s's first use isn't kept yet", err, a.user)

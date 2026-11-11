@@ -116,14 +116,12 @@ func ServedDays(want map[[2]string]time.Time) (map[[2]string]provider.UsedDays, 
 		if !ds[0] {
 			continue // the ledger doesn't reach its first use
 		}
-		c := provider.UsedDays{From: want[k], Last: want[k]}
+		// each day named (T-148), so a sync takes the union
+		named := make([]int, 0, len(ds))
 		for d := range ds {
-			c.Count++
-			if at := want[k].Add(time.Duration(d) * 24 * time.Hour); at.After(c.Last) {
-				c.Last = at
-			}
+			named = append(named, int(d))
 		}
-		out[k] = c
+		out[k] = provider.UsedDaysOf(want[k], named)
 	}
 	return out, nil
 }

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"log"
 	"slices"
@@ -212,7 +213,7 @@ func TestGrowthUsedDaysKeptBySaveMoveAndSync(t *testing.T) {
 	usedDaysFixture(t, "use")
 	NoteAccountUsed("codex", "new@example.com", day(0, 0))
 	NoteAccountUsed("codex", "new@example.com", day(1, 0))
-	want := UsedDays{From: usedDaysT0, Last: day(1, 0), Count: 2}
+	want := UsedDaysOf(usedDaysT0, []int{0, 1}) // days 0 and 1, named (T-148)
 	days := func() map[string]UsedDays {
 		s, _ := storedPicks("codex")
 		return s.AccountUsedDays
@@ -413,4 +414,111 @@ func TestGrowthBuiltinDefaultCalendarCases(t *testing.T) {
 			t.Fatalf("a count not known under the default: %+v", g)
 		}
 	})
+}
+
+// Two computers that each served the account on days of their own count
+// both's days after a sync, each once (T-148): here days 0 to 2, there 0,
+// 5 and 6, so 5 days, not the larger 3. A sync again counts no day twice,
+// and the account is on the day of the days used in all.
+func TestGrowthUsedDaysSyncTakesTheUnion(t *testing.T) {
+	usedDaysFixture(t, "use")
+	for d := range 3 {
+		NoteAccountUsed("codex", "new@example.com", day(d, 0))
+	}
+	f, _ := read()
+	there := slices.Clone(f.Providers)
+	for i := range there {
+		if there[i].ID == "codex" {
+			there[i].AccountUsedDays = map[string]UsedDays{"new@example.com": UsedDaysOf(usedDaysT0, []int{0, 5, 6})}
+		}
+	}
+	want := UsedDaysOf(usedDaysT0, []int{0, 1, 2, 5, 6})
+	for range 2 {
+		if err := Mirror(there, nil); err != nil {
+			t.Fatal(err)
+		}
+		s, _ := storedPicks("codex")
+		if got := s.AccountUsedDays["new@example.com"]; got != want {
+			t.Fatalf("after a sync: %+v, want %+v", got, want)
+		}
+	}
+	if g, _ := grownAt(t, day(7, time.Hour)); g.Day != 5 || !g.UsedDays {
+		t.Fatalf("on day 7, used on 5 days before it: %+v", g)
+	}
+	// the other way, the same
+	here := map[string]UsedDays{"new@example.com": UsedDaysOf(usedDaysT0, []int{0, 1, 2})}
+	fu := map[string]time.Time{"new@example.com": usedDaysT0}
+	if got := keptUsedDays(there[slices.IndexFunc(there, func(p Provider) bool { return p.ID == "codex" })].AccountUsedDays, here, fu)["new@example.com"]; got != want {
+		t.Fatalf("there's first: %+v, want %+v", got, want)
+	}
+	// a day each counts on after is counted once more, named
+	NoteAccountUsed("codex", "new@example.com", day(9, time.Hour))
+	s, _ := storedPicks("codex")
+	if got, want := s.AccountUsedDays["new@example.com"], UsedDaysOf(usedDaysT0, []int{0, 1, 2, 5, 6, 9}); got != want {
+		t.Fatalf("day 9 counted: %+v, want %+v", got, want)
+	}
+}
+
+// A count kept before the days were named ({from, last, count}, T-134)
+// is still read, and merged: it names its first day and its last only,
+// so beside one that names its days the union counts those it names and
+// as many as the larger count at least, never more than either could
+// have; a day counted on it after names its last too.
+func TestGrowthUsedDaysOldCountMerges(t *testing.T) {
+	var old map[string]UsedDays
+	if err := json.Unmarshal([]byte(`{"a":{"from":"2026-03-01T23:30:00Z","last":"2026-03-07T23:30:00Z","count":3}}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if c := old["a"]; c.Count != 3 || !c.Last.Equal(day(6, 0)) || c.Days != "" {
+		t.Fatalf("read as %+v", c)
+	}
+	fu := map[string]time.Time{"a": usedDaysT0}
+	for _, c := range []struct {
+		name  string
+		other UsedDays
+		count int
+		named []int
+	}{
+		// days 0, 1, 2 here; 0, 6 and one not known there: 4 known, 4 at least
+		{"three named", UsedDaysOf(usedDaysT0, []int{0, 1, 2}), 4, []int{0, 1, 2, 6}},
+		// day 6 named on both: the larger count, 3
+		{"same last", UsedDaysOf(usedDaysT0, []int{0, 6}), 3, []int{0, 6}},
+		// more named than the old count: all of them
+		{"more named", UsedDaysOf(usedDaysT0, []int{0, 1, 2, 3, 4}), 6, []int{0, 1, 2, 3, 4, 6}},
+		// two old counts: the larger, with both lasts named
+		{"both old", UsedDays{From: usedDaysT0, Last: day(4, 0), Count: 5}, 5, []int{0, 4, 6}},
+	} {
+		for _, order := range [][2]map[string]UsedDays{{old, {"a": c.other}}, {{"a": c.other}, old}} {
+			got := keptUsedDays(order[0], order[1], fu)["a"]
+			named := UsedDaysOf(usedDaysT0, c.named)
+			if got.Count != c.count || got.Days != named.Days || !got.Last.Equal(named.Last) {
+				t.Errorf("%s: %+v, want %d days naming %v", c.name, got, c.count, c.named)
+			}
+		}
+	}
+
+	// an old count a request counts on: its last stays named
+	usedDaysFixture(t, "use")
+	NoteAccountUsed("codex", "new@example.com", day(0, 0))
+	if err := editStored("codex", func(q *Provider) bool {
+		q.AccountUsedDays = map[string]UsedDays{"new@example.com": old["a"]}
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	NoteAccountUsed("codex", "new@example.com", day(8, time.Hour))
+	s, _ := storedPicks("codex")
+	got := s.AccountUsedDays["new@example.com"]
+	if named := UsedDaysOf(usedDaysT0, []int{0, 6, 8}); got.Count != 4 || got.Days != named.Days || !got.Last.Equal(day(8, 0)) {
+		t.Fatalf("an old count, day 8 counted on it: %+v", got)
+	}
+	// days that can't be read are none named, the count kept
+	bad := UsedDays{From: usedDaysT0, Last: day(2, 0), Count: 3, Days: "%%"}
+	if got := keptUsedDays(map[string]UsedDays{"a": bad}, map[string]UsedDays{"a": UsedDaysOf(usedDaysT0, []int{0, 1})}, fu)["a"]; got.Count != 3 || got.Days != UsedDaysOf(usedDaysT0, []int{0, 1, 2}).Days {
+		t.Fatalf("days unreadable: %+v", got)
+	}
+	// a day past usedDaysSpan is counted, not named, so no file grows large
+	if c := UsedDaysOf(usedDaysT0, []int{0, usedDaysSpan + 5}); c.Count != 2 || len(c.Days) > 4 {
+		t.Fatalf("a day far on: %+v", c)
+	}
 }

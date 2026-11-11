@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // FirstServed takes each account's earliest served row from when it was
@@ -78,6 +80,10 @@ func TestServedDaysCountsEachDayOnce(t *testing.T) {
 	got, err := ServedDays(map[[2]string]time.Time{k: from, k2: at(2, 0)})
 	if c := got[k]; err != nil || c.Count != 4 || !c.From.Equal(from) || !c.Last.Equal(at(8, 0)) || len(got) != 1 {
 		t.Fatalf("served days %+v (%v), want 4 to day 8", got, err)
+	}
+	// and which: days 0, 1, 2 and 8, so a sync takes the union (T-148)
+	if want := provider.UsedDaysOf(from, []int{0, 1, 2, 8}); got[k] != want {
+		t.Fatalf("served days %+v, want %+v", got[k], want)
 	}
 	if err := os.Chmod(Path(), 0); err != nil {
 		t.Fatal(err)
