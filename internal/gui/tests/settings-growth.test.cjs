@@ -79,11 +79,11 @@ function server(lang, saves, previews) {
 }
 
 const want = {
-  en: { tab: "Growth policy", first: "Days 0 to 7", week: "From day 3 on", firstToThree: "Days 0 to 3", threeToSeven: "Days 3 to 7", last: "From day 14 on", standard: "Standard", note: "used to let such a window go", ramp: "A ramp starts at 1% to 99% and reaches 100% in 1 to 365 days", refused: "magpie didn't save the policies:", draw: "magpie couldn't draw this policy:", from: "from its first use" },
-  zh: { tab: "成长策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", standard: "标准", note: "以前会直接放开", ramp: "爬坡的起点为 1% 到 99%，在 1 到 365 天内到 100%", refused: "magpie 没有保存这些策略：", draw: "magpie 画不出这个策略：", from: "从首次使用算起" },
-  "zh-TW": { tab: "成長策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", standard: "標準", note: "以前會直接放開", ramp: "爬坡的起點為 1% 到 99%，在 1 到 365 天內到 100%", refused: "magpie 沒有儲存這些策略：", draw: "magpie 畫不出這個策略：", from: "從首次使用算起" },
-  ja: { tab: "成長ポリシー", first: "0〜7 日目", week: "3 日目から", firstToThree: "0〜3 日目", threeToSeven: "3〜7 日目", last: "14 日目から", standard: "標準", note: "制限を外していました", ramp: "ランプは 1%〜99% から始まり、1〜365 日で 100% に達します", refused: "magpie はポリシーを保存できませんでした：", draw: "magpie はこのポリシーを描けませんでした：", from: "初めて使った時点" },
-  de: { tab: "Wachstumsregel", first: "Tag 0 bis 7", week: "Ab Tag 3", firstToThree: "Tag 0 bis 3", threeToSeven: "Tag 3 bis 7", last: "Ab Tag 14", standard: "Standard", note: "Früher gab magpie", ramp: "Ein Anstieg beginnt bei 1 % bis 99 % und erreicht 100 % in 1 bis 365 Tagen", refused: "magpie hat die Regeln nicht gespeichert:", draw: "magpie konnte diese Regel nicht zeichnen:", from: "ab seiner ersten Nutzung" },
+  en: { rampLine: "Starts at {start} % reaches 100% in {days} days", tab: "Growth policy", first: "Days 0 to 7", week: "From day 3 on", firstToThree: "Days 0 to 3", threeToSeven: "Days 3 to 7", last: "From day 14 on", standard: "Standard", note: "used to let such a window go", ramp: "A ramp starts at 1% to 99% and reaches 100% in 1 to 365 days", refused: "magpie didn't save the policies:", draw: "magpie couldn't draw this policy:", from: "from its first use" },
+  zh: { rampLine: "起点 {start} % {days} 天到 100%", tab: "成长策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", standard: "标准", note: "以前会直接放开", ramp: "爬坡的起点为 1% 到 99%，在 1 到 365 天内到 100%", refused: "magpie 没有保存这些策略：", draw: "magpie 画不出这个策略：", from: "从首次使用算起" },
+  "zh-TW": { rampLine: "起點 {start} % {days} 天到 100%", tab: "成長策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", standard: "標準", note: "以前會直接放開", ramp: "爬坡的起點為 1% 到 99%，在 1 到 365 天內到 100%", refused: "magpie 沒有儲存這些策略：", draw: "magpie 畫不出這個策略：", from: "從首次使用算起" },
+  ja: { rampLine: "開始 {start} % {days} 日で 100%", tab: "成長ポリシー", first: "0〜7 日目", week: "3 日目から", firstToThree: "0〜3 日目", threeToSeven: "3〜7 日目", last: "14 日目から", standard: "標準", note: "制限を外していました", ramp: "ランプは 1%〜99% から始まり、1〜365 日で 100% に達します", refused: "magpie はポリシーを保存できませんでした：", draw: "magpie はこのポリシーを描けませんでした：", from: "初めて使った時点" },
+  de: { rampLine: "Beginnt bei {start} % erreicht 100 % in {days} Tagen", tab: "Wachstumsregel", first: "Tag 0 bis 7", week: "Ab Tag 3", firstToThree: "Tag 0 bis 3", threeToSeven: "Tag 3 bis 7", last: "Ab Tag 14", standard: "Standard", note: "Früher gab magpie", ramp: "Ein Anstieg beginnt bei 1 % bis 99 % und erreicht 100 % in 1 bis 365 Tagen", refused: "magpie hat die Regeln nicht gespeichert:", draw: "magpie konnte diese Regel nicht zeichnen:", from: "ab seiner ersten Nutzung" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -153,6 +153,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const name = await list.locator(".growth-name").inputValue();
         assert(name.includes(w.standard), `the copy is named ${name}`);
         assert(!(await list.locator(".growth-save").isDisabled()), "a copy leaves Save off");
+        // the ramp's days read as days, not the core's weekday word (T-147)
+        const rampLine = await list.locator(".gp-line:has(.growth-days)").evaluate((line) =>
+          [...line.children].map((c) => (c.matches(".growth-days") ? "{days}" : c.matches(".growth-start") ? "{start}" : c.textContent.trim())).join(" "));
+        assert.equal(rampLine, w.rampLine);
 
         // a ramp out of range is said in the page's language; nothing is saved
         await list.locator(".growth-start").fill("120");

@@ -283,7 +283,14 @@ function growthEditor(p, d, all, edit, redraw) {
     days.inputMode = "numeric";
     days.setAttribute("aria-label", t("Days to reach 100%"));
     days.oninput = () => { p.days = days.value.trim(); edit(); };
-    line.append(el("span", "gp-lab", t("Starts at")), start, el("span", "growth-pct", "%"), el("span", "gp-lab", t("reaches 100% in")), days, el("span", "gp-lab", t("days")));
+    // the days field sits where its language says the number, in a phrase
+    // of the plugin's own: the core's "days" is a weekday picker's 星期
+    // (T-147)
+    const [before, after = ""] = t("reaches 100% in {days} days").split("{days}");
+    line.append(el("span", "gp-lab", t("Starts at")), start, el("span", "growth-pct", "%"));
+    if (before.trim()) line.append(el("span", "gp-lab", before.trim()));
+    line.append(days);
+    if (after.trim()) line.append(el("span", "gp-lab", after.trim()));
     ed.append(line, el("div", "gp-note", t("Every window, the 5 hours and the week alike, is held at this share on day 0, rising each day to 100% on the last.")));
     return ed;
   }
