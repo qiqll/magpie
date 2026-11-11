@@ -110,10 +110,19 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "no page scroll sideways");
         // its menu ticks nothing: No cap is not what holds it (review M2)
-        await pill(ME).click();
+        // a scroll closes the menu (scrollCloses): the pill is brought into
+        // view and the scroll's events let land before it is pressed
+        const press = async (id) => {
+          await pill(id).scrollIntoViewIfNeeded();
+          await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+          await pill(id).click();
+        };
+        await press(ME);
         await page.locator(".proto-menu .pm-item").first().waitFor();
         assert.equal(await page.locator(".proto-menu .pm-item.on").count(), 0);
-        await pill(OWN).click();
+        await page.keyboard.press("Escape");
+        await page.locator(".proto-menu").waitFor({ state: "detached" });
+        await press(OWN);
         await page.locator(".proto-menu .pm-item.on").first().waitFor();
         if (lang !== "en") {
           const missing = await page.evaluate(([l, keys]) => keys.filter((k) => !I18N[l][k]), [lang, KEYS]);
