@@ -3430,10 +3430,12 @@ func fail(rw http.ResponseWriter, err error) {
 	// the page's language by Settings › Growth policy
 	var refused *settings.GrowthError
 	if errors.As(err, &refused) {
-		out["code"], out["growth"] = "growth_refused", refused.Code
 		for k, v := range refused.Vals {
-			out[k] = v
+			if !slices.Contains(growthKept, k) {
+				out[k] = v
+			}
 		}
+		out["code"], out["growth"] = "growth_refused", refused.Code
 	}
 	var picked *pickedPolicyError
 	if errors.As(err, &picked) {

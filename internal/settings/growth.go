@@ -13,6 +13,7 @@ package settings
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"regexp"
 	"slices"
 	"strconv"
@@ -393,7 +394,7 @@ func CheckGrowthPolicies(own []GrowthPolicy, def string) error {
 			return growthRefused("name_needed", vals{"id": p.ID}, "the growth policy %q needs a name", p.ID)
 		}
 		if utf8.RuneCountInString(name) > GrowthNameMost {
-			return growthRefused("name_long", vals{"name": name}, "a growth policy's name is up to %d characters", GrowthNameMost)
+			return growthRefused("name_long", nil, "a growth policy's name is up to %d characters", GrowthNameMost)
 		}
 		if names[strings.ToLower(name)] {
 			return growthRefused("name_twice", vals{"name": name}, "two growth policies are named %q", name)
@@ -470,11 +471,14 @@ func EditGrowth(edit func(own []GrowthPolicy, def string) ([]GrowthPolicy, strin
 	defer lockFile()()
 	s, err := loadChecked()
 	if err != nil {
-		why := err.Error()
-		if cause := errors.Unwrap(err); cause != nil {
-			why = cause.Error()
+		// what went wrong, without the path the page names already
+		cause := err.Error()
+		if pe := (*fs.PathError)(nil); errors.As(err, &pe) {
+			cause = pe.Err.Error()
+		} else if u := errors.Unwrap(err); u != nil {
+			cause = u.Error()
 		}
-		return &GrowthError{Code: GrowthUnreadable, Vals: map[string]string{"path": Path(), "why": why}, Msg: err.Error(), Err: err}
+		return &GrowthError{Code: GrowthUnreadable, Vals: map[string]string{"path": Path(), "cause": cause}, Msg: err.Error(), Err: err}
 	}
 	s.GrowthPolicies = slices.Clone(s.GrowthPolicies)
 	MigrateGrowth(&s)

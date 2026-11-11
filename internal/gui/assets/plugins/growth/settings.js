@@ -80,7 +80,7 @@ function growthWhy(e) {
     stage_cap: () => t("Each stage starts on a day from 0 to 365 and holds its window at 1% to 99%"),
     stage_window: () => t("A stage holds the 5 hours or the 7 days, not {got}", v),
     stage_twice: () => t("Two stages hold the {window} from day {day}", { ...v, window: win ? t(win[1]) : v.window }),
-    builtin: () => t("{id} is one of magpie's own policies, which can't be changed: copy it and change the copy", v),
+    builtin: () => t("{id} is one of magpie's own policies, which can't be changed: copy it and change the copy", { id: GROWTH_BUILTIN[v.id] ? t(GROWTH_BUILTIN[v.id]) : v.id }),
     id: () => t("A policy's id is up to 64 letters, digits, - and _, not {got}", v),
     id_twice: () => t("Two policies have the id {id}", v),
     name_needed: () => t("A policy needs a name"),
@@ -91,9 +91,9 @@ function growthWhy(e) {
     ramp_start: () => t("A ramp starts at 1% to 99% and reaches 100% in 1 to 365 days"),
     ramp_days: () => t("A ramp starts at 1% to 99% and reaches 100% in 1 to 365 days"),
     kind: () => t("A policy ramps or has stages, not {got}", v),
-    unreadable: () => t("magpie can't read {path}, so what it holds is unknown: {why}", v),
+    unreadable: () => t("magpie can't read {path}, so what it holds is unknown: {why}", { path: v.path, why: v.cause }),
     picked: () => t("{subs} picked the policy {policy}: pick another in its editor, or on its account's row, before deleting this one", v),
-    picks_unreadable: () => t("magpie can't read which subscriptions picked a policy, so none is deleted: {why}", v),
+    picks_unreadable: () => t("magpie can't read which subscriptions picked a policy, so none is deleted: {why}", { why: v.cause }),
   }[v.growth];
   return said ? said() : e.message;
 }

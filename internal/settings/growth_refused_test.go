@@ -39,7 +39,7 @@ func TestGrowthRefusalsHaveCodes(t *testing.T) {
 		{[]GrowthPolicy{ramp("a b", "R", 60, 14)}, "", "id", map[string]string{"got": "a b"}, `a growth policy's id is up to 64 letters, digits, - and _, not "a b"`},
 		{[]GrowthPolicy{ramp("r", "R", 60, 14), ramp("r", "Q", 60, 14)}, "", "id_twice", map[string]string{"id": "r"}, `two growth policies have the id "r"`},
 		{[]GrowthPolicy{ramp("r", " ", 60, 14)}, "", "name_needed", map[string]string{"id": "r"}, `the growth policy "r" needs a name`},
-		{[]GrowthPolicy{ramp("r", strings.Repeat("名", 65), 60, 14)}, "", "name_long", map[string]string{"name": strings.Repeat("名", 65)}, "a growth policy's name is up to 64 characters"},
+		{[]GrowthPolicy{ramp("r", strings.Repeat("名", 65), 60, 14)}, "", "name_long", nil, "a growth policy's name is up to 64 characters"},
 		{[]GrowthPolicy{ramp("r", "Gentle", 60, 14)}, "", "name_twice", map[string]string{"name": "Gentle"}, `two growth policies are named "Gentle"`},
 		{[]GrowthPolicy{ramp("r", "R", 60, 14)}, "gone", "default_gone", map[string]string{"id": "gone"}, `no growth policy has the id "gone"`},
 		{[]GrowthPolicy{{ID: "r", Name: "R", Kind: GrowthRamp, Start: 60, Days: 14, CountDays: "hours"}}, "", "count_days", map[string]string{"got": "hours"}, `a growth policy counts calendar days ("") or the days used ("used"), not "hours"`},
@@ -72,7 +72,7 @@ func TestGrowthRefusalsHaveCodes(t *testing.T) {
 		return own, def, nil
 	})
 	var ge *GrowthError
-	if !errors.As(err, &ge) || ge.Code != GrowthUnreadable || ge.Vals["path"] != Path() || ge.Vals["why"] == "" || errors.Unwrap(err) == nil {
+	if !errors.As(err, &ge) || ge.Code != GrowthUnreadable || ge.Vals["path"] != Path() || ge.Vals["cause"] == "" || strings.Contains(ge.Vals["cause"], Path()) || errors.Unwrap(err) == nil {
 		t.Fatalf("unreadable: %v %+v", err, ge)
 	}
 	seen[ge.Code] = true

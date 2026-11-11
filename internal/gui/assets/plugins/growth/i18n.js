@@ -318,7 +318,7 @@ magpie.strings({
     "A policy counts calendar days or the days used, not {got}": "Eine Regel zählt Kalendertage oder genutzte Tage, nicht {got}",
     "A policy ramps or has stages, not {got}": "Eine Regel steigt an oder hat Stufen, nicht {got}",
     "magpie can't read {path}, so what it holds is unknown: {why}": "magpie kann {path} nicht lesen, daher ist unbekannt, was darin steht: {why}",
-    "{subs} picked the policy {policy}: pick another in its editor, or on its account's row, before deleting this one": "{subs} hat die Regel {policy} gewählt: wähle in seinem Editor oder in der Zeile seines Kontos eine andere, bevor du diese löschst",
+    "{subs} picked the policy {policy}: pick another in its editor, or on its account's row, before deleting this one": "Die Regel {policy} ist gewählt von {subs}: wähle dort im Editor oder in der Zeile des Kontos eine andere, bevor du diese löschst",
     "magpie can't read which subscriptions picked a policy, so none is deleted: {why}": "magpie kann nicht lesen, welche Abos eine Regel gewählt haben, daher wird keine gelöscht: {why}",
   },
 });

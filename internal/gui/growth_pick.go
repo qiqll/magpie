@@ -46,7 +46,7 @@ func growthPickedKept(was, next []settings.GrowthPolicy) error {
 	}
 	picks, err := provider.GrowthPicks()
 	if err != nil {
-		return &settings.GrowthError{Code: growthPicksUnreadable, Vals: map[string]string{"why": err.Error()},
+		return &settings.GrowthError{Code: growthPicksUnreadable, Vals: map[string]string{"cause": err.Error()},
 			Msg: "which subscriptions picked a growth policy can't be read, so none is deleted: " + err.Error(), Err: err}
 	}
 	for _, p := range gone {
@@ -75,6 +75,10 @@ const (
 	growthPicked          = "picked"
 	growthPicksUnreadable = "picks_unreadable"
 )
+
+// growthKept are the keys of fail's reply a GrowthError's values never
+// write over: what api() in app.js reads as something else.
+var growthKept = []string{"error", "code", "growth", "said", "why", "offline", "blocked", "agent", "user", "share", "status", "proxyUsed", "proxyFrom"}
 
 // pickedAccountSep parts a subscription from its account in a
 // pickedPolicyError's Subs.

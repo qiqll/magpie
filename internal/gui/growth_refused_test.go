@@ -76,7 +76,7 @@ func TestGrowthRefusalsSayTheirCode(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	fail(rec, err)
-	if got := said(rec); got["growth"] != growthPicksUnreadable || got["why"] == "" || !strings.HasPrefix(got["error"], "which subscriptions picked a growth policy can't be read") {
+	if got := said(rec); got["growth"] != growthPicksUnreadable || got["cause"] == "" || !strings.HasPrefix(got["error"], "which subscriptions picked a growth policy can't be read") {
 		t.Errorf("providers.json unread: %v", got)
 	}
 	if err := os.Remove(provider.Path()); err != nil {
@@ -90,8 +90,15 @@ func TestGrowthRefusalsSayTheirCode(t *testing.T) {
 	lastgood.Reset()
 	t.Cleanup(lastgood.Reset)
 	got = post("/api/settings/growth-policies", `{"policies":[],"default":""}`)
-	if got["growth"] != settings.GrowthUnreadable || got["path"] != settings.Path() || got["why"] == "" {
+	if got["growth"] != settings.GrowthUnreadable || got["path"] != settings.Path() || got["cause"] == "" {
 		t.Errorf("settings.json unread: %v", got)
+	}
+
+	// a value never writes over a key api() reads as something else
+	rec = httptest.NewRecorder()
+	fail(rec, &settings.GrowthError{Code: "name_twice", Vals: map[string]string{"name": "N", "code": "x", "error": "x", "growth": "x", "said": "x", "why": "x"}, Msg: "the English"})
+	if got := said(rec); got["code"] != "growth_refused" || got["growth"] != "name_twice" || got["error"] != "the English" || got["said"] != "" || got["why"] != "" || got["name"] != "N" {
+		t.Errorf("values over the reply's own keys: %v", got)
 	}
 
 	page, err := os.ReadFile("assets/plugins/growth/settings.js")

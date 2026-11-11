@@ -47,17 +47,17 @@ const REFUSALS = [
   [{ growth: "ramp_start", got: "0" }, RANGE],
   [{ growth: "ramp_days", got: "366" }, RANGE],
   [{ growth: "kind", got: "off" }, "A policy ramps or has stages, not {got}"],
-  [{ growth: "unreadable", path: "/h/.config/magpie/settings.json", why: "is a directory" }, "magpie can't read {path}, so what it holds is unknown: {why}"],
+  [{ growth: "unreadable", path: "/h/.config/magpie/settings.json", cause: "is a directory" }, "magpie can't read {path}, so what it holds is unknown: {why}"],
   [{ growth: "picked", policy: "Slow", subs: "Codex · a@example.com" }, "{subs} picked the policy {policy}: pick another in its editor, or on its account's row, before deleting this one"],
-  [{ growth: "picks_unreadable", why: "is a directory" }, "magpie can't read which subscriptions picked a policy, so none is deleted: {why}"],
+  [{ growth: "picks_unreadable", cause: "is a directory" }, "magpie can't read which subscriptions picked a policy, so none is deleted: {why}"],
 ];
 // what a few say, written out, so a dictionary the page doesn't read
 // can't pass
 const WRITTEN = {
   zh: { ramp_start: "magpie 没有保存这些策略：爬坡的起点为 1% 到 99%，在 1 到 365 天内到 100%", default_gone: "magpie 没有保存这些策略：默认策略（gone）已不存在：请把另一个策略设为默认", stage_twice: "magpie 没有保存这些策略：有两个阶段从第 3 天起都限制「7 天」窗口" },
   "zh-TW": { name_twice: "magpie 沒有儲存這些策略：有兩個策略都叫「Slow」" },
-  ja: { builtin: "magpie はポリシーを保存できませんでした：gentle は magpie の組み込みポリシーで変更できません：コピーしてコピーを変更してください" },
-  de: { picked: "magpie hat die Regeln nicht gespeichert: Codex · a@example.com hat die Regel Slow gewählt: wähle in seinem Editor oder in der Zeile seines Kontos eine andere, bevor du diese löschst" },
+  ja: { builtin: "magpie はポリシーを保存できませんでした：穏やか は magpie の組み込みポリシーで変更できません：コピーしてコピーを変更してください" },
+  de: { picked: "magpie hat die Regeln nicht gespeichert: Die Regel Slow ist gewählt von Codex · a@example.com: wähle dort im Editor oder in der Zeile des Kontos eine andere, bevor du diese löschst" },
 };
 
 function server(lang, answer) {
@@ -121,7 +121,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       };
 
       for (const [vals, key] of REFUSALS) {
-        const filled = vals.growth === "stage_twice" ? { ...vals, window: WEEK[lang] } : vals;
+        const filled = vals.growth === "stage_twice" ? { ...vals, window: WEEK[lang] } : vals.growth === "builtin" ? { id: say(lang, "Gentle") } : vals.cause ? { ...vals, why: vals.cause } : vals;
         const want = wrap.replace("\u0000", say(lang, key, filled));
         const got = await refused({ code: "growth_refused", ...vals });
         assert.equal(got, want, vals.growth);
