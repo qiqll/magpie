@@ -883,8 +883,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// and reads once from the ledger when each account added before its
 	// first use was kept was first used (the growth policy's days), then
 	// the days each was used on that aren't counted yet (T-134), and marks
-	// once the accounts whose ramp-up the calendar had done (T-150)
+	// once the accounts whose ramp-up the calendar had done (T-150). Its
+	// writes to providers.json end before this returns: a gateway stopped
+	// (a restart, a handover, a test's home removed after) has written all
+	// it will
+	backfilled := make(chan struct{})
+	defer func() { <-backfilled }()
 	go func() {
+		defer close(backfilled)
 		provider.BackfillFirstUsed(usage.FirstServed)
 		provider.BackfillUsedDays(usage.ServedDays)
 		provider.GraduateOnce()
