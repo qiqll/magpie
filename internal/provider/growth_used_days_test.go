@@ -383,3 +383,34 @@ func TestGrowthBuiltinsCountDaysUsed(t *testing.T) {
 		})
 	}
 }
+
+// Under the built-in default (days used), an account the gateway doesn't
+// serve counts calendar days and its row says so, and a served one whose
+// count isn't known yet counts calendar days and says that.
+func TestGrowthBuiltinDefaultCalendarCases(t *testing.T) {
+	t.Run("not served", func(t *testing.T) {
+		usedDaysFixture(t, "")
+		NoteAccountUsed("codex", "new@example.com", day(0, 0))
+		if err := SetSwitchOnly("codex", true); err != nil {
+			t.Fatal(err)
+		}
+		g, _ := grownAt(t, day(4, 0))
+		if g.Policy != settings.GrowthStandard || g.Day != 4 || g.UsedDays || !g.ByAdded || !g.CalendarOnly {
+			t.Fatalf("switch-only under the default: %+v", g)
+		}
+	})
+	t.Run("count unknown", func(t *testing.T) {
+		usedDaysFixture(t, "")
+		NoteAccountUsed("codex", "new@example.com", day(0, 0))
+		if err := editStored("codex", func(q *Provider) bool {
+			q.AccountUsedDays = nil
+			return true
+		}); err != nil {
+			t.Fatal(err)
+		}
+		g, _ := grownAt(t, day(4, 0))
+		if g.Policy != settings.GrowthStandard || g.Day != 4 || g.UsedDays || !g.UsedDaysUnknown {
+			t.Fatalf("a count not known under the default: %+v", g)
+		}
+	})
+}

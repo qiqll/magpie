@@ -28,9 +28,9 @@ const STAGES = [
   { from: 7, window: "5h", cap: 90 }, { from: 14, window: "5h", cap: 95 },
 ];
 const BUILTINS = [
-  { id: "standard", name: "Standard", kind: "ramp", start: 50, days: 14, builtin: true },
-  { id: "gentle", name: "Gentle", kind: "ramp", start: 70, days: 7, builtin: true },
-  { id: "cautious", name: "Cautious", kind: "ramp", start: 30, days: 30, builtin: true },
+  { id: "standard", name: "Standard", kind: "ramp", start: 50, days: 14, countDays: "used", builtin: true },
+  { id: "gentle", name: "Gentle", kind: "ramp", start: 70, days: 7, countDays: "used", builtin: true },
+  { id: "cautious", name: "Cautious", kind: "ramp", start: 30, days: 30, countDays: "used", builtin: true },
   { id: "off", name: "Off", kind: "off", builtin: true },
 ];
 // the server's curve: numbers of its own, so a chart drawn from anything
@@ -175,7 +175,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await list.locator(".growth-save").click();
         await page.waitForFunction((s) => document.querySelector("#growthList .growth-head .sub.err")?.textContent.startsWith(s), w.refused);
 
-        // saved whole, with the default
+        // saved whole, with the default; the copy of Standard counts the
+        // days used, as Standard does (需求方 2026-11-11)
         await list.locator(".growth-name").fill("Slow");
         const id = await list.locator(".gp-item.on").getAttribute("data-id");
         await list.locator(".growth-save").click();
@@ -183,7 +184,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.waitForFunction(() => document.querySelector("#growthList .growth-save")?.disabled);
         assert.deepEqual(saves[0], { policies: [
           { id: "mine", name: "My stages", kind: "stages", stages: STAGES },
-          { id, name: "Slow", kind: "ramp", start: 40, days: 14 },
+          { id, name: "Slow", kind: "ramp", start: 40, days: 14, countDays: "used" },
         ], default: id });
         assert.equal(await list.locator(`.gp-item[data-id="${id}"] .gp-tag.def`).count(), 1);
         assert.match(await list.locator(".growth-inuse").textContent(), /Slow/);

@@ -29,9 +29,9 @@ const later = new Date(Date.now() + 2 * 3600e3).toISOString();
 const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString();
 
 const BUILTINS = [
-  { id: "standard", name: "Standard", kind: "ramp", start: 50, days: 14, builtin: true },
-  { id: "gentle", name: "Gentle", kind: "ramp", start: 70, days: 7, builtin: true },
-  { id: "cautious", name: "Cautious", kind: "ramp", start: 30, days: 30, builtin: true },
+  { id: "standard", name: "Standard", kind: "ramp", start: 50, days: 14, countDays: "used", builtin: true },
+  { id: "gentle", name: "Gentle", kind: "ramp", start: 70, days: 7, countDays: "used", builtin: true },
+  { id: "cautious", name: "Cautious", kind: "ramp", start: 30, days: 30, countDays: "used", builtin: true },
   { id: "off", name: "Off", kind: "off", builtin: true },
 ];
 const SLOW = { id: "slow", name: "Slow", kind: "ramp", start: 20, days: 60 };

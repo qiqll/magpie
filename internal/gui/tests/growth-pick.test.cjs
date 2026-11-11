@@ -21,9 +21,9 @@ const LANGS = ["en", "zh", "zh-TW", "ja", "de"];
 const tr = (lang, s, args = {}) => Object.entries(args).reduce((a, [k, v]) => a.replaceAll(`{${k}}`, v), lang === "en" ? s : I18N[lang]?.[s] ?? s);
 
 const BUILTINS = [
-  { id: "standard", name: "Standard", kind: "ramp", start: 50, days: 14, builtin: true },
-  { id: "gentle", name: "Gentle", kind: "ramp", start: 70, days: 7, builtin: true },
-  { id: "cautious", name: "Cautious", kind: "ramp", start: 30, days: 30, builtin: true },
+  { id: "standard", name: "Standard", kind: "ramp", start: 50, days: 14, countDays: "used", builtin: true },
+  { id: "gentle", name: "Gentle", kind: "ramp", start: 70, days: 7, countDays: "used", builtin: true },
+  { id: "cautious", name: "Cautious", kind: "ramp", start: 30, days: 30, countDays: "used", builtin: true },
   { id: "off", name: "Off", kind: "off", builtin: true },
 ];
 const SLOW = { id: "slow", name: "Slow", kind: "ramp", start: 20, days: 60 };
@@ -109,7 +109,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await items.count(), 1 + BUILTINS.length + 1);
         assert.equal(await page.locator(".proto-menu .pm-head").textContent(), x("Growth policy this subscription's accounts are held by"));
         assert.equal((await items.nth(3).locator(".pm-name").textContent()).trim(), x("Cautious"));
-        assert.equal((await items.nth(3).locator(".pm-note").textContent()).trim(), x("{start}% to 100% in {days} days", { start: 30, days: 30 }));
+        assert.equal((await items.nth(3).locator(".pm-note").textContent()).trim(), x("{said} · days used", { said: x("{start}% to 100% in {days} days", { start: 30, days: 30 }) }));
         if (process.env.SHOTS) await page.screenshot({ path: path.join(process.env.SHOTS, `menu-${engine}-${lang}-${width}.png`) });
         await items.nth(5).click();
         await page.waitForFunction(() => document.querySelector(".editor .growth-pill")?.textContent.trim() === "Slow");

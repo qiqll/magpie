@@ -123,8 +123,8 @@ const GrowthUsedDays = "used"
 // GrowthPolicy is a growth policy: a ramp from Start% on day 0 to 100% on
 // day Days, or stages, or none. CountDays is how its days are counted: ""
 // (calendar days, every policy of the user's saved before T-134) or
-// GrowthUsedDays (every built-in ramp's). Builtin is set on magpie's own, which are
-// never saved and can't be changed or removed.
+// GrowthUsedDays (every built-in ramp's). Builtin is set on magpie's own,
+// which are never saved and can't be changed or removed.
 type GrowthPolicy struct {
 	ID        string        `json:"id"`
 	Name      string        `json:"name"`
