@@ -1373,9 +1373,14 @@ func BackfillFirstUsed(served FirstServed) {
 		}
 	}
 	f.FirstUsedRead = true
+	// the first uses known, the mark is made in the same write (T-150),
+	// so a start writes providers.json no more often than before
+	marked := graduate(&f, time.Now())
 	if err := store(f); err != nil {
 		log.Printf("providers.json: %v; the accounts' first use is read at a later start", err)
+		return
 	}
+	logGraduated(marked)
 }
 
 // ServedDays is, for each account of want, the days used (UsedDays) the
@@ -1477,7 +1482,9 @@ func BackfillUsedDays(served ServedDays) {
 // first use kept, no ramp-up skipped, under a ramp or stages. Run at the
 // gateway's start after BackfillFirstUsed; until that read has gone
 // through, the first uses aren't known, and nothing is marked till a
-// later start.
+// later start. A file BackfillFirstUsed reads first uses into is marked in
+// that write (graduate), so GraduateOnce writes only a file whose first
+// uses were read before T-150.
 func GraduateOnce() { graduateOnce(time.Now()) }
 
 // graduateOnce is GraduateOnce at now.
@@ -1497,6 +1504,21 @@ func graduateOnce(now time.Time) {
 	}
 	if f.GraduatedRead || !f.FirstUsedRead {
 		return
+	}
+	marked := graduate(&f, now)
+	if err := storeQuiet(f); err != nil {
+		log.Printf("providers.json: %v; the accounts whose ramp-up is done are marked at a later start", err)
+		return
+	}
+	logGraduated(marked)
+}
+
+// graduate marks in f, at now, each account GraduateOnce marks, and the
+// mark done (GraduatedRead): how many were marked. Nothing for a file
+// marked already.
+func graduate(f *file, now time.Time) int {
+	if f.GraduatedRead {
+		return 0
 	}
 	at, marked := now.UTC().Truncate(time.Second), 0
 	for i := range f.Providers {
@@ -1525,10 +1547,11 @@ func graduateOnce(now time.Time) {
 		}
 	}
 	f.GraduatedRead = true
-	if err := storeQuiet(f); err != nil {
-		log.Printf("providers.json: %v; the accounts whose ramp-up is done are marked at a later start", err)
-		return
-	}
+	return marked
+}
+
+// logGraduated says how many accounts graduate marked, when any.
+func logGraduated(marked int) {
 	if marked > 0 {
 		log.Printf("growth: %d accounts had their ramp-up done by the calendar and are held no more, now their policy counts the days used", marked)
 	}

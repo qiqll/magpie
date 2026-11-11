@@ -20,6 +20,21 @@ func fiveHoursAt(now time.Time) int {
 	return s
 }
 
+// fromT134 is providers.json as a magpie of T-134 left it: first uses
+// read (usedDaysFixture's markRead, which marks a fresh file done in the
+// same write) and the mark not made.
+func fromT134(t *testing.T) {
+	t.Helper()
+	f, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.GraduatedRead = false
+	if err := store(f); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // graduated is when the account was found done with its ramp-up, zero for
 // not.
 func graduated() time.Time { return AccountGraduatedOf("codex", "new@example.com") }
@@ -31,6 +46,7 @@ func graduated() time.Time { return AccountGraduatedOf("codex", "new@example.com
 // isn't held. Run under TZ=UTC and TZ=Pacific/Kiritimati.
 func TestGraduatedKeptAtFull(t *testing.T) {
 	usedDaysFixture(t, "")
+	fromT134(t)
 	for d := range 8 {
 		NoteAccountUsed("codex", "new@example.com", day(d, time.Hour))
 	}
@@ -76,6 +92,7 @@ func TestGraduatedKeptAtFull(t *testing.T) {
 // upgrade.
 func TestGraduatedOnceOnly(t *testing.T) {
 	usedDaysFixture(t, "")
+	fromT134(t)
 	for d := range 5 {
 		NoteAccountUsed("codex", "new@example.com", day(d, time.Hour))
 	}
@@ -112,6 +129,7 @@ func TestGraduatedOnceOnly(t *testing.T) {
 // alone, its calendar's last day long past.
 func TestGraduatedNewAccountByUse(t *testing.T) {
 	usedDaysFixture(t, "")
+	fromT134(t)
 	graduateOnce(day(0, -30*time.Minute)) // before its first use
 	NoteAccountUsed("codex", "new@example.com", day(0, time.Hour))
 	NoteAccountUsed("codex", "new@example.com", day(1, time.Hour))
@@ -137,6 +155,7 @@ func TestGraduatedOnlyByUse(t *testing.T) {
 			t.Fatalf("first uses not read: marked %v, done %v", graduated(), storedFile().GraduatedRead)
 		}
 		markRead(t)
+		fromT134(t)
 		graduateOnce(later)
 		if graduated().IsZero() || !storedFile().GraduatedRead {
 			t.Fatalf("first uses read: marked %v, done %v", graduated(), storedFile().GraduatedRead)
@@ -144,6 +163,7 @@ func TestGraduatedOnlyByUse(t *testing.T) {
 	})
 	t.Run("calendar policy", func(t *testing.T) {
 		usedDaysFixture(t, "cal")
+		fromT134(t)
 		NoteAccountUsed("codex", "new@example.com", day(0, 0))
 		graduateOnce(day(25, 0))
 		if !graduated().IsZero() || !storedFile().GraduatedRead {
@@ -152,6 +172,7 @@ func TestGraduatedOnlyByUse(t *testing.T) {
 	})
 	t.Run("not served", func(t *testing.T) {
 		usedDaysFixture(t, "")
+		fromT134(t)
 		NoteAccountUsed("codex", "new@example.com", day(0, 0))
 		if err := SetSwitchOnly("codex", true); err != nil {
 			t.Fatal(err)
@@ -163,6 +184,7 @@ func TestGraduatedOnlyByUse(t *testing.T) {
 	})
 	t.Run("skipped", func(t *testing.T) {
 		usedDaysFixture(t, "")
+		fromT134(t)
 		NoteAccountUsed("codex", "new@example.com", day(0, 0))
 		if err := SkipGrowth("codex", "new@example.com"); err != nil {
 			t.Fatal(err)
@@ -181,6 +203,7 @@ func TestGraduatedOnlyByUse(t *testing.T) {
 // account drops it.
 func TestGraduatedKeptApart(t *testing.T) {
 	usedDaysFixture(t, "")
+	fromT134(t)
 	NoteAccountUsed("codex", "new@example.com", day(0, 0))
 	upgrade := day(20, 0)
 	graduateOnce(upgrade)
@@ -258,6 +281,7 @@ func TestGraduatedKeptApart(t *testing.T) {
 // used until it is.
 func TestGraduatedFromBefore(t *testing.T) {
 	usedDaysFixture(t, "")
+	fromT134(t)
 	NoteAccountUsed("codex", "new@example.com", day(0, 0))
 	if f := storedFile(); f.GraduatedRead {
 		t.Fatal("a file from before reads as marked")
@@ -267,5 +291,41 @@ func TestGraduatedFromBefore(t *testing.T) {
 	}
 	if s := fiveHoursAt(day(20, 0)); s != 53 {
 		t.Fatalf("before the mark, 1 day used: %d%%", s)
+	}
+}
+
+// A file whose first uses were never read (a magpie from before T-134) has
+// the mark made in the ledger read's own write, so a start writes
+// providers.json no more often than before: an account added 30 days ago
+// and first served 20 days ago is marked done under Standard, one first
+// served 3 days ago isn't, and GraduateOnce after writes nothing.
+func TestGraduatedWithTheFirstUseRead(t *testing.T) {
+	firstUsedFixture(t, 30*24*time.Hour)
+	growthDefault(t, settings.GrowthStandard)
+	codexSignIn(t, os.Getenv("HOME"), "late@example.com", "r-late")
+	rememberLogins(true)
+	addedAgo(t, "codex", "late@example.com", 30*24*time.Hour)
+	now := time.Now()
+	BackfillFirstUsed(func(want map[[2]string]time.Time) (map[[2]string]time.Time, error) {
+		return map[[2]string]time.Time{
+			{"codex", "new@example.com"}:  now.Add(-20 * growthDay),
+			{"codex", "late@example.com"}: now.Add(-3 * growthDay),
+		}, nil
+	})
+	f := storedFile()
+	if !f.FirstUsedRead || !f.GraduatedRead {
+		t.Fatalf("read %v, marked %v", f.FirstUsedRead, f.GraduatedRead)
+	}
+	s, _ := storedPicks("codex")
+	if s.AccountGraduated["new@example.com"].IsZero() || !s.AccountGraduated["late@example.com"].IsZero() {
+		t.Fatalf("marked: %v", s.AccountGraduated)
+	}
+	before, err := os.Stat(Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	GraduateOnce()
+	if after, _ := os.Stat(Path()); !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
+		t.Fatal("GraduateOnce wrote the file again")
 	}
 }
