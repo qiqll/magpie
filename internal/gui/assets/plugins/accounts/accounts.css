@@ -65,7 +65,9 @@
 .acx-stat { display: flex; flex-direction: column; min-width: 0; font-size: 11px; color: var(--muted); }
 .acx-stat b { font-size: 13px; font-weight: 550; color: var(--fg); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
 .acx-stat.bad b { color: var(--red); }
-.acx-card .acts { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: auto; }
+/* wrapped too: a card's row of five ran left into the card beside it
+   (T-146) */
+.acx-card .acts { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: auto; }
 .acx-card .quota-refresh { width: 22px; height: 22px; margin: 0; opacity: 1; }
 #acxView[hidden], .acx-tools .sess-pick[hidden] { display: none; }
 /* a narrow window: who on its own line, the windows and requests under it */

@@ -156,7 +156,7 @@ const rowsOf = (page) => page.evaluate(() => [...document.querySelectorAll("#acx
 })));
 const settle = (page) => page.waitForTimeout(150);
 // every action button that reaches past either side of its row or card,
-// or of the window, with how far (T-142 at 380px)
+// or of the window, with how far (T-142 at 380px, T-146 in cards at 1000px)
 const actsOut = (page, sel) => page.evaluate((sel) => [...document.querySelectorAll(sel)].flatMap((box) => {
   const b = box.getBoundingClientRect(), left = Math.max(b.left, 0), right = Math.min(b.right, document.documentElement.clientWidth);
   return [...box.querySelectorAll(".acts > *")].map((x) => {
@@ -332,6 +332,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           [x("Pause"), x("Mark banned"), x("Disable"), x("Open")], [x("Take out of rotation"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Sign in again"), x("Mark banned"), x("Disable"), x("Open")], [x("Mark banned"), x("Disable"), x("Open")], [x("Add to rotation"), x("Mark banned"), x("Disable"), x("Open")],
         ]);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "nothing wider than the window");
+        assert.deepEqual(await actsOut(page, "#acxList .acx-card"), [], "every card's actions inside its card, none in the next one's");
 
         // the filters: a menu's option picked by its name
         const users = async () => (await cardsOf(page)).map((c) => c.user);
