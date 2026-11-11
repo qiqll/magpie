@@ -7,7 +7,8 @@
 //
 // A page the accounts plugin adds to the window (kernel.js), its words in
 // i18n.js beside this file. This file registers the page and its markup,
-// before app.js; page.js, after app.js, is the page's code. The shell
+// before app.js; page.js, after app.js, is the page's code. It adds Proxy
+// IPs too (ips.js), which shares the paid period's pill (renew.js). The shell
 // loads the providers for it (loads: "providers").
 magpie.plugin("accounts", (ctx) => {
   ctx.slots.add("page", {
@@ -36,5 +37,23 @@ magpie.plugin("accounts", (ctx) => {
     open() { return acxLoad(false); },
     refresh(again) { return acxLoad(again); },
     reload() { return acxLoad(true); },
+  });
+  // Models › Proxy IPs (T-155): the proxy exit IPs paid by the month, each
+  // with its start date and the period pill Accounts' rows have (renew.js);
+  // ips.js, after app.js, is its code
+  ctx.slots.add("page", {
+    key: "ips",
+    title: "Proxy IPs",
+    html: `
+  <p class="acx-sum" id="ipsSum" role="status"></p>
+  <div class="list ips-list" id="ipsList" hidden></div>
+  <p class="acx-err ips-err" id="ipsErr" role="alert" hidden></p>
+  <div class="ips-tools"><button class="text ips-add" id="ipsAdd" type="button" hidden data-t>Add IP</button></div>
+  <p class="usage-note acx-note" id="ipsNote"></p>
+`,
+    mount() { ipsMount(); },
+    open() { return ipsLoad(); },
+    refresh() { return ipsLoad(); },
+    reload() { return ipsLoad(); },
   });
 });

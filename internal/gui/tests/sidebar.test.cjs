@@ -61,7 +61,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.equal(await page.locator(".top #nav").count(), 0, "and not in the header");
       assert.deepEqual(await page.locator("#nav .nav-gl:visible").allTextContents(), w.groups);
       assert.deepEqual(await page.locator("#nav button[data-view]").evaluateAll((bs) => bs.map((b) => b.dataset.view)),
-        ["agents", "sessions", "library", "providers", "routing", "groups", "gateway", "usage", "masking", "plugins"]);
+        ["agents", "sessions", "library", "providers", "accounts", "ips", "routing", "groups", "gateway", "usage", "masking", "plugins"]);
       assert.ok(await page.locator("#side .side-foot #prefs").isVisible(), "Settings at the sidebar's foot");
       assert.equal((await page.locator("#prefs .side-l").textContent()).trim(), w.settings);
       // no page's name or group cut, and nothing scrolls sideways
@@ -101,10 +101,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.locator("#prefs").click();
       const subs = page.locator("#side .nav-sub:not(.leaving) .nav-s");
       await subs.first().waitFor();
-      assert.equal(await subs.count(), 8);
+      assert.equal(await subs.count(), 9);
       assert.equal(await page.locator("#setTabs").isVisible(), false, "the page's own strip is hidden");
       assert.deepEqual(await subs.evaluateAll((ss) => ss.map((s) => s.dataset.of)),
-        ["setTab-general", "setTab-usage", "setTab-network", "setTab-models", "setTab-privacy", "setTab-otel", "setTab-sync", "setTab-about"]);
+        ["setTab-general", "setTab-usage", "setTab-growth", "setTab-network", "setTab-models", "setTab-privacy", "setTab-otel", "setTab-sync", "setTab-about"]);
       assert.deepEqual(await subs.evaluateAll((ss) => ss.filter((s) => s.scrollWidth > s.clientWidth + 1).map((s) => s.textContent)), [], "tab names read whole");
       // the selection sets off as the row is pressed, ahead of the page,
       // and goes back when the press leaves the row

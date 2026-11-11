@@ -119,7 +119,7 @@ const viewShown = (page) => page.evaluate(() => [...document.querySelectorAll("m
 // the tabs with Sessions and Library off, the preset's masking on
 // (Routing groups has a tab of its own in the sidebar only, from 1024
 // points; under it Routing's page opens them)
-const KEPT = ["agents", "providers", "routing", "gateway", "usage", "masking", "plugins"];
+const KEPT = ["agents", "providers", "accounts", "ips", "routing", "gateway", "usage", "masking", "plugins"];
 const keptAt = (width) => (width >= 1024 ? KEPT.flatMap((k) => (k === "routing" ? [k, "groups"] : [k])) : KEPT);
 const rowsOf = (page) => page.evaluate(() => [...document.querySelectorAll("#builtinList .feat-row")].map((r) => {
   const b = r.querySelector('[role="switch"]');

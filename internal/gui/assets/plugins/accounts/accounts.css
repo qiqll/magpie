@@ -92,3 +92,17 @@
 .renew-edit { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; }
 .renew-date { font: inherit; padding: 1px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); }
 .renew-edit .busy { opacity: .6; }
+/* Models › Proxy IPs (ips.js): each IP a row of the window's lists, its
+   form a row of two boxes and Read from a saved proxy */
+.ips-list[hidden], .ips-err[hidden] { display: none; }
+.row.ips-row .who, .row.ips-form .ips-fields { flex: 1 1 220px; min-width: 0; }
+.row.ips-row .name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 3px; }
+.ips-ip { font-size: 13px; overflow-wrap: anywhere; }
+.row.ips-form { flex-wrap: wrap; row-gap: 8px; }
+.ips-fields { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ips-fields input { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); min-width: 0; }
+.ips-in-ip { flex: 1 1 160px; max-width: 260px; }
+.ips-in-name { flex: 1 1 140px; max-width: 220px; }
+.ips-from.busy, .ips-form .busy { opacity: .6; }
+.ips-tools { margin: 8px 2px; }
+.ips-err { margin: 6px 2px; font-size: 12px; color: var(--red); }
