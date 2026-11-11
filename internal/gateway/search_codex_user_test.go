@@ -16,8 +16,8 @@ import (
 // Bound by user, a ChatGPT account's own web search (the backend's
 // /alpha/search, codexSearchBy) is made on the account the user is on,
 // never on the provider's first for every user (usersSearchKey, as a
-// Kimi Code plan's search service is); a search made for no user is
-// sent on none.
+// Kimi Code plan's search service is); a search a call without a user
+// makes is DefaultUser's (T-157), on the account it is on.
 func TestChatGPTWebSearchOnTheUsersAccount(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	reply, err := os.ReadFile("testdata/codex_alpha_search.json")
@@ -55,15 +55,20 @@ func TestChatGPTWebSearchOnTheUsersAccount(t *testing.T) {
 	h := lanGuard(byUserUpTo(t, New(), 1).Handler())
 	const here = "127.0.0.1:5000"
 
+	// without a user: DefaultUser's (T-157), on the one account it is
+	// bound to
 	m := readMCP(t, mcpPost(h, here, mcpSearchCall))
-	if !m.Result.IsError {
+	if m.Result.IsError || !strings.Contains(m.Result.Content[0].Text, "go.dev") {
 		t.Fatalf("without a user: %+v", m)
 	}
 	mu.Lock()
-	if len(tried) != 0 {
+	if len(tried) != 1 {
 		t.Fatalf("searched without a user on %q", tried)
 	}
 	mu.Unlock()
+	if b := boundIn(t, "codex"); len(b) != 1 || b[DefaultUser] == "" {
+		t.Fatalf("without a user bound %v, want %s", b, DefaultUser)
+	}
 
 	var alice, bob []string
 	for i := 0; i < 2; i++ {
@@ -83,8 +88,8 @@ func TestChatGPTWebSearchOnTheUsersAccount(t *testing.T) {
 		}
 	}
 	oneKeyEach(t, "ChatGPT's web search", alice, bob)
-	if b := boundIn(t, "codex"); len(b) != 2 {
-		t.Fatalf("bound %v, want alice and bob", b)
+	if b := boundIn(t, "codex"); len(b) != 3 || b["alice"] == "" || b["bob"] == "" {
+		t.Fatalf("bound %v, want %s, alice and bob", b, DefaultUser)
 	}
 	if leaked != 0 {
 		t.Fatalf("%d searches took the user header to ChatGPT", leaked)

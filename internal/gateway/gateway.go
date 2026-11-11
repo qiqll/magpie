@@ -2183,15 +2183,17 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 	writeJSON(w, 200, map[string]any{"input_tokens": estimate(req)})
 }
 
-// countsWithoutUser is whether r is a count, bound by user, that names
-// no user (userOf), or one with a tier UserTierHeader can't take: one
-// noUser would refuse generating, so no account of the pool may be asked
-// for it. Tiers that can't be read are left to the count, as noUser
-// leaves them to the binding.
+// countsWithoutUser is whether r is a count, bound by user, with a user
+// UserHeader can't take (userOf), or with a tier UserTierHeader can't
+// take: one noUser would refuse generating, so no account of the pool may
+// be asked for it. One that names no user is DefaultUser's count, as a
+// user's (userDefaulted, T-157). Tiers that can't be read are left to the
+// count, as noUser leaves them to the binding.
 func (s *Server) countsWithoutUser(r *http.Request) bool {
 	if !s.bind.byUser() {
 		return false
 	}
+	s.userDefaulted(r)
 	if user, _ := userOf(r.Header); user == "" {
 		return true
 	}

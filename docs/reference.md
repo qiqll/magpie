@@ -2595,10 +2595,16 @@ neither read nor written, nor are `X-Magpie-User-Tier` and
 `user-tiers.json`. `--bind=user` keeps each of your users on accounts of
 its own, below. Then every request that asks a model (chat,
 responses, messages, Gemini's generateContent, images, embeddings,
-audio, videos, Codex's backend) must name its user: one without, or
-with one the header can't take, is a 400 that says why, and nothing is
-sent. A routing group's request and one with `X-Magpie-Account` need it
-too. A routing group's request, a drawing, video, embedding, rerank or
+audio, videos, Codex's backend) has a user: one with a user the header
+can't take is a 400 that says why, and nothing is sent. One that names
+no user (no `X-Magpie-User`, or a blank one) is the user `other10000`'s:
+a user like any other, bound to accounts of its own and held to its
+tier's, as a request that names `other10000` itself is, so every caller
+that names none shares that one user's accounts. A routing group's
+request and one with `X-Magpie-Account` are too. magpie's own MCP tools
+(drawing, video, web search, image look) take a call without a user the
+same way. The quota, concurrency, usage and Codex reset routes are told
+below. A routing group's request, a drawing, video, embedding, rerank or
 audio request on one too, goes on
 its user's own accounts of each member's provider, bound only on those it
 reaches, as the one before fails. One with `X-Magpie-Account` is bound

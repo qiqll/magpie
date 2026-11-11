@@ -722,7 +722,8 @@ func TestUserVideoFetchedByItsUserAlone(t *testing.T) {
 		if rec := get(path, "alice"); rec.Code != 404 || strings.Contains(rec.Body.String(), "bob") {
 			t.Fatalf("alice asked after bob's video %s: %d %s", path, rec.Code, rec.Body.String())
 		}
-		if rec := get(path, ""); rec.Code != 400 || !strings.Contains(rec.Body.String(), "--bind=user") {
+		// no user is DefaultUser (T-157): another user, told as alice is
+		if rec := get(path, ""); rec.Code != 404 || strings.Contains(rec.Body.String(), "bob") {
 			t.Fatalf("no user asked after %s: %d %s", path, rec.Code, rec.Body.String())
 		}
 	}

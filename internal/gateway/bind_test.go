@@ -161,9 +161,9 @@ func postAt(s *Server, path, body string, h map[string]string) *httptest.Respons
 	return rec
 }
 
-// Bound by user, every request that asks a model names its user: one
-// without, or with one the header can't take, is a 400 that says so and
-// asks nobody — a group's and one pinned to an account too. A pinned
+// Bound by user, every request that asks a model has a user: one with a
+// user the header can't take is a 400 that says so and asks nobody; one
+// without (or a blank one) is DefaultUser's (T-157), a group's too. A pinned
 // one is bound, its pin holding only to its user's own (T-009); a
 // group's is, on its user's own of each member's provider (groupTurn). Listing models picks no account, and needs none; a
 // count without a user is estimated, asking none
@@ -181,18 +181,11 @@ func TestUserBindingNeedsTheUser(t *testing.T) {
 		h                map[string]string
 		says             string
 	}{
-		{"none", "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), nil, "--bind=user"},
-		{"blank", "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), map[string]string{UserHeader: "   "}, "--bind=user"},
 		{"too long", "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), map[string]string{UserHeader: strings.Repeat("u", userMax+1)}, "at most"},
 		{"control", "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), map[string]string{UserHeader: "a\tb"}, "control"},
 		{"format", "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), map[string]string{UserHeader: "a\u200bb"}, "format"},
-		{"group", "/v1/responses", strings.Replace(resp, "%s", "group/pair", 1), nil, "--bind=user"},
-		{"pinned", "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), map[string]string{AccountHeader: "me@example.com"}, "--bind=user"},
-		{"chat", "/v1/chat/completions", `{"model":"codex/gpt-5.5","messages":[{"role":"user","content":"hi"}]}`, nil, "--bind=user"},
-		{"messages", "/v1/messages", `{"model":"codex/gpt-5.5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`, nil, "--bind=user"},
-		{"gemini", "/v1beta/models/codex/gpt-5.5:generateContent", `{"contents":[{"parts":[{"text":"hi"}]}]}`, nil, "--bind=user"},
-		{"codex", CodexPath + "/responses", `{"model":"gpt-5.5","stream":true,"input":"hi"}`, nil, "--bind=user"},
-		{"embeddings", "/v1/embeddings", `{"model":"codex/gpt-5.5","input":"hi"}`, nil, "--bind=user"},
+		{"chat", "/v1/chat/completions", `{"model":"codex/gpt-5.5","messages":[{"role":"user","content":"hi"}]}`, map[string]string{UserHeader: "a\tb"}, "control"},
+		{"codex", CodexPath + "/responses", `{"model":"gpt-5.5","stream":true,"input":"hi"}`, map[string]string{UserHeader: "a\tb"}, "control"},
 	} {
 		rec := postAt(s, c.path, c.body, c.h)
 		if rec.Code != 400 || !strings.Contains(rec.Body.String(), c.says) {
@@ -200,7 +193,39 @@ func TestUserBindingNeedsTheUser(t *testing.T) {
 		}
 	}
 	if got := asked(true); len(got) != 0 {
-		t.Fatalf("asked without a user: %v", got)
+		t.Fatalf("asked for a user the header can't take: %v", got)
+	}
+	if _, err := os.Stat(usersPath()); !os.IsNotExist(err) {
+		t.Fatalf("a user the header can't take was bound: %v", err)
+	}
+	// without a user (or a blank one), every route that asks a model
+	// serves the request as DefaultUser's (T-157): never refused for it
+	for _, c := range []struct {
+		name, path, body string
+		h                map[string]string
+	}{
+		{"none", "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), nil},
+		{"blank", "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), map[string]string{UserHeader: "   "}},
+		{"group", "/v1/responses", strings.Replace(resp, "%s", "group/pair", 1), nil},
+		{"chat", "/v1/chat/completions", `{"model":"codex/gpt-5.5","messages":[{"role":"user","content":"hi"}]}`, nil},
+		{"messages", "/v1/messages", `{"model":"codex/gpt-5.5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`, nil},
+		{"gemini", "/v1beta/models/codex/gpt-5.5:generateContent", `{"contents":[{"parts":[{"text":"hi"}]}]}`, nil},
+		{"codex", CodexPath + "/responses", `{"model":"gpt-5.5","stream":true,"input":"hi"}`, nil},
+	} {
+		if rec := postAt(s, c.path, c.body, c.h); rec.Code != 200 {
+			t.Errorf("%s without a user: %d %s", c.name, rec.Code, rec.Body.String())
+		}
+	}
+	if got := asked(true); len(got) == 0 {
+		t.Fatal("nothing asked for a request without a user")
+	}
+	if b := boundIn(t, "codex"); len(b) != 1 || b[DefaultUser] == "" {
+		t.Fatalf("without a user bound %v, want %s alone", b, DefaultUser)
+	}
+	// an embedding without a user gets past the user's check too: Codex
+	// has no such API, which is what it is told
+	if rec := postAt(s, "/v1/embeddings", `{"model":"codex/gpt-5.5","input":"hi"}`, nil); strings.Contains(rec.Body.String(), "--bind=user") {
+		t.Fatalf("embeddings without a user: %d %s", rec.Code, rec.Body.String())
 	}
 	// a pinned request with a user: answered, its user bound as an
 	// unpinned one is, the pin holding only to its own (the owner's

@@ -86,7 +86,8 @@ func bindMaxIgnored() {
 func (s *Server) Binding() Binding { return s.bind }
 
 // userNeeded refuses, bound by user, a request that picks a model or an
-// account without a user (noUser). Bound by session it is h.
+// account with a user it can't take (noUser), one without a user going
+// as DefaultUser's. Bound by session it is h.
 func (s *Server) userNeeded(from provider.Protocol, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.noUser(w, r, from) {
@@ -477,14 +478,36 @@ func keepIn(cs []candidate, pl planned, keep func(candidate) bool) ([]candidate,
 	return out, pl
 }
 
-// noUser refuses with a 400, bound by user, a request without a user, or
-// with one UserHeader can't take, or with a tier (UserTierHeader) that
-// isn't one of user-tiers.json's: each request goes to its user's
-// accounts, so one without can't be placed. A group's request, bound
-// on each member's provider it reaches (groupTurn), and one with
-// AccountHeader, held to the user's own (T-009), need it too. Tiers that
-// can't be read are left to the binding to refuse.
+// DefaultUser is the user, bound by user, of a request that names none
+// (T-157): a user like any other, bound to accounts of its own and held
+// to its tier's, never the pool of every user's accounts.
+const DefaultUser = "other10000"
+
+// userDefaulted names DefaultUser in r's UserHeader, bound by user, when r
+// names no user in any of userHeaders: a request that names one, or one
+// the header can't take, is left as it is. Bound by session r is left
+// as it is. Only a request a caller sent is given it (noUser,
+// countsWithoutUser), never magpie's own ask made for no user's request
+// (serve's userMissing, usersOn, usersOwn still refuse that).
+func (s *Server) userDefaulted(r *http.Request) {
+	if !s.bind.byUser() {
+		return
+	}
+	if user, bad := userOf(r.Header); user != "" || bad != "" {
+		return
+	}
+	r.Header.Set(UserHeader, DefaultUser)
+}
+
+// noUser refuses with a 400, bound by user, a request with a user
+// UserHeader can't take, or with a tier (UserTierHeader) that isn't one
+// of user-tiers.json's: each request goes to its user's accounts. One
+// without a user is DefaultUser's (userDefaulted, T-157). A group's
+// request, bound on each member's provider it reaches (groupTurn), and
+// one with AccountHeader, held to the user's own (T-009), are too. Tiers
+// that can't be read are left to the binding to refuse.
 func (s *Server) noUser(w http.ResponseWriter, r *http.Request, from provider.Protocol) bool {
+	s.userDefaulted(r)
 	if bad := s.userMissing(r); bad != "" {
 		writeError(w, from, http.StatusBadRequest, bad)
 		return true

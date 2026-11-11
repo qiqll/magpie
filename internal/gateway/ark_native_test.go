@@ -210,11 +210,11 @@ func TestNativeArkRefusedBoundByUser(t *testing.T) {
 			t.Errorf("%s %s: %d %s", c.method, c.path, rec.Code, rec.Body)
 		}
 	}
-	// without a user, the handler's route refuses it first
+	// without a user it is DefaultUser's (T-157), refused as a user's is
 	req := httptest.NewRequest("POST", NativePath+"ark/images/generations", strings.NewReader(`{"model":"doubao-seedream-4-5-251128","prompt":"x"}`))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "--bind=user") {
 		t.Errorf("no user: %d %s", rec.Code, rec.Body)
 	}
 	up.mu.Lock()

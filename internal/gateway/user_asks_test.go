@@ -98,7 +98,8 @@ func dsKeyed(t *testing.T, on provider.Protocol) (keys func(model string) []stri
 // Bound by user (--bind=user), a web_search through the MCP server is
 // asked of the searcher's accounts its caller's user is bound to, as a
 // model request of that user would be, never drawn from every account of
-// the provider; a call without its user is refused, and searches nothing.
+// the provider; a call without its user is DefaultUser's (T-157), asked
+// of the one account that user is bound to.
 func TestSearchMCPAskedOfTheUsersAccounts(t *testing.T) {
 	keys, users := dsKeyed(t, provider.Responses)
 	s := byUserUpTo(t, New(), 1)
@@ -106,11 +107,14 @@ func TestSearchMCPAskedOfTheUsersAccounts(t *testing.T) {
 	const here = "127.0.0.1:5000"
 
 	m := readMCP(t, mcpPost(h, here, mcpSearchCall))
-	if !m.Result.IsError || !strings.Contains(m.Result.Content[0].Text, "--bind=user") {
+	if m.Result.IsError || !strings.Contains(m.Result.Content[0].Text, "22/17℃") {
 		t.Fatalf("without a user: %+v", m)
 	}
-	if got := keys("deepseek-flash"); len(got) != 0 {
+	if got := keys("deepseek-flash"); len(got) != 1 {
 		t.Fatalf("searched without a user: %q", got)
+	}
+	if b := boundIn(t, "ds"); len(b) != 1 || b[DefaultUser] == "" {
+		t.Fatalf("without a user bound %v, want %s", b, DefaultUser)
 	}
 
 	var alice, bob []string
@@ -129,8 +133,8 @@ func TestSearchMCPAskedOfTheUsersAccounts(t *testing.T) {
 		}
 	}
 	oneKeyEach(t, "web_search", alice, bob)
-	if b := boundIn(t, "ds"); len(b) != 2 {
-		t.Fatalf("bound %v, want alice and bob", b)
+	if b := boundIn(t, "ds"); len(b) != 3 || b["alice"] == "" || b["bob"] == "" {
+		t.Fatalf("bound %v, want %s, alice and bob", b, DefaultUser)
 	}
 	if n := users(); n != 0 {
 		t.Fatalf("%d searches took the user header to the vendor", n)
@@ -157,7 +161,7 @@ func probesKeyed(t *testing.T) (*Server, func(model string) []string, func() int
 // Bound by user, analyze_image is asked of the describer's accounts its
 // caller's user is bound to, the same image as another user's included
 // (a look isn't one user's answer handed to the next); a call without its
-// user is refused, and looks at nothing.
+// user is DefaultUser's (T-157), asked of the one account it is bound to.
 func TestVisionMCPAskedOfTheUsersAccounts(t *testing.T) {
 	s, keys, users := probesKeyed(t)
 	h := lanGuard(s.Handler())
@@ -165,11 +169,14 @@ func TestVisionMCPAskedOfTheUsersAccounts(t *testing.T) {
 	call := analyzeCall("data:image/png;base64,aGVsbG8=", "")
 
 	m := readMCP(t, visionPost(h, here, call))
-	if !m.Result.IsError || !strings.Contains(m.Result.Content[0].Text, "--bind=user") {
+	if m.Result.IsError || m.Result.Content[0].Text != "A red square with the word HELLO in it." {
 		t.Fatalf("without a user: %+v", m)
 	}
-	if got := keys("eye"); len(got) != 0 {
+	if got := keys("eye"); len(got) != 1 {
 		t.Fatalf("looked without a user: %q", got)
+	}
+	if b := boundIn(t, "probe"); len(b) != 1 || b[DefaultUser] == "" {
+		t.Fatalf("without a user bound %v, want %s", b, DefaultUser)
 	}
 
 	var alice, bob []string
@@ -187,12 +194,12 @@ func TestVisionMCPAskedOfTheUsersAccounts(t *testing.T) {
 			}
 		}
 	}
-	if got := keys("eye"); len(got) != 4 {
-		t.Fatalf("4 looks, one of each user at each image, asked %q", got)
+	if got := keys("eye"); len(got) != 5 {
+		t.Fatalf("5 looks, %s's and one of each user at each image, asked %q", DefaultUser, got)
 	}
 	oneKeyEach(t, "analyze_image", alice, bob)
-	if b := boundIn(t, "probe"); len(b) != 2 {
-		t.Fatalf("bound %v, want alice and bob", b)
+	if b := boundIn(t, "probe"); len(b) != 3 || b["alice"] == "" || b["bob"] == "" {
+		t.Fatalf("bound %v, want %s, alice and bob", b, DefaultUser)
 	}
 	if n := users(); n != 0 {
 		t.Fatalf("%d looks took the user header to the vendor", n)

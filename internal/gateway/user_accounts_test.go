@@ -157,13 +157,24 @@ func TestUserBoundToOneAccountOfTheProvider(t *testing.T) {
 	if got := asked(true); rec.Code != 200 || len(got) != 1 || got[0] != first["carol"] {
 		t.Fatalf("after a restart: asked %v, bound to %s", got, first["carol"])
 	}
-	// a request without a user is refused, bound by user, and binds
-	// nobody
-	if rec := userPost(s, "codex/gpt-5.5", "", "nobody's"); rec.Code != 400 {
+	// a request without a user is DefaultUser's, bound by user (T-157):
+	// bound as a user of its own, on one account, as any user is
+	if rec := userPost(s, "codex/gpt-5.5", "", "nobody's"); rec.Code != 200 {
 		t.Fatalf("no user: %d %s", rec.Code, rec.Body.String())
 	}
-	if b := boundIn(t, "codex"); len(b) != 3 {
-		t.Fatalf("a request without a user bound one: %v", b)
+	if got := asked(true); len(got) != 1 {
+		t.Fatalf("no user: asked %v", got)
+	}
+	if r := lastRoute(s); r.User == nil || r.User.User != DefaultUser || r.User.Why != "bound" {
+		t.Fatalf("no user: route %+v", r.User)
+	}
+	if b := boundIn(t, "codex"); len(b) != 4 || b[DefaultUser] == "" {
+		t.Fatalf("a request without a user wasn't bound as %s: %v", DefaultUser, b)
+	}
+	for _, h := range *heads {
+		if h.Get(UserHeader) != "" {
+			t.Fatalf("%s went upstream: %v", UserHeader, h)
+		}
 	}
 }
 
@@ -444,17 +455,21 @@ func TestUserHeaderOfTheCallersOwn(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
 	asked, heads := usersUpstream(t, nil)
 	s := byUser(New())
-	// not the user's header: bound by user, a request without a user;
-	// bound by session, routed as any
-	if rec := userPostIn(s, "X-User-ID", "alice", "unnamed"); rec.Code != 400 {
+	// not the user's header: bound by user, a request without a user,
+	// DefaultUser's (T-157); bound by session, routed as any
+	if rec := userPostIn(s, "X-User-ID", "alice", "unnamed"); rec.Code != 200 {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if r := lastRoute(s); r.User == nil || r.User.User != DefaultUser {
+		t.Fatalf("unnamed: route %+v", r.User)
 	}
 	if rec := userPostIn(New(), "X-User-ID", "alice", "unnamed"); rec.Code != 200 {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
-	if _, err := os.Stat(usersPath()); err == nil {
-		t.Fatalf("X-User-ID bound a user without %s", UserHeaderEnv)
+	if b := boundIn(t, "codex"); b["alice"] != "" {
+		t.Fatalf("X-User-ID bound a user without %s: %v", UserHeaderEnv, b)
 	}
+	asked(true)
 	t.Setenv(UserHeaderEnv, "x-user-id")
 	for i, in := range []string{"one", "two", "three"} {
 		if rec := userPostIn(s, "X-User-ID", "alice", in); rec.Code != 200 {
@@ -464,7 +479,7 @@ func TestUserHeaderOfTheCallersOwn(t *testing.T) {
 			t.Fatalf("%s: route %+v", in, r.User)
 		}
 	}
-	if got := asked(true); len(got) != 4 || got[1] != got[2] || got[2] != got[3] {
+	if got := asked(true); len(got) != 3 || got[0] != got[1] || got[1] != got[2] {
 		t.Fatalf("asked %v", got)
 	}
 	for _, h := range *heads {
