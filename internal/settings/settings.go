@@ -2346,6 +2346,15 @@ func saveOwn(s Settings, recording, reads bool) error {
 	if s.BusyLoad < 0 || s.BusyLoad >= BusyLoadMost {
 		return fmt.Errorf("busy models go last over a load from 1 to %d%%, or 0 for off, not %d", BusyLoadMost-1, s.BusyLoad)
 	}
+	// the default's stages, for a magpie from before policies were kept
+	// (T-138); stages still to move are kept as they are
+	if m, ok := s.GrowthMirror(); ok && s.stagesToMove() == nil {
+		m = slices.Clone(m)
+		if m == nil {
+			m = []GrowthStage{} // none on purpose, as that magpie reads it
+		}
+		s.Growth = &m
+	}
 	if s.Growth != nil {
 		if err := CheckGrowth(*s.Growth); err != nil {
 			return err
