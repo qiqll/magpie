@@ -28,8 +28,8 @@ import (
 //     such key.
 //
 // Bound by user, a request is told, of those, only the cards of the
-// accounts and keys its user (UserHeader; DefaultUser when it names
-// none, T-163) is on (T-090),
+// accounts and keys its user (UserHeader; DefaultUser when one with a
+// gateway key names none, T-163) is on (T-090),
 // as it spends only their Codex resets (resetNotUsers): another user's
 // card names its account and what is left of it.
 //
@@ -96,9 +96,11 @@ type usersOwn struct {
 // usersSeats is, bound by user, every account and key r's user
 // (UserHeader) is on, of every provider, as its group shares them
 // (sharedOf, userGroup; T-089), as resetNotUsers reads its Codex ones.
-// A request that names no user is DefaultUser's, told that user's alone
-// as its requests are bound as that user's (T-157, T-163); own is nil
-// bound by session: told every card, as before. A user header that
+// A request with a gateway key that names no user is DefaultUser's, told
+// that user's alone as its requests are bound as that user's (T-157,
+// T-163); own is nil for one without a key (this machine's owner, as
+// magpie's own console asks) and bound by session: told every card, as
+// before. A user header that
 // can't be taken is answered 400; a user-accounts.json that can't be
 // read, or changed and doesn't read now (stale), 503: which seats are the
 // user's is unknown, so it is told none.
@@ -124,7 +126,8 @@ func (s *Server) seatsOf(w http.ResponseWriter, r *http.Request, defaulted bool)
 
 // usersOwnOf is usersSeats' answer without writing it: the status and
 // message a request is refused with, code 0 when it isn't. A request
-// that names no user is DefaultUser's when defaulted, else own is nil.
+// with a gateway key that names no user is DefaultUser's when
+// defaulted, else own is nil.
 // A stream reads it again as it goes (routeEvents).
 func (s *Server) usersOwnOf(r *http.Request, defaulted bool) (own *usersOwn, code int, msg string) {
 	if !s.bind.byUser() {
@@ -134,7 +137,9 @@ func (s *Server) usersOwnOf(r *http.Request, defaulted bool) (own *usersOwn, cod
 	if bad != "" {
 		return nil, http.StatusBadRequest, bad
 	}
-	if user == "" && !defaulted {
+	// magpie's own console on this machine (OwnerLanes, magpie
+	// statusline) asks without a key: the owner's, told everything
+	if user == "" && (!defaulted || access.Caller(r.Context()).KeyID == "") {
 		return nil, 0, ""
 	}
 	if user == "" {

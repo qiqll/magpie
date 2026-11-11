@@ -714,15 +714,20 @@ user's seats of every provider, read through `sharedOf` as
 account list is (`quotaScope.onSeat`). A card that isn't the user's is
 refused a refresh 403; a user header that can't be taken is 400, and a
 users file that can't be read, or doesn't read since it changed, 503. A
-request naming no user is `DefaultUser`'s (`other10000`, T-163), as its
-model requests are (T-157): `usersOwnOf` reads that user's seats, so the
+request with a gateway key naming no user is `DefaultUser`'s
+(`other10000`, T-163), as its model requests are (T-157); one without a
+key (this machine's owner: `OwnerLanes` in a console, `magpie
+statusline`) is told what it was. `usersOwnOf` reads that user's seats, so the
 quotas, `/v1/magpie/concurrency`, `/v1/magpie/usage` and its requests
 tell it that user's alone, the users file unread 503 for it too. Bound by
 session a request is told what it was. The GUI's own `/api/*` views
 don't go through `usersSeats` and still show the whole pool.
 `/v1/magpie/route` and the route-events feed read `namedSeats`, which
 leaves a request naming no user told every route, as before, and the
-status line's model follows them while its cards are `DefaultUser`'s.
+status line's model follows them while its cards are `DefaultUser`'s:
+a caller naming no user who names another user's session is told its
+model there, as `/v1/magpie/route` tells it the route (the owner left
+those as they were).
 `TestBoundUserToldItsOwnQuotas` in
 [`quotas_users_test.go`](../../internal/gateway/quotas_users_test.go)
 covers the five routes, another key's user of the same name and the

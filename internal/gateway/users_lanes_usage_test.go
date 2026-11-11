@@ -191,6 +191,30 @@ func TestBoundUserToldItsOwnLanesAndUsage(t *testing.T) {
 			t.Errorf("%q told sessions %v, want %v", c.user, sessionsOf(u), allSessions)
 		}
 	}
+	// this machine without a key, as magpie's own console asks
+	// (OwnerLanes): the owner's, every lane and call, as before (T-163)
+	for _, path := range []string{"/v1/magpie/concurrency", "/v1/magpie/usage?period=all"} {
+		r := httptest.NewRequest("GET", path, nil)
+		r.RemoteAddr = "127.0.0.1:5000"
+		w := httptest.NewRecorder()
+		bound.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("this machine, no key, %s: %d %s", path, w.Code, w.Body)
+		}
+		var out struct {
+			Data     map[string]Lane
+			Sessions []struct{ ID string }
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if path == "/v1/magpie/concurrency" && len(out.Data) != len(all) {
+			t.Errorf("this machine, no key: told lanes %v, want %v", out.Data, all)
+		}
+		if path != "/v1/magpie/concurrency" && len(out.Sessions) != len(allSessions) {
+			t.Errorf("this machine, no key: told sessions %v, want %v", out.Sessions, allSessions)
+		}
+	}
 	// Other's alice is its own: Two's lane, and her one call on it
 	secret = secrets[1]
 	if got := lanes(bound, "alice", false); !slices.Equal(got, []string{two}) {

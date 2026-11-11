@@ -3156,12 +3156,15 @@ window's whole is left out as it is for a held key. A card that isn't
 its own is refused a refresh (403), and a refresh that names none reads
 again only its own. A user on no account is told an empty list. A user
 header that can't be taken is 400, and a `user-accounts.json` that can't
-be read 503, with no card told. A request without the header (or with a
-blank one) is `other10000`'s, as its model requests are: it is told the
-cards of that user's accounts alone, and refused a refresh of any other
-(the status line's cards too; its model is told as `/v1/magpie/route`
-tells it). magpie's own pages (the GUI's Usage and Providers) still
-show every account. `/v1/magpie/concurrency` tells such a request the
+be read 503, with no card told. A request with a gateway key and without
+the header (or with a blank one) is `other10000`'s, as its model
+requests are: it is told the cards of that user's accounts alone, and
+refused a refresh of any other (the status line's cards too; its model
+is told as `/v1/magpie/route` tells it, so a caller naming no user who
+names another user's session is told that session's model). A request
+from this computer without a key is the owner's and told everything, as
+magpie's own pages (the GUI's Usage and Providers, a console's lanes)
+and `magpie statusline` ask. `/v1/magpie/concurrency` tells such a request the
 lanes (`data`) of that user's accounts and keys alone, with the
 gateway's counts as before and `active` empty, `/v1/magpie/usage`
 the summary of its own calls answered by those accounts and keys, and
@@ -3169,9 +3172,11 @@ the summary of its own calls answered by those accounts and keys, and
 totals and splits counted of them alone: another user's calls, the same
 name under a key that doesn't share its users, a call naming no user and
 its own calls on an account it isn't on now are left out. A held key's
-user is told its own of the key's calls. A request without the header is
-`other10000`'s on these three routes too, and `/v1/magpie/concurrency`'s
-`keys` are its key's group's alone. The same 400 and 503 apply.
+user is told its own of the key's calls. A request with a key and
+without the header is `other10000`'s on these three routes too, and
+`/v1/magpie/concurrency`'s `keys` are its key's group's alone. A call
+logged with no user (before the request without a user became
+`other10000`'s) is told to no user, only to the owner. The same 400 and 503 apply.
 `/v1/magpie/route` and the route-events feed still tell a request without
 the header every route, as before.
 

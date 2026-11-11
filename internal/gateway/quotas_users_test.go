@@ -204,7 +204,8 @@ func TestBoundUserToldItsOwnStatusline(t *testing.T) {
 	keys, secrets := newCaller(t, "Full")
 	one, two := "alpha#"+provider.KeyID("alpha-one"), "alpha#"+provider.KeyID("alpha-two")
 	writeUsers(t, userFile{Keys: map[string]map[string]map[string]userBinding{
-		keys[0].ID: {"alpha": {"alice": {Who: one, Account: "One", At: now}, "bob": {Who: two, Account: "Two", At: now}}},
+		keys[0].ID: {"alpha": {"alice": {Who: one, Account: "One", At: now}, "bob": {Who: two, Account: "Two", At: now},
+			DefaultUser: {Who: two, Account: "Two", At: now}}},
 	}})
 	s := byUserUpTo(t, New(), 1)
 	h := lanGuard(s.Handler())
@@ -243,9 +244,9 @@ func TestBoundUserToldItsOwnStatusline(t *testing.T) {
 	if cards, model := do("bob"); slices.Contains(cards, "alpha:one") || slices.Contains(cards, "beta:") || model != "" {
 		t.Errorf("bob: told %v and model %q, want none of alice's cards and no model", cards, model)
 	}
-	// no user named: DefaultUser's cards, none here (T-163), and the
+	// no user named: DefaultUser's cards, Two's alone (T-163), and the
 	// session's model as /v1/magpie/route tells it, as before
-	if cards, model := do(""); len(cards) != 0 || model != "alpha/m-alice" {
-		t.Errorf("no user: told %v and model %q, want no card and the route's model", cards, model)
+	if cards, model := do(""); !slices.Equal(cards, []string{"alpha:two"}) || model != "alpha/m-alice" {
+		t.Errorf("no user: told %v and model %q, want alpha:two alone and the route's model", cards, model)
 	}
 }
