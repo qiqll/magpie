@@ -79,11 +79,11 @@ function server(lang, saves, previews) {
 }
 
 const want = {
-  en: { rampLine: "Starts at {start} % reaches 100% in {days} days", tab: "Growth policy", first: "Days 0 to 7", week: "From day 3 on", firstToThree: "Days 0 to 3", threeToSeven: "Days 3 to 7", last: "From day 14 on", standard: "Standard", note: "used to let such a window go", ramp: "A ramp starts at 1% to 99% and reaches 100% in 1 to 365 days", refused: "magpie didn't save the policies:", draw: "magpie couldn't draw this policy:", from: "from its first use" },
-  zh: { rampLine: "起点 {start} % {days} 天到 100%", tab: "成长策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", standard: "标准", note: "以前会直接放开", ramp: "爬坡的起点为 1% 到 99%，在 1 到 365 天内到 100%", refused: "magpie 没有保存这些策略：", draw: "magpie 画不出这个策略：", from: "从首次使用算起" },
-  "zh-TW": { rampLine: "起點 {start} % {days} 天到 100%", tab: "成長策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", standard: "標準", note: "以前會直接放開", ramp: "爬坡的起點為 1% 到 99%，在 1 到 365 天內到 100%", refused: "magpie 沒有儲存這些策略：", draw: "magpie 畫不出這個策略：", from: "從首次使用算起" },
-  ja: { rampLine: "開始 {start} % {days} 日で 100%", tab: "成長ポリシー", first: "0〜7 日目", week: "3 日目から", firstToThree: "0〜3 日目", threeToSeven: "3〜7 日目", last: "14 日目から", standard: "標準", note: "制限を外していました", ramp: "ランプは 1%〜99% から始まり、1〜365 日で 100% に達します", refused: "magpie はポリシーを保存できませんでした：", draw: "magpie はこのポリシーを描けませんでした：", from: "初めて使った時点" },
-  de: { rampLine: "Beginnt bei {start} % erreicht 100 % in {days} Tagen", tab: "Wachstumsregel", first: "Tag 0 bis 7", week: "Ab Tag 3", firstToThree: "Tag 0 bis 3", threeToSeven: "Tag 3 bis 7", last: "Ab Tag 14", standard: "Standard", note: "Früher gab magpie", ramp: "Ein Anstieg beginnt bei 1 % bis 99 % und erreicht 100 % in 1 bis 365 Tagen", refused: "magpie hat die Regeln nicht gespeichert:", draw: "magpie konnte diese Regel nicht zeichnen:", from: "ab seiner ersten Nutzung" },
+  en: { rampLine: "Starts at {start} % reaches 100% in {days} days", tab: "Growth policy", first: "Days 0 to 7", week: "From day 3 on", firstToThree: "Days 0 to 3", threeToSeven: "Days 3 to 7", last: "From day 14 on", standard: "Standard", note: "used to let such a window go", ramp: "A ramp starts at 1% to 99% and reaches 100% in 1 to 365 days", refused: "magpie didn't save the policies:", draw: "magpie couldn't draw this policy:", from: "from its first use", used: "magpie's own policies count only the days the gateway served the account" },
+  zh: { rampLine: "起点 {start} % {days} 天到 100%", tab: "成长策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", standard: "标准", note: "以前会直接放开", ramp: "爬坡的起点为 1% 到 99%，在 1 到 365 天内到 100%", refused: "magpie 没有保存这些策略：", draw: "magpie 画不出这个策略：", from: "从首次使用算起", used: "magpie 的内置策略只计网关为这个账号转发过请求的日子" },
+  "zh-TW": { rampLine: "起點 {start} % {days} 天到 100%", tab: "成長策略", first: "第 0–7 天", week: "第 3 天起", firstToThree: "第 0–3 天", threeToSeven: "第 3–7 天", last: "第 14 天起", standard: "標準", note: "以前會直接放開", ramp: "爬坡的起點為 1% 到 99%，在 1 到 365 天內到 100%", refused: "magpie 沒有儲存這些策略：", draw: "magpie 畫不出這個策略：", from: "從首次使用算起", used: "magpie 的內建策略只計閘道為這個帳號轉發過請求的日子" },
+  ja: { rampLine: "開始 {start} % {days} 日で 100%", tab: "成長ポリシー", first: "0〜7 日目", week: "3 日目から", firstToThree: "0〜3 日目", threeToSeven: "3〜7 日目", last: "14 日目から", standard: "標準", note: "制限を外していました", ramp: "ランプは 1%〜99% から始まり、1〜365 日で 100% に達します", refused: "magpie はポリシーを保存できませんでした：", draw: "magpie はこのポリシーを描けませんでした：", from: "初めて使った時点", used: "magpie の組み込みポリシーはゲートウェイがそのアカウントのリクエストを処理した日だけを数える" },
+  de: { rampLine: "Beginnt bei {start} % erreicht 100 % in {days} Tagen", tab: "Wachstumsregel", first: "Tag 0 bis 7", week: "Ab Tag 3", firstToThree: "Tag 0 bis 3", threeToSeven: "Tag 3 bis 7", last: "Ab Tag 14", standard: "Standard", note: "Früher gab magpie", ramp: "Ein Anstieg beginnt bei 1 % bis 99 % und erreicht 100 % in 1 bis 365 Tagen", refused: "magpie hat die Regeln nicht gespeichert:", draw: "magpie konnte diese Regel nicht zeichnen:", from: "ab seiner ersten Nutzung", used: "magpies eigene Regeln zählen nur die Tage, an denen das Gateway Anfragen des Kontos ausgeliefert hat" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -113,6 +113,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await list.locator(".gp-item.on").getAttribute("data-id"), "mine");
         assert.equal(await list.locator('.gp-item[data-id="mine"] .gp-tag.def').count(), 1);
         assert((await list.locator(".growth-head .sub").textContent()).includes(w.from), "the days aren't said to count from first use");
+        // and that magpie's own count only the days used (T-151)
+        assert((await list.locator(".growth-head .sub").textContent()).includes(w.used), "the page doesn't say magpie's own count the days used");
 
         // its stages: a row's days run to the next row of its own window
         // (T-128), and the page says so (T-136)

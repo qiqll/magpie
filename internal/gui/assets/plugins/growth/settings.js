@@ -24,8 +24,9 @@ const growthChart = { key: "", want: "", data: null, err: "", box: null, timer: 
 const GROWTH_WINDOWS = [["5h", "5 hours"], ["7d", "7 days"]];
 const GROWTH_BUILTIN = { standard: "Standard", gentle: "Gentle", cautious: "Cautious", off: "Off" };
 const GROWTH_SVG = "http://www.w3.org/2000/svg";
-// what the page says under its name, in each language through t()
-const GROWTH_SAYS = "A subscription account added to magpie is held to a share of its windows that grows with its days, counted from its first use (the first request its vendor served through magpie; one not used yet is on day 0), and routing goes on to your other accounts until the window renews. The default policy holds every subscription that picked none; a subscription can pick another in its editor. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.";
+// what the page says under its name, in each language through t(); it
+// says magpie's own count the days used (T-151)
+const GROWTH_SAYS = "A subscription account added to magpie is held to a share of its windows that grows with its days, counted from its first use (the first request its vendor served through magpie; one not used yet is on day 0), and routing goes on to your other accounts until the window renews. magpie's own policies count only the days the gateway served the account, so an idle one stays on its day; one of yours counts as it says. The default policy holds every subscription that picked none; a subscription can pick another in its editor. An account added before magpie kept the day is never held, and a cap you set on an account or a window comes first.";
 
 const growthName = (p) => (p.builtin ? t(GROWTH_BUILTIN[p.id] || p.name) : p.name);
 // a policy of the user's as the inputs hold it: numbers as typed
