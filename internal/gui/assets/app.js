@@ -14313,7 +14313,7 @@ function windowCapMeter(m, p, user, w) {
   return b;
 }
 function accountCapPill(p, user, cap, direct) {
-  const byWindow = !cap && windowCapsOf(p, user) > 0, g = !cap && !byWindow && growthCapOf(p, user), n = g && { n: g.week, five: g.fiveHours, week: g.week, policy: g.name };
+  const byWindow = !cap && windowCapsOf(p, user) > 0, g = !cap && growthCapOf(p, user), n = g && { n: g.week, five: g.fiveHours, week: g.week, policy: g.name };
   const pill = el("button", "acap" + (cap || byWindow || g ? " set" : ""), cap ? t("Cap {n}%", { n: cap }) : byWindow ? t("Caps by window") : g ? t(g.fiveHours === g.week ? "Ramping up {n}%" : "Ramping up 5h {five}% · week {week}%", n) : t("No cap"));
   pill.type = "button";
   pill.title = (cap ? t("Stops at {n}% of each usage window: once magpie reads a window at {n}% or past it, it counts this account as used up and sends it nothing more until the window renews. A turn already under way can still take it past {n}%, so the cap doesn't promise the rest is left. Click to change", { n: cap })
@@ -14334,7 +14334,7 @@ function accountCapPill(p, user, cap, direct) {
     const opts = [{ v: 0, name: "No cap", note: "Use each window to 100%" }];
     for (const n of shares) opts.push({ v: n, name: n + "%", note: "", literalName: true });
     opts.push({ v: -1, name: "Other…", note: "A share of your own, 1–99%" });
-    openProtoMenu(pill, opts, cap, (v) => {
+    openProtoMenu(pill, opts, g ? -2 : cap, (v) => {
       if (v === -1) return other();
       if (v !== cap) set(v);
     }, "Usage cap", "sess-menu");
