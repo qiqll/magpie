@@ -110,7 +110,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         const ramping = (...parts) => [x("Ramping up"), ...parts].join(" · ");
         assert.deepEqual(await marks(page, "#acxList .row.acx"), {
-          "new@example.com": [x("Ramp-up skipped")],
+          "new@example.com": [x("Skipped ramp-up")],
           "fresh@example.com": [ramping(x("starts at first use"), x("now {n}%", { n: 50 }))],
           "old@example.com": [x("Ramped up")],
         });
@@ -124,7 +124,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const items = page.locator(".proto-menu .pm-item");
         // Resume, Follow the subscription and each policy, its own ticked
         assert.equal(await items.count(), 2 + BUILTINS.length);
-        assert.equal(await page.locator(".proto-menu .pm-head").textContent(), x("Ramp-up skipped"));
+        assert.equal(await page.locator(".proto-menu .pm-head").textContent(), x("Skipped ramp-up"));
         const item = items.first();
         assert.equal(await item.locator(".pm-name").textContent(), x("Resume ramp-up"));
         assert.equal(await item.locator(".pm-note").textContent(), x("Its growth policy holds it again, from the day its days count from"));
@@ -143,7 +143,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.reload();
         await page.waitForFunction(() => document.querySelectorAll("#acxList .acx-card .acx-skipped").length === 1);
         // one ramped up and skipped says Ramped up alone on its card too
-        assert.deepEqual((await marks(page, "#acxList .acx-card"))["old@example.com"].filter((s) => s === x("Ramped up") || s === x("Ramp-up skipped")), [x("Ramped up")]);
+        assert.deepEqual((await marks(page, "#acxList .acx-card"))["old@example.com"].filter((s) => s === x("Ramped up") || s === x("Skipped ramp-up")), [x("Ramped up")]);
         assert.ok(await wider(page) <= 0.5, `a card marker reaches ${await wider(page)}px past the window`);
         assert.deepEqual(await cut(page), [], "every marker says all its words");
         assert.deepEqual(errors, []);

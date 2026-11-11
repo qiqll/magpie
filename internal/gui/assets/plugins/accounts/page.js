@@ -449,7 +449,7 @@ async function acxGrowthMenu(e, b, r, skip) {
 function acxSkipped(r) {
   const { p, l } = r;
   const picked = growthAccountPicked(p, l.user);
-  const b = el("button", "acx-grow acx-skipped", t("Ramp-up skipped"));
+  const b = el("button", "acx-grow acx-skipped", t("Skipped ramp-up"));
   b.type = "button";
   b.title = t("Its growth policy holds none of its windows: you skipped its ramp-up. Click to resume it")
     + (picked.id ? "\n" + t("Growth policy: {name}", { name: picked.policy ? growthName(picked.policy) : picked.id }) : "");
@@ -466,7 +466,7 @@ function acxSkipped(r) {
         ? accountAction("provider/resumegrowth", { id: p.id, account: l.user }, t("{who} resumed its ramp-up", { who: accountNameOf(p, l.user) || l.user }))
         : growthAccountSave(p, l.user, v);
       done.then(() => acxDraw());
-    }, "Ramp-up skipped");
+    }, "Skipped ramp-up");
   };
   return b;
 }
