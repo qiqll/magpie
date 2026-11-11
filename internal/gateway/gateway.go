@@ -886,14 +886,21 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// once the accounts whose ramp-up the calendar had done (T-150). Its
 	// writes to providers.json end before this returns: a gateway stopped
 	// (a restart, a handover, a test's home removed after) has written all
-	// it will
+	// it will, and a step not begun by then is left to the next start
 	backfilled := make(chan struct{})
 	defer func() { <-backfilled }()
 	go func() {
 		defer close(backfilled)
-		provider.BackfillFirstUsed(usage.FirstServed)
-		provider.BackfillUsedDays(usage.ServedDays)
-		provider.GraduateOnce()
+		for _, step := range []func(){
+			func() { provider.BackfillFirstUsed(usage.FirstServed) },
+			func() { provider.BackfillUsedDays(usage.ServedDays) },
+			provider.GraduateOnce,
+		} {
+			if ctx.Err() != nil {
+				return
+			}
+			step()
+		}
 	}()
 	// and tells the request hooks of an account to sign in again
 	go keepHooksToldOfSignIns(ctx)
