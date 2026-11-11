@@ -544,8 +544,9 @@ function growthDraw() {
 // until it is picked no more (T-131), as the server refuses too. A pick
 // that holds nothing is listed as the server counts it (T-145): of a
 // subscription turned off, of one Providers has no row of, of an account
-// its subscription no longer lists; the last two have no other place to
-// be changed, so each is cleared here.
+// its subscription no longer lists, and of a provider of keys whose
+// record kept one (T-152); all but the first have no other place to be
+// changed, so each is cleared here.
 function growthUseFill() {
   const box = growthChart.box?.closest("#growthList"), say = box?.querySelector(".growth-uses");
   if (!say) return;
@@ -553,8 +554,9 @@ function growthUseFill() {
   if (!uses) return say.replaceChildren();
   const line = (u) => {
     const own = u.accountsPicked ? t(u.accountsPicked === 1 ? "1 account picked it" : "{n} accounts picked it", { n: u.accountsPicked }) : "";
-    const name = u.off ? t("{name} (turned off)", { name: u.name }) : u.unlisted ? t("{name} (not in Providers)", { name: u.name }) : u.name;
-    if (u.off || u.unlisted) {
+    const name = u.off ? t("{name} (turned off)", { name: u.name }) : u.unlisted ? t("{name} (not in Providers)", { name: u.name })
+      : u.keyed ? t("{name} (keys, no accounts)", { name: u.name }) : u.name;
+    if (u.off || u.unlisted || u.keyed) {
       // it holds no account now: nothing ramps up
       if (!u.picked) return t("{name}: {own}", { name, own });
       const said = t("{name} picked it", { name });
@@ -582,10 +584,10 @@ function growthUseFill() {
   const rows = [];
   for (const u of uses) {
     const row = el("div", "growth-use", line(u));
-    if (u.unlisted && u.picked) row.append(" ", clearer("provider/growthpolicy", { id: u.provider }));
+    if ((u.unlisted || u.keyed) && u.picked) row.append(" ", clearer("provider/growthpolicy", { id: u.provider }));
     rows.push(row);
     for (const a of u.gone || []) {
-      const g = el("div", "growth-use growth-gone-pick", t("{account} picked it, but {name} no longer lists it", { account: a, name: u.name }));
+      const g = el("div", "growth-use growth-gone-pick", t(u.keyed ? "{account} picked it, but {name} has keys, not accounts" : "{account} picked it, but {name} no longer lists it", { account: a, name: u.name }));
       g.append(" ", clearer("provider/accountgrowthpolicy", { id: u.provider, account: a }));
       rows.push(g);
     }
@@ -609,7 +611,7 @@ function growthDelHeld(del, uses) {
   }
   del.disabled = true;
   del.dataset.held = "1";
-  del.title = uses.some((u) => u.unlisted || u.gone?.length)
+  del.title = uses.some((u) => u.unlisted || u.keyed || u.gone?.length)
     ? t("{names} picked it: clear what is left here, or pick another policy in its editor or on its accounts' rows, first", { names: picked.join(", ") })
     : uses.some((u) => u.accountsPicked)
       ? t("{names} picked it: pick another policy in its editor or on its accounts' rows first", { names: picked.join(", ") })

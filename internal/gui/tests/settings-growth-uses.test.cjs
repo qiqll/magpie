@@ -46,7 +46,7 @@ function serve(lang, ctl) {
       const b = req.postDataJSON();
       ctl.posts.push([url.pathname.slice(5), b]);
       if (ctl.refuse) return route.fulfill({ status: 400, json: { error: "providers.json can't be read" } });
-      if (url.pathname.endsWith("/growthpolicy")) ctl.claudePicked = false;
+      if (url.pathname.endsWith("/growthpolicy")) ctl[b.id === "relay" ? "relayPicked" : "claudePicked"] = false;
       else ctl.gone = ctl.gone.filter((g) => !(g.id === b.id && g.account === b.account));
       return json({ providers: [], presets: [], excluded: [], gateway: { running: true, window: true } });
     }
@@ -62,6 +62,9 @@ function serve(lang, ctl) {
         if (!ctl.noCodex) uses.push({ provider: "codex", name: "Codex", picked: true, accounts: 0, accountsPicked: goneOf("codex").length || undefined, off: true, gone: goneOf("codex") });
         const claude = goneOf("claude");
         if (ctl.claudePicked || claude.length) uses.push({ provider: "claude", name: "Claude", picked: ctl.claudePicked || undefined, accounts: 0, accountsPicked: claude.length || undefined, accountsOnly: !ctl.claudePicked || undefined, unlisted: true, gone: claude });
+        // a provider of keys whose record kept picks (T-152)
+        const relay = goneOf("relay");
+        if (ctl.relayPicked || relay.length) uses.push({ provider: "relay", name: "My relay", picked: ctl.relayPicked || undefined, accounts: 0, accountsPicked: relay.length || undefined, accountsOnly: !ctl.relayPicked || undefined, keyed: true, gone: relay });
       }
       const body = { points: POINTS, accounts: [], uses: JSON.parse(JSON.stringify(uses)) };
       if (ctl.hold) {
@@ -222,5 +225,53 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.equal(await del.getAttribute("title"), why);
       assert.deepEqual(errors, []);
     });
+  }
+}
+
+// T-152: a provider of keys whose record kept a pick (written before, by
+// hand or a sync) is listed as provider.GrowthUses answers it, Keyed, and
+// its own pick and its account's are cleared here, where nothing else can
+// change them; Delete says to clear what is left here, then lets go.
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  for (const lang of LANGS) {
+    const x = (s, a) => tr(lang, s, a);
+    for (const width of [1000, 420]) {
+      test(`${engine} ${lang} ${width}: a provider of keys' leftover picks are listed and cleared in In use`, async (t) => {
+        const ctl = { posts: [], previews: 0, refuse: false, noCodex: true, claudePicked: false, relayPicked: true, gone: [{ id: "relay", account: "old@example.com" }] };
+        const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+        t.after(() => { ctl.release?.(); return browser.close(); });
+        const page = await (await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: "reduce" })).newPage();
+        page.setDefaultTimeout(5000);
+        page.setDefaultNavigationTimeout(60000);
+        const errors = [];
+        page.on("pageerror", (e) => errors.push(e.message));
+        await page.route("**/*", serve(lang, ctl));
+        await page.goto("http://magpie.test/?view=settings&tab=growth");
+        await page.locator("#setTab-growth").click();
+        const list = page.locator("#growthList");
+        await list.locator('.gp-item[data-id="slow"]').click();
+        await list.locator(".growth-uses .growth-gone-pick").waitFor();
+        const clear = x("Clear the pick");
+        const keyed = x("{name} (keys, no accounts)", { name: "My relay" });
+        assert.deepEqual(await lines(page), [
+          x("{name} picked it", { name: keyed }) + " · " + x("1 account picked it") + " " + clear,
+          x("{account} picked it, but {name} has keys, not accounts", { account: "old@example.com", name: "My relay" }) + " " + clear,
+        ]);
+        const del = list.locator(".growth-delete");
+        assert.equal(await del.isDisabled(), true);
+        assert.equal(await del.getAttribute("title"), x("{names} picked it: clear what is left here, or pick another policy in its editor or on its accounts' rows, first", { names: "My relay" }));
+        assert.ok(await sideways(page) <= 1, "In use scrolls sideways");
+        if (process.env.SHOTS) await list.locator(".growth-uses").screenshot({ path: path.join(process.env.SHOTS, `uses-keyed-${engine}-${lang}-${width}.png`) });
+
+        await list.locator(".growth-use:not(.growth-gone-pick)", { hasText: keyed }).locator(".growth-clear").click();
+        await page.waitForFunction((want) => [...document.querySelectorAll("#growthList .growth-uses .growth-use")].some((e) => e.textContent.trim() === want), x("{name}: {own}", { name: keyed, own: x("1 account picked it") }));
+        assert.deepEqual(ctl.posts.at(-1), ["provider/growthpolicy", { id: "relay", growthPolicy: "" }]);
+        await list.locator(".growth-gone-pick .growth-clear").click();
+        await page.waitForFunction((none) => [...document.querySelectorAll("#growthList .growth-uses .growth-use")].map((e) => e.textContent.trim()).join() === none, x("No subscription is held by it"));
+        assert.deepEqual(ctl.posts.at(-1), ["provider/accountgrowthpolicy", { id: "relay", account: "old@example.com", growthPolicy: "" }]);
+        assert.equal(await del.isDisabled(), false, "Delete stayed off with nothing picking the policy");
+        assert.deepEqual(errors, []);
+      });
+    }
   }
 }

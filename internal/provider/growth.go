@@ -212,24 +212,30 @@ func growthPolicyFor(id, user string) settings.GrowthPolicy {
 // the record as it is under the lock (editFound). A pick is cleared ("")
 // of an account the subscription no longer lists too, by its name: one
 // gone from outside magpie would keep its policy from being deleted, and
-// of a subscription the Providers page doesn't list (clearStoredPick).
+// of a subscription the Providers page doesn't list (clearStoredPick), and
+// of a provider of keys whose record kept one (T-152): none can be picked
+// for it, but one written before, by hand or by a sync, is counted.
 func SetAccountGrowthPolicy(id, ref, policy string) error {
+	clear := func(q *Provider) bool {
+		// keys as they are kept: one written by hand in another case
+		// is the account's too
+		m := normalAccountGrowthPolicy(q.AccountGrowthPolicy)
+		_, had := m[accountKey(ref)]
+		delete(m, accountKey(ref))
+		q.AccountGrowthPolicy = normalAccountGrowthPolicy(m)
+		return had
+	}
 	if strings.TrimSpace(policy) == "" && storedOnly(id) {
-		return clearStoredPick(id, func(q *Provider) bool {
-			// keys as they are kept: one written by hand in another case
-			// is the account's too
-			m := normalAccountGrowthPolicy(q.AccountGrowthPolicy)
-			_, had := m[accountKey(ref)]
-			delete(m, accountKey(ref))
-			q.AccountGrowthPolicy = normalAccountGrowthPolicy(m)
-			return had
-		})
+		return clearStoredPick(id, clear)
 	}
 	p, err := Find(id)
 	if err != nil {
 		return err
 	}
 	if p.Account == nil {
+		if strings.TrimSpace(policy) == "" && p.ID == normalID(id) {
+			return clearStoredPick(p.ID, clear) // a pick left on a provider of keys (T-152)
+		}
 		return fmt.Errorf("%s has keys, not subscription accounts for a growth policy to hold", p.Name)
 	}
 	policy = strings.TrimSpace(policy)
@@ -324,20 +330,25 @@ func normalAccountGrowthPolicy(m map[string]string) map[string]string {
 // policy policy (T-131), or by the default for "": one no policy has is
 // refused. Written on the record as it is under the lock (editFound), so
 // what another change wrote since stays. "" clears the pick of a
-// subscription the Providers page doesn't list too (clearStoredPick).
+// subscription the Providers page doesn't list too (clearStoredPick), and
+// of a provider of keys whose record kept one (T-152), asked by its id.
 func SetGrowthPolicy(id, policy string) error {
+	clear := func(q *Provider) bool {
+		had := q.GrowthPolicy != ""
+		q.GrowthPolicy = ""
+		return had
+	}
 	if strings.TrimSpace(policy) == "" && storedOnly(id) {
-		return clearStoredPick(id, func(q *Provider) bool {
-			had := q.GrowthPolicy != ""
-			q.GrowthPolicy = ""
-			return had
-		})
+		return clearStoredPick(id, clear)
 	}
 	p, err := Find(id)
 	if err != nil {
 		return err
 	}
 	if p.Account == nil {
+		if strings.TrimSpace(policy) == "" && p.ID == normalID(id) {
+			return clearStoredPick(p.ID, clear)
+		}
 		return fmt.Errorf("%s has keys, not subscription accounts for a growth policy to hold", p.Name)
 	}
 	policy = strings.TrimSpace(policy)
@@ -542,7 +553,10 @@ func growthAccounts(now time.Time, held func(s *Provider, user string) bool) []G
 // the delete is refused by it (T-145): Off is a subscription turned off,
 // Unlisted one the Providers page doesn't list (signed out, hidden), and
 // Gone the accounts (as providers.json keeps them) that picked it which
-// the subscription no longer lists, every account of one Unlisted.
+// the subscription no longer lists, every account of one Unlisted. Keyed
+// is a provider of keys whose record kept a pick (T-152: written before,
+// by hand or a sync), every account's of it Gone: none is held by it, and
+// it has no other place to be cleared.
 type GrowthUse struct {
 	Provider       string   `json:"provider"`
 	Name           string   `json:"name"`
@@ -552,6 +566,7 @@ type GrowthUse struct {
 	AccountsOnly   bool     `json:"accountsOnly,omitempty"`
 	Off            bool     `json:"off,omitempty"`
 	Unlisted       bool     `json:"unlisted,omitempty"`
+	Keyed          bool     `json:"keyed,omitempty"`
 	Gone           []string `json:"gone,omitempty"`
 }
 
@@ -578,10 +593,17 @@ func GrowthUses(id string, now time.Time) []GrowthUse {
 	}
 	var out []GrowthUse
 	for _, p := range all {
-		if p.Account == nil || slices.ContainsFunc(out, func(u GrowthUse) bool { return u.Provider == p.ID }) {
+		if slices.ContainsFunc(out, func(u GrowthUse) bool { return u.Provider == p.ID }) {
 			continue
 		}
 		s := stored[normalID(p.ID)]
+		if p.Account == nil {
+			if mine, gone := accountPicksOf(s, id, nil); mine > 0 || s.GrowthPolicy == id {
+				out = append(out, GrowthUse{Provider: p.ID, Name: cmp.Or(p.Name, p.ID), Picked: s.GrowthPolicy == id,
+					AccountsPicked: mine, AccountsOnly: s.GrowthPolicy != id, Keyed: true, Gone: gone})
+			}
+			continue
+		}
 		listed := map[string]bool{}
 		for _, r := range p.AccountRefs() {
 			listed[accountKey(r)] = true

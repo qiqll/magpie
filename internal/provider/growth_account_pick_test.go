@@ -428,3 +428,61 @@ func TestGrowthClearsTheRecordItNames(t *testing.T) {
 		t.Fatalf("picks after clearing Claude's and Codex's gone account's: %v %v", picks, err)
 	}
 }
+
+// A provider of keys whose record kept a pick (written before, by hand or
+// a sync) is in the policy's In use (T-152), Keyed, its accounts' picks
+// Gone: GrowthPicks counts them, so they refuse the delete. Each is
+// cleared by its setter's "" by the provider's id, and then neither lists
+// it nor refuses the delete; a pick of a policy is still refused, as one
+// of keys has no accounts to hold, and so is a clear asked by its name.
+func TestGrowthUsesListAKeyedProvidersPick(t *testing.T) {
+	firstUsedFixture(t, 3*24*time.Hour+time.Hour)
+	f, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Providers = append(f.Providers, Provider{ID: "relay", Name: "My relay", Chat: "https://relay.example.com/v1", Key: "sk-test",
+		GrowthPolicy: settings.GrowthCautious, AccountGrowthPolicy: map[string]string{"old@example.com": settings.GrowthCautious}})
+	if err := store(f); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := Find("relay"); err != nil || p.Account != nil || !slices.ContainsFunc(sharedAll(), func(q Provider) bool { return q.ID == "relay" }) {
+		t.Fatalf("the fixture's relay is meant to be a listed provider of keys: %v %v", p, err)
+	}
+	now := time.Now()
+	us := GrowthUses(settings.GrowthCautious, now)
+	i := slices.IndexFunc(us, func(u GrowthUse) bool { return u.Provider == "relay" })
+	if i < 0 || !us[i].Keyed || !us[i].Picked || us[i].AccountsOnly || us[i].AccountsPicked != 1 || !slices.Equal(us[i].Gone, []string{"old@example.com"}) || us[i].Name != "My relay" {
+		t.Fatalf("the relay in Cautious's In use: %+v", us)
+	}
+	if picks, err := GrowthPicks(); err != nil || len(picks) != 2 {
+		t.Fatalf("picks: %v %v", picks, err)
+	}
+	if err := SetGrowthPolicy("relay", settings.GrowthGentle); err == nil {
+		t.Fatal("picked a policy for a provider of keys")
+	}
+	if err := SetGrowthPolicy("My relay", ""); err == nil {
+		t.Fatal("cleared a pick asked by the provider's name")
+	}
+	if err := SetAccountGrowthPolicy("relay", "Old@example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if us := GrowthUses(settings.GrowthCautious, now); !slices.ContainsFunc(us, func(u GrowthUse) bool { return u.Provider == "relay" && u.Picked && len(u.Gone) == 0 }) {
+		t.Fatalf("after its account's clear: %+v", us)
+	}
+	if err := SetGrowthPolicy("relay", ""); err != nil {
+		t.Fatal(err)
+	}
+	if picks, err := GrowthPicks(); err != nil || len(picks) != 0 {
+		t.Fatalf("picks after clearing each: %v %v", picks, err)
+	}
+	if us := GrowthUses(settings.GrowthCautious, now); len(us) != 0 {
+		t.Fatalf("Cautious's In use after clearing each: %+v", us)
+	}
+	if err := SetGrowthPolicy("relay", ""); err == nil {
+		t.Fatal("cleared the relay's pick twice")
+	}
+	if p, err := Find("relay"); err != nil || p.Key != "sk-test" || p.Chat != "https://relay.example.com/v1" {
+		t.Fatalf("the clear changed the relay: %v %v", p, err)
+	}
+}
