@@ -347,7 +347,44 @@ func TestResumeGrowth(t *testing.T) {
 	if after, _ := os.ReadFile(Path()); string(after) != string(before) {
 		t.Errorf("resuming one not skipped rewrote providers.json")
 	}
-	if err := ResumeGrowth("codex", "nobody@example.com"); err != nil {
-		t.Errorf("resuming an account it has no skip of: %v", err)
+	// a name it neither lists nor has a skip of is refused; one it has a
+	// skip of but no longer lists is cleared by its name
+	if err := ResumeGrowth("codex", "nobody@example.com"); err == nil {
+		t.Error("resumed an account Codex has none of")
+	}
+	if err := editStored("codex", func(q *Provider) bool {
+		q.AccountGrowthSkipped = map[string]time.Time{"gone@example.com": time.Now().UTC()}
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResumeGrowth("codex", "Gone@example.com"); err != nil {
+		t.Errorf("resuming the skip of an account gone from the list: %v", err)
+	}
+	if s, _ := storedPicks("codex"); s.AccountGrowthSkipped != nil {
+		t.Errorf("resumed, the gone account's skip stayed: %v", s.AccountGrowthSkipped)
+	}
+}
+
+// An account skipped and then given a cap of its own isn't said skipped
+// (T-158 review L1): the policy never holds an account with its own cap,
+// so resuming it would hold it no more than now.
+func TestSkippedWithItsOwnCapSaysNone(t *testing.T) {
+	firstUsedFixture(t, time.Hour)
+	growthDefault(t, settings.GrowthStandard)
+	if err := SkipGrowth("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAccountCap("codex", "new@example.com", 80); err != nil {
+		t.Fatal(err)
+	}
+	if at := AccountGrowthSkippedOf("codex", "new@example.com"); !at.IsZero() {
+		t.Errorf("with a cap of its own, said skipped at %v", at)
+	}
+	if err := SetAccountCap("codex", "new@example.com", 0); err != nil {
+		t.Fatal(err)
+	}
+	if at := AccountGrowthSkippedOf("codex", "new@example.com"); at.IsZero() {
+		t.Error("its cap lifted, the skip isn't said")
 	}
 }

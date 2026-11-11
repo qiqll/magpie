@@ -819,7 +819,15 @@ func SkipGrowth(id, ref string) error {
 // Nothing else is written: a share, an amount or a cap the user set stays
 // theirs. An account that isn't skipped is left as it is. One the
 // subscription no longer lists is cleared by its name, so a skip is never
-// stuck on the record.
+// stuck on the record; a name it neither lists nor has a skip of is
+// refused, as SkipGrowth refuses it.
+//
+// GraduateOnce marks no skipped account (letGo), so one skipped while the
+// mark was made and done by the calendar by then would be held again by
+// the days it was used, the pull-back T-150 marks against: once the mark
+// is made (GraduatedRead), a resumed account done by the calendar now
+// (doneByCalendar) is marked as it would have been. Settings that can't be
+// read mark nothing.
 func ResumeGrowth(id, ref string) error {
 	p, err := Find(id)
 	if err != nil {
@@ -828,31 +836,48 @@ func ResumeGrowth(id, ref string) error {
 	if p.Account == nil {
 		return fmt.Errorf("%s has keys, not subscription accounts for a growth policy to hold", p.Name)
 	}
-	k := accountKey(ref)
+	k, listed := accountKey(ref), false
 	if r, ok := p.accountRef(ref); ok {
-		k = accountKey(r)
+		k, listed = accountKey(r), true
 	}
+	st, stErr := settings.SharedChecked()
+	marked, now := storedFile().GraduatedRead, time.Now()
+	gone := false
 	// on the record as it is stored then (T-079); a record there is none
 	// of is not written, as nothing changed
-	return editStored(p.ID, func(q *Provider) bool {
+	err = editStored(p.ID, func(q *Provider) bool {
 		// keys as they are kept: one written by hand in another case is
 		// the account's too
 		m := normalAccountAdded(q.AccountGrowthSkipped)
 		if _, had := m[k]; !had {
+			gone = !listed
 			return false
 		}
 		delete(m, k)
 		q.AccountGrowthSkipped = normalAccountAdded(m)
+		if _, done := q.AccountGraduated[k]; marked && stErr == nil && !done && doneByCalendar(st, *q, k, now) {
+			q.AccountGraduated = maps.Clone(q.AccountGraduated)
+			if q.AccountGraduated == nil {
+				q.AccountGraduated = map[string]time.Time{}
+			}
+			q.AccountGraduated[k] = now.UTC().Truncate(time.Second)
+		}
 		return true
 	})
+	if err == nil && gone {
+		return fmt.Errorf("%s has no account %q", p.Name, ref)
+	}
+	return err
 }
 
 // AccountGrowthSkippedOf is when the user skipped the ramp-up of the
 // account user of the subscription id (AccountGrowthSkipped, T-140), zero
 // for none, for its row to say (T-158). Read by the key letGo reads, so
-// the row says skipped only of an account the gateway lets go of.
+// the row says skipped only of an account the gateway lets go of. Zero for
+// one with a cap of its own or on a subscription turned off too: the
+// policy holds neither, so resuming it would hold it no more than now.
 func AccountGrowthSkippedOf(id, user string) time.Time {
-	if s, ok := storedPicks(id); ok {
+	if s, ok := storedPicks(id); ok && !s.Off && s.AccountCaps[accountKey(user)] == 0 {
 		return s.AccountGrowthSkipped[accountKey(user)]
 	}
 	return time.Time{}
@@ -1578,16 +1603,8 @@ func graduate(f *file, now time.Time) int {
 		if !gatewayServed(*p) {
 			continue
 		}
-		for u, used := range p.AccountFirstUsed {
-			if !addedKnown(used) || !addedKnown(p.AccountAdded[u]) || letGo(*p, u) {
-				continue
-			}
-			pol := st.GrowthFor(p.AccountGrowthPolicy[u], p.GrowthPolicy)
-			if pol.CountDays != settings.GrowthUsedDays || pol.Kind != settings.GrowthRamp && pol.Kind != settings.GrowthStaged {
-				continue
-			}
-			// on the calendar from its first use, as it was held before
-			if holdsAny(policyCaps(pol, used, now)) {
+		for u := range p.AccountFirstUsed {
+			if letGo(*p, u) || !doneByCalendar(st, *p, u, now) {
 				continue
 			}
 			p.AccountGraduated = maps.Clone(p.AccountGraduated)
@@ -1600,6 +1617,23 @@ func graduate(f *file, now time.Time) int {
 	}
 	f.GraduatedRead = true
 	return marked
+}
+
+// doneByCalendar is whether the account u (its key) of the record p,
+// served by the gateway, has a policy counting the days used that holds
+// none of its windows on the calendar from its first use at now, as it was
+// held before: what graduate marks, and ResumeGrowth after the mark was
+// made (T-158).
+func doneByCalendar(st settings.Settings, p Provider, u string, now time.Time) bool {
+	used := p.AccountFirstUsed[u]
+	if !gatewayServed(p) || !addedKnown(used) || !addedKnown(p.AccountAdded[u]) {
+		return false
+	}
+	pol := st.GrowthFor(p.AccountGrowthPolicy[u], p.GrowthPolicy)
+	if pol.CountDays != settings.GrowthUsedDays || pol.Kind != settings.GrowthRamp && pol.Kind != settings.GrowthStaged {
+		return false
+	}
+	return !holdsAny(policyCaps(pol, used, now))
 }
 
 // logGraduated says how many accounts graduate marked, when any.

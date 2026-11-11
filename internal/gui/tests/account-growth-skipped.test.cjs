@@ -5,7 +5,9 @@
 // (provider/resumegrowth). The server's answer then holds it again, and
 // the row says it ramping up. One ramped up and skipped both says Ramped
 // up alone: resuming would hold it no more. Every language, at a wide and
-// a phone's width; no backend, the API is faked here.
+// a phone's width; no backend, the API is faked here. A skipped account
+// that picked a policy of its own says it, and its menu still offers the
+// policies to pick (review M2).
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -21,6 +23,12 @@ const later = new Date(Date.now() + 2 * 3600e3).toISOString();
 const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString();
 
 const standard = { policy: "standard", name: "Standard", builtin: true, kind: "ramp" };
+const BUILTINS = [
+  { id: "standard", name: "Standard", kind: "ramp", start: 50, days: 14, countDays: "used", builtin: true },
+  { id: "gentle", name: "Gentle", kind: "ramp", start: 70, days: 7, countDays: "used", builtin: true },
+  { id: "cautious", name: "Cautious", kind: "ramp", start: 30, days: 30, countDays: "used", builtin: true },
+  { id: "off", name: "Off", kind: "off", builtin: true },
+];
 const providersOf = (seen) => {
   const skipped = seen.resumed ? {} : { "new@example.com": daysAgo(1) };
   return {
@@ -36,6 +44,7 @@ const providersOf = (seen) => {
         "fresh@example.com": { ...standard, day: 0, days: 14, fiveHours: 50, week: 50, waiting: true },
       },
       accountGrowthSkipped: { ...skipped, "old@example.com": daysAgo(20) },
+      accountGrowthPolicy: { "new@example.com": "gentle" },
       accountGraduated: { "old@example.com": daysAgo(3) },
       accountAdded: { "new@example.com": daysAgo(9), "fresh@example.com": daysAgo(1), "old@example.com": daysAgo(40) },
       accountFirstUsed: { "new@example.com": daysAgo(2), "old@example.com": daysAgo(39) }, firstUsedKnown: true,
@@ -47,7 +56,7 @@ const w = (name, used, trayKind) => ({ name, used, resetsAt: later, trayKind });
 const quotas = ["new@example.com", "fresh@example.com", "old@example.com"].map((user, i) => ({ provider: "claude", name: "Claude", user, windows: [w("5 hours", [40, 0, 12][i], "5h"), w("7 days", [20, 0, 64][i], "7d")] }));
 
 function serve(lang, seen) {
-  const settings = { lang, theme: "light", tray: "panel", currency: "usd", textSize: 100, proxy: "", version: "test", dir: "/test", lanURLs: [], fx: { rate: 7.2, at: new Date().toISOString(), stale: false }, proxies: [] };
+  const settings = { lang, theme: "light", tray: "panel", currency: "usd", textSize: 100, proxy: "", version: "test", dir: "/test", lanURLs: [], fx: { rate: 7.2, at: new Date().toISOString(), stale: false }, proxies: [], growthPolicyList: BUILTINS, growthInEffect: "standard" };
   return async (route) => {
     const req = route.request(), url = new URL(req.url());
     const json = (data) => route.fulfill({ json: data });
@@ -106,17 +115,20 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           "old@example.com": [x("Ramped up")],
         });
         const b = page.locator('#acxList .row.acx[data-user="new@example.com"] .acx-skipped');
-        assert.equal(await b.getAttribute("title"), x("Its growth policy holds none of its windows: you skipped its ramp-up. Click to resume it"));
+        assert.equal(await b.getAttribute("title"), x("Its growth policy holds none of its windows: you skipped its ramp-up. Click to resume it") + "\n" + x("Growth policy: {name}", { name: x("Gentle") }));
         assert.ok(await wider(page) <= 0.5, `a marker reaches ${await wider(page)}px past the window`);
         assert.deepEqual(await cut(page), [], "every marker says all its words");
 
         // Resume ramp-up posts the account, and the server's answer holds it again
         await b.click();
-        const item = page.locator(".proto-menu .pm-item");
-        assert.equal(await item.count(), 1);
+        const items = page.locator(".proto-menu .pm-item");
+        // Resume, Follow the subscription and each policy, its own ticked
+        assert.equal(await items.count(), 2 + BUILTINS.length);
         assert.equal(await page.locator(".proto-menu .pm-head").textContent(), x("Ramp-up skipped"));
+        const item = items.first();
         assert.equal(await item.locator(".pm-name").textContent(), x("Resume ramp-up"));
         assert.equal(await item.locator(".pm-note").textContent(), x("Its growth policy holds it again, from the day its days count from"));
+        assert.equal(await page.locator(".proto-menu .pm-item.on .pm-name").textContent(), x("Gentle"));
         await item.click();
         await page.waitForFunction(() => !document.querySelector("#acxList .acx-skipped"));
         assert.deepEqual(seen.posts, [{ id: "claude", account: "new@example.com" }]);
@@ -130,6 +142,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.waitForFunction(() => document.querySelectorAll("#acxList .acx-card").length === 3);
         await page.reload();
         await page.waitForFunction(() => document.querySelectorAll("#acxList .acx-card .acx-skipped").length === 1);
+        // one ramped up and skipped says Ramped up alone on its card too
+        assert.deepEqual((await marks(page, "#acxList .acx-card"))["old@example.com"].filter((s) => s === x("Ramped up") || s === x("Ramp-up skipped")), [x("Ramped up")]);
         assert.ok(await wider(page) <= 0.5, `a card marker reaches ${await wider(page)}px past the window`);
         assert.deepEqual(await cut(page), [], "every marker says all its words");
         assert.deepEqual(errors, []);

@@ -422,3 +422,68 @@ func TestGraduatedWaitsForSettings(t *testing.T) {
 		t.Fatalf("settings read again: marked %v, done %v", graduated(), storedFile().GraduatedRead)
 	}
 }
+
+// An account skipped when the mark was made isn't marked (letGo), so one
+// done by the calendar then and resumed after (T-158) would be held again
+// by the days it was used: used 8 days of 20, back at Standard's 78%.
+// ResumeGrowth marks it as the mark would have, so it stays at 100%.
+func TestGraduatedOnResume(t *testing.T) {
+	usedDaysFixture(t, "")
+	fromT134(t)
+	for d := range 8 {
+		NoteAccountUsed("codex", "new@example.com", day(d, time.Hour))
+	}
+	if err := SkipGrowth("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	graduateOnce(day(20, 0))
+	if !graduated().IsZero() || !storedFile().GraduatedRead {
+		t.Fatalf("skipped at the mark: marked %v, done %v", graduated(), storedFile().GraduatedRead)
+	}
+	if err := ResumeGrowth("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if graduated().IsZero() {
+		t.Error("resumed, done by the calendar, not marked")
+	}
+	if s := fiveHoursAt(time.Now()); s != 100 {
+		t.Errorf("resumed, the gateway holds it at %d%%", s)
+	}
+	if g := AccountGrowthOf("codex", "new@example.com", time.Now()); g != nil {
+		t.Errorf("resumed, its row says it ramps up: %+v", g)
+	}
+}
+
+// One resumed still ramping up by the calendar (used 3 days, first used 5
+// days ago) isn't marked: the policy holds it again by its days used.
+func TestGraduatedNotOnResumeWhileRamping(t *testing.T) {
+	usedDaysFixture(t, "")
+	now := time.Now()
+	f, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range f.Providers {
+		if f.Providers[i].ID == "codex" {
+			f.Providers[i].AccountAdded["new@example.com"] = now.Add(-6 * 24 * time.Hour).UTC()
+		}
+	}
+	if err := store(f); err != nil {
+		t.Fatal(err)
+	}
+	for d := range 3 {
+		NoteAccountUsed("codex", "new@example.com", now.Add(time.Duration(d-5)*24*time.Hour))
+	}
+	if err := SkipGrowth("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResumeGrowth("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if !graduated().IsZero() {
+		t.Errorf("resumed while ramping up, marked %v", graduated())
+	}
+	if s := fiveHoursAt(now); s >= 100 {
+		t.Errorf("resumed while ramping up, the gateway holds it at %d%%", s)
+	}
+}

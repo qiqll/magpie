@@ -443,20 +443,29 @@ async function acxGrowthMenu(e, b, r, skip) {
 
 // acxSkipped: an account whose ramp-up the user skipped (T-158), as a
 // button offering Resume ramp-up (provider/resumegrowth): its skip goes,
-// and its growth policy holds it again from the day its days count from
+// and its growth policy holds it again from the day its days count from.
+// The policies to pick for it alone stay in its menu (a pick ends the skip
+// too, provider.SetAccountGrowthPolicy), and one it picked is said
 function acxSkipped(r) {
   const { p, l } = r;
+  const picked = growthAccountPicked(p, l.user);
   const b = el("button", "acx-grow acx-skipped", t("Ramp-up skipped"));
   b.type = "button";
-  b.title = t("Its growth policy holds none of its windows: you skipped its ramp-up. Click to resume it");
+  b.title = t("Its growth policy holds none of its windows: you skipped its ramp-up. Click to resume it")
+    + (picked.id ? "\n" + t("Growth policy: {name}", { name: picked.policy ? growthName(picked.policy) : picked.id }) : "");
   b.setAttribute("aria-haspopup", "menu");
-  b.onclick = (e) => {
+  b.onclick = async (e) => {
     e.stopPropagation();
     if (b.classList.contains("open")) return closeProtoMenu();
-    const opts = [{ v: "!resume", name: "Resume ramp-up", note: "Its growth policy holds it again, from the day its days count from" }];
-    openProtoMenu(b, opts, "", () => {
+    await growthListLoad();
+    const now = growthAccountPicked(p, l.user);
+    const opts = [{ v: "!resume", name: "Resume ramp-up", note: "Its growth policy holds it again, from the day its days count from" }].concat(growthAccountOpts(p));
+    openProtoMenu(b, opts, now.gone ? "!gone" : now.id, (v) => {
       b.classList.add("busy");
-      accountAction("provider/resumegrowth", { id: p.id, account: l.user }, t("{who} resumed its ramp-up", { who: accountNameOf(p, l.user) || l.user })).then(() => acxDraw());
+      const done = v === "!resume"
+        ? accountAction("provider/resumegrowth", { id: p.id, account: l.user }, t("{who} resumed its ramp-up", { who: accountNameOf(p, l.user) || l.user }))
+        : growthAccountSave(p, l.user, v);
+      done.then(() => acxDraw());
     }, "Ramp-up skipped");
   };
   return b;
