@@ -207,6 +207,7 @@ func TestUserBindingNeedsTheUser(t *testing.T) {
 		{"none", "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), nil},
 		{"blank", "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), map[string]string{UserHeader: "   "}},
 		{"group", "/v1/responses", strings.Replace(resp, "%s", "group/pair", 1), nil},
+		{"pinned", "/v1/responses", strings.Replace(resp, "%s", "codex/gpt-5.5", 1), map[string]string{AccountHeader: "me@example.com"}},
 		{"chat", "/v1/chat/completions", `{"model":"codex/gpt-5.5","messages":[{"role":"user","content":"hi"}]}`, nil},
 		{"messages", "/v1/messages", `{"model":"codex/gpt-5.5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`, nil},
 		{"gemini", "/v1beta/models/codex/gpt-5.5:generateContent", `{"contents":[{"parts":[{"text":"hi"}]}]}`, nil},

@@ -2,7 +2,11 @@ package gateway
 
 import (
 	"os"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // Bound by user, a request that names no user is DefaultUser's (T-157):
@@ -63,5 +67,62 @@ func TestNoUserIsDefaultUser(t *testing.T) {
 	}
 	if _, err := os.Stat(usersPath()); !os.IsNotExist(err) {
 		t.Fatalf("by session, user-accounts.json written: %v", err)
+	}
+}
+
+// Bound by user, a request without a user that Anthropic answers
+// authentication_failed holds its caller (its session here, as it would
+// be bound by session), and the next one without a user is told the
+// hold's 429, nothing run: authHeld, which reads the request before
+// noUser names DefaultUser, finds the hold startAuthHold wrote (T-157).
+func TestNoUserAuthHoldHoldsItsCaller(t *testing.T) {
+	log := claudeSubscriptionFirstSays(t, authRefused)
+	now := time.Now().Truncate(time.Second)
+	holdClockAt(t, now)
+	until := now.Add(time.Duration(settings.DefaultAuthHoldHours) * time.Hour)
+	s := byUser(New())
+	sess := map[string]string{SessionHeader: "sess-1"}
+	heldAnswer(t, claudeAsk(s, sess), until, now)
+	if hs, _ := AuthHolds(); len(hs) != 1 || hs[0].Kind != "session" || hs[0].Who != "sess-1" {
+		t.Fatalf("holds %+v", hs)
+	}
+	heldAnswer(t, claudeAsk(s, sess), until, now)
+	if runs := runsOf(t, log); runs != "own" {
+		t.Fatalf("a held request without a user ran Claude Code: %q", runs)
+	}
+}
+
+// Bound by user, a video generate_video starts for a call without a user
+// is DefaultUser's, and generation_result asked without a user finds it,
+// its content downloaded the same way (T-157).
+func TestImageMCPVideoWithoutAUserAskedAfter(t *testing.T) {
+	grokSignedIn(t)
+	newGrokMedia(t)
+	t.Setenv("MAGPIE_PUBLIC_URL", "")
+	s := byUser(New())
+	h := lanGuard(s.Handler())
+	was, wasPoll := imageMCPWithin, imageMCPPoll
+	t.Cleanup(func() { imageMCPWithin, imageMCPPoll = was, wasPoll })
+	imageMCPWithin, imageMCPPoll = 0, time.Millisecond
+	m := readImageReply(t, imagePost(h, "127.0.0.1:5000", imageToolCall(GenerateVideoTool, map[string]any{"prompt": "a kite sways", "seconds": 6})))
+	text := m.Result.Content[0].Text
+	i := strings.Index(text, `"video_`)
+	if m.Result.IsError || i < 0 {
+		t.Fatalf("still making: %+v", m)
+	}
+	id := strings.Trim(strings.Fields(text[i:])[0], `".,`)
+	imageMCPWithin = time.Minute
+	m = readImageReply(t, imagePost(h, "127.0.0.1:5000", imageToolCall(GenerationResultTool, map[string]any{"id": id})))
+	urls := urlsIn(m.Result.Content[0].Text)
+	if m.Result.IsError || len(urls) != 1 {
+		t.Fatalf("asked after without a user: %+v", m)
+	}
+	if w := imageGet(h, "127.0.0.1:5000", urls[0]); w.Code != 200 || w.Body.String() != "fake-mp4-bytes" {
+		t.Fatalf("content: %d %s", w.Code, w.Body.String())
+	}
+	// another user asking after it is told it isn't one being made
+	m = readImageReply(t, imagePost(h, "127.0.0.1:5000", imageToolCall(GenerationResultTool, map[string]any{"id": id}), UserHeader, "alice"))
+	if !m.Result.IsError {
+		t.Fatalf("alice asked after %s's video: %+v", DefaultUser, m)
 	}
 }

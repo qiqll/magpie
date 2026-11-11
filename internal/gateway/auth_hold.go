@@ -224,8 +224,12 @@ func ReleaseAuthHold(holder string) error {
 
 // authHolder is who r is of, for a hold: its user (the usage row's), else
 // the calling gateway key, else its session; ok false for none.
+// DefaultUser is no user here: authHeld reads r before noUser names it
+// (userDefaulted), so its hold is the key's or the session's, the same
+// read before and after, and one key's callers that name no user aren't
+// held for another key's (T-157).
 func authHolder(r *http.Request) (AuthHold, bool) {
-	if u := callerUser(r); u != "" {
+	if u := callerUser(r); u != "" && u != DefaultUser {
 		return AuthHold{Kind: "user", Who: u}, true
 	}
 	if id, name, _ := rowCaller(r.Context()); id != "" {

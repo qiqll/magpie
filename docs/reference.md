@@ -2600,7 +2600,12 @@ can't take is a 400 that says why, and nothing is sent. One that names
 no user (no `X-Magpie-User`, or a blank one) is the user `other10000`'s:
 a user like any other, bound to accounts of its own and held to its
 tier's, as a request that names `other10000` itself is, so every caller
-that names none shares that one user's accounts. A routing group's
+that names none shares that one user's accounts. Like any user it is
+one per gateway key, and one for all the keys that share their users
+(and callers with no key): their callers that name no user share its
+accounts, its tier's count and its usage, which any of them can read by
+naming `other10000`. An auth hold on such a caller is its key's or
+session's, not `other10000`'s. A routing group's
 request and one with `X-Magpie-Account` are too. magpie's own MCP tools
 (drawing, video, web search, image look) take a call without a user the
 same way. The quota, concurrency, usage and Codex reset routes are told

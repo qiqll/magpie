@@ -248,6 +248,10 @@ func (s *Server) imageMCPCall(r *http.Request, m mcpMessage) (any, map[string]an
 			if said, ok := s.mcpNoUser(r); ok {
 				return said, nil
 			}
+		case GenerationResultTool:
+			// a video made for a call without a user is DefaultUser's
+			// (its id says so), so is the call asking after it (T-157)
+			s.userDefaulted(r)
 		}
 		switch p.Name {
 		case GenerateImageTool:
