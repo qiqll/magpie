@@ -143,3 +143,65 @@ func TestServedReadPartwayIsUnknown(t *testing.T) {
 		t.Fatalf("read through after: served days %+v (%v), want 1", got[k], err)
 	}
 }
+
+// A read that continues the last one and stops partway still hands Visit
+// every row read before (T-149 review M1): the last block, taken off to be
+// continued, among them. It isn't kept as the ledger, so the next read,
+// through, has the rows after the break too; LogVersion says the stopped
+// one isn't complete.
+func TestLogReadPartwayKeepsTheRowsBefore(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	restartLog()
+	t.Cleanup(restartLog)
+	from := time.Date(2026, 3, 1, 23, 30, 0, 0, time.UTC)
+	for i := range 3 {
+		Append(Record{Time: from.Add(time.Duration(i) * time.Hour), Provider: "codex", ProviderAccount: "me@example.com", Status: 200})
+	}
+	count := func() int {
+		n := 0
+		Visit(time.Time{}, func(Record) { n++ })
+		return n
+	}
+	if n := count(); n != 3 {
+		t.Fatalf("read through: %d rows, want 3", n)
+	}
+	Append(Record{Time: from.Add(3 * time.Hour), Provider: "codex", ProviderAccount: "me@example.com", Status: 200})
+	Append(Record{Time: from.Add(4 * time.Hour), Provider: "codex", ProviderAccount: "me@example.com", Status: 200})
+	// the fourth line is read, the fifth isn't
+	was := logReadFrom
+	t.Cleanup(func() { logReadFrom = was })
+	logReadFrom = func(f *os.File, n int64) io.Reader {
+		// the rest of the log from where the read continues: its first line
+		// whole, then a failure
+		rest := make([]byte, n)
+		k, _ := io.ReadFull(f, rest)
+		first := int64(bytes.IndexByte(rest[:k], '\n') + 1)
+		return io.MultiReader(bytes.NewReader(rest[:first]), iotest.ErrReader(errors.New("the disk went away")))
+	}
+	if n := count(); n != 4 {
+		t.Errorf("a read that stopped after the fourth row: %d rows, want the 4 before the break", n)
+	}
+	if _, complete := LogVersion(); complete {
+		t.Error("a read that stopped partway is complete")
+	}
+	logReadFrom = was
+	if n := count(); n != 5 {
+		t.Fatalf("read through after: %d rows, want 5", n)
+	}
+	// a log that can't be looked at is no log read through either (L2)
+	if os.Getuid() != 0 {
+		dir := filepath.Dir(Path())
+		if err := os.Chmod(dir, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(dir, 0o700) })
+		if _, complete := LogVersion(); complete {
+			t.Error("a log that can't be looked at is complete")
+		}
+		os.Chmod(dir, 0o700)
+	}
+}

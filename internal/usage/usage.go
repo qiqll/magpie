@@ -1109,14 +1109,15 @@ func Vias(since time.Time) ViaIndex {
 
 // LogVersion is a number for the log as it stands, which changes when a
 // call is written to it, and whether there is one: a synthetic log
-// (LogCalls), or one not read to its end, has none; no log yet is one. The Sessions page
+// (LogCalls), or one not read to its end, has none; no log yet is one,
+// one that couldn't be read isn't (T-149 review L2). The Sessions page
 // keys an unchanged list on it.
 func LogVersion() (uint64, bool) {
 	if LogCalls != nil {
 		return 0, false
 	}
 	s := readLogSnapshot()
-	return s.version, s.info == nil || s.complete()
+	return s.version, s.err == nil && (s.info == nil || s.complete())
 }
 
 // A provider renamed since is listed by the id it has now (renames): the

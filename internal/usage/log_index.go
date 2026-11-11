@@ -208,8 +208,16 @@ func readLogSnapshot() *logSnapshot {
 		b, e := rd.ReadBytes('\n')
 		if e != nil {
 			if !errors.Is(e, io.EOF) {
-				// the rest of the log isn't known: never published as current
+				// the rest of the log isn't known: never published as current,
+				// but its readers still get every row read before it, the
+				// last block's taken off for the read included (review M1)
 				next.err = e
+				if tail != nil {
+					next.blocks = append(next.blocks, tail.freeze())
+				}
+				for _, c := range next.blocks {
+					next.bytes += c.Bytes
+				}
 				return next
 			}
 			break
