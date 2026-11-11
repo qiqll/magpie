@@ -5,7 +5,9 @@
 // magpie doesn't send requests for counting calendar days. A policy saved
 // before says Calendar days and is saved as it was (no countDays); one
 // switched to Days used asks for its chart and is saved with countDays
-// "used", and the list says so. A built-in one has no choice. Every
+// "used", and the list says so. A built-in one has no choice: its ramp
+// counts the days used (需求方 2026-11-11), said under it and in the list,
+// and a new policy starts on Days used. Every
 // language, at a narrow and a wide window, in each engine asked for; no
 // backend, the API is faked here. SHOTS=<dir> keeps a screenshot of each.
 const assert = require("node:assert/strict");
@@ -21,9 +23,9 @@ const { I18N } = strings();
 const tr = (lang, s, args = {}) => Object.entries(args).reduce((a, [k, v]) => a.replaceAll(`{${k}}`, v), lang === "en" ? s : I18N[lang]?.[s] ?? s);
 const until = async (ok) => { for (let i = 0; !ok(); i++) { if (i > 500) throw new Error("never came"); await new Promise((r) => setTimeout(r, 10)); } };
 const BUILTINS = [
-  { id: "standard", name: "Standard", kind: "ramp", start: 50, days: 14, builtin: true },
-  { id: "gentle", name: "Gentle", kind: "ramp", start: 70, days: 7, builtin: true },
-  { id: "cautious", name: "Cautious", kind: "ramp", start: 30, days: 30, builtin: true },
+  { id: "standard", name: "Standard", kind: "ramp", start: 50, days: 14, countDays: "used", builtin: true },
+  { id: "gentle", name: "Gentle", kind: "ramp", start: 70, days: 7, countDays: "used", builtin: true },
+  { id: "cautious", name: "Cautious", kind: "ramp", start: 30, days: 30, countDays: "used", builtin: true },
   { id: "off", name: "Off", kind: "off", builtin: true },
 ];
 const SLOW = { id: "slow", name: "Slow", kind: "ramp", start: 20, days: 30 };
@@ -110,6 +112,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // a built-in one has no choice
         await list.locator('.gp-item[data-id="standard"]').click();
         assert.equal(await list.locator(".growth-count").count(), 0);
+        assert.equal((await note()).trim(), x(USED_NOTE));
+        assert.equal((await list.locator('.gp-item[data-id="standard"] .gp-sum').textContent()).trim(), x("{said} · days used", { said: x("{start}% to 100% in {days} days", { start: 50, days: 14 }) }));
+        await list.locator('.gp-item[data-id="off"]').click();
+        assert.equal(await list.locator(".growth-count-note").count(), 0);
 
         // switched to the days used: its chart is asked again, and it is saved so
         await list.locator('.gp-item[data-id="slow"]').click();
@@ -133,6 +139,17 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await list.locator(".growth-save").click();
         await until(() => saves.length === 2);
         assert.deepEqual(saves[1].policies[0], { id: "slow", name: "Slow", kind: "ramp", start: 20, days: 30 });
+
+        // a new policy counts the days used until changed
+        await page.waitForFunction(() => document.querySelector("#growthList .growth-save")?.disabled);
+        await list.locator(".growth-new").click();
+        assert.equal((await on()).trim(), x("Days used"));
+        assert.equal((await note()).trim(), x(USED_NOTE));
+        await list.locator(".growth-save").click();
+        await until(() => saves.length === 3);
+        const made = saves[2].policies[2];
+        assert.deepEqual({ ...made, id: "" }, { id: "", name: x("New policy"), kind: "ramp", start: 50, days: 14, countDays: "used" });
+        assert.deepEqual(saves[2].policies[0], { id: "slow", name: "Slow", kind: "ramp", start: 20, days: 30 });
         assert.deepEqual(errors, []);
       });
     }

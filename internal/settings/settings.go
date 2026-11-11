@@ -565,9 +565,10 @@ type Settings struct {
 	// built-in ones (BuiltinGrowth), and GrowthDefault the id of the one
 	// accounts are held by: "" for Standard (GrowthInEffect). A policy's
 	// countDays (T-134) is how its days are counted: absent or "" for
-	// calendar days since the account's first use, as every built-in one
-	// and every one saved before counts them; "used" for only the days the
-	// gateway served a request of the account.
+	// calendar days since the account's first use, as every one saved
+	// before counts them; "used" for only the days the gateway served a
+	// request of the account, as the built-in ramps count them (since
+	// 2026-11-11) and a policy made in the editor does unless changed.
 	GrowthPolicies []GrowthPolicy `json:"growthPolicies,omitempty"`
 	GrowthDefault  string         `json:"growthDefault,omitempty"`
 	// Searcher is the provider that searches the web for a model that

@@ -345,3 +345,41 @@ func TestUsedDay(t *testing.T) {
 		t.Errorf("a clock set back past a day counted: from %v, want the first use", got)
 	}
 }
+
+// Magpie's own ramps count the days used (需求方 2026-11-11), so a user
+// who set nothing, or picked Standard, Gentle or Cautious, has an idle
+// account stay on its day: used on days 0 to 2, idle 3 to 7, used on day 8,
+// on each day d it is on the day of the days it was used on before d, its
+// share that day's of the built-in's ramp, by its row and by the
+// gateway's hold. On the calendar (each built-in until then) it would be on
+// day d. Run under TZ=UTC and TZ=Pacific/Kiritimati.
+func TestGrowthBuiltinsCountDaysUsed(t *testing.T) {
+	ramps := map[string][2]int{settings.GrowthStandard: {50, 14}, settings.GrowthGentle: {70, 7}, settings.GrowthCautious: {30, 30}}
+	for _, id := range []string{"", settings.GrowthStandard, settings.GrowthGentle, settings.GrowthCautious} {
+		name := id
+		if id == "" {
+			name, id = "nothing set", settings.GrowthStandard
+		}
+		t.Run(name, func(t *testing.T) {
+			usedDaysFixture(t, "")
+			if name != "nothing set" {
+				growthDefault(t, id)
+			}
+			r := ramps[id]
+			usedBefore := 0
+			for d := 0; d <= 10; d++ {
+				used := d <= 2 || d == 8
+				if used {
+					NoteAccountUsed("codex", "new@example.com", day(d, time.Hour))
+				}
+				g, s := grownAt(t, day(d, 2*time.Hour))
+				if g.Policy != id || g.Day != usedBefore || !g.UsedDays || g.UsedDaysUnknown || s != r[0]+(100-r[0])*usedBefore/r[1] {
+					t.Errorf("day %d: on day %d at %d%% (%+v), want day %d at %d%%", d, g.Day, s, g, usedBefore, r[0]+(100-r[0])*usedBefore/r[1])
+				}
+				if used {
+					usedBefore++
+				}
+			}
+		})
+	}
+}

@@ -237,18 +237,42 @@ func TestEditGrowth(t *testing.T) {
 }
 
 // A policy counts its days on the calendar ("") or by use
-// (GrowthUsedDays, T-134): every built-in one and one saved before counts
-// the calendar's, as before; one of the user's keeps what it was saved
-// with; any other way is refused.
+// (GrowthUsedDays, T-134): every built-in ramp counts the days used, and
+// so a user who set nothing (需求方 2026-11-11); one of the user's saved
+// before, with no countDays, and the stages from before policies were
+// kept count the calendar's, as before; one of the user's keeps what it
+// was saved with; any other way is refused.
 func TestGrowthCountDays(t *testing.T) {
 	growthHome(t)
 	for _, p := range BuiltinGrowth() {
-		if p.CountDays != "" {
-			t.Errorf("%s counts %q", p.ID, p.CountDays)
+		if want := map[bool]string{true: "", false: GrowthUsedDays}[p.Kind == GrowthOff]; p.CountDays != want {
+			t.Errorf("%s counts %q, want %q", p.ID, p.CountDays, want)
 		}
 	}
-	if g := (Settings{}).GrowthInEffect(); g.CountDays != "" {
+	if g := (Settings{}).GrowthInEffect(); g.CountDays != GrowthUsedDays {
 		t.Fatalf("a user who set nothing counts %q", g.CountDays)
+	}
+	saved := GrowthPolicy{ID: "slow", Name: "Slow", Kind: GrowthRamp, Start: 10, Days: 90}
+	if g := (Settings{GrowthPolicies: []GrowthPolicy{saved}, GrowthDefault: "slow"}).GrowthInEffect(); g.CountDays != "" {
+		t.Fatalf("a policy saved with no countDays counts %q", g.CountDays)
+	}
+	old := []GrowthStage{{From: 0, Window: GrowthWeek, Cap: 60}}
+	if g := (Settings{Growth: &old}).GrowthInEffect(); g.CountDays != "" {
+		t.Fatalf("the stages from before policies were kept count %q", g.CountDays)
+	}
+	m := Settings{Growth: &old}
+	MigrateGrowth(&m)
+	if m.GrowthPolicies[0].CountDays != "" {
+		t.Fatalf("the stages moved to a policy count %q", m.GrowthPolicies[0].CountDays)
+	}
+	// stages saved where the user has none of their own make a new policy,
+	// which counts as a new one does; stages saved onto one kept keep how
+	// it counts
+	if own, _, _ := WithOwnStages(nil, "", old); own[0].CountDays != GrowthUsedDays {
+		t.Fatalf("a new stages policy counts %q", own[0].CountDays)
+	}
+	if own, _, _ := WithOwnStages(m.GrowthPolicies, m.GrowthDefault, old); own[0].CountDays != "" {
+		t.Fatalf("stages saved onto the migrated policy count %q", own[0].CountDays)
 	}
 	use := GrowthPolicy{ID: "use", Name: "By use", Kind: GrowthStaged, Stages: []GrowthStage{{From: 0, Window: GrowthWeek, Cap: 60}}, CountDays: GrowthUsedDays}
 	if err := CheckGrowthPolicies([]GrowthPolicy{use, {ID: "climb", Name: "Climb", Kind: GrowthRamp, Start: 40, Days: 9, CountDays: GrowthUsedDays}}, "use"); err != nil {

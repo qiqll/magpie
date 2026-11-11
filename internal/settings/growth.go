@@ -115,13 +115,15 @@ const GrowthNameMost = 64
 // How a policy counts an account's days (GrowthPolicy.CountDays, T-134):
 // "" the calendar's, every 24 hours since its first use; GrowthUsedDays
 // only the days the gateway served a request of it, so an idle account
-// doesn't move on.
+// doesn't move on. Magpie's own ramps count the days used (需求方
+// 2026-11-11), and so does a policy the user makes from then on; one of
+// theirs saved before, with no countDays, keeps the calendar's.
 const GrowthUsedDays = "used"
 
 // GrowthPolicy is a growth policy: a ramp from Start% on day 0 to 100% on
 // day Days, or stages, or none. CountDays is how its days are counted: ""
-// (calendar days, every built-in policy's and every one saved before
-// T-134) or GrowthUsedDays. Builtin is set on magpie's own, which are
+// (calendar days, every policy of the user's saved before T-134) or
+// GrowthUsedDays (every built-in ramp's). Builtin is set on magpie's own, which are
 // never saved and can't be changed or removed.
 type GrowthPolicy struct {
 	ID        string        `json:"id"`
@@ -135,7 +137,8 @@ type GrowthPolicy struct {
 }
 
 // BuiltinGrowth are magpie's own policies, read only: Standard (50% to
-// 100% in 14 days), Gentle (70% in 7), Cautious (30% in 30) and Off.
+// 100% in 14 days), Gentle (70% in 7), Cautious (30% in 30), each counting
+// the days used (until 2026-11-11 the calendar's), and Off.
 func BuiltinGrowth() []GrowthPolicy {
 	return []GrowthPolicy{
 		builtinGrowth(GrowthStandard), builtinGrowth(GrowthGentle),
@@ -148,11 +151,11 @@ func BuiltinGrowth() []GrowthPolicy {
 func builtinGrowth(id string) GrowthPolicy {
 	switch id {
 	case GrowthStandard:
-		return GrowthPolicy{ID: id, Name: "Standard", Kind: GrowthRamp, Start: 50, Days: 14, Builtin: true}
+		return GrowthPolicy{ID: id, Name: "Standard", Kind: GrowthRamp, Start: 50, Days: 14, CountDays: GrowthUsedDays, Builtin: true}
 	case GrowthGentle:
-		return GrowthPolicy{ID: id, Name: "Gentle", Kind: GrowthRamp, Start: 70, Days: 7, Builtin: true}
+		return GrowthPolicy{ID: id, Name: "Gentle", Kind: GrowthRamp, Start: 70, Days: 7, CountDays: GrowthUsedDays, Builtin: true}
 	case GrowthCautious:
-		return GrowthPolicy{ID: id, Name: "Cautious", Kind: GrowthRamp, Start: 30, Days: 30, Builtin: true}
+		return GrowthPolicy{ID: id, Name: "Cautious", Kind: GrowthRamp, Start: 30, Days: 30, CountDays: GrowthUsedDays, Builtin: true}
 	case GrowthNone:
 		return GrowthPolicy{ID: id, Name: "Off", Kind: GrowthOff, Builtin: true}
 	}
@@ -452,7 +455,8 @@ func EditGrowth(edit func(own []GrowthPolicy, def string) ([]GrowthPolicy, strin
 // WithOwnStages is own and def with stages saved as the user's own stages
 // policy, made the default: the default's, when it is a stages policy of
 // the user's; GrowthMine's, when it has stages; a new one named as the
-// migrated stages are (migratedID) otherwise. own is not written.
+// migrated stages are (migratedID) otherwise, counting the days used as a
+// new policy does (the one kept keeps how it counts). own is not written.
 func WithOwnStages(own []GrowthPolicy, def string, stages []GrowthStage) ([]GrowthPolicy, string, error) {
 	own = slices.Clone(own)
 	at := slices.IndexFunc(own, func(p GrowthPolicy) bool { return p.ID == def && p.Kind == GrowthStaged })
@@ -461,7 +465,7 @@ func WithOwnStages(own []GrowthPolicy, def string, stages []GrowthStage) ([]Grow
 	}
 	if at < 0 {
 		id, name := migratedID(own)
-		own = append(own, GrowthPolicy{ID: id, Name: name, Kind: GrowthStaged})
+		own = append(own, GrowthPolicy{ID: id, Name: name, Kind: GrowthStaged, CountDays: GrowthUsedDays})
 		at = len(own) - 1
 	}
 	own[at].Stages = slices.Clone(stages)

@@ -7,9 +7,10 @@
 // and the share). Its chart is each day's shares as the gateway holds an
 // account to them, asked of POST /api/growth/preview (the same function
 // the gateway reads), never worked out here, with each account marked on
-// its day. A policy of the user's counts its days on the calendar or by
-// use (countDays "used", T-134: only the days the gateway served the
-// account). Every change is a draft, saved whole through
+// its day. A policy counts its days on the calendar or by use (countDays
+// "used", T-134: only the days the gateway served the account): magpie's
+// own ramps and a new policy by use, one of the user's saved before as it
+// was saved. Every change is a draft, saved whole through
 // settings/growth-policies. Run after app.js, whose helpers it shares
 // (el, input, segs, api, writingPrefs, status), and before start.js draws
 // Settings.
@@ -144,7 +145,7 @@ function renderGrowth(s) {
   const add = el("button", "text growth-new", t("New policy"));
   add.type = "button";
   add.onclick = () => {
-    const p = { id: growthFreeID(all), name: growthFreeName(all, t("New policy")), kind: "ramp", start: "50", days: "14", stages: [] };
+    const p = { id: growthFreeID(all), name: growthFreeName(all, t("New policy")), kind: "ramp", start: "50", days: "14", countDays: "used", stages: [] };
     d.own.push(p);
     growthSel = p.id;
     edit();
@@ -256,6 +257,7 @@ function growthEditor(p, d, all, edit, redraw) {
 
   if (p.builtin) {
     ed.append(el("div", "gp-note", p.kind === "off" ? t("magpie's own policy: no account is held.") : t("magpie's own policy, read only. Copy it to change it.")));
+    if (p.kind !== "off") ed.append(growthCountNote(p));
     return ed;
   }
   const kind = segs([["ramp", t("Ramp")], ["stages", t("In stages")]], p.kind, (v) => {
@@ -340,11 +342,14 @@ function growthCountLine(p, edit, redraw) {
   const pick = segs([["", t("Calendar days")], ["used", t("Days used")]], p.countDays || "", (v) => { p.countDays = v; edit(); redraw(); });
   pick.setAttribute("aria-label", t("How its days are counted"));
   line.append(el("span", "gp-lab", t("Days counted")), pick);
-  const note = el("div", "gp-note growth-count-note", p.countDays === "used"
-    ? t("Only a day the gateway served a request of the account counts, so an idle account stays on its day. An account magpie doesn't send requests for (Claude Code kept to the agent, Codex switch-only) counts calendar days.")
-    : t("Every day since its first use counts, used or not."));
-  return [line, note];
+  return [line, growthCountNote(p)];
 }
+
+// growthCountNote says what p's way of counting days means; a built-in
+// ramp's too, which counts the days used (需求方 2026-11-11)
+const growthCountNote = (p) => el("div", "gp-note growth-count-note", p.countDays === "used"
+  ? t("Only a day the gateway served a request of the account counts, so an idle account stays on its day. An account magpie doesn't send requests for (Claude Code kept to the agent, Codex switch-only) counts calendar days.")
+  : t("Every day since its first use counts, used or not."));
 
 // growthAsk asks for the chart of p as the page has it, once its numbers
 // are a policy; until then, and while it is asked, the last chart stays,
