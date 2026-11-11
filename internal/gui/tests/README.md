@@ -2192,6 +2192,13 @@ With Node.js and Playwright available, `make test-ui` manually runs the whole su
 every `internal/gui/tests/*.test.cjs`, discovered automatically. Files are
 independent and run a few at a time (`UI_TEST_CONCURRENCY`, default 2); set
 `UI_TEST_CONCURRENCY=1` to run one at a time when diagnosing a flaky file.
+Each test fails after `UI_TEST_TIMEOUT` ms (default 600000) rather than
+waiting forever on a browser that stopped answering on a busy machine.
+`browser.cjs` starts a test's browser with a 60s bound on its launch, new
+context and new page, each failing with the step that didn't answer, and
+`TEST_MS` (5 minutes) for a test's own `{ timeout }`; `window-cap-pool` and
+`account-cap` use it. Run alone with `node --test`, a file without them has
+no timeout at all.
 
 ```sh
 make test-ui

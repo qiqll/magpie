@@ -11,7 +11,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { test } = require("node:test");
-const { chromium, webkit } = require("playwright");
+const { TEST_MS, launch, newPage } = require("./browser.cjs");
 
 const assets = path.resolve(__dirname, "../assets");
 const at = (h) => new Date(Date.now() + h * 36e5 + 60e3).toISOString();
@@ -78,15 +78,16 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     for (const lang of Object.keys(words)) {
       const w = words[lang];
       const open = async (t, name, windows) => {
-        const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+        const browser = await launch(engine);
+        let page;
         t.after(async () => {
-          if (process.env.ARTIFACT_DIR) {
+          if (process.env.ARTIFACT_DIR && page) {
             await fs.mkdir(process.env.ARTIFACT_DIR, { recursive: true });
             await page.screenshot({ path: path.join(process.env.ARTIFACT_DIR, `${engine}-${width}-${lang}-${name}-window-cap-pool.png`) });
           }
           await browser.close();
         });
-        const page = await (await browser.newContext({ viewport: { width, height: 760 }, reducedMotion: "reduce" })).newPage();
+        page = await newPage(browser, engine, { viewport: { width, height: 760 }, reducedMotion: "reduce" });
         page.setDefaultTimeout(5000);
         page.setDefaultNavigationTimeout(60000);
         const errors = [], posts = [];
@@ -116,7 +117,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       };
       const label = `${engine} ${width} ${lang}`;
 
-      test(`${label}: each pool's 5 hours and 7 days sets its own cap`, async (t) => {
+      test(`${label}: each pool's 5 hours and 7 days sets its own cap`, { timeout: TEST_MS }, async (t) => {
         const { page, errors, posts } = await open(t, "pool", pooled);
         // Gemini 5h, Gemini 7d, Claude & GPT 5h, 7d: every meter a button
         assert.equal(await row(page).locator(".aq-win").count(), 4);
@@ -138,7 +139,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(errors, []);
       });
 
-      test(`${label}: a family's meter sets each of its models' windows`, async (t) => {
+      test(`${label}: a family's meter sets each of its models' windows`, { timeout: TEST_MS }, async (t) => {
         const { page, errors, posts } = await open(t, "family", () => models(false));
         assert.equal(await meters(page).count(), 2);
         const gemini = meters(page).first();

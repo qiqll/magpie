@@ -51,10 +51,13 @@ test:
 UI_TESTS = $(wildcard internal/gui/tests/*.test.cjs)
 # Files are independent and run in parallel; 1 diagnoses a flaky one.
 UI_TEST_CONCURRENCY ?= 2
+# A test that waits on a stuck browser fails after this many ms instead of
+# holding the run forever; the slowest test, a whole page on phones, ~4.5 min.
+UI_TEST_TIMEOUT ?= 600000
 
 test-ui:
 	@test -n "$(UI_TESTS)" || { echo "no GUI tests found under internal/gui/tests" >&2; exit 1; }
-	node --test --test-concurrency=$(UI_TEST_CONCURRENCY) $(UI_TESTS)
+	node --test --test-concurrency=$(UI_TEST_CONCURRENCY) --test-timeout=$(UI_TEST_TIMEOUT) $(UI_TESTS)
 
 # macOS bundle: menu bar app with no Dock icon (LSUIElement).
 app: build

@@ -13,7 +13,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { test } = require("node:test");
-const { chromium, webkit } = require("playwright");
+const { TEST_MS, launch, newPage } = require("./browser.cjs");
 
 const assets = path.resolve(__dirname, "../assets");
 const inHours = (h) => new Date(Date.now() + h * 3600e3 + 60e3).toISOString();
@@ -97,15 +97,16 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
   for (const lang of ["en", "zh"]) {
     const w = words[lang];
     const open = async (t, name, use, alone) => {
-      const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+      const browser = await launch(engine);
+      let page;
       t.after(async () => {
-        if (process.env.ARTIFACT_DIR) {
+        if (process.env.ARTIFACT_DIR && page) {
           await fs.mkdir(process.env.ARTIFACT_DIR, { recursive: true });
           await page.screenshot({ path: path.join(process.env.ARTIFACT_DIR, `${engine}-${lang}-${name}-account-cap.png`) });
         }
         await browser.close();
       });
-      const page = await (await browser.newContext({ viewport: { width: 900, height: 760 }, reducedMotion: "reduce" })).newPage();
+      page = await newPage(browser, engine, { viewport: { width: 900, height: 760 }, reducedMotion: "reduce" });
       page.setDefaultTimeout(5000);
       page.setDefaultNavigationTimeout(60000);
       const errors = [];
@@ -137,7 +138,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       return posts.at(-1);
     };
 
-    test(`${engine} ${lang}: an account's usage cap is shown, set from the app's menu, typed, and lifted`, async (t) => {
+    test(`${engine} ${lang}: an account's usage cap is shown, set from the app's menu, typed, and lifted`, { timeout: TEST_MS }, async (t) => {
       const { page, errors, posts } = await open(t, "codex");
       // me is capped at 70% and at 75%: its pill, the note and a mark on each meter
       assert.equal(await pill(page, "me@example.com").textContent(), w.cap(70));
@@ -206,7 +207,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     // signed in to it asks the vendor itself; with no other account on to
     // move it to, the cap stops only what goes through magpie, and the row
     // says so, as the pill does before the cap is reached
-    test(`${engine} ${lang}: the only account on, at its cap, says the agent signed in to it still uses it`, async (t) => {
+    test(`${engine} ${lang}: the only account on, at its cap, says the agent signed in to it still uses it`, { timeout: TEST_MS }, async (t) => {
       const { page, errors } = await open(t, "alone", usage, true);
       const note = row(page, "me@example.com").locator(".acap-held");
       assert.equal(await note.textContent(), w.direct);
@@ -224,13 +225,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.deepEqual(errors, []);
     });
 
-    test(`${engine} ${lang}: with another account on, the pill and the note don't say the agent goes past the cap`, async (t) => {
+    test(`${engine} ${lang}: with another account on, the pill and the note don't say the agent goes past the cap`, { timeout: TEST_MS }, async (t) => {
       const { page } = await open(t, "codex");
       assert.equal(await row(page, "me@example.com").locator(".acap-direct").count(), 0);
       assert.doesNotMatch(await pill(page, "me@example.com").getAttribute("title"), /Codex is signed in|Codex 登录此账号/);
     });
 
-    test(`${engine} ${lang}: a window of one model past the cap holds the account for that model, and says so`, async (t) => {
+    test(`${engine} ${lang}: a window of one model past the cap holds the account for that model, and says so`, { timeout: TEST_MS }, async (t) => {
       const { page, errors } = await open(t, "opus", opusUsage);
       const note = row(page, "me@example.com").locator(".acap-held");
       assert.equal(await note.textContent(), w.opus);
