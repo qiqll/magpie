@@ -395,6 +395,7 @@ function growthAsk(p) {
   const key = out ? JSON.stringify({ id: out.id, kind: out.kind, start: out.start, days: out.days, stages: out.stages, countDays: out.countDays }) : "";
   growthChart.want = key;
   growthChart.err = "";
+  growthChart.policy = p;
   clearTimeout(growthChart.timer);
   if (key && key === growthChart.key) return growthDraw();
   growthDraw();
@@ -531,7 +532,11 @@ function growthDraw() {
 // growthUseFill says which subscriptions the policy shown holds, how
 // many of their accounts picked it themselves (T-133) and how many ramp
 // up now; a policy a subscription or an account picked can't be deleted
-// until it is picked no more (T-131), as the server refuses too
+// until it is picked no more (T-131), as the server refuses too. A pick
+// that holds nothing is listed as the server counts it (T-145): of a
+// subscription turned off, of one Providers has no row of, of an account
+// its subscription no longer lists; the last two have no other place to
+// be changed, so each is cleared here.
 function growthUseFill() {
   const box = growthChart.box?.closest("#growthList"), say = box?.querySelector(".growth-uses");
   if (!say) return;
@@ -539,18 +544,52 @@ function growthUseFill() {
   if (!uses) return say.replaceChildren();
   const line = (u) => {
     const own = u.accountsPicked ? t(u.accountsPicked === 1 ? "1 account picked it" : "{n} accounts picked it", { n: u.accountsPicked }) : "";
-    if (u.accountsOnly) return t("{name}: {own} · {n} ramping up", { name: u.name, own, n: u.accounts });
-    const said = t(u.picked ? "{name} picked it · {n} ramping up" : "{name} follows the default · {n} ramping up", { name: u.name, n: u.accounts });
+    const name = u.off ? t("{name} (turned off)", { name: u.name }) : u.unlisted ? t("{name} (not in Providers)", { name: u.name }) : u.name;
+    if (u.off || u.unlisted) {
+      // it holds no account now: nothing ramps up
+      if (!u.picked) return t("{name}: {own}", { name, own });
+      const said = t("{name} picked it", { name });
+      return own ? said + " · " + own : said;
+    }
+    if (u.accountsOnly) return t("{name}: {own} · {n} ramping up", { name, own, n: u.accounts });
+    const said = t(u.picked ? "{name} picked it · {n} ramping up" : "{name} follows the default · {n} ramping up", { name, n: u.accounts });
     return own ? said + " · " + own : said;
   };
-  say.replaceChildren(...(uses.length ? uses.map((u) => el("div", "growth-use", line(u)))
-    : [el("div", "growth-use", t("No subscription is held by it"))]));
+  // clearing a pick asks for the chart again, whose In use then leaves it
+  // out; one the server refuses says why
+  const clear = (b, path, body) => {
+    b.disabled = true;
+    api(path, { ...body, growthPolicy: "" }).then(() => {
+      growthChart.key = "";
+      if (growthChart.policy) growthAsk(growthChart.policy);
+    }, (e) => { b.disabled = false; status(growthWhy(e), "err"); });
+  };
+  const clearer = (path, body) => {
+    const b = el("button", "text growth-clear", t("Clear the pick"));
+    b.type = "button";
+    b.onclick = () => clear(b, path, body);
+    return b;
+  };
+  const rows = [];
+  for (const u of uses) {
+    const row = el("div", "growth-use", line(u));
+    if (u.unlisted && u.picked) row.append(" ", clearer("provider/growthpolicy", { id: u.provider }));
+    rows.push(row);
+    for (const a of u.gone || []) {
+      const g = el("div", "growth-use growth-gone-pick", t("{account} picked it, but {name} no longer lists it", { account: a, name: u.name }));
+      g.append(" ", clearer("provider/accountgrowthpolicy", { id: u.provider, account: a }));
+      rows.push(g);
+    }
+  }
+  say.replaceChildren(...(rows.length ? rows : [el("div", "growth-use", t("No subscription is held by it"))]));
   const picked = uses.filter((u) => u.picked || u.accountsPicked).map((u) => u.name), del = box.querySelector(".growth-delete");
   if (del && picked.length) {
     del.disabled = true;
-    del.title = uses.some((u) => u.accountsPicked)
-      ? t("{names} picked it: pick another policy in its editor or on its accounts' rows first", { names: picked.join(", ") })
-      : t("{names} picked it: pick another policy in its editor first", { names: picked.join(", ") });
+    del.title = uses.some((u) => u.unlisted || u.gone?.length)
+      ? t("{names} picked it: clear what is left here, or pick another policy in its editor or on its accounts' rows, first", { names: picked.join(", ") })
+      : uses.some((u) => u.accountsPicked)
+        ? t("{names} picked it: pick another policy in its editor or on its accounts' rows first", { names: picked.join(", ") })
+        : t("{names} picked it: pick another policy in its editor first", { names: picked.join(", ") });
   }
 }
 

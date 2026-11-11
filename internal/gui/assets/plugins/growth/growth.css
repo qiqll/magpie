@@ -68,6 +68,9 @@
 .gp-table td { color: var(--fg-2); }
 /* In use's subscriptions, and a subscription editor's pick (T-131) */
 .growth-foot .growth-uses { display: flex; flex-direction: column; gap: 1px; margin-top: 4px; overflow-wrap: anywhere; }
+/* a pick that holds nothing, cleared from In use (T-145) */
+.growth-foot .growth-gone-pick { padding-left: 12px; }
+.growth-foot .growth-clear { font-size: inherit; padding: 0 4px; }
 .growth-pick { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
 .growth-pick .growth-pill { max-width: 100%; }
 .growth-pick .growth-pill > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
