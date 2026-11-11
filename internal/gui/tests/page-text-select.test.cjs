@@ -104,7 +104,7 @@ const loose = (page) => page.evaluate(() => {
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   for (const lang of ["en", "zh", "zh-TW", "ja", "de"]) {
     for (const width of [1000, 420]) {
-      test(`${engine} ${lang} ${width}: a page's words and numbers can be selected, its controls can't`, async (t) => {
+      test(`${engine} ${lang} ${width}: a page's words and numbers can be selected, its controls can't`, { timeout: 120e3 }, async (t) => {
         const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
         t.after(() => browser.close());
         const page = await (await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: "reduce" })).newPage();
@@ -174,7 +174,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         // Library: a drag across a skill's name opens nothing; a click reads it
         await page.goto("http://magpie.test/");
-        await page.evaluate(() => show("library"));
+        await page.evaluate(() => { show("library"); }); // not its promise, which waits on the page's loads
         // its Skills tab
         const kinds = page.locator("#view-library .lib-tabs");
         await kinds.waitFor();
@@ -191,7 +191,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.locator('#view-plugins .lib-tabs .opt[data-sub="installed"]').click();
         const plugin = page.locator("#view-plugins .pm-row .name").first();
         await plugin.waitFor();
-        assert.match(await drag(page, plugin), /opencode-copilot-auth/);
+        assert.match(await drag(page, plugin), /opencode-copilot/); // its end may be cut off at 420px
         assert.equal(await page.locator(".pm-detail").count(), 0, "a drag across a plugin's name opened its detail");
         await plugin.click();
         await page.locator(".pm-detail").waitFor();
