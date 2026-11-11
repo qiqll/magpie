@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -264,7 +265,8 @@ func TestGraduatedKeptApart(t *testing.T) {
 	if err := Mirror(there, nil); err != nil {
 		t.Fatal(err)
 	}
-	if s, _ := storedPicks("codex"); !s.AccountGraduated["new@example.com"].Equal(day(15, 0)) || !s.AccountGraduated["other@example.com"].Equal(day(16, 0)) {
+	// other@ isn't added here or there: its mark isn't kept (review M3)
+	if s, _ := storedPicks("codex"); !s.AccountGraduated["new@example.com"].Equal(day(15, 0)) || len(s.AccountGraduated) != 1 {
 		t.Fatalf("after a sync with an earlier one: %v", s.AccountGraduated)
 	}
 
@@ -327,5 +329,96 @@ func TestGraduatedWithTheFirstUseRead(t *testing.T) {
 	GraduateOnce()
 	if after, _ := os.Stat(Path()); !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
 		t.Fatal("GraduateOnce wrote the file again")
+	}
+}
+
+// A backup from before T-150 (no accountGraduated) restored keeps the
+// marks made here: the mark is made once, so one dropped is never made
+// again, and the account would be held at 78% (T-150 review H1).
+func TestGraduatedKeptThroughARestore(t *testing.T) {
+	usedDaysFixture(t, "")
+	fromT134(t)
+	for d := range 8 {
+		NoteAccountUsed("codex", "new@example.com", day(d, time.Hour))
+	}
+	upgrade := day(20, 0)
+	graduateOnce(upgrade)
+	ps, err := Stored()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range ps {
+		ps[i].AccountGraduated = nil
+	}
+	if _, _, err := Restore(ps); err != nil {
+		t.Fatal(err)
+	}
+	if !graduated().Equal(upgrade) {
+		t.Fatalf("after a restore without it: %v", graduated())
+	}
+	if s := fiveHoursAt(day(21, 0)); s != 100 {
+		t.Fatalf("after a restore: held at %d%%", s)
+	}
+}
+
+// An account the user removed here isn't marked again by a sync bringing
+// the other computer's mark: added again, it is new (review M3).
+func TestGraduatedNotBroughtBackForARemoved(t *testing.T) {
+	usedDaysFixture(t, "")
+	fromT134(t)
+	NoteAccountUsed("codex", "new@example.com", day(0, 0))
+	graduateOnce(day(20, 0))
+	f, _ := read()
+	there := slices.Clone(f.Providers)
+	if err := ForgetLogin("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	// the other computer's record of the account removed here, its mark
+	// still on, its AccountAdded gone with this computer's sync of the
+	// removal
+	for i := range there {
+		if there[i].ID == "codex" {
+			there[i].AccountAdded = maps.Clone(there[i].AccountAdded)
+			delete(there[i].AccountAdded, "new@example.com")
+		}
+	}
+	if err := Mirror(there, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !graduated().IsZero() {
+		t.Fatalf("a mark of an account not added came back: %v", graduated())
+	}
+}
+
+// Settings that can't be read are unknown: nothing is marked, the mark
+// isn't done, and the next start with them read makes it (review M1).
+func TestGraduatedWaitsForSettings(t *testing.T) {
+	usedDaysFixture(t, "")
+	fromT134(t)
+	NoteAccountUsed("codex", "new@example.com", day(0, 0))
+	good, err := os.ReadFile(settings.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// no copy to read it from either
+	if err := os.Remove(settings.Path() + ".bak"); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings.Path(), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.SharedChecked(); err == nil {
+		t.Fatal("settings read with no error")
+	}
+	graduateOnce(day(20, 0))
+	if !graduated().IsZero() || storedFile().GraduatedRead {
+		t.Fatalf("settings unreadable: marked %v, done %v", graduated(), storedFile().GraduatedRead)
+	}
+	if err := os.WriteFile(settings.Path(), good, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	graduateOnce(day(20, 0))
+	if graduated().IsZero() || !storedFile().GraduatedRead {
+		t.Fatalf("settings read again: marked %v, done %v", graduated(), storedFile().GraduatedRead)
 	}
 }

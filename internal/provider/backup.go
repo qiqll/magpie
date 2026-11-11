@@ -48,14 +48,20 @@ func Restore(ps []Provider) (added, replaced int, err error) {
 			}
 		}
 		if i < 0 {
+			p.AccountGraduated = keptGraduated(nil, p.AccountGraduated, p.AccountAdded)
 			p.KeepSelf = false
 			f.Providers = append(f.Providers, p)
 			added++
 			continue
 		}
 		keepSelf := f.Providers[i].KeepSelf // this computer's own (Mirror)
+		// the ramp-ups found done here are kept beside the backup's: the
+		// mark is made once (GraduatedRead), so one a backup from before
+		// T-150 drops would never be made again (T-150 review H1)
+		grad := keptGraduated(f.Providers[i].AccountGraduated, p.AccountGraduated, p.AccountAdded)
 		f.Providers[i] = KeepSecrets(p, f.Providers[i], p.Key == "" && len(p.Keys) == 0)
 		f.Providers[i].KeepSelf = keepSelf
+		f.Providers[i].AccountGraduated = grad
 		replaced++
 	}
 	if added+replaced == 0 {
@@ -134,10 +140,12 @@ func Mirror(ps []Provider, gs []Group) error {
 			// and its days used, counted against that first use (T-134)
 			p.AccountUsedDays = keptUsedDays(h.AccountUsedDays, p.AccountUsedDays, p.AccountFirstUsed)
 			// and a ramp-up found done on either computer, the earlier (T-150)
-			p.AccountGraduated = earlierFirstUsed(h.AccountGraduated, p.AccountGraduated)
+			p.AccountGraduated = keptGraduated(h.AccountGraduated, p.AccountGraduated, p.AccountAdded)
 			p.KeepLogin, p.KeepLoginAs, p.SwitchOnly, p.RestartApp = h.KeepLogin, h.KeepLoginAs, h.SwitchOnly, h.RestartApp
 			p.KeepSelf = h.KeepSelf
 		} else {
+			// marks only of the accounts it has (T-150 review M3)
+			p.AccountGraduated = keptGraduated(nil, p.AccountGraduated, p.AccountAdded)
 			p.KeepLoginAs = "" // an account signed in on the other computer
 			p.KeepSelf = false // kept on the other computer, of a magpie that isn't this one
 		}

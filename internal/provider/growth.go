@@ -1515,9 +1515,16 @@ func graduateOnce(now time.Time) {
 
 // graduate marks in f, at now, each account GraduateOnce marks, and the
 // mark done (GraduatedRead): how many were marked. Nothing for a file
-// marked already.
+// marked already. Settings that can't be read are unknown, never the
+// default: nothing is marked nor the mark done, and a later start makes it
+// (review M1).
 func graduate(f *file, now time.Time) int {
 	if f.GraduatedRead {
+		return 0
+	}
+	st, err := settings.SharedChecked()
+	if err != nil {
+		log.Printf("settings: %v; the accounts whose ramp-up is done are marked at a later start", err)
 		return 0
 	}
 	at, marked := now.UTC().Truncate(time.Second), 0
@@ -1530,7 +1537,7 @@ func graduate(f *file, now time.Time) int {
 			if !addedKnown(used) || !addedKnown(p.AccountAdded[u]) || letGo(*p, u) {
 				continue
 			}
-			pol := settings.Shared().GrowthFor(p.AccountGrowthPolicy[u], p.GrowthPolicy)
+			pol := st.GrowthFor(p.AccountGrowthPolicy[u], p.GrowthPolicy)
 			if pol.CountDays != settings.GrowthUsedDays || pol.Kind != settings.GrowthRamp && pol.Kind != settings.GrowthStaged {
 				continue
 			}
@@ -1555,6 +1562,21 @@ func logGraduated(marked int) {
 	if marked > 0 {
 		log.Printf("growth: %d accounts had their ramp-up done by the calendar and are held no more, now their policy counts the days used", marked)
 	}
+}
+
+// keptGraduated are the marks of here and there (a sync's or a restore's),
+// each account's earlier (earlierFirstUsed), of the accounts added has
+// alone: a mark of an account the user removed (forgetAdded) on one side
+// is not brought back by the other's, so one added again is new (review
+// M3); a restore of a record from before T-150 keeps the marks here
+// (review H1).
+func keptGraduated(here, there map[string]time.Time, added map[string]time.Time) map[string]time.Time {
+	out := earlierFirstUsed(here, there)
+	maps.DeleteFunc(out, func(u string, _ time.Time) bool { return !addedKnown(added[u]) })
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // holdsAny is whether caps holds a window under 100%.
