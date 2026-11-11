@@ -23,6 +23,7 @@ import (
 	"github.com/yetone/magpie/internal/library"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/renewal"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/update"
 	"github.com/yetone/magpie/internal/upstream"
@@ -229,6 +230,11 @@ type providerJSON struct {
 	// it no more till it is resumed (provider/resumegrowth). Shown only, as
 	// AccountAdded is
 	AccountGrowthSkipped map[string]time.Time `json:"accountGrowthSkipped,omitempty"`
+	// each account's paid period the user told the opening of, by its name
+	// in lower case (provider.AccountOpenedOf, T-154), worked out now
+	// (renewal.Of): when it ends, the days left and whether it is due, for
+	// Models › Accounts to say. Nothing is worked out on the page
+	AccountRenewal map[string]*renewal.State `json:"accountRenewal,omitempty"`
 	// where a custom provider's balance is asked (see provider.Balance)
 	BalanceURL    string `json:"balanceURL,omitempty"`
 	BalancePath   string `json:"balancePath,omitempty"`
@@ -896,6 +902,12 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 					out.AccountGrowthSkipped = map[string]time.Time{}
 				}
 				out.AccountGrowthSkipped[strings.ToLower(strings.TrimSpace(r))] = at
+			}
+			if st := renewal.Of(provider.AccountOpenedOf(p.ID, r), now); st != nil {
+				if out.AccountRenewal == nil {
+					out.AccountRenewal = map[string]*renewal.State{}
+				}
+				out.AccountRenewal[strings.ToLower(strings.TrimSpace(r))] = st
 			}
 		}
 	}
@@ -1828,6 +1840,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// Alias, for accountname: the account's name of the user's
 			// own, "" to take it off (#1515)
 			Alias string `json:"alias"`
+			// Opened, for accountopened: when the account's paid period
+			// was opened (RFC 3339), "" to take it off (T-154)
+			Opened string `json:"opened"`
 			// Typed, for test and models: the request carries the editor's
 			// form, which is tried as it stands before a Save (see typed)
 			Typed bool `json:"typed"`
@@ -2534,6 +2549,19 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// the skip undone: the growth policy holds the account again
 			// (T-158)
 			if err := provider.ResumeGrowth(in.ID, req.Account); err != nil {
+				fail(rw, err)
+				return
+			}
+		case "accountopened":
+			var at time.Time
+			if v := strings.TrimSpace(req.Opened); v != "" {
+				var err error
+				if at, err = time.Parse(time.RFC3339, v); err != nil {
+					fail(rw, fmt.Errorf("the opening date %q isn't a time", v))
+					return
+				}
+			}
+			if err := provider.SetAccountOpened(in.ID, req.Account, at); err != nil {
 				fail(rw, err)
 				return
 			}

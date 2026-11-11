@@ -24,6 +24,9 @@ let acxHolds = null, acxHoldHours = 12, acxHoldsAt = 0;
 let acxUsage = null, acxUsageAt = 0;
 // what the list was drawn from, so a change elsewhere draws it again
 let acxSeen = null, acxWatch = 0;
+// the account whose start date is being picked (renewEditor, T-154), by
+// its provider and its name in lower case
+let acxRenewing = "";
 
 function acxMount() {
   const q = $("#acxQ");
@@ -125,7 +128,10 @@ function acxRows() {
       const graduated = p.accountGraduated?.[acxLow(l.user)] || "";
       // its ramp-up skipped, till resumed (provider.AccountGrowthSkippedOf, T-158)
       const skipped = p.accountGrowthSkipped?.[acxLow(l.user)] || "";
-      out.push({ p, a, l, sub, state, banned, disabled, off, authFailed, again, act, q, added, firstUsed, growth, pick, graduated, skipped, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
+      // its paid period from the start date the user told, as the server
+      // worked it out (provider.AccountOpened, renewal.Of, T-154)
+      const renew = p.accountRenewal?.[acxLow(l.user)] || null;
+      out.push({ p, a, l, sub, state, banned, disabled, off, authFailed, again, act, q, added, firstUsed, growth, pick, graduated, skipped, renew, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
     }
   }
   return out;
@@ -289,8 +295,12 @@ function acxDraw() {
     if (nd) parts.push(t("{n} disabled", { n: nd }));
     // the line to act on is the warning's, said last
     if (n("again")) parts.push(t("{n} to sign in again", { n: n("again") }));
+    // and the paid periods due, soon or ended (T-154)
+    const due = all.filter((r) => r.renew?.due).length;
+    if (due) parts.push(t(due === 1 ? "1 to renew" : "{n} to renew", { n: due }));
     sum.append(...parts.flatMap((s, i) => (i ? [" · ", el("span", "", s)] : [el("span", "", s)])));
-    if (n("again")) sum.lastChild.classList.add("acx-warn");
+    if (n("again") || due) sum.lastChild.classList.add("acx-warn");
+    if (n("again") && due) sum.lastChild.previousElementSibling.classList.add("acx-warn");
   }
 
   const list = $("#acxList");
@@ -507,8 +517,20 @@ function acxWho(r) {
     done.title = t("Its ramp-up was done by the calendar when its growth policy began counting only the days used, so the policy holds it no more");
     name.append(done);
   }
+  name.append(acxRenew(r));
   who.append(name);
   return [who, alias];
+}
+
+// acxRenew: the account's paid period as a pill (renewPill, shared with
+// Models › Proxy IPs), or its start date being picked; a pick is kept
+// with provider/accountopened, and the server's answer draws the list
+function acxRenew(r) {
+  const { p, l } = r;
+  const key = p.id + "/" + acxLow(l.user);
+  if (acxRenewing !== key) return renewPill(r.renew, () => { acxRenewing = key; acxDraw(); });
+  return renewEditor(r.renew, (opened) => accountAction("provider/accountopened", { id: p.id, account: l.user, opened }),
+    () => { acxRenewing = ""; acxDraw(); });
 }
 
 // acxMeter: a window as a bar, its name and the share used; with its

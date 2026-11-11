@@ -556,6 +556,15 @@ type Provider struct {
 	// removes the account (forgetAdded), and a sync keeps both
 	// computers', the earlier time.
 	AccountGraduated map[string]time.Time `json:"accountGraduated,omitempty"`
+	// AccountOpened is, for a subscription, when the user says each
+	// account's paid period was opened (T-154), by its name in lower case:
+	// the period is renewal.Days long, and Models › Accounts asks for a
+	// renewal from renewal.WarnDays before its end (renewal.Of). Set on its
+	// own (provider/accountopened, SetAccountOpened); the editor's Save
+	// keeps what the file has. It moves with an account renamed
+	// (moveAccountSettings), goes when the user removes the account
+	// (forgetAdded), and a sync or backup carries it with the record.
+	AccountOpened map[string]time.Time `json:"accountOpened,omitempty"`
 	// AccountWindowAmounts is, for a subscription, the fixed amount of a
 	// window's own unit (credits, requests, tokens) an account is used to
 	// at most where the user set one in place of a share (9won_25273 on
@@ -1041,6 +1050,7 @@ func (p Provider) clone() Provider {
 	p.AccountGrowthPolicy = maps.Clone(p.AccountGrowthPolicy)
 	p.AccountGrowthSkipped = maps.Clone(p.AccountGrowthSkipped)
 	p.AccountGraduated = maps.Clone(p.AccountGraduated)
+	p.AccountOpened = maps.Clone(p.AccountOpened)
 	p.AccountNames = maps.Clone(p.AccountNames)
 	p.KeySpendCaps = maps.Clone(p.KeySpendCaps)
 	p.KeyOwnBalances = maps.Clone(p.KeyOwnBalances)
@@ -1167,6 +1177,7 @@ func accountSettings(a, pk Provider) Provider {
 	a.AccountCaps, a.AccountWindowCaps, a.AccountWindowAmounts = pk.AccountCaps, pk.AccountWindowCaps, pk.AccountWindowAmounts
 	a.CapStop, a.CapCareful = pk.CapStop, pk.CapCareful
 	a.GrowthPolicy, a.AccountGrowthPolicy, a.AccountGrowthSkipped = pk.GrowthPolicy, pk.AccountGrowthPolicy, pk.AccountGrowthSkipped
+	a.AccountOpened = pk.AccountOpened
 	a.UseFirst = pk.UseFirst
 	a.AccountNames = pk.AccountNames
 	a.MaxConcurrency, a.PinUpstream = pk.MaxConcurrency, pk.PinUpstream
@@ -1444,6 +1455,8 @@ func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err e
 		p.AccountGrowthSkipped = was.AccountGrowthSkipped
 		// and a ramp-up found done is magpie's (T-150)
 		p.AccountGraduated = was.AccountGraduated
+		// and when its accounts' periods were opened is set on its own (T-154)
+		p.AccountOpened = was.AccountOpened
 		if p.Was == nil {
 			p.Was = was.Was
 		}
@@ -2041,6 +2054,7 @@ func normalize(p Provider) Provider {
 	p.AccountGrowthPolicy = normalAccountGrowthPolicy(p.AccountGrowthPolicy)
 	p.AccountGrowthSkipped = normalAccountAdded(p.AccountGrowthSkipped)
 	p.AccountGraduated = normalAccountAdded(p.AccountGraduated)
+	p.AccountOpened = normalAccountAdded(p.AccountOpened)
 	p.AccountWindowAmounts = normalWindowAmounts(p.AccountWindowAmounts)
 	p.AccountNames = normalAccountNames(p.AccountNames)
 	p.KeySpendCaps = normalKeySpendCaps(p.KeySpendCaps)

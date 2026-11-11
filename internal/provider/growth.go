@@ -1966,6 +1966,15 @@ func forgetAdded(agent string, users ...string) {
 			}
 			changed = true
 		}
+		// and when its period was opened (T-154)
+		if _, ok := p.AccountOpened[accountKey(u)]; ok {
+			p.AccountOpened = maps.Clone(p.AccountOpened)
+			delete(p.AccountOpened, accountKey(u))
+			if len(p.AccountOpened) == 0 {
+				p.AccountOpened = nil
+			}
+			changed = true
+		}
 		if _, ok := p.AccountAdded[accountKey(u)]; ok {
 			if !cloned {
 				cloned = true
