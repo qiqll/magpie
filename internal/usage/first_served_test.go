@@ -1,9 +1,13 @@
 package usage
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/yetone/magpie/internal/provider"
@@ -93,5 +97,49 @@ func TestServedDaysCountsEachDayOnce(t *testing.T) {
 		if _, err := ServedDays(map[[2]string]time.Time{k: from}); err == nil {
 			t.Fatal("an unreadable ledger read as not used")
 		}
+	}
+}
+
+// A ledger read that stops partway is an error to FirstServed and
+// ServedDays, never the rows before it taken for all (T-149): the
+// account's served row after the break would read as never used (day 0)
+// or as not used on its days. The read that failed isn't kept as the
+// ledger either: the next one, read through, has the row.
+func TestServedReadPartwayIsUnknown(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	restartLog()
+	t.Cleanup(restartLog)
+	from := time.Date(2026, 3, 1, 23, 30, 0, 0, time.UTC)
+	k := [2]string{"codex", "me@example.com"}
+	Append(Record{Time: from.Add(-time.Hour), Provider: "codex", ProviderAccount: "other@example.com", Status: 200})
+	Append(Record{Time: from, Provider: "codex", ProviderAccount: "me@example.com", Status: 200})
+	b, err := os.ReadFile(Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := int64(bytes.IndexByte(b, '\n') + 1)
+	was := logReadFrom
+	t.Cleanup(func() { logReadFrom = was })
+	logReadFrom = func(f *os.File, n int64) io.Reader {
+		return io.MultiReader(io.LimitReader(f, min(n, first)), iotest.ErrReader(errors.New("the disk went away")))
+	}
+	restartLog()
+	if got, err := FirstServed(map[[2]string]time.Time{k: from}); err == nil {
+		t.Errorf("a read that stopped after the first line: first served %v, no error", got)
+	}
+	restartLog()
+	if got, err := ServedDays(map[[2]string]time.Time{k: from}); err == nil {
+		t.Errorf("a read that stopped after the first line: served days %v, no error", got)
+	}
+	logReadFrom = was
+	if got, err := FirstServed(map[[2]string]time.Time{k: from}); err != nil || !got[k].Equal(from) {
+		t.Fatalf("read through after: first served %v (%v), want %v", got[k], err, from)
+	}
+	if got, err := ServedDays(map[[2]string]time.Time{k: from}); err != nil || got[k].Count != 1 {
+		t.Fatalf("read through after: served days %+v (%v), want 1", got[k], err)
 	}
 }

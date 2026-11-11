@@ -30,7 +30,9 @@ func (r Record) ServedOn() bool {
 // of want (a provider's id and an account's name in lower case), its
 // earliest served row (ServedOn) at or after the time want gives it, the
 // provider named by its id now (UsageRenames). A ledger that isn't there
-// has none served; one that can't be opened is an error, never "none".
+// has none served; one that can't be opened or read to its end is an
+// error, never "none" (T-149: a read that stopped partway left out the
+// rows after it).
 func FirstServed(want map[[2]string]time.Time) (map[[2]string]time.Time, error) {
 	out := map[[2]string]time.Time{}
 	if len(want) == 0 {
@@ -51,7 +53,11 @@ func FirstServed(want map[[2]string]time.Time) (map[[2]string]time.Time, error) 
 		}
 	}
 	renames := provider.UsageRenames()
-	Visit(since, func(r Record) {
+	ledger := readLogSnapshot()
+	if ledger.err != nil {
+		return nil, ledger.err
+	}
+	ledger.visit(since, func(r Record) {
 		if !r.ServedOn() {
 			return
 		}
@@ -75,8 +81,8 @@ func FirstServed(want map[[2]string]time.Time) (map[[2]string]time.Time, error) 
 // its first use is a served row, so the ledger doesn't reach back to it
 // (trimmed, or the first use another computer's), and its days aren't
 // known, never one. A ledger that isn't there has none; one that can't be
-// opened is an error. Read once at a start (provider.BackfillUsedDays),
-// never on a request.
+// opened or read to its end is an error (T-149). Read once at a start
+// (provider.BackfillUsedDays), never on a request.
 func ServedDays(want map[[2]string]time.Time) (map[[2]string]provider.UsedDays, error) {
 	out := map[[2]string]provider.UsedDays{}
 	if len(want) == 0 {
@@ -97,8 +103,12 @@ func ServedDays(want map[[2]string]time.Time) (map[[2]string]provider.UsedDays, 
 		}
 	}
 	renames := provider.UsageRenames()
+	ledger := readLogSnapshot()
+	if ledger.err != nil {
+		return nil, ledger.err
+	}
 	days := map[[2]string]map[int64]bool{}
-	Visit(since, func(r Record) {
+	ledger.visit(since, func(r Record) {
 		if !r.ServedOn() {
 			return
 		}

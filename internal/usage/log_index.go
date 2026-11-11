@@ -8,9 +8,11 @@ import (
 	"crypto/sha256"
 	"encoding"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"slices"
@@ -61,7 +63,15 @@ type logSnapshot struct {
 	hosts map[string]string
 	// full is where the full blocks end, for log-v1.bin
 	full logFull
+	// err is why the log couldn't be read to its end: one there that
+	// couldn't be looked at, opened or read through. Its blocks are then
+	// what was read before it, never the whole log (T-149).
+	err error
 }
+
+// logReadFrom is what the log's lines are read from, n bytes of f: a test
+// makes a read fail partway with it.
+var logReadFrom = func(f *os.File, n int64) io.Reader { return io.LimitReader(f, n) }
 
 var logIndex struct {
 	sync.Mutex
@@ -139,6 +149,9 @@ func readLogSnapshot() *logSnapshot {
 
 	next := &logSnapshot{path: path, info: info, settled: settled, version: logIndex.version, keyProviders: map[string]bool{}, hosts: map[string]string{}}
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			next.err = err
+		}
 		logIndex.snapshot = next
 		return next
 	}
@@ -173,10 +186,12 @@ func readLogSnapshot() *logSnapshot {
 	logIndex.reads++
 	f, err := os.Open(path)
 	if err != nil {
+		next.err = err
 		return next
 	} // never publish an incomplete read as current
 	defer f.Close()
 	if _, err = f.Seek(next.off, 0); err != nil {
+		next.err = err
 		return next
 	}
 	var tail *rowChunk
@@ -188,10 +203,15 @@ func readLogSnapshot() *logSnapshot {
 			routes.seen(tail, i)
 		}
 	}
-	rd := bufio.NewReaderSize(io.LimitReader(f, info.Size()-next.off), 64<<10)
+	rd := bufio.NewReaderSize(logReadFrom(f, info.Size()-next.off), 64<<10)
 	for next.off < info.Size() {
 		b, e := rd.ReadBytes('\n')
 		if e != nil {
+			if !errors.Is(e, io.EOF) {
+				// the rest of the log isn't known: never published as current
+				next.err = e
+				return next
+			}
 			break
 		} // a partial final line is read again after it completes
 		next.off += int64(len(b))
