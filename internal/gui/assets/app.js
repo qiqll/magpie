@@ -13427,20 +13427,15 @@ function renderAccounts(a, p) {
     if (p && on && several) line.append(keyWeight(p, { name: l.user }, wOf(l), weights, "provider/accountweight", { id: p.id, account: l.user }));
     // its own models (#474), when there is another account to send the rest to
     const [amPill, amBox] = ls.length > 1 || accountModelsOf(p, l.user).length ? accountModels(p, l.user, false, l.user) : [];
-    // what is set shows on it; the rest waits under ⋯ on a line below
     const tools = el("div", "acc-tools");
     const pill = (x) => (x.classList.contains("set") ? line : tools).append(x);
     if (amPill) pill(amPill);
-    // its usage cap: the share of each window it is used to at most
     const cap = accountCapOf(p, l.user);
     // alone, the cap holds back only magpie's (𝕏 on Discord)
     const direct = l.active && !several && (a.agent === "claude" || a.agent === "codex") ? a.agentName : "";
     if (p) pill(accountCapPill(p, l.user, cap, direct));
-    // and each window's own, set on its meter (willz on Discord)
     const capFor = (w) => windowCapOf(p, l.user, w);
-    // how many requests it has out at once, and waiting (#892)
     if (p) pill(laneLimitPill(p, l.user, p.id + "@" + String(l.user).toLowerCase(), l.user));
-    // its credits, as on its Usage card (jojonas_xyz on X)
     if (a.agent === "codex" && !sub?.plugin && !unusable(l)) {
       const c = creditsRow({ provider: "codex", user: l.user }, "acc-credits");
       if (c) tools.append(c);
@@ -13613,7 +13608,7 @@ function renderAccounts(a, p) {
     list.append(el("div", "restart-app", re));
   }
   // how a pool ends at its caps (plugins#349)
-  const capped = (l) => accountCapOf(p, l.user) || windowCapsOf(p, l.user);
+  const capped = (l) => accountCapOf(p, l.user) || windowCapsOf(p, l.user) || growthCapOf(p, l.user);
   if (p && (ls.some(capped) || p.capStop || p.capCareful)) {
     const box = el("div", "pool-ends");
     for (const [k, say, tip] of [["capStop", "Stop when every account is at its cap", "On: once every account in use is at its cap, requests get 429 instead of going to the fallbacks."],
@@ -14179,11 +14174,11 @@ function windowOwnCapOf(p, user, w) {
   return (w?.capId && p?.accountWindowCaps?.[String(user).toLowerCase()]?.[w.capId]) || 0;
 }
 function windowCapsOf(p, user) { const k = String(user).toLowerCase(), c = p?.accountWindowCaps?.[k], a = p?.accountWindowAmounts?.[k]; return Object.keys({ ...c, ...a }).filter((w) => a?.[w] || c?.[w] % 100).length; }
+function growthCapOf(p, user) { return p?.accountGrowth?.[String(user).toLowerCase()]; }
 // a window's cap at an amount of its unit (provider.AccountWindowAmounts), 0 for none
 function windowAmountOf(p, user, w) {
   return (w?.capId && p?.accountWindowAmounts?.[String(user).toLowerCase()]?.[w.capId]) || 0;
 }
-// windowCapOf: the share the window holds the account at, 0 for none
 function windowCapOf(p, user, w) {
   const amount = windowAmountOf(p, user, w);
   if (amount && w?.limit > 0) return amount / w.limit * 100;
@@ -14247,7 +14242,6 @@ function capMark(track, w, cap) {
   track.classList.add("capped");
   track.append(mk);
 }
-// a number typed in a pill: Enter or blur saves, Escape keeps
 const capOf = (v) => { v = parseInt(v.replace("%", ""), 10); return v >= 1 && v <= 99 ? v : null; };
 function pillNumber(at, val, ph, cls, label, parse, bad, own, set) {
   const i = input(val, ph, "text");
@@ -14269,7 +14263,6 @@ function pillNumber(at, val, ph, cls, label, parse, bad, own, set) {
   i.focus(NO_SCROLL);
 }
 
-// windowCapMeter: a window's meter as the button setting its own cap
 function windowCapMeter(m, p, user, w) {
   const ids = (w.tiers || [w]).map((x) => x.capId), owns = ids.map((capId) => windowOwnCapOf(p, user, { capId }));
   const amounts = ids.map((capId) => windowAmountOf(p, user, { capId }));
@@ -14320,10 +14313,11 @@ function windowCapMeter(m, p, user, w) {
   return b;
 }
 function accountCapPill(p, user, cap, direct) {
-  const byWindow = !cap && windowCapsOf(p, user) > 0;
-  const pill = el("button", "acap" + (cap || byWindow ? " set" : ""), cap ? t("Cap {n}%", { n: cap }) : byWindow ? t("Caps by window") : t("No cap"));
+  const byWindow = !cap && windowCapsOf(p, user) > 0, g = !cap && !byWindow && growthCapOf(p, user), n = g && { n: g.week, five: g.fiveHours, week: g.week, policy: g.name };
+  const pill = el("button", "acap" + (cap || byWindow || g ? " set" : ""), cap ? t("Cap {n}%", { n: cap }) : byWindow ? t("Caps by window") : g ? t(g.fiveHours === g.week ? "Ramping up {n}%" : "Ramping up 5h {five}% · week {week}%", n) : t("No cap"));
   pill.type = "button";
   pill.title = (cap ? t("Stops at {n}% of each usage window: once magpie reads a window at {n}% or past it, it counts this account as used up and sends it nothing more until the window renews. A turn already under way can still take it past {n}%, so the cap doesn't promise the rest is left. Click to change", { n: cap })
+    : g ? t("Ramping up: {policy} holds this account at {five}% of its 5 hours and {week}% of its week for now, and more as its days go by. A cap set here holds in its place. Click to change", n)
     : t("Used to 100% of its usage windows. Click to cap it at a share of each, so magpie goes on to the other accounts past it"))
     + "\n" + t("A window can have a cap of its own: click its meter below")
     + (direct ? "\n\n" + directNote(direct) : "");
