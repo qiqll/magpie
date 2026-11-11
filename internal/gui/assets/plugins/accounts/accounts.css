@@ -34,7 +34,9 @@
 .acx-err { color: var(--red); }
 .acx-calls { width: 5.5em; flex: none; display: flex; flex-direction: column; align-items: flex-end; font-size: 11px; color: var(--muted); }
 .acx-calls b { font-size: 13px; font-weight: 550; color: var(--fg); font-variant-numeric: tabular-nums; }
-.row.acx .acts { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex: none; margin-left: auto; min-width: var(--acx-acts, auto); }
+/* the actions wrap onto a second line rather than run past the row, as
+   a phone's width and a long language make them (T-142) */
+.row.acx .acts { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; flex: none; max-width: 100%; margin-left: auto; min-width: var(--acx-acts, auto); }
 /* each row has room for its Read again, always in sight */
 .row.acx .quota-refresh { width: 22px; height: 22px; margin: 0; opacity: 1; }
 .acx-sk { min-height: 48px; }
@@ -69,7 +71,7 @@
 /* a narrow window: who on its own line, the windows and requests under it */
 @media (max-width: 620px) {
   .row.acx .who { flex-basis: calc(100% - 40px); }
-  .row.acx .acts { min-width: 0; }
+  .row.acx .acts { min-width: 0; flex: 0 1 auto; }
   .acx-meters { flex: 1 1 160px; width: auto; }
   .acx-tools .acx-q { flex: 1 1 160px; width: auto; }
   .acx-list.acx-cards { grid-template-columns: minmax(0, 1fr); }

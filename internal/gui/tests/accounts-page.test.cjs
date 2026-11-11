@@ -155,6 +155,15 @@ const rowsOf = (page) => page.evaluate(() => [...document.querySelectorAll("#acx
   meters: r.querySelector(".acx-meter") ? Math.round(r.querySelector(".acx-meters").getBoundingClientRect().left) : null,
 })));
 const settle = (page) => page.waitForTimeout(150);
+// every action button that reaches past either side of its row or card,
+// or of the window, with how far (T-142 at 380px)
+const actsOut = (page, sel) => page.evaluate((sel) => [...document.querySelectorAll(sel)].flatMap((box) => {
+  const b = box.getBoundingClientRect(), left = Math.max(b.left, 0), right = Math.min(b.right, document.documentElement.clientWidth);
+  return [...box.querySelectorAll(".acts > *")].map((x) => {
+    const r = x.getBoundingClientRect();
+    return [box.dataset.user + " " + x.textContent, Math.round(Math.max(left - r.left, r.right - right))];
+  }).filter(([, d]) => d > 0);
+}), sel);
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   for (const lang of LANGS) {
@@ -203,6 +212,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await page.locator("#acxSum").textContent(), [x("{n} accounts", { n: 6 }), x("{n} in rotation", { n: 3 }), x("{n} to sign in again", { n: 2 })].join(" · "));
         if (width > 600) assert.equal(new Set(rows.filter((r) => r.meters != null).map((r) => r.meters)).size, 1, "the windows line up");
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "nothing wider than the window");
+        assert.deepEqual(await actsOut(page, "#acxList .row.acx"), [], "every row's actions inside its row and the window");
 
         // found by state, by provider and by a word (its own name too)
         await page.locator("#acxState button", { hasText: x("Sign in again") }).click();
