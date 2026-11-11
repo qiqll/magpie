@@ -3426,6 +3426,19 @@ func fail(rw http.ResponseWriter, err error) {
 			out["status"] = strconv.Itoa(held.status)
 		}
 	}
+	// a growth policy refused (T-139): which rule and its values, said in
+	// the page's language by Settings › Growth policy
+	var refused *settings.GrowthError
+	if errors.As(err, &refused) {
+		out["code"], out["growth"] = "growth_refused", refused.Code
+		for k, v := range refused.Vals {
+			out[k] = v
+		}
+	}
+	var picked *pickedPolicyError
+	if errors.As(err, &picked) {
+		out["code"], out["growth"], out["policy"], out["subs"] = "growth_refused", growthPicked, picked.Policy, strings.Join(picked.Subs, ", ")
+	}
 	// a save refused because a folder on the way to magpie's own isn't the
 	// user's: the window offers to make it theirs again
 	if permissionDenied(err) {

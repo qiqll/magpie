@@ -11,9 +11,11 @@ package settings
 // held, and the others let go). provider.CapsOf reads it.
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -53,6 +55,39 @@ func GrowthStagesBefore() []GrowthStage {
 	}
 }
 
+// GrowthError is a growth policy, or a save of the policies, refused
+// (T-139): Code says which rule (one of GrowthCodes), Vals the values its
+// words name, so a page says it in its own language; Error is the
+// English, as it always was. Err is what it wraps, if anything.
+type GrowthError struct {
+	Code string
+	Vals map[string]string
+	Msg  string
+	Err  error
+}
+
+func (e *GrowthError) Error() string { return e.Msg }
+func (e *GrowthError) Unwrap() error { return e.Err }
+
+// GrowthUnreadable is EditGrowth refused because settings.json can't be
+// read: what it holds is unknown, so nothing is saved.
+const GrowthUnreadable = "unreadable"
+
+// GrowthCodes are the codes a GrowthError of this package has, each said
+// in the page's words by Settings › Growth policy (growthWhy).
+var GrowthCodes = []string{
+	"stage_day", "stage_window", "stage_cap", "stage_twice",
+	"builtin", "id", "id_twice", "name_needed", "name_long", "name_twice",
+	"default_gone", "count_days", "ramp_start", "ramp_days", "kind",
+	GrowthUnreadable,
+}
+
+type vals = map[string]string
+
+func growthRefused(code string, v vals, format string, args ...any) error {
+	return &GrowthError{Code: code, Vals: v, Msg: fmt.Sprintf(format, args...)}
+}
+
 // CheckGrowth says what is wrong with a policy, nil when nothing is: each
 // stage starts on a day from 0 to GrowthDaysMost, holds one of
 // GrowthWindows at 1–99%, and no two hold the same window from one day.
@@ -60,17 +95,17 @@ func CheckGrowth(stages []GrowthStage) error {
 	seen := map[GrowthStage]bool{}
 	for _, g := range stages {
 		if g.From < 0 || g.From > GrowthDaysMost {
-			return fmt.Errorf("a growth stage starts on a day from 0 to %d, not %d", GrowthDaysMost, g.From)
+			return growthRefused("stage_day", vals{"got": strconv.Itoa(g.From)}, "a growth stage starts on a day from 0 to %d, not %d", GrowthDaysMost, g.From)
 		}
 		if !slices.Contains(GrowthWindows, g.Window) {
-			return fmt.Errorf("a growth stage holds the %q or %q window, not %q", GrowthFiveHours, GrowthWeek, g.Window)
+			return growthRefused("stage_window", vals{"got": g.Window}, "a growth stage holds the %q or %q window, not %q", GrowthFiveHours, GrowthWeek, g.Window)
 		}
 		if g.Cap < 1 || g.Cap > 99 {
-			return fmt.Errorf("a growth stage holds its window at 1%% to 99%%, not %d%%", g.Cap)
+			return growthRefused("stage_cap", vals{"got": strconv.Itoa(g.Cap)}, "a growth stage holds its window at 1%% to 99%%, not %d%%", g.Cap)
 		}
 		k := GrowthStage{From: g.From, Window: g.Window}
 		if seen[k] {
-			return fmt.Errorf("two growth stages hold the %s window from day %d", g.Window, g.From)
+			return growthRefused("stage_twice", vals{"window": g.Window, "day": strconv.Itoa(g.From)}, "two growth stages hold the %s window from day %d", g.Window, g.From)
 		}
 		seen[k] = true
 	}
@@ -330,7 +365,7 @@ func growthTaken(own []GrowthPolicy, id, name string) bool {
 var growthIDChars = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // CheckGrowthPolicies says what is wrong with the user's own policies and
-// the default named, nil when nothing is: each has an id of letters,
+// the default named (a *GrowthError), nil when nothing is: each has an id of letters,
 // digits, - and _ no built-in one has, and a name, neither longer than
 // GrowthNameMost nor had by another policy (a name in any case); a ramp
 // starts at 1–99% and reaches 100% in 1–GrowthDaysMost days; stages pass
@@ -344,24 +379,24 @@ func CheckGrowthPolicies(own []GrowthPolicy, def string) error {
 	}
 	for _, p := range own {
 		if builtinGrowth(p.ID).ID != "" {
-			return fmt.Errorf("the built-in growth policy %q can't be changed", p.ID)
+			return growthRefused("builtin", vals{"id": p.ID}, "the built-in growth policy %q can't be changed", p.ID)
 		}
 		if !growthIDChars.MatchString(p.ID) || utf8.RuneCountInString(p.ID) > GrowthNameMost {
-			return fmt.Errorf("a growth policy's id is up to %d letters, digits, - and _, not %q", GrowthNameMost, p.ID)
+			return growthRefused("id", vals{"got": p.ID}, "a growth policy's id is up to %d letters, digits, - and _, not %q", GrowthNameMost, p.ID)
 		}
 		if ids[p.ID] {
-			return fmt.Errorf("two growth policies have the id %q", p.ID)
+			return growthRefused("id_twice", vals{"id": p.ID}, "two growth policies have the id %q", p.ID)
 		}
 		ids[p.ID] = true
 		name := strings.TrimSpace(p.Name)
 		if name == "" {
-			return fmt.Errorf("the growth policy %q needs a name", p.ID)
+			return growthRefused("name_needed", vals{"id": p.ID}, "the growth policy %q needs a name", p.ID)
 		}
 		if utf8.RuneCountInString(name) > GrowthNameMost {
-			return fmt.Errorf("a growth policy's name is up to %d characters", GrowthNameMost)
+			return growthRefused("name_long", vals{"name": name}, "a growth policy's name is up to %d characters", GrowthNameMost)
 		}
 		if names[strings.ToLower(name)] {
-			return fmt.Errorf("two growth policies are named %q", name)
+			return growthRefused("name_twice", vals{"name": name}, "two growth policies are named %q", name)
 		}
 		names[strings.ToLower(name)] = true
 		if err := CheckGrowthShape(p); err != nil {
@@ -369,7 +404,7 @@ func CheckGrowthPolicies(own []GrowthPolicy, def string) error {
 		}
 	}
 	if def != "" && !ids[def] {
-		return fmt.Errorf("no growth policy has the id %q", def)
+		return growthRefused("default_gone", vals{"id": def}, "no growth policy has the id %q", def)
 	}
 	return nil
 }
@@ -381,20 +416,20 @@ func CheckGrowthPolicies(own []GrowthPolicy, def string) error {
 // or the other; Off is magpie's alone.
 func CheckGrowthShape(p GrowthPolicy) error {
 	if p.CountDays != "" && p.CountDays != GrowthUsedDays {
-		return fmt.Errorf("a growth policy counts calendar days (\"\") or the days used (%q), not %q", GrowthUsedDays, p.CountDays)
+		return growthRefused("count_days", vals{"got": p.CountDays}, "a growth policy counts calendar days (\"\") or the days used (%q), not %q", GrowthUsedDays, p.CountDays)
 	}
 	switch p.Kind {
 	case GrowthRamp:
 		if p.Start < 1 || p.Start > 99 {
-			return fmt.Errorf("a growth ramp starts at 1%% to 99%%, not %d%%", p.Start)
+			return growthRefused("ramp_start", vals{"got": strconv.Itoa(p.Start)}, "a growth ramp starts at 1%% to 99%%, not %d%%", p.Start)
 		}
 		if p.Days < 1 || p.Days > GrowthDaysMost {
-			return fmt.Errorf("a growth ramp reaches 100%% in 1 to %d days, not %d", GrowthDaysMost, p.Days)
+			return growthRefused("ramp_days", vals{"got": strconv.Itoa(p.Days)}, "a growth ramp reaches 100%% in 1 to %d days, not %d", GrowthDaysMost, p.Days)
 		}
 	case GrowthStaged:
 		return CheckGrowth(p.Stages)
 	default:
-		return fmt.Errorf("a growth policy ramps (%q) or has stages (%q), not %q", GrowthRamp, GrowthStaged, p.Kind)
+		return growthRefused("kind", vals{"got": p.Kind}, "a growth policy ramps (%q) or has stages (%q), not %q", GrowthRamp, GrowthStaged, p.Kind)
 	}
 	return nil
 }
@@ -428,14 +463,18 @@ func NormalGrowthPolicies(own []GrowthPolicy) []GrowthPolicy {
 // the file as it read them before its own lock, as it carries every field
 // it doesn't send.) A settings file that
 // can't be read is left as it is, with the error: what it holds is
-// unknown, never "no policies". edit is given a copy; what it returns is
+// unknown, never "no policies" (a *GrowthError, GrowthUnreadable). edit is given a copy; what it returns is
 // kept as NormalGrowthPolicies has it once CheckGrowthPolicies passes, and
 // an error from either saves nothing.
 func EditGrowth(edit func(own []GrowthPolicy, def string) ([]GrowthPolicy, string, error)) error {
 	defer lockFile()()
 	s, err := loadChecked()
 	if err != nil {
-		return err
+		why := err.Error()
+		if cause := errors.Unwrap(err); cause != nil {
+			why = cause.Error()
+		}
+		return &GrowthError{Code: GrowthUnreadable, Vals: map[string]string{"path": Path(), "why": why}, Msg: err.Error(), Err: err}
 	}
 	s.GrowthPolicies = slices.Clone(s.GrowthPolicies)
 	MigrateGrowth(&s)

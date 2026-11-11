@@ -156,8 +156,7 @@ async function api(path, body, heads, signal) {
       err.code = data.code;
       if (data.offline === "stage" || data.offline === "disconnect") err.offline = data.offline;
     }
-    // magpie has no models to connect an agent to yet: said in the
-    // reader's language
+    // no models to connect an agent to yet
     if (data?.code === "no_models") err.message = t("Add a provider or subscription in magpie first, then connect {agent}", { agent: data.agent });
     // magpie has models, and none is left in the agent's model list (#1989)
     if (data?.code === "all_hidden") {
@@ -169,12 +168,12 @@ async function api(path, body, heads, signal) {
       err.message = t("magpie can't save into {path}: it belongs to another user", { path: data.blocked });
       setTimeout(() => configBlockedAsk(data.blocked), 0);
     }
+    if (data?.code === "growth_refused") err.growth = data; // said by growthWhy (T-139)
     if (data?.why) err.why = data.why; // a failed move's reason, said in the reader's language
     // a sign-in that didn't start: the proxy its CLI was given (T-103)
     if (data?.proxyFrom) err.proxyUsed = { proxy: data.proxyUsed || "", from: data.proxyFrom };
     if (data?.said) err.message = t(data.said, data); // an i18n.js key (api.go)
-    // an account the agent is signed in to, refused removal while it has
-    // another: said in the reader's language
+    // an account the agent is signed in to, refused removal
     if (data?.code === "signed_in" || data?.code === "signed_in_only") {
       err.code = data.code;
       const v = { agent: { codex: "Codex", claude: "Claude Code" }[data.agent] || data.agent, user: data.user };

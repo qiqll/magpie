@@ -46,7 +46,8 @@ func growthPickedKept(was, next []settings.GrowthPolicy) error {
 	}
 	picks, err := provider.GrowthPicks()
 	if err != nil {
-		return fmt.Errorf("which subscriptions picked a growth policy can't be read, so none is deleted: %w", err)
+		return &settings.GrowthError{Code: growthPicksUnreadable, Vals: map[string]string{"why": err.Error()},
+			Msg: "which subscriptions picked a growth policy can't be read, so none is deleted: " + err.Error(), Err: err}
 	}
 	for _, p := range gone {
 		var subs []string
@@ -66,6 +67,14 @@ func growthPickedKept(was, next []settings.GrowthPolicy) error {
 	}
 	return nil
 }
+
+// The codes fail sends for a save of the growth policies refused here
+// (T-139), beside settings.GrowthCodes: a policy picked is deleted, and
+// providers.json, which says who picked one, can't be read.
+const (
+	growthPicked          = "picked"
+	growthPicksUnreadable = "picks_unreadable"
+)
 
 // pickedAccountSep parts a subscription from its account in a
 // pickedPolicyError's Subs.
