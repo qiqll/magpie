@@ -28,18 +28,32 @@ func TestOf(t *testing.T) {
 		{-40 * day, 0, DueEnded},
 	} {
 		opened := now.Add(c.left - Days*day)
-		s := Of(opened, now)
+		s := of(opened, now, time.UTC)
 		if s == nil || s.DaysLeft != c.days || s.Due != c.due || !s.Ends.Equal(now.Add(c.left)) || !s.Opened.Equal(opened) {
 			t.Errorf("%v left: %+v, want %d days, due %q", c.left, s, c.days, c.due)
 		}
 	}
-	if s := Of(time.Time{}, now); s != nil {
+	if s := of(time.Time{}, now, time.UTC); s != nil {
 		t.Errorf("no time: %+v", s)
 	}
-	// a time in another zone ends as the same instant
+	// a day's start in the reader's zone ends on the same date's start,
+	// a day the clocks change on included: Berlin goes back an hour on
+	// 10-25, so 30 days from 10-10 00:00 are 721 hours, not 720
 	sh := time.FixedZone("UTC+8", 8*3600)
-	if s := Of(time.Date(2026, 11, 1, 0, 0, 0, 0, sh), now); !s.Ends.Equal(time.Date(2026, 12, 1, 0, 0, 0, 0, sh)) || s.Ends.Location() != time.UTC {
+	if s := of(time.Date(2026, 11, 1, 0, 0, 0, 0, sh), now, sh); !s.Ends.Equal(time.Date(2026, 12, 1, 0, 0, 0, 0, sh)) || s.Ends.Location() != time.UTC {
 		t.Errorf("in UTC+8: %+v", s)
+	}
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Skip("no zone database:", err)
+	}
+	start := time.Date(2026, 10, 10, 0, 0, 0, 0, berlin)
+	s := of(start, time.Date(2026, 11, 4, 0, 0, 0, 0, berlin), berlin)
+	if !s.Ends.Equal(time.Date(2026, 11, 9, 0, 0, 0, 0, berlin)) || s.Ends.Sub(start) != 721*time.Hour {
+		t.Errorf("over the clocks' change in Berlin: ends %v", s.Ends.In(berlin))
+	}
+	if s.DaysLeft != 5 || s.Due != DueSoon {
+		t.Errorf("5 days before, in Berlin: %+v", s)
 	}
 }
 

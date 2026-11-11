@@ -1,6 +1,7 @@
 package renewal
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,20 +23,21 @@ func ipsHome(t *testing.T) string {
 func TestSetIPs(t *testing.T) {
 	path := ipsHome(t)
 	now := time.Now()
-	if ips, err := IPs(); err != nil || ips != nil {
-		t.Fatalf("no file: %v %v", ips, err)
+	ips, rev, err := IPs()
+	if err != nil || ips != nil || rev != "" {
+		t.Fatalf("no file: %v %q %v", ips, rev, err)
 	}
 	at := now.Add(-26 * 24 * time.Hour).Truncate(time.Second)
 	in := []IP{{IP: " 203.0.113.7 ", Name: " Tokyo ", Opened: at}, {IP: "2001:DB8::1"}}
-	if err := SetIPs(in, now); err != nil {
+	if err := SetIPs(in, rev, now); err != nil {
 		t.Fatal(err)
 	}
 	if in[0].IP != " 203.0.113.7 " {
 		t.Error("the list sent was changed")
 	}
-	ips, err := IPs()
-	if err != nil {
-		t.Fatal(err)
+	ips, rev, err = IPs()
+	if err != nil || rev == "" {
+		t.Fatal(rev, err)
 	}
 	if len(ips) != 2 || ips[0].IP != "203.0.113.7" || ips[0].Name != "Tokyo" || !ips[0].Opened.Equal(at) || ips[1].IP != "2001:db8::1" || !ips[1].Opened.IsZero() {
 		t.Fatalf("kept %+v", ips)
@@ -44,10 +46,10 @@ func TestSetIPs(t *testing.T) {
 	if strings.Contains(string(raw), `"opened": "0001`) {
 		t.Errorf("an IP with no time is written with one: %s", raw)
 	}
-	if err := SetIPs(nil, now); err != nil {
+	if err := SetIPs(nil, rev, now); err != nil {
 		t.Fatal(err)
 	}
-	if ips, err := IPs(); err != nil || len(ips) != 0 {
+	if ips, _, err := IPs(); err != nil || len(ips) != 0 {
 		t.Fatalf("emptied: %v %v", ips, err)
 	}
 	matches, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".ips-*"))
@@ -60,9 +62,10 @@ func TestSetIPs(t *testing.T) {
 func TestSetIPsRefused(t *testing.T) {
 	path := ipsHome(t)
 	now := time.Now()
-	if err := SetIPs([]IP{{IP: "198.51.100.1"}}, now); err != nil {
+	if err := SetIPs([]IP{{IP: "198.51.100.1"}}, "", now); err != nil {
 		t.Fatal(err)
 	}
+	_, rev, _ := IPs()
 	for name, ips := range map[string][]IP{
 		"not an address": {{IP: "proxy.example.com"}},
 		"none":           {{IP: ""}},
@@ -72,11 +75,11 @@ func TestSetIPsRefused(t *testing.T) {
 		"far ahead":      {{IP: "198.51.100.2", Opened: now.AddDate(1, 0, 0)}},
 		"too many":       make([]IP, MaxIPs+1),
 	} {
-		if err := SetIPs(ips, now); err == nil {
+		if err := SetIPs(ips, rev, now); err == nil {
 			t.Errorf("%s: kept", name)
 		}
 	}
-	if ips, _ := IPs(); len(ips) != 1 || ips[0].IP != "198.51.100.1" {
+	if ips, _, _ := IPs(); len(ips) != 1 || ips[0].IP != "198.51.100.1" {
 		t.Fatalf("after the refusals: %+v", ips)
 	}
 
@@ -84,10 +87,10 @@ func TestSetIPsRefused(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"ips": [`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := IPs(); err == nil {
-		t.Error("a broken file read as a list")
+	if _, _, err := IPs(); err == nil || !strings.Contains(err.Error(), path) {
+		t.Errorf("a broken file read as a list, or its error doesn't name it: %v", err)
 	}
-	if err := SetIPs([]IP{{IP: "198.51.100.3"}}, now); err == nil {
+	if err := SetIPs([]IP{{IP: "198.51.100.3"}}, rev, now); err == nil {
 		t.Error("a broken file was written over")
 	}
 	if raw, _ := os.ReadFile(path); string(raw) != `{"ips": [` {
@@ -105,11 +108,60 @@ func TestIPsReadAsWritten(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"ips":[{"ip":"192.0.2.9"},{"ip":"192.0.2.10","name":"HK","opened":"2026-11-01T00:00:00Z","later":1}],"more":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ips, err := IPs()
+	ips, _, err := IPs()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ips) != 2 || ips[0].IP != "192.0.2.9" || !ips[0].Opened.IsZero() || ips[1].Name != "HK" || !ips[1].Opened.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) {
 		t.Fatalf("read %+v", ips)
+	}
+}
+
+// A list made from an older read is refused, so another window's edit is
+// never written over (T-155 review M2); one made from the read now is kept.
+func TestSetIPsMadeFromAnOlderRead(t *testing.T) {
+	ipsHome(t)
+	now := time.Now()
+	if err := SetIPs([]IP{{IP: "198.51.100.1"}}, "", now); err != nil {
+		t.Fatal(err)
+	}
+	_, mine, _ := IPs()
+	// another window adds one from the same read
+	if err := SetIPs([]IP{{IP: "198.51.100.1"}, {IP: "198.51.100.2"}}, mine, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetIPs(nil, mine, now); !errors.Is(err, ErrIPsChanged) {
+		t.Fatalf("a removal made from the older read: %v", err)
+	}
+	if err := SetIPs([]IP{{IP: "198.51.100.3"}}, "", now); !errors.Is(err, ErrIPsChanged) {
+		t.Fatalf("a list made from no read over a file: %v", err)
+	}
+	ips, rev, _ := IPs()
+	if len(ips) != 2 {
+		t.Fatalf("the other window's list is gone: %+v", ips)
+	}
+	if err := SetIPs(ips[:1], rev, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A time kept before is not checked again: a clock set back since leaves
+// it more than a period ahead, and it holds up no other edit (T-155
+// review L2). A new time that far ahead is still refused.
+func TestSetIPsKeepsAnOldTime(t *testing.T) {
+	ipsHome(t)
+	now := time.Now()
+	ahead := now.Add(20 * 24 * time.Hour).UTC().Truncate(time.Second)
+	if err := SetIPs([]IP{{IP: "198.51.100.1", Opened: ahead}}, "", now); err != nil {
+		t.Fatal(err)
+	}
+	back := now.Add(-15 * 24 * time.Hour) // the clock set back
+	ips, rev, _ := IPs()
+	if err := SetIPs(append(ips, IP{IP: "198.51.100.2"}), rev, back); err != nil {
+		t.Fatalf("an edit beside a time kept before: %v", err)
+	}
+	ips, rev, _ = IPs()
+	if err := SetIPs(append(ips, IP{IP: "198.51.100.3", Opened: ahead}), rev, back); err == nil {
+		t.Fatal("a new time over a period ahead kept")
 	}
 }

@@ -68,6 +68,9 @@ function acxFollow() {
       if (view !== "accounts") { clearInterval(acxWatch); acxWatch = 0; }
       return;
     }
+    // not under a start date being typed: its box would lose a half-typed
+    // date and the focus (T-154 review L4)
+    if (document.activeElement?.closest?.("#acxList .renew-edit")) return;
     if (acxSeen && (acxSeen.providers !== providers || acxSeen.quotas !== quotasAt)) acxDraw();
   }, 700);
 }
@@ -529,7 +532,7 @@ function acxRenew(r) {
   const { p, l } = r;
   const key = p.id + "/" + acxLow(l.user);
   if (acxRenewing !== key) return renewPill(r.renew, () => { acxRenewing = key; acxDraw(); });
-  return renewEditor(r.renew, (opened) => accountAction("provider/accountopened", { id: p.id, account: l.user, opened }),
+  return renewEditor(key, r.renew, (opened) => accountAction("provider/accountopened", { id: p.id, account: l.user, opened }),
     () => { acxRenewing = ""; acxDraw(); });
 }
 

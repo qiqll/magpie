@@ -21,6 +21,10 @@ import (
 // asks nothing, 5 asks for a renewal, and one past its end has ended.
 func TestAccountOpenedRoute(t *testing.T) {
 	home := sandboxHome(t)
+	// periods end by the calendar in this computer's zone (renewal.Of):
+	// held in UTC, the days below count the same wherever it runs
+	defer func(l *time.Location) { time.Local = l }(time.Local)
+	time.Local = time.UTC
 	jwt := func(claims any) string {
 		b, _ := json.Marshal(claims)
 		return "e30." + base64.RawURLEncoding.EncodeToString(b) + ".sig"

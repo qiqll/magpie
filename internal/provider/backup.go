@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"slices"
+	"time"
 
 	"github.com/yetone/magpie/internal/plugin"
 )
@@ -141,6 +142,10 @@ func Mirror(ps []Provider, gs []Group) error {
 			p.AccountUsedDays = keptUsedDays(h.AccountUsedDays, p.AccountUsedDays, p.AccountFirstUsed)
 			// and a ramp-up found done on either computer, the earlier (T-150)
 			p.AccountGraduated = keptGraduated(h.AccountGraduated, p.AccountGraduated, p.AccountAdded)
+			// and the start dates the user told here when the record came
+			// with none: a magpie from before T-154 drops the field, and
+			// only the user knows the dates (T-154 review M4)
+			p.AccountOpened = keptOpened(h.AccountOpened, p.AccountOpened, p.AccountAdded)
 			p.KeepLogin, p.KeepLoginAs, p.SwitchOnly, p.RestartApp = h.KeepLogin, h.KeepLoginAs, h.SwitchOnly, h.RestartApp
 			p.KeepSelf = h.KeepSelf
 		} else {
@@ -277,3 +282,25 @@ func notSignedIn(ps []Provider, have map[string]bool) []string {
 // model picks and settings alone, with no endpoint or key of its own: it
 // is signed in to, never given a key.
 func OnlyPicks(p Provider) bool { return !hasEndpoint(normalize(p)) }
+
+// keptOpened is the start dates a record brought (T-154), or, when it
+// brought none, those here of the accounts it has (by AccountAdded), as a
+// magpie that doesn't know the field sends none. So clearing every date
+// on one computer leaves another's dates as they are; one date of several
+// cleared goes across.
+func keptOpened(here, came map[string]time.Time, added map[string]time.Time) map[string]time.Time {
+	if len(came) > 0 || len(here) == 0 {
+		return came
+	}
+	var out map[string]time.Time
+	for k, at := range here {
+		if _, ok := added[k]; !ok {
+			continue
+		}
+		if out == nil {
+			out = map[string]time.Time{}
+		}
+		out[k] = at
+	}
+	return out
+}

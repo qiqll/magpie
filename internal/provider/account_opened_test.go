@@ -3,6 +3,7 @@ package provider
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -150,5 +151,60 @@ func TestAccountOpenedThroughASync(t *testing.T) {
 	}
 	if got := AccountOpenedOf("codex", "new@example.com"); !got.Equal(at) {
 		t.Errorf("after a restore: %v", got)
+	}
+}
+
+// A login renamed as logins.json is written (noteAdded) takes its start
+// date to its new name, as it does its day added (T-154 review M3), and
+// the user's removal of it under the new name drops it.
+func TestAccountOpenedMovesWithARenamedLogin(t *testing.T) {
+	firstUsedFixture(t, time.Hour)
+	at := time.Now().Add(-2 * 24 * time.Hour).UTC().Truncate(time.Second)
+	if err := SetAccountOpened("codex", "new@example.com", at); err != nil {
+		t.Fatal(err)
+	}
+	noteAdded(nil, map[loginAccount]loginAccount{{"codex", "new@example.com"}: {"codex", "renamed@example.com"}}, nil)
+	if s, _ := storedPicks("codex"); !s.AccountOpened["renamed@example.com"].Equal(at) || len(s.AccountOpened) != 1 {
+		t.Fatalf("renamed: %v", s.AccountOpened)
+	}
+	forgetAdded("codex", "renamed@example.com")
+	if s, _ := storedPicks("codex"); s.AccountOpened != nil {
+		t.Fatalf("removed under its new name, kept %v", s.AccountOpened)
+	}
+}
+
+// A sync from a magpie that doesn't know the field (its record has none)
+// keeps the dates told here, of the accounts it has (T-154 review M4); a
+// record with dates brings its own, so one cleared there goes across.
+func TestAccountOpenedSyncFromBefore(t *testing.T) {
+	firstUsedFixture(t, time.Hour)
+	at := time.Now().Add(-3 * 24 * time.Hour).UTC().Truncate(time.Second)
+	ps, err := Stored()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := slices.Clone(ps) // the other computer's, from before T-154
+	if err := SetAccountOpened("codex", "new@example.com", at); err != nil {
+		t.Fatal(err)
+	}
+	if err := Mirror(old, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := AccountOpenedOf("codex", "new@example.com"); !got.Equal(at) {
+		t.Fatalf("a record with none took the date told here: %v", got)
+	}
+
+	later := at.Add(24 * time.Hour)
+	came := slices.Clone(old)
+	for i := range came {
+		if came[i].ID == "codex" {
+			came[i].AccountOpened = map[string]time.Time{"new@example.com": later}
+		}
+	}
+	if err := Mirror(came, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := AccountOpenedOf("codex", "new@example.com"); !got.Equal(later) {
+		t.Fatalf("a record with a date: %v", got)
 	}
 }

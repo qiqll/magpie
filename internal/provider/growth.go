@@ -1848,6 +1848,7 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount, left
 		used, wasUsed := f.Providers[i].AccountFirstUsed[old.user]
 		days, hadDays := f.Providers[i].AccountUsedDays[old.user]
 		grad, wasGrad := f.Providers[i].AccountGraduated[old.user]
+		opened, wasOpened := f.Providers[i].AccountOpened[old.user]
 		delete(entry(old.id).AccountAdded, old.user)
 		entry(now.id).AccountAdded[now.user] = t
 		if wasUsed {
@@ -1885,6 +1886,18 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount, left
 				n.AccountGraduated = map[string]time.Time{}
 			}
 			n.AccountGraduated[now.user] = grad
+		}
+		if wasOpened {
+			// and when its paid period was opened (T-154)
+			o := entry(old.id)
+			o.AccountOpened = maps.Clone(o.AccountOpened)
+			delete(o.AccountOpened, old.user)
+			n := entry(now.id)
+			n.AccountOpened = maps.Clone(n.AccountOpened)
+			if n.AccountOpened == nil {
+				n.AccountOpened = map[string]time.Time{}
+			}
+			n.AccountOpened[now.user] = opened
 		}
 		changed = true
 	}

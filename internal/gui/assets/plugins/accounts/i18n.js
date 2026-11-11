@@ -2,6 +2,8 @@
 // kernel adds them to i18n.js's (magpie.strings).
 magpie.strings({
   zh: {
+    "The list was changed in another window and is read again: make your change again": "列表已在另一个窗口里改过，已重新读取：请再改一次",
+    "Its start date and reminder go with it.": "它的开启时间和提醒会一并删除。",
     "Set start date": "设置开启时间",
     "When its 30 days were paid from: magpie reminds you 5 days before they end": "这份 30 天订阅从哪天开始付费：到期前 5 天 magpie 会提醒你",
     "Started {start}, its 30 days end {end}. Click to change": "{start} 开启，30 天到 {end} 结束。点击修改",
@@ -105,6 +107,8 @@ magpie.strings({
     "Its policy counts the days used, but magpie hasn't read them from its usage yet, so every day counts till then": "它的策略按有使用的天计，但 magpie 还没从用量记录里读出它用过的天数，在那之前每天都算",
   },
   "zh-TW": {
+    "The list was changed in another window and is read again: make your change again": "列表已在另一個視窗裡改過，已重新讀取：請再改一次",
+    "Its start date and reminder go with it.": "它的開啟時間和提醒會一併刪除。",
     "Set start date": "設定開啟時間",
     "When its 30 days were paid from: magpie reminds you 5 days before they end": "這份 30 天訂閱從哪天開始付費：到期前 5 天 magpie 會提醒你",
     "Started {start}, its 30 days end {end}. Click to change": "{start} 開啟，30 天到 {end} 結束。點擊修改",
@@ -208,6 +212,8 @@ magpie.strings({
     "Its policy counts the days used, but magpie hasn't read them from its usage yet, so every day counts till then": "它的策略按有使用的天計，但 magpie 還沒從用量紀錄裡讀出它用過的天數，在那之前每天都算",
   },
   ja: {
+    "The list was changed in another window and is read again: make your change again": "一覧は別のウィンドウで変更されたため読み直しました：もう一度変更してください",
+    "Its start date and reminder go with it.": "開始日とお知らせも一緒に削除されます。",
     "Set start date": "開始日を設定",
     "When its 30 days were paid from: magpie reminds you 5 days before they end": "30 日分を支払い始めた日：終了の 5 日前に magpie がお知らせします",
     "Started {start}, its 30 days end {end}. Click to change": "{start} 開始、30 日は {end} に終了。クリックで変更",
@@ -311,6 +317,8 @@ magpie.strings({
     "Its policy counts the days used, but magpie hasn't read them from its usage yet, so every day counts till then": "ポリシーは使った日を数えますが、magpie はまだ使用記録から日数を読めていないため、それまでは毎日数えます",
   },
   de: {
+    "The list was changed in another window and is read again: make your change again": "Die Liste wurde in einem anderen Fenster geändert und neu gelesen: bitte die Änderung wiederholen",
+    "Its start date and reminder go with it.": "Sein Startdatum und die Erinnerung werden mit entfernt.",
     "Set start date": "Startdatum setzen",
     "When its 30 days were paid from: magpie reminds you 5 days before they end": "Ab wann die 30 Tage bezahlt sind: magpie erinnert 5 Tage vor ihrem Ende",
     "Started {start}, its 30 days end {end}. Click to change": "Gestartet {start}, die 30 Tage enden {end}. Zum Ändern klicken",

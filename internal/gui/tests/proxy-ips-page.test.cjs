@@ -28,7 +28,7 @@ const periodOf = (opened) => {
   const daysLeft = left <= 0 ? 0 : Math.ceil(left / day);
   return { opened, ends: new Date(ends).toISOString(), daysLeft, ...(left <= 0 ? { due: "ended" } : daysLeft <= 5 ? { due: "soon" } : {}) };
 };
-const answer = (ips) => ({ ips: ips.map((x) => ({ ...x, ...(x.opened ? { renewal: periodOf(x.opened) } : {}) })), days: 30, warnDays: 5 });
+const answer = (ips, rev) => ({ ips: ips.map((x) => ({ ...x, ...(x.opened ? { renewal: periodOf(x.opened) } : {}) })), rev: "r" + rev, days: 30, warnDays: 5 });
 
 function serve(lang, seen) {
   const settings = { lang, theme: "light", tray: "panel", currency: "usd", textSize: 100, proxy: "", version: "test", dir: "/test", lanURLs: [], fx: { rate: 7.2, at: new Date().toISOString(), stale: false },
@@ -44,10 +44,12 @@ function serve(lang, seen) {
       if (req.method() === "POST") {
         const body = req.postDataJSON();
         seen.posts.push(body);
+        if (body.rev !== "r" + seen.rev) return json({ error: "the IPs were changed elsewhere since they were read" }, 400);
         if (body.ips.some((x) => x.ip === "bad")) return json({ error: "\"bad\" is not an IP address" }, 400);
         seen.ips = body.ips.map((x) => Object.fromEntries(Object.entries(x).filter(([, v]) => v !== undefined && v !== "")));
+        seen.rev++;
       }
-      return json(answer(seen.ips));
+      return json(answer(seen.ips, seen.rev));
     }
     if (url.pathname === "/api/proxy/check") {
       seen.checks.push(req.postDataJSON());
@@ -74,7 +76,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     const x = (s, a) => tr(lang, s, a);
     for (const width of [1000, 380]) {
       test(`${engine} ${lang} ${width}: proxy IPs are listed, added, edited, renewed and removed`, async (t) => {
-        const seen = { posts: [], checks: [], ips: [
+        const seen = { posts: [], checks: [], rev: 1, ips: [
           { ip: "203.0.113.7", name: "Osaka", opened: "2026-10-17T04:00:00Z" },
           { ip: "203.0.113.8", opened: "2026-10-18T04:00:00Z" },
           { ip: "2001:db8::1", name: "Old", opened: "2026-09-01T00:00:00Z" },
@@ -147,11 +149,35 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(seen.posts.at(-1).ips[1].opened, "2026-10-18T04:00:00Z", "an edit keeps the start date");
         assert.ok(await page.locator("#ipsErr").isHidden());
 
-        // removed
+        // a date typed for one IP is not the next one's (review M1)
+        await page.locator('#ipsList .ips-row[data-ip="203.0.113.7"] .renew-pill').click();
+        await page.locator("#ipsList .renew-date").fill("2026-01-05");
+        await page.locator('#ipsList .ips-row[data-ip="203.0.113.8"] .renew-pill').click();
+        assert.equal(await page.locator('#ipsList .ips-row[data-ip="203.0.113.8"] .renew-date').inputValue(), "2026-10-18");
+        await page.locator("#ipsList .renew-cancel").click();
+        await page.waitForFunction(() => !document.querySelector("#ipsList .renew-edit"));
+
+        // removed, once asked; Cancel removes nothing
+        const posted = seen.posts.length;
         await page.locator('#ipsList .ips-row[data-ip="203.0.113.7"] .ips-remove').click();
+        await page.locator("dialog.action-confirm button:not(.primary)").click();
+        assert.equal(seen.posts.length, posted);
+        await page.locator('#ipsList .ips-row[data-ip="203.0.113.7"] .ips-remove').click();
+        await page.locator("dialog.action-confirm button.primary").click();
         await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 3);
         assert.deepEqual(seen.posts.at(-1).ips.map((x) => x.ip), ["203.0.113.8", "2001:db8::1", "198.51.100.42"]);
         assert.equal(await page.locator("#ipsSum").textContent(), x("{n} IPs", { n: 3 }));
+
+        // another window's change meanwhile: the save is refused, the list
+        // is read again with it and says so (review M2)
+        seen.ips = [...seen.ips, { ip: "192.0.2.77", name: "Elsewhere" }];
+        seen.rev++;
+        await page.locator('#ipsList .ips-row[data-ip="203.0.113.8"] .ips-remove').click();
+        await page.locator("dialog.action-confirm button.primary").click();
+        await page.waitForFunction(() => !document.querySelector("#ipsErr").hidden);
+        assert.equal(await page.locator("#ipsErr").textContent(), x("The list was changed in another window and is read again: make your change again"));
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 4);
+        assert.deepEqual((await rows(page)).map((r) => r[0]), ["203.0.113.8", "2001:db8::1", "198.51.100.42", "192.0.2.77"]);
         assert.deepEqual(errors, []);
       });
     }

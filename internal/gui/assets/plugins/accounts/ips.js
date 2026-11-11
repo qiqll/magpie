@@ -5,10 +5,12 @@
 // read as the exit of a saved proxy (Settings › Network, proxy/check);
 // the list is kept whole, as Settings' saved proxies are. Run after app.js.
 
-// the list as the server last said it, the form open (the index edited,
-// -1 for a new one, null for none) and its draft, the IP whose start date
-// is being picked, and the last error
-let ipsList = null, ipsEdit = null, ipsDraft = { ip: "", name: "" }, ipsRenewing = "", ipsErr = "";
+// the list as the server last said it and the revision it was read at
+// (a save made from an older one is refused), the form open (the index
+// edited, -1 for a new one, null for none) and its draft, the IP whose
+// start date is being picked, the last error, and whether a save is under
+// way: the list takes no other change till it is answered (T-155 review M2)
+let ipsList = null, ipsRev = "", ipsEdit = null, ipsDraft = { ip: "", name: "" }, ipsRenewing = "", ipsErr = "", ipsSaving = false;
 
 function ipsMount() {
   const add = $("#ipsAdd");
@@ -20,7 +22,9 @@ function ipsMount() {
 async function ipsLoad() {
   if (!ipsList) ipsDraw();
   try {
-    ipsList = (await api("ips")).ips || [];
+    const got = await api("ips");
+    ipsList = got.ips || [];
+    ipsRev = got.rev || "";
     ipsErr = "";
   } catch (e) {
     ipsList = null;
@@ -30,17 +34,30 @@ async function ipsLoad() {
 }
 
 // ipsKeep: the whole list, each IP as it is kept (its period is the
-// server's), saved; true once kept
+// server's), saved from the revision read; true once kept. One made from
+// an older read (another window's change) reads the list again and says
+// so, and nothing is written over
 async function ipsKeep(next) {
+  if (ipsSaving) return false;
+  ipsSaving = true;
   try {
-    ipsList = (await api("ips", { ips: next.map(({ ip, name, opened }) => ({ ip, name, opened })) })).ips || [];
+    const got = await api("ips", { rev: ipsRev, ips: next.map(({ ip, name, opened }) => ({ ip, name, opened })) });
+    ipsList = got.ips || [];
+    ipsRev = got.rev || "";
     ipsErr = "";
-    ipsDraw();
     return true;
   } catch (e) {
-    ipsErr = t(e.message);
-    ipsDraw();
+    // read again first: a read that went through clears the last error
+    if (/changed elsewhere/.test(e.message)) {
+      ipsEdit = null;
+      ipsRenewing = "";
+      await ipsLoad();
+      if (ipsList) ipsErr = t("The list was changed in another window and is read again: make your change again");
+    } else ipsErr = t(e.message);
     return false;
+  } finally {
+    ipsSaving = false;
+    ipsDraw();
   }
 }
 
@@ -55,10 +72,13 @@ function ipsDraw() {
     sum.append(el("span", "", t(xs.length === 1 ? "1 IP" : "{n} IPs", { n: xs.length })));
     if (due) sum.append(" · ", el("span", "acx-warn", t(due === 1 ? "1 to renew" : "{n} to renew", { n: due })));
   }
+  // the box typed in is the one given back the focus once drawn again
+  const typing = document.activeElement?.closest?.("#ipsList .ips-form") ? document.activeElement.className : "";
   list.replaceChildren();
   list.hidden = !xs.length && ipsEdit === null;
   xs.forEach((x, i) => list.append(ipsEdit === i ? ipsForm(i) : ipsRow(x, i)));
   if (ipsEdit === -1) list.append(ipsForm(-1));
+  if (typing) list.querySelector(".ips-form ." + typing.split(" ")[0])?.focus();
   $("#ipsAdd").hidden = !ipsList || ipsEdit !== null;
   const err = $("#ipsErr");
   err.textContent = ipsErr;
@@ -77,7 +97,7 @@ function ipsRow(x, i) {
   const name = el("div", "name");
   name.append(el("code", "ips-ip", x.ip));
   if (ipsRenewing === x.ip) {
-    name.append(renewEditor(x.renewal, (opened) => ipsKeep(ipsList.map((y, j) => (j === i ? { ...y, opened: opened || undefined } : y))),
+    name.append(renewEditor("ip/" + x.ip, x.renewal, (opened) => ipsKeep(ipsList.map((y, j) => (j === i ? { ...y, opened: opened || undefined } : y))),
       () => { ipsRenewing = ""; ipsDraw(); }));
   } else name.append(renewPill(x.renewal, () => { ipsRenewing = x.ip; ipsDraw(); }));
   who.append(name);
@@ -89,7 +109,11 @@ function ipsRow(x, i) {
   edit.onclick = () => { ipsEdit = i; ipsDraft = { ip: x.ip, name: x.name || "" }; ipsErr = ""; ipsDraw(); };
   const rm = el("button", "text ips-remove", t("Remove"));
   rm.type = "button";
-  rm.onclick = () => { rm.classList.add("busy"); ipsKeep(ipsList.filter((_, j) => j !== i)); };
+  rm.onclick = async () => {
+    if (ipsSaving || !await confirmRemoval(x.name ? x.ip + " (" + x.name + ")" : x.ip, "Its start date and reminder go with it.")) return;
+    rm.classList.add("busy");
+    ipsKeep(ipsList.filter((y) => y.ip !== x.ip));
+  };
   acts.append(edit, rm);
   row.append(acts);
   return row;

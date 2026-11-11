@@ -31,25 +31,31 @@ const renewDay = (at) => {
   return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 };
 
-// the date typed in the open editor, kept over a redraw of its page
-let renewTyped = "";
+// the date typed in the open editor, by the editor's key, kept over a
+// redraw of its page; another editor opened starts from its own date
+// (T-154 review M1)
+let renewTyped = { key: "", day: "" };
 
 // renewEditor: the start date to pick, Save, Clear (once one is told) and
-// Cancel. save gets the day's start in the reader's zone as an ISO time,
-// "" to clear, and returns whether it was kept; done closes the editor.
-function renewEditor(st, save, done) {
+// Cancel, for the account or IP key. save gets the day's start in the
+// reader's zone as an ISO time, "" to clear, and returns whether it was
+// kept; done closes the editor.
+function renewEditor(key, st, save, done) {
   const box = el("span", "renew-edit");
   box.onclick = (e) => e.stopPropagation();
   const day = el("input", "renew-date");
   day.type = "date";
-  day.value = renewTyped || (st ? renewDay(st.opened) : renewDay(Date.now()));
-  day.oninput = () => { renewTyped = day.value; };
+  if (renewTyped.key !== key) renewTyped = { key, day: "" };
+  day.value = renewTyped.day || (st ? renewDay(st.opened) : renewDay(Date.now()));
+  day.oninput = () => { renewTyped.day = day.value; };
   day.setAttribute("aria-label", t("Start date"));
   const keep = (v, b) => {
+    // one save at a time: Enter twice sends one (T-154 review L3)
+    if (box.querySelector(".busy")) return;
     b.classList.add("busy");
     Promise.resolve(save(v)).then((ok) => { b.classList.remove("busy"); if (ok !== false) end(); });
   };
-  const end = () => { renewTyped = ""; done(); };
+  const end = () => { renewTyped = { key: "", day: "" }; done(); };
   const ok = el("button", "text primary renew-save", t("Save"));
   ok.type = "button";
   ok.onclick = () => {

@@ -25,7 +25,7 @@ const (
 )
 
 // State is a period worked out at a time: when it was opened, when it
-// ends (Days later), the whole days left, rounded up so that 5 days and an
+// ends (Days calendar days later), the whole days left, rounded up so that 5 days and an
 // hour is 6, 0 once it has ended, and Due.
 type State struct {
 	Opened   time.Time `json:"opened"`
@@ -35,14 +35,18 @@ type State struct {
 }
 
 // Of is the period opened at opened as it stands at now, nil for no time.
-// It ends Days×24h after opened; from WarnDays days before then it is due
-// soon, and at its end it is ended. One period only: a renewal is the
-// user setting the new time.
-func Of(opened, now time.Time) *State {
+// It ends Days calendar days after opened in this computer's zone, so a
+// day the clocks change on doesn't move its end off its date (T-154
+// review M5); from WarnDays days before then it is due soon, and at its
+// end it is ended. One period only: a renewal is the user setting the
+// new time.
+func Of(opened, now time.Time) *State { return of(opened, now, time.Local) }
+
+func of(opened, now time.Time, zone *time.Location) *State {
 	if opened.IsZero() {
 		return nil
 	}
-	s := &State{Opened: opened.UTC(), Ends: opened.Add(Days * 24 * time.Hour).UTC()}
+	s := &State{Opened: opened.UTC(), Ends: opened.In(zone).AddDate(0, 0, Days).UTC()}
 	left := s.Ends.Sub(now)
 	if left <= 0 {
 		s.Due = DueEnded
