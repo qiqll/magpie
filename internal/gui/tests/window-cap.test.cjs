@@ -329,6 +329,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await item(page, w.off).click();
         assert.deepEqual(await posted(posts, n), { id: "codex", account: "Friend@Example.com", window: "5 hours", cap: 100 });
         await page.waitForFunction(() => document.querySelectorAll('.editor .acc[data-account-id="Friend@Example.com"] .aq-cap').length === 1);
+        // the week's 40% still makes its caps by window beside the 100 (T-141)
+        assert.equal(await row(page, "Friend@Example.com").locator(".acap").textContent(), w.byWindow);
         if (w.none) assert.equal(await row(page, "Friend@Example.com").locator(".aq-own").first().textContent(), w.none);
 
         // back to the account's: 0, its own goes
