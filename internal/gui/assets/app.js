@@ -14178,7 +14178,7 @@ function accountCapOf(p, user) { return p?.accountCaps?.[String(user).toLowerCas
 function windowOwnCapOf(p, user, w) {
   return (w?.capId && p?.accountWindowCaps?.[String(user).toLowerCase()]?.[w.capId]) || 0;
 }
-function windowCapsOf(p, user) { const k = String(user).toLowerCase(); return Object.keys({ ...p?.accountWindowCaps?.[k], ...p?.accountWindowAmounts?.[k] }).length; }
+function windowCapsOf(p, user) { const k = String(user).toLowerCase(), c = p?.accountWindowCaps?.[k], a = p?.accountWindowAmounts?.[k]; return Object.keys({ ...c, ...a }).filter((w) => a?.[w] || c?.[w] % 100).length; }
 // a window's cap at an amount of its unit (provider.AccountWindowAmounts), 0 for none
 function windowAmountOf(p, user, w) {
   return (w?.capId && p?.accountWindowAmounts?.[String(user).toLowerCase()]?.[w.capId]) || 0;
@@ -14320,7 +14320,6 @@ function windowCapMeter(m, p, user, w) {
   return b;
 }
 function accountCapPill(p, user, cap, direct) {
-  // with no cap of its own but some windows', it says so
   const byWindow = !cap && windowCapsOf(p, user) > 0;
   const pill = el("button", "acap" + (cap || byWindow ? " set" : ""), cap ? t("Cap {n}%", { n: cap }) : byWindow ? t("Caps by window") : t("No cap"));
   pill.type = "button";

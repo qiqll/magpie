@@ -274,6 +274,25 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(errors, []);
       });
 
+      // 100 on every window, as Skip ramp-up leaves an account, is no cap (T-141)
+      test(`${label}: windows lifted to 100% are no caps by window`, async (t) => {
+        const { page, errors, posts } = await open(t, "lifted", under);
+        for (const [i, name] of ["5 hours", "weekly"].entries()) {
+          await still(page, "me@example.com", meter(page, "me@example.com", i));
+          const n = posts.length;
+          await item(page, w.off).click();
+          assert.deepEqual(await posted(posts, n), { id: "codex", account: "me@example.com", window: name, cap: 100 });
+          await page.waitForFunction((k) => document.querySelectorAll('.editor .acc[data-account-id="me@example.com"] .aq-own').length === k, i + 1);
+        }
+        const pill = row(page, "me@example.com").locator(".acap");
+        assert.notEqual(await pill.textContent(), w.byWindow);
+        assert.equal(await pill.evaluate((e) => e.classList.contains("set")), false);
+        if (w.none) assert.equal(await pill.textContent(), w.none);
+        // the pool's note counts it with the accounts used to 100%
+        assert.match(await page.locator(".editor .pool-ends .note").textContent(), /me@example\.com/);
+        assert.deepEqual(errors, []);
+      });
+
       test(`${label}: a window's cap is set from its meter in the app's menu, typed, and lifted`, async (t) => {
         const { page, errors, posts } = await open(t, "set", under);
         // me's five hours: the menu, headed by the window, no native select
