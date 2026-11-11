@@ -185,7 +185,7 @@ magpie.strings({
     "1 account picked it": "1 アカウントが個別に選択",
     "{n} accounts picked it": "{n} アカウントが個別に選択",
     "{name}: {own} · {n} ramping up": "{name}：{own} · {n} 件が慣らし中",
-    "{names} picked it: pick another policy in its editor or on its accounts' rows first": "{names} が選んでいます：先にエディターかアカウントの行で別のポリシーを選んでください",
+    "{names} picked it: pick another policy in its editor or on its accounts' rows first": "{names} が選んでいます：先にエディタかアカウントの行で別のポリシーを選んでください",
     "{name} (turned off)": "{name}（オフ）",
     "{name} (not in Providers)": "{name}（プロバイダ一覧にない）",
     "{name} picked it": "{name} が選択",

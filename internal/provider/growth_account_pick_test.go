@@ -378,3 +378,53 @@ func TestGrowthUsesListWhatRefusesTheDelete(t *testing.T) {
 		t.Fatalf("a record made for nobody: %v", err)
 	}
 }
+
+// A clear meant for a record the Providers page has no row of goes to that
+// record, never to a listed provider Find reaches by its name or a former
+// id (review H1): a provider of the user's own named Claude, which refused
+// the clear as one of keys. A key or
+// an id written by hand in another case is its account's or its
+// provider's: In use lists Codex once, the account listed isn't Gone, and
+// one clear takes the pick away (review M2, M3).
+func TestGrowthClearsTheRecordItNames(t *testing.T) {
+	firstUsedFixture(t, 3*24*time.Hour+time.Hour)
+	f, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(f.Providers, func(p Provider) bool { return p.ID == "codex" })
+	f.Providers[i].ID = " Codex"
+	f.Providers[i].GrowthPolicy = settings.GrowthCautious
+	f.Providers[i].AccountGrowthPolicy = map[string]string{"New@Example.com": settings.GrowthCautious, "Gone@Example.com": settings.GrowthCautious}
+	f.Providers = append(f.Providers, Provider{ID: "mine", Name: "Claude", Chat: "https://relay.example.com/v1", Key: "sk-test"},
+		Provider{ID: "claude", GrowthPolicy: settings.GrowthCautious, AccountGrowthPolicy: map[string]string{"old@example.com": settings.GrowthCautious}})
+	if err := store(f); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := Find("claude"); err != nil || p.ID != "mine" {
+		t.Fatalf("the fixture's Find(claude) is meant to reach the user's own Claude by its name: %v %v", p, err)
+	}
+	now := time.Now()
+	us := GrowthUses(settings.GrowthCautious, now)
+	if n := len(slices.DeleteFunc(slices.Clone(us), func(u GrowthUse) bool { return u.Provider != "codex" })); n != 1 {
+		t.Fatalf("Codex listed %d times: %+v", n, us)
+	}
+	if i := slices.IndexFunc(us, func(u GrowthUse) bool { return u.Provider == "codex" }); i < 0 || us[i].Unlisted || us[i].AccountsPicked != 2 || !slices.Equal(us[i].Gone, []string{"gone@example.com"}) {
+		t.Fatalf("Codex in Cautious's In use: %+v", us)
+	}
+
+	if err := SetGrowthPolicy("claude", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAccountGrowthPolicy("claude", "old@example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAccountGrowthPolicy("codex", "gone@example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	picks, err := GrowthPicks()
+	want := []GrowthPick{{Provider: " Codex", Policy: settings.GrowthCautious}, {Provider: " Codex", Account: "new@example.com", Policy: settings.GrowthCautious}}
+	if err != nil || !slices.Equal(picks, want) {
+		t.Fatalf("picks after clearing Claude's and Codex's gone account's: %v %v", picks, err)
+	}
+}

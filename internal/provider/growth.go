@@ -185,17 +185,19 @@ func growthPolicyFor(id, user string) settings.GrowthPolicy {
 // gone from outside magpie would keep its policy from being deleted, and
 // of a subscription the Providers page doesn't list (clearStoredPick).
 func SetAccountGrowthPolicy(id, ref, policy string) error {
+	if strings.TrimSpace(policy) == "" && storedOnly(id) {
+		return clearStoredPick(id, func(q *Provider) bool {
+			// keys as they are kept: one written by hand in another case
+			// is the account's too
+			m := normalAccountGrowthPolicy(q.AccountGrowthPolicy)
+			_, had := m[accountKey(ref)]
+			delete(m, accountKey(ref))
+			q.AccountGrowthPolicy = normalAccountGrowthPolicy(m)
+			return had
+		})
+	}
 	p, err := Find(id)
 	if err != nil {
-		if strings.TrimSpace(policy) == "" {
-			return clearStoredPick(id, err, func(q *Provider) bool {
-				_, had := q.AccountGrowthPolicy[accountKey(ref)]
-				m := maps.Clone(q.AccountGrowthPolicy)
-				delete(m, accountKey(ref))
-				q.AccountGrowthPolicy = normalAccountGrowthPolicy(m)
-				return had
-			})
-		}
 		return err
 	}
 	if p.Account == nil {
@@ -216,7 +218,9 @@ func SetAccountGrowthPolicy(id, ref, policy string) error {
 		if policy != "" && !settings.Shared().GrowthKnows(policy) {
 			return fmt.Errorf("no growth policy has the id %q", policy)
 		}
-		m := maps.Clone(q.AccountGrowthPolicy)
+		// normalized first, so a key written by hand in another case is
+		// cleared, not kept beside it (review M2)
+		m := normalAccountGrowthPolicy(q.AccountGrowthPolicy)
 		if policy == "" {
 			delete(m, k)
 		} else {
@@ -230,24 +234,32 @@ func SetAccountGrowthPolicy(id, ref, policy string) error {
 	})
 }
 
+// storedOnly is whether providers.json keeps a record of the id itself
+// that the Providers page has no row of (signed out, hidden). Find isn't
+// asked first: it finds a provider by its name or a former id too, and a
+// clear meant for the record would clear another's pick (review H1).
+func storedOnly(id string) bool {
+	id = normalID(id)
+	if slices.ContainsFunc(sharedAll(), func(p Provider) bool { return p.ID == id }) {
+		return false
+	}
+	return slices.ContainsFunc(storedFile().Providers, func(q Provider) bool { return normalID(q.ID) == id })
+}
+
+// normalID is a provider id as editRecord matches it.
+func normalID(id string) string { return strings.ToLower(strings.TrimSpace(id)) }
+
 // clearStoredPick clears a growth policy's pick (clear, which says
 // whether it had one) on the record providers.json keeps of the
-// subscription id that Find doesn't find (notFound, its error): one signed
-// out or hidden keeps its picks, and GrowthPicks counts them, so a policy
-// it picked can't be deleted until it is cleared (T-145). A record there
-// is none of, or one with no pick to clear, is notFound; nothing is made.
-func clearStoredPick(id string, notFound error, clear func(q *Provider) bool) error {
-	id = strings.ToLower(strings.TrimSpace(id))
-	f, err := read()
-	if err != nil {
-		return err
-	}
-	if !slices.ContainsFunc(f.Providers, func(q Provider) bool { return strings.ToLower(strings.TrimSpace(q.ID)) == id }) {
-		return notFound
-	}
+// subscription id the Providers page has no row of (storedOnly): one
+// signed out or hidden keeps its picks, and GrowthPicks counts them, so a
+// policy it picked can't be deleted until it is cleared (T-145). A record
+// with no pick to clear, or gone meanwhile, is an error; nothing is made.
+func clearStoredPick(id string, clear func(q *Provider) bool) error {
+	id = normalID(id)
 	return editRecord(id, false, func(q *Provider) (bool, error) {
 		if !clear(q) {
-			return false, notFound
+			return false, fmt.Errorf("%s has no such growth policy pick to clear", id)
 		}
 		return true, nil
 	})
@@ -276,15 +288,15 @@ func normalAccountGrowthPolicy(m map[string]string) map[string]string {
 // what another change wrote since stays. "" clears the pick of a
 // subscription the Providers page doesn't list too (clearStoredPick).
 func SetGrowthPolicy(id, policy string) error {
+	if strings.TrimSpace(policy) == "" && storedOnly(id) {
+		return clearStoredPick(id, func(q *Provider) bool {
+			had := q.GrowthPolicy != ""
+			q.GrowthPolicy = ""
+			return had
+		})
+	}
 	p, err := Find(id)
 	if err != nil {
-		if strings.TrimSpace(policy) == "" {
-			return clearStoredPick(id, err, func(q *Provider) bool {
-				had := q.GrowthPolicy != ""
-				q.GrowthPolicy = ""
-				return had
-			})
-		}
 		return err
 	}
 	if p.Account == nil {
@@ -517,12 +529,20 @@ func GrowthUses(id string, now time.Time) []GrowthUse {
 		counts[a.Provider]++
 	}
 	all, f := sharedAll(), storedFile()
+	// each record by its id as editRecord matches it, read once: an id
+	// written by hand in another case is its provider's (review M3, L5)
+	stored := map[string]Provider{}
+	for _, s := range f.Providers {
+		if _, ok := stored[normalID(s.ID)]; !ok {
+			stored[normalID(s.ID)] = s
+		}
+	}
 	var out []GrowthUse
 	for _, p := range all {
 		if p.Account == nil || slices.ContainsFunc(out, func(u GrowthUse) bool { return u.Provider == p.ID }) {
 			continue
 		}
-		s, _ := storedPicks(p.ID)
+		s := stored[normalID(p.ID)]
 		listed := map[string]bool{}
 		for _, r := range p.AccountRefs() {
 			listed[accountKey(r)] = true
@@ -541,14 +561,15 @@ func GrowthUses(id string, now time.Time) []GrowthUse {
 	// a record the Providers page has no row of keeps its picks, and
 	// GrowthPicks counts them
 	for _, s := range f.Providers {
-		if slices.ContainsFunc(out, func(u GrowthUse) bool { return u.Provider == s.ID }) || slices.ContainsFunc(all, func(p Provider) bool { return p.ID == s.ID }) {
+		sid := normalID(s.ID)
+		if slices.ContainsFunc(out, func(u GrowthUse) bool { return u.Provider == sid }) || slices.ContainsFunc(all, func(p Provider) bool { return p.ID == sid }) {
 			continue
 		}
 		mine, gone := accountPicksOf(s, id, nil)
 		if mine == 0 && s.GrowthPolicy != id {
 			continue
 		}
-		out = append(out, GrowthUse{Provider: s.ID, Name: cmp.Or(s.Name, s.ID), Picked: s.GrowthPolicy == id,
+		out = append(out, GrowthUse{Provider: sid, Name: cmp.Or(s.Name, sid), Picked: s.GrowthPolicy == id,
 			AccountsPicked: mine, AccountsOnly: s.GrowthPolicy != id, Unlisted: true, Gone: gone})
 	}
 	slices.SortFunc(out, func(a, b GrowthUse) int {
@@ -567,8 +588,8 @@ func accountPicksOf(s Provider, id string, listed map[string]bool) (int, []strin
 			continue
 		}
 		n++
-		if !listed[u] {
-			gone = append(gone, u)
+		if !listed[accountKey(u)] {
+			gone = append(gone, accountKey(u))
 		}
 	}
 	slices.Sort(gone)

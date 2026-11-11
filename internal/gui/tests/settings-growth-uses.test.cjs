@@ -5,7 +5,8 @@
 // and an account its subscription no longer lists. Delete is disabled
 // for each; the two with no other place to be changed are cleared here
 // (provider/growthpolicy, provider/accountgrowthpolicy with ""), and the
-// chart is asked again, whose In use then leaves them out. Every
+// chart is asked again, whose In use then leaves them out; an answer
+// asked before the clear that comes back after it is not drawn. Every
 // language, at a wide and a narrow width; no backend, the API is faked
 // here. SHOTS=<dir> keeps a screenshot of each.
 const assert = require("node:assert/strict");
@@ -61,7 +62,13 @@ function serve(lang, ctl) {
         const claude = goneOf("claude");
         if (ctl.claudePicked || claude.length) uses.push({ provider: "claude", name: "Claude", picked: ctl.claudePicked || undefined, accounts: 0, accountsPicked: claude.length || undefined, accountsOnly: !ctl.claudePicked || undefined, unlisted: true, gone: claude });
       }
-      return json({ points: POINTS, accounts: [], uses });
+      const body = { points: POINTS, accounts: [], uses: JSON.parse(JSON.stringify(uses)) };
+      if (ctl.hold) {
+        // answered with what was so when asked, once the test lets it go
+        ctl.hold = false;
+        await new Promise((r) => { ctl.release = r; ctl.onHeld(); });
+      }
+      return json(body);
     }
     if (url.pathname === "/api/plugins") return json({ plugins: [] });
     if (url.pathname === "/api/groups") return json({ groups: [], pools: [] });
@@ -84,7 +91,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       test(`${engine} ${lang} ${width}: In use lists every pick that refuses the delete, and the leftovers are cleared there`, async (t) => {
         const ctl = { posts: [], previews: 0, refuse: false, claudePicked: true, gone: [{ id: "codex", account: "gone@example.com" }, { id: "claude", account: "old@example.com" }] };
         const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
-        t.after(() => browser.close());
+        // a held answer is let go before the browser closes
+        t.after(() => { ctl.release?.(); return browser.close(); });
         const page = await (await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: "reduce" })).newPage();
         page.setDefaultTimeout(5000);
         page.setDefaultNavigationTimeout(60000);
@@ -126,12 +134,27 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         ctl.refuse = false;
         ctl.posts = [];
 
+        // an answer asked before a clear that comes back after it is not
+        // drawn: only the last ask's is (the chart asked again on a draw,
+        // a request still out as the clear's comes back)
+        const held = new Promise((r) => { ctl.onHeld = r; });
+        ctl.hold = true;
+        await list.locator('.gp-item[data-id="slow"]').click();
+        await Promise.race([held, new Promise((_, no) => setTimeout(() => no(new Error("the chart wasn't asked again on a click")), 5000))]);
+        await list.locator('.gp-item[data-id="slow"]').click();
+        await page.waitForFunction(() => document.querySelectorAll("#growthList .growth-gone-pick").length === 2);
+
         // an account gone: its pick cleared by its name, the chart asked again
         const asked = ctl.previews;
         await list.locator(".growth-gone-pick", { hasText: "gone@example.com" }).locator(".growth-clear").click();
         await page.waitForFunction((n) => document.querySelectorAll("#growthList .growth-gone-pick").length === n, 1);
         assert.deepEqual(ctl.posts, [["provider/accountgrowthpolicy", { id: "codex", account: "gone@example.com", growthPolicy: "" }]]);
         assert.ok(ctl.previews > asked, "the chart wasn't asked again");
+        const late = page.waitForResponse((r) => r.url().endsWith("/api/growth/preview"));
+        ctl.release();
+        await (await late).finished();
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+        assert.equal(await list.locator(".growth-gone-pick").count(), 1, "an answer asked before the clear was drawn over it");
         // Claude's own pick, with no row to change it on
         await list.locator(".growth-use", { hasText: x("{name} (not in Providers)", { name: "Claude" }) }).locator(".growth-clear").click();
         const claudeLeft = x("{name}: {own}", { name: x("{name} (not in Providers)", { name: "Claude" }), own: own1 });

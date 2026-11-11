@@ -20,7 +20,7 @@
 let growthDraft = null, growthErr = "", growthSel = null;
 // growthChart is the last chart asked for: its policy (key), what came
 // back, and the box it is drawn in
-const growthChart = { key: "", want: "", data: null, err: "", box: null, timer: 0, ro: null, day: -1 };
+const growthChart = { key: "", want: "", data: null, err: "", box: null, timer: 0, ro: null, day: -1, asked: 0 };
 const GROWTH_WINDOWS = [["5h", "5 hours"], ["7d", "7 days"]];
 const GROWTH_BUILTIN = { standard: "Standard", gentle: "Gentle", cautious: "Cautious", off: "Off" };
 const GROWTH_SVG = "http://www.w3.org/2000/svg";
@@ -401,14 +401,18 @@ function growthAsk(p) {
   growthDraw();
   if (!key) return;
   growthChart.timer = setTimeout(() => {
+    // only the last ask's answer is drawn: one asked with the same key
+    // before a pick was cleared, and back after, says the pick is still
+    // there (T-145)
+    const asked = ++growthChart.asked;
     api("growth/preview", { policy: out }).then((data) => {
-      if (growthChart.want !== key) return;
+      if (growthChart.want !== key || growthChart.asked !== asked) return;
       growthChart.key = key;
       growthChart.data = data;
       growthChart.err = "";
       growthDraw();
     }).catch((e) => {
-      if (growthChart.want !== key) return;
+      if (growthChart.want !== key || growthChart.asked !== asked) return;
       growthChart.err = t("magpie couldn't draw this policy: {why}", { why: growthWhy(e) });
       growthDraw();
     });
