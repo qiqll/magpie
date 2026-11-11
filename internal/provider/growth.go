@@ -158,27 +158,28 @@ func rampCaps(start, days int, added, now time.Time) map[string]int {
 	return out
 }
 
-// withGrowth is c with the shares of the policy the account user of the
-// subscription id is held by (growthPolicyFor) for an account added at
-// added, at now, on the windows the user set nothing on (no share, no
-// amount); c as it is when the account has a cap of its own, which holds
-// every window. c's map is never written: one with growth is a copy.
-func (c WindowCaps) withGrowth(id, user string, added, now time.Time) WindowCaps {
-	if !addedKnown(added) || c.All > 0 || growthLetGo(id, user) {
+// withGrowth is c with the shares of the policy the account user is held
+// by (growthPolicyFor), of its record s in the file f, its days counted
+// from growthFrom, at now, on the windows the user set nothing on (no
+// share, no amount); c as it is when the account has a cap of its own,
+// which holds every window, or the policy lets it go (letGo). c's map is
+// never written: one with growth is a copy. The record and the settings
+// are read once by its caller and here, for the policy, its days and the
+// let-go alike (T-143): the gateway asks it on every request (CapsOf,
+// accountCapsAt).
+func (c WindowCaps) withGrowth(f file, s Provider, user string, now time.Time) WindowCaps {
+	k := accountKey(user)
+	if c.All > 0 || letGo(s, k) {
 		return c
 	}
-	return c.withPolicy(growthPolicyFor(id, user), added, now)
+	pol := settings.Shared().GrowthFor(s.AccountGrowthPolicy[k], s.GrowthPolicy)
+	from, _ := countIn(f, s, k, now, func() settings.GrowthPolicy { return pol })
+	return c.withPolicy(pol, from, now)
 }
 
-// growthLetGo is whether the policy holds none of the windows of the
-// account user of the subscription id: the user skipped its ramp-up
+// letGo is whether the policy holds none of the windows of the account
+// whose key is k of the record s: the user skipped its ramp-up
 // (SkipGrowth), or it was found done (AccountGraduated, T-150).
-func growthLetGo(id, user string) bool {
-	s, _ := storedPicks(id)
-	return letGo(s, accountKey(user))
-}
-
-// letGo is growthLetGo of the record s and the account's key k.
 func letGo(s Provider, k string) bool {
 	_, skipped := s.AccountGrowthSkipped[k]
 	_, graduated := s.AccountGraduated[k]
@@ -903,11 +904,21 @@ func growthFrom(id, user string, now time.Time) time.Time {
 
 // growthCount is growthFrom, and whether its days are the days used.
 func growthCount(id, user string, now time.Time) (time.Time, bool) {
-	s, ok := storedPicks(id)
+	f := storedFile()
+	s, ok := picksIn(f, id)
 	if !ok {
 		return time.Time{}, false
 	}
 	k := accountKey(user)
+	return countIn(f, s, k, now, func() settings.GrowthPolicy {
+		return settings.Shared().GrowthFor(s.AccountGrowthPolicy[k], s.GrowthPolicy)
+	})
+}
+
+// countIn is growthCount of the account whose key is k of the record s in
+// the file f, pol its policy (growthPolicyFor), asked only of one with a
+// count of its days used.
+func countIn(f file, s Provider, k string, now time.Time, pol func() settings.GrowthPolicy) (time.Time, bool) {
 	added := s.AccountAdded[k]
 	if !addedKnown(added) {
 		return time.Time{}, false
@@ -916,12 +927,12 @@ func growthCount(id, user string, now time.Time) (time.Time, bool) {
 		return added, false
 	}
 	if used := s.AccountFirstUsed[k]; addedKnown(used) {
-		if c, ok := s.AccountUsedDays[k]; ok && c.From.Equal(used) && growthPolicyFor(id, user).CountDays == settings.GrowthUsedDays {
+		if c, ok := s.AccountUsedDays[k]; ok && c.From.Equal(used) && pol().CountDays == settings.GrowthUsedDays {
 			return usedFrom(c, now), true
 		}
 		return used, false
 	}
-	if storedFile().FirstUsedRead {
+	if f.FirstUsedRead {
 		return now, false
 	}
 	return added, false

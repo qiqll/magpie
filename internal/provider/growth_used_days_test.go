@@ -542,3 +542,39 @@ func TestGrowthUsedDaysOldCountMerges(t *testing.T) {
 		t.Fatalf("a day far on: %+v", c)
 	}
 }
+
+// The gateway's hold of an account reads providers.json once (T-143): the
+// user's caps, the policy, its days used and the let-go come from one
+// read, by CapsOf and AccountCapsOf alike, and hold it as before (3 days
+// used, Standard: 60%). The fewest of a few asks is counted, so a read
+// another goroutine makes meanwhile isn't the hold's.
+func TestCapsOfReadsProvidersOnce(t *testing.T) {
+	usedDaysFixture(t, "")
+	for d := range 3 {
+		NoteAccountUsed("codex", "new@example.com", day(d, time.Hour))
+	}
+	p, err := Find("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := day(25, 0)
+	for name, hold := range map[string]func() WindowCaps{
+		"AccountCapsOf": func() WindowCaps { return accountCapsAt("codex", "new@example.com", now) },
+		"CapsOf":        func() WindowCaps { return p.CapsOf("new@example.com") },
+	} {
+		fewest := int64(-1)
+		for range 3 {
+			before := storedReads.Load()
+			hold()
+			if n := storedReads.Load() - before; fewest < 0 || n < fewest {
+				fewest = n
+			}
+		}
+		if fewest != 1 {
+			t.Errorf("%s read providers.json %d times, want 1", name, fewest)
+		}
+	}
+	if s, _ := accountCapsAt("codex", "new@example.com", now).Of("5 hours"); s != 60 {
+		t.Errorf("held at %d%%, want 60%%", s)
+	}
+}

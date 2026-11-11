@@ -809,6 +809,7 @@ func load() file {
 // magpie's 33 GB in 53 minutes. What it returns is shared: the caller
 // must not change it, nor a list or map in it.
 func storedFile() file {
+	storedReads.Add(1)
 	f, err := filememo.Read("providers", Path(), parseProviders)
 	if err != nil {
 		// missing, or a file that doesn't decode: read's own way, its
@@ -817,6 +818,10 @@ func storedFile() file {
 	}
 	return f
 }
+
+// storedReads counts storedFile's reads, for the tests: the gateway's
+// holds read providers.json once a request (T-143).
+var storedReads atomic.Int64
 
 func parseProviders(b []byte) (file, error) {
 	var f file

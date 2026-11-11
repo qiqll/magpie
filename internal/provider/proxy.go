@@ -112,8 +112,12 @@ func ViaSignedIn(ctx context.Context, id string) context.Context {
 	return Via(ctx, id)
 }
 
-func storedPicks(id string) (Provider, bool) {
-	for _, p := range storedFile().Providers {
+func storedPicks(id string) (Provider, bool) { return picksIn(storedFile(), id) }
+
+// picksIn is storedPicks of the file f, read once by a caller that asks
+// more of it.
+func picksIn(f file, id string) (Provider, bool) {
+	for _, p := range f.Providers {
 		if p.ID == id {
 			return p, true
 		}

@@ -173,17 +173,17 @@ func (c WindowCaps) Holds() bool {
 // windows' own, and the growth policy's on the windows the user set
 // nothing on while it is new, by the days since its first use (growth.go). As with AccountCap, an account
 // made afresh beside the agent's own reads them from providers.json.
+// providers.json is read once for both (T-143).
 func (p Provider) CapsOf(user string) WindowCaps {
+	f := storedFile()
+	s, _ := picksIn(f, p.ID)
 	caps, wins, amts := p.AccountCaps, p.AccountWindowCaps, p.AccountWindowAmounts
 	if caps == nil && wins == nil && amts == nil {
-		if s, ok := storedPicks(p.ID); ok {
-			caps, wins, amts = s.AccountCaps, s.AccountWindowCaps, s.AccountWindowAmounts
-		}
+		caps, wins, amts = s.AccountCaps, s.AccountWindowCaps, s.AccountWindowAmounts
 	}
 	k := accountKey(user)
 	c := WindowCaps{All: caps[k], Windows: wins[k], Amounts: amts[k]}
-	now := time.Now()
-	return c.withGrowth(p.ID, user, growthFrom(p.ID, user, now), now)
+	return c.withGrowth(f, s, user, time.Now())
 }
 
 // AccountCapsOf is CapsOf of the provider id.
@@ -191,18 +191,23 @@ func AccountCapsOf(id, user string) WindowCaps {
 	return accountCapsAt(id, user, time.Now())
 }
 
-// accountCapsAt is AccountCapsOf at now; ownCapsOf is it without the
-// growth policy's, the user's own alone.
+// accountCapsAt is AccountCapsOf at now, providers.json read once (T-143);
+// ownCapsOf is it without the growth policy's, the user's own alone.
 func accountCapsAt(id, user string, now time.Time) WindowCaps {
-	return ownCapsOf(id, user).withGrowth(id, user, growthFrom(id, user, now), now)
+	f := storedFile()
+	s, _ := picksIn(f, id)
+	return ownCapsIn(s, user).withGrowth(f, s, user, now)
 }
 
 func ownCapsOf(id, user string) WindowCaps {
-	if s, ok := storedPicks(id); ok {
-		k := accountKey(user)
-		return WindowCaps{All: s.AccountCaps[k], Windows: s.AccountWindowCaps[k], Amounts: s.AccountWindowAmounts[k]}
-	}
-	return WindowCaps{}
+	s, _ := storedPicks(id)
+	return ownCapsIn(s, user)
+}
+
+// ownCapsIn is ownCapsOf of the record s.
+func ownCapsIn(s Provider, user string) WindowCaps {
+	k := accountKey(user)
+	return WindowCaps{All: s.AccountCaps[k], Windows: s.AccountWindowCaps[k], Amounts: s.AccountWindowAmounts[k]}
 }
 
 // SetWindowCap sets the share of the window named window of the account ref
