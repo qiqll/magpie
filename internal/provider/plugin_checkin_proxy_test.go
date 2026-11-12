@@ -1,11 +1,14 @@
 package provider
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,11 +51,25 @@ func TestPluginCheckinGoesThroughItsProxy(t *testing.T) {
 	}
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Setenv("FAKE_CHECKIN", filepath.Join(home, "presses"))
-	// a name no request reaches but through a proxy that answers for it
-	t.Setenv("FAKE_CHECKIN_URL", "http://vendor.invalid/checkin")
 	t.Cleanup(plugin.Settle)
 	global, globalSaw := recordingProxy(t)
 	own, ownSaw := recordingProxy(t)
+	// the vendor, on this computer, refuses a check-in sent to it direct:
+	// only a proxy answers for it. A name that resolves nowhere, as
+	// vendor.invalid was, still asks DNS, and a TUN proxy's fake-IP DNS
+	// (Clash's 198.18/15) answers it and holds the connection past the
+	// step's minute. 0.0.0.0 is no loopback name to host.js, so the
+	// account's proxy is used, and a direct dial of it stays on this
+	// computer.
+	var ownDirect atomic.Bool
+	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ownDirect.CompareAndSwap(false, strings.HasSuffix(r.URL.Path, "/ck-own"))
+		http.Error(w, "not through a proxy", http.StatusForbidden)
+	}))
+	t.Cleanup(vendor.Close)
+	_, port, _ := net.SplitHostPort(vendor.Listener.Addr().String())
+	url := "http://0.0.0.0:" + port + "/checkin"
+	t.Setenv("FAKE_CHECKIN_URL", url)
 	// the global proxy, set before the host starts, as the user's is
 	s := settings.Load()
 	s.Proxy = global.URL
@@ -105,7 +122,7 @@ func TestPluginCheckinGoesThroughItsProxy(t *testing.T) {
 					t.Errorf("%s: the account with its own proxy: %+v", name, r)
 				}
 			case directUser:
-				// sent direct: vendor.invalid is reached by no one
+				// sent direct: the vendor refuses it
 				if r.Outcome != CheckinFailed {
 					t.Errorf("%s: the direct account: %+v", name, r)
 				}
@@ -116,18 +133,21 @@ func TestPluginCheckinGoesThroughItsProxy(t *testing.T) {
 		if g := globalSaw(); len(g) != 0 {
 			t.Errorf("%s: the global proxy was asked %q", name, g)
 		}
+		if ownDirect.Load() {
+			t.Errorf("%s: the account with its own proxy was sent direct", name)
+		}
 	}
 
 	// the loop's, on a day of its own
 	day := time.Date(2026, 10, 6, 10, 0, 0, 0, beijing)
 	loop := pluginCheckiner{now: func() time.Time { return day }, only: func(id string) bool { return PluginCheckinOn(settings.Load(), id) }}
 	check("the loop", loop.checkinNow(step(), false))
-	if o := ownSaw(); !slices.Equal(o, []string{"http://vendor.invalid/checkin/ck-own"}) {
+	if o := ownSaw(); !slices.Equal(o, []string{url + "/ck-own"}) {
 		t.Fatalf("the loop: the account's proxy was asked %q", o)
 	}
 	// a press, today
 	check("a press", CheckInPlugins(step(), "fakeco"))
-	if o := ownSaw(); !slices.Equal(o, []string{"http://vendor.invalid/checkin/ck-own", "http://vendor.invalid/checkin/ck-own"}) {
+	if o := ownSaw(); !slices.Equal(o, []string{url + "/ck-own", url + "/ck-own"}) {
 		t.Fatalf("a press: the account's proxy was asked %q", o)
 	}
 }

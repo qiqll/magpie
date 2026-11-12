@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -336,9 +337,20 @@ func TestPluginProxy(t *testing.T) {
 	ownSrv, globalSrv := proxy(&own, "own"), proxy(&global, "global")
 	t.Setenv("HTTP_PROXY", globalSrv.URL)
 	t.Setenv("http_proxy", globalSrv.URL)
-	t.Setenv("FAKE_BASE", "http://vendor.invalid/v1")
-	t.Setenv("FAKE_USAGE", "http://vendor.invalid/usage")
-	t.Setenv("FAKE_MODELS", "http://vendor.invalid/models")
+	// the vendor, on this computer, says it was asked direct. A name that
+	// resolves nowhere, as vendor.invalid was, still asks DNS, and a TUN
+	// proxy's fake-IP DNS (Clash's 198.18/15) answers it and holds the
+	// connection. 0.0.0.0 is no loopback name to host.js, so a proxy is
+	// used for it, and a direct dial of it stays on this computer.
+	vendorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "direct")
+	}))
+	t.Cleanup(vendorSrv.Close)
+	_, port, _ := net.SplitHostPort(vendorSrv.Listener.Addr().String())
+	vendor := "http://0.0.0.0:" + port
+	t.Setenv("FAKE_BASE", vendor+"/v1")
+	t.Setenv("FAKE_USAGE", vendor+"/usage")
+	t.Setenv("FAKE_MODELS", vendor+"/models")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	abs, _ := filepath.Abs("testdata/fake/index.js")
@@ -353,7 +365,7 @@ func TestPluginProxy(t *testing.T) {
 	}
 	fetch := func(ctx context.Context) (string, error) {
 		res, err := Fetch(ctx, FetchRequest{Provider: "fakeco", Model: "fake-1", NPM: "@ai-sdk/openai-compatible",
-			URL: "http://vendor.invalid/v1/chat/completions", Method: "POST", Body: []byte(`{}`)})
+			URL: vendor + "/v1/chat/completions", Method: "POST", Body: []byte(`{}`)})
 		if err != nil {
 			return "", err
 		}
@@ -376,10 +388,10 @@ func TestPluginProxy(t *testing.T) {
 	}
 	// its own, as host:port
 	mine := netproxy.With(ctx, strings.TrimPrefix(ownSrv.URL, "http://"))
-	if b, err := fetch(mine); err != nil || b != "own" || last(&own) != "http://vendor.invalid/v1/chat/completions" {
+	if b, err := fetch(mine); err != nil || b != "own" || last(&own) != vendor+"/v1/chat/completions" {
 		t.Fatalf("with its own proxy: %q, %v; the proxy saw %q", b, err, last(&own))
 	}
-	if u, err := AccountUsage(mine, "fakeco", ""); err != nil || u.Plan != "own" || last(&own) != "http://vendor.invalid/usage" {
+	if u, err := AccountUsage(mine, "fakeco", ""); err != nil || u.Plan != "own" || last(&own) != vendor+"/usage" {
 		t.Fatalf("usage with its own proxy: %+v, %v", u, err)
 	}
 	// a move's check of the account asks the vendor as its requests do
@@ -390,15 +402,15 @@ func TestPluginProxy(t *testing.T) {
 	mu.Lock()
 	asked := slices.Clone(own)
 	mu.Unlock()
-	if err != nil || !slices.Contains(c.Models, "fake-own") || !slices.Contains(asked, "http://vendor.invalid/models") || !slices.Contains(asked, "http://vendor.invalid/usage") {
+	if err != nil || !slices.Contains(c.Models, "fake-own") || !slices.Contains(asked, vendor+"/models") || !slices.Contains(asked, vendor+"/usage") {
 		t.Fatalf("a check with its own proxy: %+v, %v; the proxy saw %q", c, err, asked)
 	}
-	// direct: vendor.invalid can't be reached but through a proxy
+	// direct: the vendor answers it itself
 	mu.Lock()
 	n := len(global) + len(own)
 	mu.Unlock()
-	if b, err := fetch(netproxy.With(ctx, "direct")); err == nil {
-		t.Fatalf("went direct, yet answered %q", b)
+	if b, err := fetch(netproxy.With(ctx, "direct")); err != nil || b != "direct" {
+		t.Fatalf("direct: %q, %v", b, err)
 	}
 	mu.Lock()
 	m := len(global) + len(own)
