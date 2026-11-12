@@ -30,11 +30,11 @@ function serve(lang, reads, gateway = { url: "http://127.0.0.1:3425", running: t
 
 // each language's group names, and Settings' Models tab
 const words = {
-  en: { groups: ["Work", "Models", "Insights", "Extend"], settings: "Settings", models: "Models" },
-  zh: { groups: ["使用", "模型", "观测", "扩展"], settings: "设置", models: "模型" },
-  "zh-TW": { groups: ["使用", "模型", "觀測", "擴充"], settings: "設定", models: "模型" },
-  ja: { groups: ["利用", "モデル", "観測", "拡張"], settings: "設定", models: "モデル" },
-  de: { groups: ["Arbeit", "Modelle", "Einblick", "Zusätze"], settings: "Einstellungen", models: "Modelle" },
+  en: { groups: ["Work", "Models", "Resources", "Insights", "Extend"], settings: "Settings", models: "Models" },
+  zh: { groups: ["使用", "模型", "资源", "观测", "扩展"], settings: "设置", models: "模型" },
+  "zh-TW": { groups: ["使用", "模型", "資源", "觀測", "擴充"], settings: "設定", models: "模型" },
+  ja: { groups: ["利用", "モデル", "リソース", "観測", "拡張"], settings: "設定", models: "モデル" },
+  de: { groups: ["Arbeit", "Modelle", "Ressourcen", "Einblick", "Zusätze"], settings: "Einstellungen", models: "Modelle" },
 };
 const frame = (page) => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
@@ -61,7 +61,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.equal(await page.locator(".top #nav").count(), 0, "and not in the header");
       assert.deepEqual(await page.locator("#nav .nav-gl:visible").allTextContents(), w.groups);
       assert.deepEqual(await page.locator("#nav button[data-view]").evaluateAll((bs) => bs.map((b) => b.dataset.view)),
-        ["agents", "sessions", "library", "providers", "accounts", "ips", "routing", "groups", "gateway", "usage", "masking", "plugins"]);
+        ["agents", "sessions", "library", "providers", "routing", "groups", "gateway", "accounts", "ips", "usage", "masking", "plugins"]);
       assert.ok(await page.locator("#side .side-foot #prefs").isVisible(), "Settings at the sidebar's foot");
       assert.equal((await page.locator("#prefs .side-l").textContent()).trim(), w.settings);
       // no page's name or group cut, and nothing scrolls sideways

@@ -184,10 +184,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.goto("http://magpie.test/?view=accounts");
         await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 6 && document.querySelector('#acxList .row.acx[data-user="alice@example.com"] .acx-calls b')?.textContent === "128");
 
-        // its tab, under Models after Providers
+        // its tab heads Resources, then IPs (T-171)
         if (width > 600) {
           const tabs = await page.$$eval("#nav > *", (xs) => xs.map((e) => e.dataset.view || "|" + e.textContent));
-          assert.deepEqual(tabs.slice(tabs.indexOf("providers") - 1, tabs.indexOf("providers") + 2), ["|" + x("Models"), "providers", "accounts"]);
+          assert.deepEqual(tabs.slice(tabs.indexOf("accounts") - 1, tabs.indexOf("accounts") + 2), ["|" + x("Resources"), "accounts", "ips"]);
         }
         assert.equal(await page.locator("#pageTitle").textContent(), x("Accounts"));
 
