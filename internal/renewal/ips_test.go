@@ -2,8 +2,10 @@ package renewal
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -163,5 +165,42 @@ func TestSetIPsKeepsAnOldTime(t *testing.T) {
 	ips, rev, _ = IPs()
 	if err := SetIPs(append(ips, IP{IP: "198.51.100.3", Opened: ahead}), rev, back); err == nil {
 		t.Fatal("a new time over a period ahead kept")
+	}
+}
+
+// The proxies an IP is the exit of (T-170) are kept trimmed and once
+// each, the list sent left as it was; one that isn't a proxy, "direct",
+// or more than MaxIPProxies of them are refused.
+func TestSetIPsProxies(t *testing.T) {
+	ipsHome(t)
+	now := time.Now()
+	sent := []string{" socks5://u:p@203.0.113.7:1080 ", "http://hk.example:3128", "socks5://u:p@203.0.113.7:1080"}
+	in := []IP{{IP: "203.0.113.7", Proxies: sent}}
+	if err := SetIPs(in, "", now); err != nil {
+		t.Fatal(err)
+	}
+	if sent[0] != " socks5://u:p@203.0.113.7:1080 " || len(in[0].Proxies) != 3 {
+		t.Errorf("the list sent was changed: %q", in[0].Proxies)
+	}
+	ips, rev, err := IPs()
+	if err != nil || len(ips) != 1 || !slices.Equal(ips[0].Proxies, []string{"socks5://u:p@203.0.113.7:1080", "http://hk.example:3128"}) {
+		t.Fatalf("kept %+v %v", ips, err)
+	}
+	many := make([]string, MaxIPProxies+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("http://203.0.113.7:%d", 1000+i)
+	}
+	for name, ps := range map[string][]string{
+		"not a proxy": {"ftp://203.0.113.7"},
+		"direct":      {"direct"},
+		"none":        {"  "},
+		"too many":    many,
+	} {
+		if err := SetIPs([]IP{{IP: "203.0.113.7", Proxies: ps}}, rev, now); err == nil {
+			t.Errorf("%s: kept", name)
+		}
+	}
+	if ips, _, _ := IPs(); len(ips) != 1 || len(ips[0].Proxies) != 2 {
+		t.Fatalf("after the refusals: %+v", ips)
 	}
 }

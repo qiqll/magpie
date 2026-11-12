@@ -5,8 +5,11 @@
 // date set and cleared, and removed, each posting the whole list; one
 // added from a saved proxy takes that proxy's exit (proxy/check) and its
 // name. A list the server refuses says why and keeps the form. The page's
-// tab is in the sidebar under Accounts. Every language, at a wide and a
-// phone's width; no backend, the API is faked here.
+// tab is in the sidebar under Accounts. T-170: Import from accounts reads
+// the exit of each proxy an account goes through and adds what isn't
+// listed, each IP names its accounts with their state, and the list is
+// found by that state. Every language, at a wide and a phone's width; no
+// backend, the API is faked here.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -52,10 +55,13 @@ function serve(lang, seen) {
       return json(answer(seen.ips, seen.rev));
     }
     if (url.pathname === "/api/proxy/check") {
-      seen.checks.push(req.postDataJSON());
-      return json({ source: "settings", through: { ip: "198.51.100.42", loc: "JP", ms: 80 }, direct: { ip: "192.0.2.1" } });
+      const asked = req.postDataJSON();
+      seen.checks.push(asked);
+      const exit = seen.exits ? seen.exits[asked.proxy] : "198.51.100.42";
+      if (!exit) return json({ source: "saved", through: { error: "dial tcp: i/o timeout" }, direct: { ip: "192.0.2.1" } });
+      return json({ source: "settings", through: { ip: exit, loc: "JP", ms: 80 }, direct: { ip: "192.0.2.1" } });
     }
-    if (url.pathname === "/api/providers") return json({ providers: [], presets: [], excluded: [], gateway: { running: true, window: true } });
+    if (url.pathname === "/api/providers") return json({ providers: seen.providers || [], presets: [], excluded: [], gateway: { running: true, window: true } });
     if (url.pathname === "/api/plugins") return json({ plugins: [] });
     if (url.pathname.startsWith("/api/")) return json({});
     const file = path.join(assets, url.pathname === "/" ? "index.html" : url.pathname);
@@ -114,7 +120,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.ok(await wider(page) <= 0.5, `the form reaches ${await wider(page)}px past the window`);
         await page.locator("#ipsList .ips-save").click();
         await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 4 && !document.querySelector("#ipsList .ips-form"));
-        assert.deepEqual(seen.posts.at(-1).ips.at(-1), { ip: "198.51.100.42", name: "Tokyo line" });
+        assert.deepEqual(seen.posts.at(-1).ips.at(-1), { ip: "198.51.100.42", name: "Tokyo line", proxies: ["http://me:pw@tokyo.example:3128"] });
         assert.equal(seen.posts.at(-1).ips.length, 4);
         assert.deepEqual((await rows(page))[3], ["198.51.100.42", "Tokyo line", x("Set start date"), "none"]);
 
@@ -178,6 +184,114 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await page.locator("#ipsErr").textContent(), x("The list was changed in another window and is read again: make your change again"));
         await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 4);
         assert.deepEqual((await rows(page)).map((r) => r[0]), ["203.0.113.8", "2001:db8::1", "198.51.100.42", "192.0.2.77"]);
+        assert.deepEqual(errors, []);
+      });
+    }
+  }
+}
+
+// the accounts the import reads, as /api/providers says them: Claude's
+// alice through a proxy at a listed IP, bob through the saved Tokyo line,
+// carol (to sign in again) through her subscription's proxy, which
+// doesn't answer; Codex's ops goes direct, qa (banned) through Tokyo too
+const prov = (id, name, agent, logins, extra = {}) => ({ id, name, icon: id + "-color", chat: "", responses: "", anthropic: "", catalog: "", models: [], agents: [], fallback: [], headers: {}, keyList: [], account: { agent, agentName: name, user: logins[0]?.user, plan: logins[0]?.plan, logins }, proxy: "", ...extra });
+const TOKYO = "http://me:pw@tokyo.example:3128", AT_IP = "socks5://u:s3cret@203.0.113.7:1080", HK = "http://hk:pw@hk.example:8080";
+const accountProviders = () => [
+  prov("claude", "Claude", "claude", [
+    { user: "alice@example.com", plan: "max", active: true, on: true },
+    { user: "bob@example.com", plan: "pro", on: true },
+    { user: "carol@example.com", plan: "pro", lapsed: "Its sign-in was refused (401)" },
+  ], { proxy: HK, accountNames: { "bob@example.com": "Work" }, accountProxies: { "alice@example.com": AT_IP, "bob@example.com": TOKYO } }),
+  prov("codex", "Codex", "codex", [
+    { user: "ops@example.com", plan: "pro", active: true, on: true },
+    { user: "qa@example.com", plan: "plus", on: true, banned: true },
+  ], { proxy: TOKYO, accountProxies: { "ops@example.com": "direct" } }),
+];
+
+const accountsOf = (page) => page.evaluate(() => Object.fromEntries([...document.querySelectorAll("#ipsList .ips-row")].map((r) => [r.dataset.ip,
+  r.querySelector(".ips-none") ? "none" : [...r.querySelectorAll(".ips-acct")].map((a) => a.querySelector(".ips-acct-name").textContent + " " + a.querySelector(".acx-state").className.replace("acx-state ", "") + " " + a.querySelector(".acx-state").textContent)])));
+
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  for (const lang of LANGS) {
+    const x = (s, a) => tr(lang, s, a);
+    for (const width of [1000, 380]) {
+      test(`${engine} ${lang} ${width}: the accounts' proxies are imported, each IP names its accounts and is found by their state`, async (t) => {
+        const seen = { posts: [], checks: [], rev: 1, providers: accountProviders(), exits: { [TOKYO]: "198.51.100.42", [AT_IP]: "203.0.113.7" }, ips: [
+          { ip: "203.0.113.7", name: "Osaka", opened: "2026-10-17T04:00:00Z" },
+          { ip: "203.0.113.8" },
+        ] };
+        const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+        t.after(() => browser.close());
+        const page = await (await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" })).newPage();
+        page.setDefaultTimeout(5000);
+        page.setDefaultNavigationTimeout(60000);
+        const errors = [];
+        page.on("pageerror", (e) => errors.push(e.message));
+        await page.route("**/*", serve(lang, seen));
+        await page.addInitScript(() => { try { if (!sessionStorage.getItem("set")) { localStorage.clear(); sessionStorage.setItem("set", "1"); } } catch {} });
+        await page.goto("http://magpie.test/?view=ips");
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 2);
+        const on = "on " + x("In rotation"), banned = "banned " + x("Banned");
+
+        // before any import: the proxy at a listed IP names its account
+        assert.deepEqual(await accountsOf(page), { "203.0.113.7": ["alice@example.com " + on], "203.0.113.8": "none" });
+        assert.equal(await page.locator("#ipsSum").textContent(), x("{n} IPs", { n: 2 }) + " · " + x("1 bound to accounts") + " · " + x("1 to renew"));
+
+        // imported: each proxy an account goes through is checked once,
+        // direct and the global one are none; one exit is added with the
+        // saved proxy's name, one is told to the IP at its address, and
+        // the one that didn't answer is named without its login
+        await page.locator("#ipsImport").click();
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 3 && !document.querySelector("#ipsImport").disabled);
+        assert.deepEqual(seen.checks.map((c) => c.proxy).sort(), [AT_IP, HK, TOKYO].sort());
+        assert.equal(seen.posts.length, 1);
+        assert.deepEqual(seen.posts[0].ips, [
+          { ip: "203.0.113.7", name: "Osaka", opened: "2026-10-17T04:00:00Z", proxies: [AT_IP] },
+          { ip: "203.0.113.8" },
+          { ip: "198.51.100.42", name: "Tokyo line", proxies: [TOKYO] },
+        ]);
+        assert.equal(await page.locator("#ipsSaid").textContent(), x("1 IP added") + " · " + x("1 proxy told to an IP listed"));
+        assert.equal(await page.locator("#ipsErr").textContent(), x("These proxies didn't answer, so their exit isn't known: {list}", { list: "hk.example:8080" }));
+        assert.deepEqual(await accountsOf(page), {
+          "203.0.113.7": ["alice@example.com " + on],
+          "203.0.113.8": "none",
+          "198.51.100.42": ["Work " + on, "qa@example.com " + banned],
+        });
+        assert.ok(await wider(page) <= 0.5, `the page reaches ${await wider(page)}px past the window`);
+
+        // found by the accounts' state, kept as picked
+        const pick = async (name) => {
+          await page.locator("#ipsFilter").click();
+          await page.locator(".proto-menu .pm-item", { hasText: name }).first().click();
+        };
+        const listed = () => page.evaluate(() => [...document.querySelectorAll("#ipsList .ips-row")].map((r) => r.dataset.ip));
+        await pick(x("Not bound to an account"));
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 1);
+        assert.deepEqual(await listed(), ["203.0.113.8"]);
+        await pick(x("An account: {state}", { state: x("Banned") }));
+        await page.waitForFunction(() => document.querySelector("#ipsList .ips-row")?.dataset.ip === "198.51.100.42");
+        assert.deepEqual(await listed(), ["198.51.100.42"]);
+        await pick(x("Bound to accounts"));
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 2);
+        assert.deepEqual(await listed(), ["203.0.113.7", "198.51.100.42"]);
+        assert.equal(await page.evaluate(() => localStorage.getItem("magpie.ipsFilter")), "bound");
+        await pick(x("All IPs"));
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 3);
+
+        // imported again: only the one that didn't answer is checked, and
+        // nothing new is saved
+        const checked = seen.checks.length;
+        await page.locator("#ipsImport").click();
+        await page.waitForFunction((n) => !document.querySelector("#ipsImport").disabled && document.querySelector("#ipsSaid").textContent !== "", checked);
+        assert.deepEqual(seen.checks.slice(checked).map((c) => c.proxy), [HK]);
+        assert.equal(seen.posts.length, 1);
+
+        // an edit keeps what the IP was read from
+        await page.locator('#ipsList .ips-row[data-ip="198.51.100.42"] .ips-edit').click();
+        await page.locator("#ipsList .ips-in-name").fill("Tokyo 2");
+        await page.locator("#ipsList .ips-save").click();
+        await page.waitForFunction(() => !document.querySelector("#ipsList .ips-form"));
+        assert.deepEqual(seen.posts.at(-1).ips[2], { ip: "198.51.100.42", name: "Tokyo 2", proxies: [TOKYO] });
         assert.deepEqual(errors, []);
       });
     }

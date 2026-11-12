@@ -9,25 +9,34 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // IP is a proxy exit IP the user pays for by the month (T-155): its
-// address, a name of the user's, and when its period was opened, zero for
-// not told (never due).
+// address, a name of the user's, when its period was opened, zero for
+// not told (never due), and the proxies whose exit it was read as (T-170:
+// from a saved proxy or the accounts' own), by which the page tells the
+// accounts that go out through it.
 type IP struct {
-	IP     string    `json:"ip"`
-	Name   string    `json:"name,omitempty"`
-	Opened time.Time `json:"opened,omitzero"`
+	IP      string    `json:"ip"`
+	Name    string    `json:"name,omitempty"`
+	Opened  time.Time `json:"opened,omitzero"`
+	Proxies []string  `json:"proxies,omitempty"`
 }
 
-// MaxIPs is the most IPs kept.
-const MaxIPs = 500
+// MaxIPs is the most IPs kept, and MaxIPProxies the most proxies one IP
+// is told the exit of.
+const (
+	MaxIPs       = 500
+	MaxIPProxies = 20
+)
 
 // ipsFile is ips.json beside settings.json: {"ips": [IP…]}. It is this
 // computer's own, as Settings › Network's saved proxies are: no sync or
@@ -126,8 +135,10 @@ func SetIPs(ips []IP, rev string, now time.Time) error {
 
 // CheckIPs says whether ips can be kept, normalizing each in place: an
 // address IPv4 or IPv6 takes (written as Go writes it), none twice, a
-// name of at most 80 characters, an opening time CheckOpened takes, and
-// at most MaxIPs of them. An IP's time as kept (kept, by its address) is
+// name of at most 80 characters, an opening time CheckOpened takes, at
+// most MaxIPProxies proxies each, one settings.CheckProxy takes and not
+// "direct" (each trimmed, one listed twice kept once), and at most MaxIPs
+// of them. An IP's time as kept (kept, by its address) is
 // not checked again, so one a clock set back since puts out of bounds
 // holds up no other edit (T-155 review L2).
 func CheckIPs(ips []IP, kept map[string]time.Time, now time.Time) error {
@@ -158,6 +169,21 @@ func CheckIPs(ips []IP, kept map[string]time.Time, now time.Time) error {
 		if !x.Opened.IsZero() {
 			x.Opened = x.Opened.UTC()
 		}
+		// a list of its own: the caller's is never written in
+		var proxies []string
+		for _, p := range x.Proxies {
+			p = strings.TrimSpace(p)
+			if p == "" || p == "direct" || len(p) > 2048 || settings.CheckProxy(p) != nil {
+				return fmt.Errorf("%s: a proxy it is the exit of must look like http://127.0.0.1:7890 or socks5://127.0.0.1:1080", x.IP)
+			}
+			if !slices.Contains(proxies, p) {
+				proxies = append(proxies, p)
+			}
+		}
+		if len(proxies) > MaxIPProxies {
+			return fmt.Errorf("%s: at most %d proxies are kept for one IP, not %d", x.IP, MaxIPProxies, len(proxies))
+		}
+		x.Proxies = proxies
 	}
 	return nil
 }

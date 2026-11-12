@@ -39,16 +39,19 @@ magpie.plugin("accounts", (ctx) => {
     reload() { return acxLoad(true); },
   });
   // Models › Proxy IPs (T-155): the proxy exit IPs paid by the month, each
-  // with its start date and the period pill Accounts' rows have (renew.js);
-  // ips.js, after app.js, is its code
+  // with its start date and the period pill Accounts' rows have (renew.js),
+  // and the accounts going out through it (T-170); ips.js, after app.js
+  // and page.js, is its code
   ctx.slots.add("page", {
     key: "ips",
     title: "Proxy IPs",
     html: `
+  <div class="sess-tools ips-top"><button class="sess-pick" id="ipsFilter" type="button" hidden></button></div>
   <p class="acx-sum" id="ipsSum" role="status"></p>
   <div class="list ips-list" id="ipsList" hidden></div>
   <p class="acx-err ips-err" id="ipsErr" role="alert" hidden></p>
-  <div class="ips-tools"><button class="text ips-add" id="ipsAdd" type="button" hidden data-t>Add IP</button></div>
+  <p class="ips-said" id="ipsSaid" role="status" hidden></p>
+  <div class="ips-tools"><button class="text ips-add" id="ipsAdd" type="button" hidden data-t>Add IP</button><button class="text ips-import" id="ipsImport" type="button" hidden data-t>Import from accounts</button></div>
   <p class="usage-note acx-note" id="ipsNote"></p>
 `,
     mount() { ipsMount(); },

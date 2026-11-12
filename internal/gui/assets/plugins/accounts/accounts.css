@@ -98,7 +98,7 @@
 .renew-edit .busy { opacity: .6; }
 /* Models › Proxy IPs (ips.js): each IP a row of the window's lists, its
    form a row of two boxes and Read from a saved proxy */
-.ips-list[hidden], .ips-err[hidden] { display: none; }
+.ips-list[hidden], .ips-err[hidden], .ips-said[hidden], .ips-top .sess-pick[hidden] { display: none; }
 .row.ips-row .who, .row.ips-form .ips-fields { flex: 1 1 220px; min-width: 0; }
 .row.ips-row .name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 3px; }
 .ips-ip { font-size: 13px; overflow-wrap: anywhere; }
@@ -110,3 +110,11 @@
 .ips-from.busy, .ips-form .busy { opacity: .6; }
 .ips-tools { margin: 8px 2px; }
 .ips-err { margin: 6px 2px; font-size: 12px; color: var(--red); }
+/* an IP's accounts (T-170): each its name and its state's badge */
+.ips-accts { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; min-width: 0; }
+.ips-acct { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; font-size: 12px; color: var(--fg-2); }
+.ips-acct-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ips-none { font-size: 12px; color: var(--muted); }
+.ips-tools { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.ips-import.busy { opacity: .6; }
+.ips-said { margin: 6px 2px; font-size: 12px; color: var(--muted); }
