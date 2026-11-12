@@ -113,6 +113,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         ]);
         assert.equal(await page.locator("#ipsSum").textContent(), x("{n} IPs", { n: 3 }) + " · " + x("{n} to renew", { n: 2 }));
         assert.ok(await wider(page) <= 0.5, `the page reaches ${await wider(page)}px past the window`);
+        // the accounts filter shows with no IP bound to an account (T-176)
+        assert.ok(await page.locator("#ipsFilter").isVisible());
 
         // add one from the saved proxy: its exit and its name fill the form
         await page.locator("#ipsAdd").click();
@@ -389,6 +391,114 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(seen.posts.length, posted + 1);
         assert.equal(await page.locator("#ipsSaid").textContent(), x("Every proxy an account goes through is listed already"));
         assert.ok(await page.locator("#ipsErr").isHidden());
+        assert.deepEqual(errors, []);
+      });
+    }
+  }
+}
+
+// T-176: the list is found by a word (an address, a name, a proxy as
+// shown, an account), by its period as the server worked it out, and by
+// its accounts, each alone and together; nothing found says so, the
+// filters are kept over a reload, and cleared every IP is back
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  for (const lang of LANGS) {
+    const x = (s, a) => tr(lang, s, a);
+    for (const width of [1000, 380]) {
+      test(`${engine} ${lang} ${width}: proxy IPs are found by a word, their period and their accounts`, async (t) => {
+        const seen = { posts: [], checks: [], rev: 1, providers: accountProviders(), ips: [
+          { ip: "203.0.113.7", name: "Osaka", opened: "2026-10-17T04:00:00Z" },
+          { ip: "203.0.113.8", proxies: [TOKYO] },
+          { ip: "2001:db8::1", name: "Old", opened: "2026-09-01T00:00:00Z" },
+          { ip: "192.0.2.9", name: "Seoul", opened: "2026-11-01T00:00:00Z" },
+        ] };
+        const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+        t.after(() => browser.close());
+        const page = await (await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" })).newPage();
+        page.setDefaultTimeout(5000);
+        page.setDefaultNavigationTimeout(60000);
+        const errors = [];
+        page.on("pageerror", (e) => errors.push(e.message));
+        await page.route("**/*", serve(lang, seen));
+        await page.addInitScript(() => { try { if (!sessionStorage.getItem("set")) { localStorage.clear(); sessionStorage.setItem("set", "1"); } } catch {} });
+        await page.goto("http://magpie.test/?view=ips");
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 4);
+        const listed = () => page.evaluate(() => [...document.querySelectorAll("#ipsList .ips-row")].map((r) => r.dataset.ip));
+        const shows = (ips) => page.waitForFunction((ips) => [...document.querySelectorAll("#ipsList .ips-row")].map((r) => r.dataset.ip).join() === ips.join(), ips).then(listed);
+        const pick = async (id, name) => {
+          await page.locator(id).click();
+          await page.locator(".proto-menu .pm-item", { hasText: name }).first().click();
+        };
+        const search = (s) => page.locator("#ipsQ").fill(s);
+        const all = ["203.0.113.7", "203.0.113.8", "2001:db8::1", "192.0.2.9"];
+        assert.equal(await page.locator("#ipsQ").getAttribute("placeholder"), x("Search IPs"));
+        assert.ok(await page.locator("#ipsRenew").isVisible());
+        assert.ok(await page.locator("#ipsFilter").isVisible());
+        assert.ok(await wider(page) <= 0.5, `the tools reach ${await wider(page)}px past the window`);
+
+        // by its period, as its pill says it
+        await pick("#ipsRenew", x("No start date"));
+        assert.deepEqual(await shows(["203.0.113.8"]), ["203.0.113.8"]);
+        await pick("#ipsRenew", x("Renew soon"));
+        assert.deepEqual(await shows(["203.0.113.7"]), ["203.0.113.7"]);
+        await pick("#ipsRenew", x("Period ended"));
+        assert.deepEqual(await shows(["2001:db8::1"]), ["2001:db8::1"]);
+        await pick("#ipsRenew", x("In its period"));
+        assert.deepEqual(await shows(["192.0.2.9"]), ["192.0.2.9"]);
+        await pick("#ipsRenew", x("Start date: any"));
+        await shows(all);
+
+        // by a word: a name, an address in any case, a proxy as shown, an
+        // account and its subscription; a proxy's login is never searched
+        await search("seoul");
+        assert.deepEqual(await shows(["192.0.2.9"]), ["192.0.2.9"]);
+        await search("2001:DB8");
+        assert.deepEqual(await shows(["2001:db8::1"]), ["2001:db8::1"]);
+        await search("tokyo.example");
+        assert.deepEqual(await shows(["203.0.113.8"]), ["203.0.113.8"]);
+        await search("alice");
+        assert.deepEqual(await shows(["203.0.113.7"]), ["203.0.113.7"]);
+        await search("relay");
+        assert.deepEqual(await shows(["203.0.113.8"]), ["203.0.113.8"]);
+        await search("me:pw");
+        assert.deepEqual(await shows([]), []);
+        assert.equal(await page.locator("#ipsNote").textContent(), x("No IP matches the filter."));
+
+        // together: a word, a period and the accounts narrow each other
+        await search("203.0.113");
+        assert.deepEqual(await shows(["203.0.113.7", "203.0.113.8"]), ["203.0.113.7", "203.0.113.8"]);
+        await pick("#ipsRenew", x("No start date"));
+        assert.deepEqual(await shows(["203.0.113.8"]), ["203.0.113.8"]);
+        await pick("#ipsFilter", x("An account: {state}", { state: x("Banned") }));
+        assert.deepEqual(await shows(["203.0.113.8"]), ["203.0.113.8"]);
+        await pick("#ipsFilter", x("Not bound to an account"));
+        assert.deepEqual(await shows([]), []);
+        assert.equal(await page.locator("#ipsNote").textContent(), x("No IP matches the filter."));
+        await pick("#ipsRenew", x("Start date: any"));
+        await search("");
+        assert.deepEqual(await shows(["2001:db8::1", "192.0.2.9"]), ["2001:db8::1", "192.0.2.9"]);
+        await search("old");
+        assert.deepEqual(await shows(["2001:db8::1"]), ["2001:db8::1"]);
+        await pick("#ipsRenew", x("Period ended"));
+        assert.deepEqual(await shows(["2001:db8::1"]), ["2001:db8::1"]);
+        assert.equal(await page.evaluate(() => localStorage.getItem("magpie.ipsRenew")), "ended");
+        assert.ok(await wider(page) <= 0.5, `the tools reach ${await wider(page)}px past the window`);
+
+        // kept on this machine over a reload
+        await page.reload();
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 1);
+        assert.deepEqual(await listed(), ["2001:db8::1"]);
+        assert.equal(await page.locator("#ipsQ").inputValue(), "old");
+        assert.equal(await page.locator("#ipsRenew").textContent(), x("Period ended"));
+        assert.equal(await page.locator("#ipsFilter").textContent(), x("Not bound to an account"));
+
+        // cleared, every IP is back: Escape empties the search
+        await page.locator("#ipsQ").press("Escape");
+        assert.equal(await page.locator("#ipsQ").inputValue(), "");
+        await pick("#ipsRenew", x("Start date: any"));
+        await pick("#ipsFilter", x("All IPs"));
+        await shows(all);
+        assert.equal(await page.locator("#ipsNote").textContent(), x("Each IP's 30 days count from its start date. Kept on this computer only."));
         assert.deepEqual(errors, []);
       });
     }

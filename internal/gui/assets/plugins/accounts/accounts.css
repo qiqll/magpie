@@ -98,7 +98,10 @@
 .renew-edit .busy { opacity: .6; }
 /* Models › Proxy IPs (ips.js): each IP a row of the window's lists, its
    form a row of two boxes and Read from a saved proxy */
-.ips-list[hidden], .ips-err[hidden], .ips-said[hidden], .ips-top .sess-pick[hidden] { display: none; }
+.ips-list[hidden], .ips-err[hidden], .ips-said[hidden], .ips-top .sess-pick[hidden], .ips-top .ips-q[hidden] { display: none; }
+/* the search, its period and its accounts (T-176): the search takes a
+   line of its own on a phone's width */
+@media (max-width: 620px) { .ips-top .ips-q { flex: 1 1 100%; width: auto; } }
 .row.ips-row .who, .row.ips-form .ips-fields { flex: 1 1 220px; min-width: 0; }
 .row.ips-row .name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 3px; }
 .ips-ip { font-size: 13px; overflow-wrap: anywhere; }

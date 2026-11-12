@@ -9,7 +9,9 @@
 // through it with their state (page.js' acxRows), found by that state.
 // An IP's form lists the proxies it was read from, each unlinked there,
 // and an import checks every proxy again: one whose exit moved is moved to
-// the IP at its new exit, and said (T-172). Run after app.js and page.js.
+// the IP at its new exit, and said (T-172). The list is found by a word,
+// its period as the pill says it, and its accounts, together (T-176).
+// Run after app.js and page.js.
 
 // the list as the server last said it and the revision it was read at
 // (a save made from an older one is refused), the form open (the index
@@ -24,9 +26,25 @@ let ipsImporting = false, ipsSaid = "";
 // account goes through, "unbound" those none does, or an account state
 // (ACX_SAID's) one of its accounts is in
 let ipsFilter = "";
-try { ipsFilter = localStorage.getItem("magpie.ipsFilter") || ""; } catch {}
+// the words searched for and the period filter (T-176), kept per machine
+// as the accounts filter is: "" every IP, else IPS_RENEW's
+let ipsQuery = "", ipsRenew = "";
+try {
+  ipsFilter = localStorage.getItem("magpie.ipsFilter") || "";
+  ipsQuery = localStorage.getItem("magpie.ipsQuery") || "";
+  ipsRenew = localStorage.getItem("magpie.ipsRenew") || "";
+} catch {}
 
 function ipsMount() {
+  const q = $("#ipsQ");
+  q.value = ipsQuery;
+  q.setAttribute("aria-label", t("Search IPs"));
+  q.oninput = () => {
+    ipsQuery = q.value;
+    try { localStorage.setItem("magpie.ipsQuery", ipsQuery); } catch {}
+    ipsDraw();
+  };
+  q.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape" && q.value) { q.value = ""; q.oninput(); } };
   const add = $("#ipsAdd");
   add.onclick = () => { ipsEdit = -1; ipsDraft = { ip: "", name: "", proxies: [] }; ipsErr = ""; ipsSaid = ""; ipsDraw(); };
   $("#ipsImport").onclick = ipsImport;
@@ -223,6 +241,22 @@ async function ipsKeep(next) {
 // the filter's states, in Models › Accounts' order of what to act on
 const IPS_STATES = ["on", "paused", "off", "again", "authfail", "banned", "disabled"];
 
+// the period filter (T-176): its value and words, and whether an IP's
+// period, as the server worked it out (renewal.Of, the one the pill
+// says), is in it
+const IPS_RENEW = [["none", "No start date"], ["ok", "In its period"], ["soon", "Renew soon"], ["ended", "Period ended"]];
+function ipsRenewIs(x, v) {
+  const st = x.renewal;
+  return v === "none" ? !st : v === "ok" ? !!st && !st.due : !!st && st.due === v;
+}
+
+// ipsMatches: whether what is typed (acxLow'd, as Models › Accounts'
+// search takes it) is in the IP's address, its name, a proxy it was read
+// from (as shown, its login left out) or an account going out through it
+function ipsMatches(x, accts, words) {
+  return !words || [x.ip, x.name, ...(x.proxies || []).map(ipsShown), ...accts.flatMap((r) => [r.who, r.sub, r.p.name])].some((s) => acxLow(s).includes(words));
+}
+
 function ipsDraw() {
   const list = $("#ipsList");
   if (!list) return;
@@ -240,8 +274,21 @@ function ipsDraw() {
     if (bound) sum.append(" · ", el("span", "", t(bound === 1 ? "1 bound to accounts" : "{n} bound to accounts", { n: bound })));
     if (due) sum.append(" · ", el("span", "acx-warn", t(due === 1 ? "1 to renew" : "{n} to renew", { n: due })));
   }
-  // the filter: offered once an IP has an account; a state no IP's
-  // account is in is dropped
+  // the search and the period filter, offered once there is an IP; a
+  // value no longer offered is dropped
+  const q = $("#ipsQ");
+  q.hidden = !xs.length && !ipsQuery;
+  if (ipsRenew && !IPS_RENEW.some(([v]) => v === ipsRenew)) ipsRenew = "";
+  const rpick = $("#ipsRenew");
+  sessPick(rpick, "Start date: any", ipsRenew, IPS_RENEW.map(([v, name]) => ({ v, name: t(name), note: String(xs.filter((x) => ipsRenewIs(x, v)).length) })), "Start date", (v) => {
+    ipsRenew = v;
+    try { localStorage.setItem("magpie.ipsRenew", v); } catch {}
+    ipsDraw();
+  });
+  rpick.title = "";
+  rpick.hidden = !xs.length && !ipsRenew;
+  // the accounts filter: offered once there is an IP, bound to an account
+  // or not (T-176); a state no IP's account is in is dropped
   const states = IPS_STATES.filter((k) => xs.some((x) => accts.get(x).some((r) => r.state === k)));
   if (ipsFilter && !["bound", "unbound", ...states].includes(ipsFilter) && providers) ipsFilter = "";
   const n = (f) => xs.filter(f).length;
@@ -257,9 +304,11 @@ function ipsDraw() {
     ipsDraw();
   });
   pick.title = "";
-  pick.hidden = !bound && !ipsFilter;
-  const shows = (x) => !ipsFilter || !providers || (ipsFilter === "bound" ? accts.get(x).length > 0
-    : ipsFilter === "unbound" ? !accts.get(x).length : accts.get(x).some((r) => r.state === ipsFilter));
+  pick.hidden = !xs.length && !ipsFilter;
+  const words = acxLow(ipsQuery);
+  const shows = (x) => (!ipsFilter || !providers || (ipsFilter === "bound" ? accts.get(x).length > 0
+    : ipsFilter === "unbound" ? !accts.get(x).length : accts.get(x).some((r) => r.state === ipsFilter)))
+    && (!ipsRenew || ipsRenewIs(x, ipsRenew)) && ipsMatches(x, accts.get(x), words);
   // the box typed in is the one given back the focus once drawn again
   const typing = document.activeElement?.closest?.("#ipsList .ips-form") ? document.activeElement.className : "";
   list.replaceChildren();
