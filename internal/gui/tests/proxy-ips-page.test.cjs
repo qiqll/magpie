@@ -297,12 +297,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const imported = async () => {
           const checked = seen.checks.length;
           await page.locator("#ipsImport").click();
-          await page.waitForFunction(() => !document.querySelector("#ipsImport").disabled && document.querySelector("#ipsSaid").textContent !== "");
+          await page.waitForFunction(() => !document.querySelector("#ipsImport").disabled);
           return seen.checks.slice(checked).map((c) => c.proxy).sort();
         };
         assert.deepEqual(await imported(), [AT_IP, HK, TOKYO].sort());
         assert.equal(seen.posts.length, 1);
-        assert.equal(await page.locator("#ipsSaid").textContent(), x("{n} IPs added", { n: 0 }));
+        assert.ok(await page.locator("#ipsSaid").isHidden());
+        assert.equal(await page.locator("#ipsErr").textContent(), x("These proxies didn't answer, so their exit isn't known: {list}", { list: "hk.example:8080" }));
 
         // the Tokyo line's exit moved to a listed IP: imported, the proxy
         // leaves the IP it was read from for its new exit, and says so;
@@ -315,8 +316,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           { ip: "203.0.113.8", proxies: [TOKYO] },
           { ip: "198.51.100.42", name: "Tokyo line" },
         ]);
-        assert.equal(await page.locator("#ipsSaid").textContent(), x("{n} IPs added", { n: 0 }) + " · "
-          + x("Moved to a new exit: {list}", { list: "tokyo.example:3128 (198.51.100.42 → 203.0.113.8)" }));
+        assert.equal(await page.locator("#ipsSaid").textContent(), x("Moved to a new exit: {list}", { list: "tokyo.example:3128 (198.51.100.42 → 203.0.113.8)" }));
         assert.deepEqual(await accountsOf(page), {
           "203.0.113.7": ["alice@example.com " + on],
           "203.0.113.8": ["Work " + on, "qa@example.com " + banned, "Relay · Main " + on],
@@ -352,6 +352,43 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.waitForFunction(() => !document.querySelector("#ipsList .ips-form"));
         assert.deepEqual(seen.posts.at(-1).ips[1], { ip: "203.0.113.8", name: "Tokyo 2" });
         assert.equal((await accountsOf(page))["203.0.113.8"], "none");
+
+        // alice's proxy, at 203.0.113.7 itself, now leaves from .8: moved,
+        // her account goes with it and no longer shows at the proxy's own
+        // address (review M2); carol's, answering now, is a new IP; Tokyo,
+        // not answering, is named and put nowhere
+        Object.assign(seen.exits, { [AT_IP]: "203.0.113.8", [HK]: "192.0.2.50", [TOKYO]: undefined });
+        await imported();
+        assert.deepEqual(seen.posts.at(-1).ips, [
+          { ip: "203.0.113.7", name: "Osaka", opened: "2026-10-17T04:00:00Z" },
+          { ip: "203.0.113.8", name: "Tokyo 2", proxies: [AT_IP] },
+          { ip: "198.51.100.42", name: "Tokyo line" },
+          { ip: "192.0.2.50", name: "", proxies: [HK] },
+        ]);
+        assert.equal(await page.locator("#ipsSaid").textContent(), x("1 IP added") + " · "
+          + x("Moved to a new exit: {list}", { list: "203.0.113.7:1080 (203.0.113.7 → 203.0.113.8)" }));
+        assert.equal(await page.locator("#ipsErr").textContent(), x("These proxies didn't answer, so their exit isn't known: {list}", { list: "tokyo.example:3128" }));
+        let bound = await accountsOf(page);
+        assert.equal(bound["203.0.113.7"], "none");
+        assert.deepEqual(bound["203.0.113.8"], ["alice@example.com " + on]);
+        assert.deepEqual(bound["192.0.2.50"].map((a) => a.split(" ")[0]), ["carol@example.com"]);
+
+        // a proxy an IP was read from that doesn't answer stays there;
+        // Tokyo, answering again, is told to the IP at its exit
+        Object.assign(seen.exits, { [HK]: undefined, [TOKYO]: "198.51.100.42" });
+        const posted = seen.posts.length;
+        await imported();
+        assert.equal(seen.posts.length, posted + 1);
+        assert.deepEqual(seen.posts.at(-1).ips.slice(2), [{ ip: "198.51.100.42", name: "Tokyo line", proxies: [TOKYO] }, { ip: "192.0.2.50", proxies: [HK] }]);
+        assert.equal(await page.locator("#ipsSaid").textContent(), x("1 proxy told to an IP listed"));
+        assert.equal(await page.locator("#ipsErr").textContent(), x("These proxies didn't answer, so their exit isn't known: {list}", { list: "hk.example:8080" }));
+
+        // every one answering as listed: nothing saved, and said
+        seen.exits[HK] = "192.0.2.50";
+        await imported();
+        assert.equal(seen.posts.length, posted + 1);
+        assert.equal(await page.locator("#ipsSaid").textContent(), x("Every proxy an account goes through is listed already"));
+        assert.ok(await page.locator("#ipsErr").isHidden());
         assert.deepEqual(errors, []);
       });
     }
