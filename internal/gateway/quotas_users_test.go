@@ -211,11 +211,18 @@ func TestBoundUserToldItsOwnStatusline(t *testing.T) {
 	h := lanGuard(s.Handler())
 	tr := s.trace.begin(Route{Session: "sess-a", Model: "alpha/m-alice", caller: routeCaller{user: "alice", key: keys[0].ID}})
 	s.trace.update(tr, func(r *Route) { r.Done = true })
+	tr = s.trace.begin(Route{Session: "sess-d", Model: "alpha/m-default", caller: routeCaller{user: DefaultUser, key: keys[0].ID}})
+	s.trace.update(tr, func(r *Route) { r.Done = true })
+	keyed := true
+	session := "sess-a"
 	do := func(user string) (cards []string, model string) {
 		t.Helper()
-		r := httptest.NewRequest("GET", StatuslinePath+"?format=json&session=sess-a", nil)
-		r.RemoteAddr = "192.168.1.9:5000"
-		r.Header.Set("Authorization", "Bearer "+secrets[0])
+		r := httptest.NewRequest("GET", StatuslinePath+"?format=json&session="+session, nil)
+		r.RemoteAddr = "127.0.0.1:5000"
+		if keyed {
+			r.RemoteAddr = "192.168.1.9:5000"
+			r.Header.Set("Authorization", "Bearer "+secrets[0])
+		}
 		if user != "" {
 			r.Header.Set(UserHeader, user)
 		}
@@ -245,8 +252,19 @@ func TestBoundUserToldItsOwnStatusline(t *testing.T) {
 		t.Errorf("bob: told %v and model %q, want none of alice's cards and no model", cards, model)
 	}
 	// no user named: DefaultUser's cards, Two's alone (T-163), and the
-	// session's model as /v1/magpie/route tells it, as before
-	if cards, model := do(""); !slices.Equal(cards, []string{"alpha:two"}) || model != "alpha/m-alice" {
-		t.Errorf("no user: told %v and model %q, want alpha:two alone and the route's model", cards, model)
+	// model of DefaultUser's own sessions alone, as /v1/magpie/route
+	// tells it (T-167)
+	if cards, model := do(""); !slices.Equal(cards, []string{"alpha:two"}) || model != "" {
+		t.Errorf("no user: told %v and model %q, want alpha:two alone and none of alice's model", cards, model)
+	}
+	session = "sess-d"
+	if _, model := do(""); model != "alpha/m-default" {
+		t.Errorf("no user, DefaultUser's own session: model %q", model)
+	}
+	// this computer without a key (magpie statusline): every session's
+	// model, as before
+	keyed, session = false, "sess-a"
+	if _, model := do(""); model != "alpha/m-alice" {
+		t.Errorf("here without a key: model %q, want alice's session's", model)
 	}
 }

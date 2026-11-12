@@ -51,6 +51,7 @@ func TestBoundUserToldItsOwnRouteEvents(t *testing.T) {
 		begin(s, keys[0].ID, "bob", "bob-a")
 		begin(s, keys[1].ID, "alice", "other-alice-a")
 		begin(s, keys[0].ID, "", "nobody-a")
+		begin(s, keys[0].ID, DefaultUser, "default-a") // as userDefaulted names it
 		// a classifier's ask for alice, no header, the turn's key beside it
 		r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 		r = r.WithContext(context.WithValue(context.WithValue(r.Context(), decideForKey{}, "alice"), askedKeyKey{}, askedKey{id: keys[0].ID}))
@@ -102,9 +103,11 @@ func TestBoundUserToldItsOwnRouteEvents(t *testing.T) {
 		{srv.URL, secrets[0], "alice", "alice-a alice-decide-a"},
 		{srv.URL, secrets[0], "bob", "bob-a"},
 		{srv.URL, secrets[1], "alice", "other-alice-a"},
-		// no user header, and bound by session: everyone's, as before
-		{srv.URL, secrets[0], "", "alice-a bob-a other-alice-a nobody-a alice-decide-a"},
-		{sessionSrv.URL, secrets[0], "alice", "alice-a bob-a other-alice-a nobody-a alice-decide-a"},
+		// no user header with a gateway key: DefaultUser's alone (T-167)
+		{srv.URL, secrets[0], "", "default-a"},
+		{srv.URL, secrets[0], DefaultUser, "default-a"},
+		// bound by session: everyone's, as before
+		{sessionSrv.URL, secrets[0], "alice", "alice-a bob-a other-alice-a nobody-a default-a alice-decide-a"},
 	} {
 		if _, agents := snap(c.base, c.secret, c.user); strings.Join(agents, " ") != c.want {
 			t.Errorf("snapshot for %q (bound by user %v): %v, want %s", c.user, c.base == srv.URL, agents, c.want)

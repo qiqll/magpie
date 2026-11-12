@@ -105,18 +105,7 @@ type usersOwn struct {
 // read, or changed and doesn't read now (stale), 503: which seats are the
 // user's is unknown, so it is told none.
 func (s *Server) usersSeats(w http.ResponseWriter, r *http.Request) (own *usersOwn, ok bool) {
-	return s.seatsOf(w, r, true)
-}
-
-// namedSeats is usersSeats for the routes views, /v1/magpie/route and
-// the route-events feed: a request that names no user is told every
-// route, as before (T-163 left them as they were).
-func (s *Server) namedSeats(w http.ResponseWriter, r *http.Request) (own *usersOwn, ok bool) {
-	return s.seatsOf(w, r, false)
-}
-
-func (s *Server) seatsOf(w http.ResponseWriter, r *http.Request, defaulted bool) (own *usersOwn, ok bool) {
-	own, code, msg := s.usersOwnOf(r, defaulted)
+	own, code, msg := s.usersOwnOf(r)
 	if code != 0 {
 		writeError(w, provider.Chat, code, msg)
 		return nil, false
@@ -125,11 +114,9 @@ func (s *Server) seatsOf(w http.ResponseWriter, r *http.Request, defaulted bool)
 }
 
 // usersOwnOf is usersSeats' answer without writing it: the status and
-// message a request is refused with, code 0 when it isn't. A request
-// with a gateway key that names no user is DefaultUser's when
-// defaulted, else own is nil.
+// message a request is refused with, code 0 when it isn't.
 // A stream reads it again as it goes (routeEvents).
-func (s *Server) usersOwnOf(r *http.Request, defaulted bool) (own *usersOwn, code int, msg string) {
+func (s *Server) usersOwnOf(r *http.Request) (own *usersOwn, code int, msg string) {
 	if !s.bind.byUser() {
 		return nil, 0, ""
 	}
@@ -139,7 +126,7 @@ func (s *Server) usersOwnOf(r *http.Request, defaulted bool) (own *usersOwn, cod
 	}
 	// magpie's own console on this machine (OwnerLanes, magpie
 	// statusline) asks without a key: the owner's, told everything
-	if user == "" && (!defaulted || access.Caller(r.Context()).KeyID == "") {
+	if user == "" && access.Caller(r.Context()).KeyID == "" {
 		return nil, 0, ""
 	}
 	if user == "" {

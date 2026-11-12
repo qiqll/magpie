@@ -3159,9 +3159,8 @@ header that can't be taken is 400, and a `user-accounts.json` that can't
 be read 503, with no card told. A request with a gateway key and without
 the header (or with a blank one) is `other10000`'s, as its model
 requests are: it is told the cards of that user's accounts alone, and
-refused a refresh of any other (the status line's cards too; its model
-is told as `/v1/magpie/route` tells it, so a caller naming no user who
-names another user's session is told that session's model). A request
+refused a refresh of any other (the status line's cards too, and its
+model is that user's sessions' alone, as `/v1/magpie/route` tells it). A request
 from this computer without a key is the owner's and told everything, as
 magpie's own pages (the GUI's Usage and Providers, a console's lanes)
 and `magpie statusline` ask. `/v1/magpie/concurrency` tells such a request the
@@ -3181,8 +3180,9 @@ logged with no user (before the request without a user became
 and keys alone (a model's rest on one of them too, a whole provider's
 none), `other10000`'s for a request with a key and without the header;
 this computer without a key (the Gateway page) is told every rest.
-`/v1/magpie/route` and the route-events feed still tell a request without
-the header every route, as before.
+`/v1/magpie/route` and the route-events feed tell a request with a key
+and without the header `other10000`'s routes alone too, as a request
+naming it; one from this computer without a key is told every route.
 
 A Codex account's rate-limit reset can be used through the gateway as
 the Usage page's **Use a reset** does (#3850, the same code):
@@ -3272,8 +3272,8 @@ connection means: take a snapshot again. No session, account, key, folder,
 prompt, reply or error text is in it. It answers as `/v1/magpie/usage`
 does: this machine, another only with a gateway key while magpie is
 shared, and never a held key. Bound by user, a request that sends
-`X-Magpie-User` is told its own requests alone, as `/v1/magpie/route` is,
-and `active` counts those; a header that can't be taken is 400, a
+`X-Magpie-User` is told its own requests alone, as `/v1/magpie/route` is
+(one with a key that sends none, `other10000`'s), and `active` counts those; a header that can't be taken is 400, a
 user-accounts.json that doesn't read 503. Give a display a read-only key,
 `magpie gateway-key add Screen --read-only`, which can spend nothing. See
 the [route event contract](subsystems/gateway-routing.md#route-events-for-a-display).

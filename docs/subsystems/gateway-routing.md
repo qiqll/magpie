@@ -722,12 +722,11 @@ quotas, `/v1/magpie/concurrency`, `/v1/magpie/usage` and its requests
 tell it that user's alone, the users file unread 503 for it too. Bound by
 session a request is told what it was. The GUI's own `/api/*` views
 don't go through `usersSeats` and still show the whole pool.
-`/v1/magpie/route` and the route-events feed read `namedSeats`, which
-leaves a request naming no user told every route, as before, and the
-status line's model follows them while its cards are `DefaultUser`'s:
-a caller naming no user who names another user's session is told its
-model there, as `/v1/magpie/route` tells it the route (the owner left
-those as they were).
+`/v1/magpie/route`, the route-events feed and the status line's model
+read `usersSeats` too (T-167): a request with a gateway key naming no
+user is told `DefaultUser`'s routes alone, so naming another user's
+session tells it no route and no model; `magpie statusline` and the
+console, without a key, are told every route.
 `TestBoundUserToldItsOwnQuotas` in
 [`quotas_users_test.go`](../../internal/gateway/quotas_users_test.go)
 covers the five routes, another key's user of the same name and the

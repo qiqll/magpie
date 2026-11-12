@@ -49,6 +49,9 @@ func TestBoundUserToldItsOwnSessionRoute(t *testing.T) {
 		begin(keys[0].ID, "bob", "bob-s", "bob's try on two@example.com")
 		begin(keys[1].ID, "alice", "other-alice-s", "Other's alice's try")
 		begin(keys[0].ID, "", "nobody-s", "a try of no user's")
+		// a model request naming no user, named DefaultUser's as it is
+		// served (userDefaulted, T-157)
+		begin(keys[0].ID, DefaultUser, "default-s", "other10000's try")
 		// magpie's own asks for alice: a classifier's (decideFor) and one
 		// made for her (forUser), with no header and no key of their own,
 		// the key the turn came with beside them (askedKeyKey)
@@ -151,18 +154,35 @@ func TestBoundUserToldItsOwnSessionRoute(t *testing.T) {
 		t.Errorf("Other's alice asking Full's alice's session: %d %s", c, b)
 	}
 	secret = secrets[0]
-	// no user header, and bound by session: every session, as before
-	for _, s := range []*Server{bound, bySession} {
-		user := ""
-		if s == bySession {
-			user = "alice"
+	// no user header with a gateway key: DefaultUser's, as its model
+	// requests are (T-167), told its own sessions alone, as naming it
+	for _, user := range []string{"", DefaultUser} {
+		if c, b := do(bound, "/v1/magpie/route?session=default-s", user); c != 200 || fail(b) != "other10000's try" {
+			t.Errorf("DefaultUser's own session, user %q: %d %s", user, c, b)
 		}
-		if c, b := do(s, "/v1/magpie/route?session=bob-s", user); c != 200 || fail(b) != "bob's try on two@example.com" {
-			t.Errorf("bob's session asked with user %q (bound by user %v): %d %s", user, s == bound, c, b)
+		for _, session := range []string{"bob-s", "alice-s", "nobody-s"} {
+			if c, b := do(bound, "/v1/magpie/route?session="+session, user); c != http.StatusNotFound || b != strings.ReplaceAll(none, "nope", session) {
+				t.Errorf("user %q asking %s: %d %s", user, session, c, b)
+			}
 		}
-		if c, b := do(s, "/v1/magpie/route?session=nope", user); c != 200 || !strings.Contains(b, `"route":null`) {
-			t.Errorf("a session with no route, user %q (bound by user %v): %d %s", user, s == bound, c, b)
-		}
+	}
+	// this computer without a key (magpie's own console), and bound by
+	// session: every session, as before
+	local := func(s *Server, target string) (int, string) {
+		r := httptest.NewRequest("GET", target, nil)
+		r.RemoteAddr = "127.0.0.1:5000"
+		w := httptest.NewRecorder()
+		lanGuard(s.Handler()).ServeHTTP(w, r)
+		return w.Code, w.Body.String()
+	}
+	if c, b := local(bound, "/v1/magpie/route?session=bob-s"); c != 200 || fail(b) != "bob's try on two@example.com" {
+		t.Errorf("bob's session asked here without a key: %d %s", c, b)
+	}
+	if c, b := do(bySession, "/v1/magpie/route?session=bob-s", "alice"); c != 200 || fail(b) != "bob's try on two@example.com" {
+		t.Errorf("bob's session asked bound by session: %d %s", c, b)
+	}
+	if c, b := do(bySession, "/v1/magpie/route?session=nope", ""); c != 200 || !strings.Contains(b, `"route":null`) {
+		t.Errorf("a session with no route bound by session: %d %s", c, b)
 	}
 	if c, b := do(bound, "/v1/magpie/route?session=bob-s", "al ice\x00"); c != http.StatusBadRequest || strings.Contains(b, "try") {
 		t.Errorf("a user that can't be taken: %d %s", c, b)

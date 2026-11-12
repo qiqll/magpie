@@ -107,7 +107,8 @@ func sessionRouteOf(r Route) SessionRoute {
 // names its user is told the routes of its own requests alone (T-099),
 // those it sent under a key of its group (usersOwn.owns), and a session
 // with none of them is 404, another user's as one with no route: whether
-// it is anyone's is not told either.
+// it is anyone's is not told either. One with a gateway key naming no
+// user is DefaultUser's (usersSeats, T-167), as its model requests are.
 func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
 	if !local(r) && !sharedWith(r) {
 		writeError(w, provider.Chat, http.StatusForbidden, "magpie's routes are told to another machine only when magpie is shared on the local network (Settings → Network and sharing → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
@@ -130,7 +131,7 @@ func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
 	wait := min(time.Duration(secs*float64(time.Second)), routeWaitMax)
 	// a user header that can't be taken 400, its seats unread 503, as
 	// every other read of the user's
-	own, ok := s.namedSeats(w, r)
+	own, ok := s.usersSeats(w, r)
 	if !ok {
 		return
 	}

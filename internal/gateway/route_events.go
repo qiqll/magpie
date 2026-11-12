@@ -271,7 +271,7 @@ func (s *Server) routeSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !routeEventsAllowed(w, r) {
 		return
 	}
-	own, ok := s.namedSeats(w, r)
+	own, ok := s.usersSeats(w, r)
 	if !ok {
 		return
 	}
@@ -291,7 +291,7 @@ func (s *Server) routeEvents(w http.ResponseWriter, r *http.Request) {
 	if !routeEventsAllowed(w, r) {
 		return
 	}
-	own, ok := s.namedSeats(w, r)
+	own, ok := s.usersSeats(w, r)
 	if !ok {
 		return
 	}
@@ -316,7 +316,7 @@ func (s *Server) routeEvents(w http.ResponseWriter, r *http.Request) {
 		if own != nil {
 			// whose requests are its user's as user-accounts.json is now:
 			// a key turned to share its users, or not to, moves them
-			now, code, _ := s.usersOwnOf(r, false)
+			now, code, _ := s.usersOwnOf(r)
 			if code != 0 || now == nil {
 				return false
 			}
