@@ -48,6 +48,14 @@ func TestClosingWindowMarksPageOutOfSight(t *testing.T) {
 // hideWebview never sees. Its page is told all the same, or it is never
 // told it is back and keeps what it was drawn with: Settings' currency and
 // number units never reached it (blrbrzkj on Discord).
+//
+// On a Mac whose screen is on, WebKit says the page is hidden once the
+// panel is ordered out, with a visibilitychange of its own; a locked one
+// says hidden all along and sends none. The page records that hiding as any
+// other, so the panel here is given WebKit's event after each order-out
+// whatever the screen is. Told from a listener, magpie's signal could reach
+// the page after Wails' Hide, then after the panel was shown again, and the
+// page reported marked=false play="running" from full suite runs.
 func TestPanelHiddenByWailsMarksPageOutOfSight(t *testing.T) {
 	out, err := runAppKit(t, 2*time.Minute, []string{"MAGPIE_TEST_WINDOW_VISIBILITY=panel"})
 	if err != nil || !strings.Contains(string(out), "window visibility: ok") {
@@ -182,6 +190,15 @@ fetch("/ready");
 				if which == "panel" {
 					win = h.makePanel()
 					h.panel = win
+					// WebKit's own visibilitychange once it is ordered out, as
+					// a Mac whose screen is on sends it
+					w := win
+					w.OnWindowEvent(events.Common.WindowLostFocus, func(*application.WindowEvent) {
+						for application.InvokeSyncWithResult(func() bool { return windowOpen(w) }) {
+							time.Sleep(time.Millisecond)
+						}
+						w.ExecJS(`document.dispatchEvent(new Event("visibilitychange"))`)
+					})
 					win.Show()
 					return
 				}

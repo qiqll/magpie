@@ -44,9 +44,16 @@ func showWebview(w *application.WebviewWindow) *application.WebviewWindow {
 // A page never told it was hidden isn't told it is back either, so it kept
 // the settings it was drawn with: Settings' ¥ and 万 / 亿 never reached the
 // panel's Usage tab (blrbrzkj on Discord).
+//
+// The page is told from a hook, which Wails runs before any listener, so it
+// is told before HideOnFocusLost's Hide. Wails runs each listener in a
+// goroutine of its own: as a listener, the Hide could come first, WebKit
+// (on a Mac whose screen is on) said hidden with the page not marked, and a
+// late signal could reach the page after the panel was shown again, which
+// left it marked out of sight while on screen.
 func sayWailsHides(w *application.WebviewWindow) {
 	if js := pageHiddenJSOn(runtime.GOOS); js != "" {
-		w.OnWindowEvent(events.Common.WindowLostFocus, func(*application.WindowEvent) { w.ExecJS(js) })
+		w.RegisterHook(events.Common.WindowLostFocus, func(*application.WindowEvent) { w.ExecJS(js) })
 	}
 	w.RegisterKeyBinding("escape", func(application.Window) { hideWebview(w) })
 }
