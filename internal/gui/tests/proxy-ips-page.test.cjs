@@ -57,6 +57,8 @@ function serve(lang, seen) {
     if (url.pathname === "/api/proxy/check") {
       const asked = req.postDataJSON();
       seen.checks.push(asked);
+      // held till the test lets the checks answer
+      if (seen.hold) await (seen.held ||= new Promise((r) => { seen.release = () => { seen.hold = false; r(); }; }));
       const exit = seen.exits ? seen.exits[asked.proxy] : "198.51.100.42";
       if (!exit) return json({ source: "saved", through: { error: "dial tcp: i/o timeout" }, direct: { ip: "192.0.2.1" } });
       return json({ source: "settings", through: { ip: exit, loc: "JP", ms: 80 }, direct: { ip: "192.0.2.1" } });
@@ -206,6 +208,10 @@ const accountProviders = () => [
     { user: "ops@example.com", plan: "pro", active: true, on: true },
     { user: "qa@example.com", plan: "plus", on: true, banned: true },
   ], { proxy: TOKYO, accountProxies: { "ops@example.com": "direct" } }),
+  // a provider of keys (review H1): Main through Tokyo by its id, the
+  // other on the global proxy, so through none
+  { id: "relay", name: "Relay", icon: "generic", models: [], agents: [], fallback: [], headers: {}, chat: "https://relay.example/v1", responses: "", anthropic: "", catalog: "", proxy: "",
+    keyList: [{ id: "k1", name: "Main", masked: "sk-…a1", on: true, active: true }, { id: "k2", masked: "sk-…b2", on: false }], accountProxies: { k1: TOKYO } },
 ];
 
 const accountsOf = (page) => page.evaluate(() => Object.fromEntries([...document.querySelectorAll("#ipsList .ips-row")].map((r) => [r.dataset.ip,
@@ -241,7 +247,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // direct and the global one are none; one exit is added with the
         // saved proxy's name, one is told to the IP at its address, and
         // the one that didn't answer is named without its login
+        seen.hold = true;
         await page.locator("#ipsImport").click();
+        // while it reads, nothing else changes the list (review M1)
+        await page.waitForFunction(() => document.querySelector("#ipsImport").disabled);
+        assert.equal(await page.locator('#ipsList .ips-row[data-ip="203.0.113.8"] .ips-remove').isDisabled(), true);
+        assert.equal(await page.locator('#ipsList .ips-row[data-ip="203.0.113.8"] .ips-edit').isDisabled(), true);
+        seen.release();
         await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 3 && !document.querySelector("#ipsImport").disabled);
         assert.deepEqual(seen.checks.map((c) => c.proxy).sort(), [AT_IP, HK, TOKYO].sort());
         assert.equal(seen.posts.length, 1);
@@ -255,7 +267,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(await accountsOf(page), {
           "203.0.113.7": ["alice@example.com " + on],
           "203.0.113.8": "none",
-          "198.51.100.42": ["Work " + on, "qa@example.com " + banned],
+          "198.51.100.42": ["Work " + on, "qa@example.com " + banned, "Relay · Main " + on],
         });
         assert.ok(await wider(page) <= 0.5, `the page reaches ${await wider(page)}px past the window`);
 

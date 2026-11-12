@@ -29,13 +29,23 @@ function ipsMount() {
   $("#ipsImport").onclick = ipsImport;
 }
 
-// ipsProxyOf: the proxy an account's requests go out through when it is
-// one of its own or its subscription's (provider.ProxyOfLogin), "" for
-// the global one or none (direct)
-function ipsProxyOf(r) {
-  const v = String(r.p.accountProxies?.[acxLow(r.l.user)] || r.p.proxy || "").trim();
-  return v === "direct" ? "" : v;
+// ipsBound: what can go out through a proxy of its own, each as
+// { p, id, who, sub, state, proxy }: every signed-in account as Models ›
+// Accounts lists it (acxRows), and every key of a provider of keys (T-170
+// review H1), on or off as its editor ticks it. proxy is the one its
+// requests go through as provider.ProxyChoice picks it, its own (an
+// account by its name in lower case, a key by its id) or else its
+// provider's; "" for the global one or none (direct)
+function ipsBound() {
+  const via = (p, own) => { const v = String(p.accountProxies?.[own] || p.proxy || "").trim(); return v === "direct" ? "" : v; };
+  const out = acxRows().map((r) => ({ p: r.p, id: r.p.id + "/" + acxLow(r.l.user), who: accountShownOf(r.p, r.l.user), sub: r.l.user, state: r.state, proxy: via(r.p, acxLow(r.l.user)) }));
+  for (const p of providers?.providers || []) {
+    if (p.account?.logins?.length) continue;
+    for (const k of p.keyList || []) out.push({ p, id: p.id + "/" + k.id, who: p.name + " · " + (k.name || k.masked), sub: k.masked, state: k.on ? "on" : "off", proxy: via(p, k.id) });
+  }
+  return out;
 }
+const ipsProxyOf = (r) => r.proxy;
 
 // ipsHostOf: the proxy's host when it is an IP address, in lower case
 // and without brackets; "" for a name
@@ -46,12 +56,28 @@ function ipsHostOf(proxy) {
   } catch { return ""; }
 }
 
-// ipsAccountsOf: the accounts going out through x: their proxy is one x
-// was read as the exit of, or one at x itself
+// ipsAccountsOf: the accounts and keys going out through x: their proxy
+// is one x was read as the exit of, or one at x itself
 const ipsAccountsOf = (x, rows) => rows.filter((r) => {
   const p = ipsProxyOf(r);
-  return p && ((x.proxies || []).includes(p) || ipsHostOf(p) === x.ip.toLowerCase());
+  return p && ((x.proxies || []).includes(p) || ipsCanon(ipsHostOf(p)) === ipsCanon(x.ip));
 });
+
+// the most proxies the server keeps for one IP (renewal.MaxIPProxies)
+const IPS_MAX_PROXIES = 20;
+
+// ipsCanon: an address written one way, as the server writes it: IPv6 in
+// its short lower-case form (what Cloudflare's trace says may differ),
+// one mapped from IPv4 as the IPv4 (review M3, L2)
+function ipsCanon(ip) {
+  const s = String(ip || "").trim().toLowerCase();
+  if (!s.includes(":")) return s;
+  try {
+    const h = new URL("http://[" + s.replace(/^\[|\]$/g, "") + "]").hostname.slice(1, -1);
+    const m = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
+    return m ? [parseInt(m[1], 16) >> 8, parseInt(m[1], 16) & 255, parseInt(m[2], 16) >> 8, parseInt(m[2], 16) & 255].join(".") : h;
+  } catch { return s; }
+}
 
 // ipsShown: a proxy as it can be said, its login left out
 function ipsShown(proxy) {
@@ -63,11 +89,11 @@ function ipsShown(proxy) {
 // own, or told to the IP listed at that address; kept as one save. A
 // proxy that didn't answer is named, and nothing is guessed for it
 async function ipsImport() {
-  if (ipsImporting || ipsSaving || !ipsList) return;
+  if (ipsImporting || !ipsList) return;
   ipsErr = "";
   ipsSaid = "";
   const known = new Set(ipsList.flatMap((x) => x.proxies || []));
-  const all = [...new Set(acxRows().map(ipsProxyOf).filter(Boolean))];
+  const all = [...new Set(ipsBound().map(ipsProxyOf).filter(Boolean))];
   const todo = all.filter((p) => !known.has(p));
   if (!todo.length) {
     ipsSaid = t(all.length ? "Every proxy an account goes through is listed already" : "No account has a proxy of its own or its subscription's");
@@ -87,27 +113,39 @@ async function ipsImport() {
       }
     };
     await Promise.all([work(), work(), work(), work()]);
+    // a save under way when the checks end (one begun before the import)
+    // is waited for, and the list it kept is the one added to (review M1)
+    while (ipsSaving) await new Promise((r) => setTimeout(r, 50));
     if (!ipsList) return;
     // in the accounts' order, so the list reads the same each time
     found.sort((a, b) => todo.indexOf(a[0]) - todo.indexOf(b[0]));
     const saved = (prefs || state?.settings)?.proxies || [];
     const next = ipsList.map((x) => ({ ...x, proxies: [...(x.proxies || [])] }));
     let added = 0, linked = 0;
-    for (const [p, ip] of found) {
-      const x = next.find((y) => y.ip.toLowerCase() === ip.toLowerCase());
+    const full = [];
+    for (const [p, raw] of found) {
+      const ip = ipsCanon(raw);
+      const x = next.find((y) => ipsCanon(y.ip) === ip);
       if (!x) {
         next.push({ ip, name: saved.find((s) => s.url === p)?.name || "", proxies: [p] });
         added++;
-      } else if (!x.proxies.includes(p)) {
+      } else if (x.proxies.length >= IPS_MAX_PROXIES) full.push(x.ip);
+      else if (!x.proxies.includes(p)) {
         x.proxies.push(p);
         linked++;
       }
     }
-    if ((added || linked) && !await ipsKeep(next)) return;
+    if ((added || linked) && !await ipsKeep(next)) {
+      if (!ipsErr) ipsErr = t("The import couldn't be saved: try it again");
+      return;
+    }
     const parts = [t(added === 1 ? "1 IP added" : "{n} IPs added", { n: added })];
     if (linked) parts.push(t(linked === 1 ? "1 proxy told to an IP listed" : "{n} proxies told to IPs listed", { n: linked }));
     ipsSaid = parts.join(" · ");
-    if (failed.length) ipsErr = t("These proxies didn't answer, so their exit isn't known: {list}", { list: [...new Set(failed.map(ipsShown))].join(", ") });
+    const errs = [];
+    if (failed.length) errs.push(t("These proxies didn't answer, so their exit isn't known: {list}", { list: [...new Set(failed.map(ipsShown))].join(", ") }));
+    if (full.length) errs.push(t("These IPs are told {n} proxies already, so no more were added: {list}", { n: IPS_MAX_PROXIES, list: [...new Set(full)].join(", ") }));
+    ipsErr = errs.join(" ");
   } finally {
     ipsImporting = false;
     ipsDraw();
@@ -170,7 +208,7 @@ function ipsDraw() {
   if (!list) return;
   const xs = ipsList || [];
   // each IP's accounts, once the providers are read
-  const rows = providers ? acxRows() : [];
+  const rows = providers ? ipsBound() : [];
   const accts = new Map(xs.map((x) => [x, ipsAccountsOf(x, rows)]));
   const bound = xs.filter((x) => accts.get(x).length).length;
   const sum = $("#ipsSum");
@@ -210,6 +248,7 @@ function ipsDraw() {
   list.hidden = !list.childElementCount;
   if (typing) list.querySelector(".ips-form ." + typing.split(" ")[0])?.focus();
   $("#ipsAdd").hidden = !ipsList || ipsEdit !== null;
+  $("#ipsAdd").disabled = ipsImporting;
   const imp = $("#ipsImport");
   imp.hidden = !ipsList || ipsEdit !== null || !providers;
   imp.classList.toggle("busy", ipsImporting);
@@ -240,7 +279,7 @@ function ipsRow(x, i, accts, read) {
   if (ipsRenewing === x.ip) {
     name.append(renewEditor("ip/" + x.ip, x.renewal, (opened) => ipsKeep(ipsList.map((y, j) => (j === i ? { ...y, opened: opened || undefined } : y))),
       () => { ipsRenewing = ""; ipsDraw(); }));
-  } else name.append(renewPill(x.renewal, () => { ipsRenewing = x.ip; ipsDraw(); }));
+  } else name.append(renewPill(x.renewal, () => { if (ipsImporting) return; ipsRenewing = x.ip; ipsDraw(); }));
   who.append(name);
   if (x.name) who.append(el("div", "sub", x.name));
   if (read) {
@@ -248,9 +287,9 @@ function ipsRow(x, i, accts, read) {
     if (!accts.length) box.append(el("span", "ips-none", t("Not bound to an account")));
     for (const r of accts) {
       const a = el("span", "ips-acct " + r.state);
-      a.dataset.account = r.p.id + "/" + acxLow(r.l.user);
-      a.append(el("span", "ips-acct-name", accountShownOf(r.p, r.l.user)), el("span", "acx-state " + r.state, t(ACX_SAID[r.state])));
-      a.title = r.p.name + " · " + r.l.user;
+      a.dataset.account = r.id;
+      a.append(el("span", "ips-acct-name", r.who), el("span", "acx-state " + r.state, t(ACX_SAID[r.state])));
+      a.title = r.p.name + " · " + r.sub;
       box.append(a);
     }
     who.append(box);
@@ -259,11 +298,13 @@ function ipsRow(x, i, accts, read) {
   const acts = el("span", "acts");
   const edit = el("button", "text ips-edit", t("Edit"));
   edit.type = "button";
+  edit.disabled = ipsImporting;
   edit.onclick = () => { ipsEdit = i; ipsDraft = { ip: x.ip, name: x.name || "", proxy: "" }; ipsErr = ""; ipsSaid = ""; ipsDraw(); };
   const rm = el("button", "text ips-remove", t("Remove"));
   rm.type = "button";
+  rm.disabled = ipsImporting;
   rm.onclick = async () => {
-    if (ipsSaving || !await confirmRemoval(x.name ? x.ip + " (" + x.name + ")" : x.ip, "Its start date and reminder go with it.")) return;
+    if (ipsSaving || ipsImporting || !await confirmRemoval(x.name ? x.ip + " (" + x.name + ")" : x.ip, "Its start date and reminder go with it.")) return;
     rm.classList.add("busy");
     ipsKeep(ipsList.filter((y) => y.ip !== x.ip));
   };
