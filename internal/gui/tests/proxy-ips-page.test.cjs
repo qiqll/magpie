@@ -8,7 +8,9 @@
 // tab is in the sidebar under Accounts. T-170: Import from accounts reads
 // the exit of each proxy an account goes through and adds what isn't
 // listed, each IP names its accounts with their state, and the list is
-// found by that state. Every language, at a wide and a phone's width; no
+// found by that state. T-172: an import checks every proxy again and
+// moves one whose exit moved; an IP's form lists its proxies, each
+// unlinked there. Every language, at a wide and a phone's width; no
 // backend, the API is faked here.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
@@ -290,20 +292,66 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await pick(x("All IPs"));
         await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 3);
 
-        // imported again: only the one that didn't answer is checked, and
-        // nothing new is saved
-        const checked = seen.checks.length;
-        await page.locator("#ipsImport").click();
-        await page.waitForFunction((n) => !document.querySelector("#ipsImport").disabled && document.querySelector("#ipsSaid").textContent !== "", checked);
-        assert.deepEqual(seen.checks.slice(checked).map((c) => c.proxy), [HK]);
+        // imported again: every proxy is checked again (T-172), and with
+        // no exit moved nothing is saved
+        const imported = async () => {
+          const checked = seen.checks.length;
+          await page.locator("#ipsImport").click();
+          await page.waitForFunction(() => !document.querySelector("#ipsImport").disabled && document.querySelector("#ipsSaid").textContent !== "");
+          return seen.checks.slice(checked).map((c) => c.proxy).sort();
+        };
+        assert.deepEqual(await imported(), [AT_IP, HK, TOKYO].sort());
         assert.equal(seen.posts.length, 1);
+        assert.equal(await page.locator("#ipsSaid").textContent(), x("{n} IPs added", { n: 0 }));
 
-        // an edit keeps what the IP was read from
-        await page.locator('#ipsList .ips-row[data-ip="198.51.100.42"] .ips-edit').click();
+        // the Tokyo line's exit moved to a listed IP: imported, the proxy
+        // leaves the IP it was read from for its new exit, and says so;
+        // its accounts go with it (T-172)
+        seen.exits[TOKYO] = "203.0.113.8";
+        assert.deepEqual(await imported(), [AT_IP, HK, TOKYO].sort());
+        assert.equal(seen.posts.length, 2);
+        assert.deepEqual(seen.posts[1].ips, [
+          { ip: "203.0.113.7", name: "Osaka", opened: "2026-10-17T04:00:00Z", proxies: [AT_IP] },
+          { ip: "203.0.113.8", proxies: [TOKYO] },
+          { ip: "198.51.100.42", name: "Tokyo line" },
+        ]);
+        assert.equal(await page.locator("#ipsSaid").textContent(), x("{n} IPs added", { n: 0 }) + " · "
+          + x("Moved to a new exit: {list}", { list: "tokyo.example:3128 (198.51.100.42 → 203.0.113.8)" }));
+        assert.deepEqual(await accountsOf(page), {
+          "203.0.113.7": ["alice@example.com " + on],
+          "203.0.113.8": ["Work " + on, "qa@example.com " + banned, "Relay · Main " + on],
+          "198.51.100.42": "none",
+        });
+
+        // an IP's form lists the proxies it was read from, and an edit
+        // keeps them
+        const chips = () => page.evaluate(() => [...document.querySelectorAll("#ipsList .ips-form .ips-proxy code")].map((c) => c.textContent));
+        await page.locator('#ipsList .ips-row[data-ip="203.0.113.8"] .ips-edit').click();
+        assert.deepEqual(await chips(), ["tokyo.example:3128"]);
+        assert.ok(await page.locator("#ipsList .ips-moved").isHidden());
+        assert.ok(await wider(page) <= 0.5, `the form reaches ${await wider(page)}px past the window`);
         await page.locator("#ipsList .ips-in-name").fill("Tokyo 2");
         await page.locator("#ipsList .ips-save").click();
         await page.waitForFunction(() => !document.querySelector("#ipsList .ips-form"));
-        assert.deepEqual(seen.posts.at(-1).ips[2], { ip: "198.51.100.42", name: "Tokyo 2", proxies: [TOKYO] });
+        assert.deepEqual(seen.posts.at(-1).ips[1], { ip: "203.0.113.8", name: "Tokyo 2", proxies: [TOKYO] });
+
+        // an address typed over says the proxies were read as the old
+        // one's exit; one unlinked is gone from what is saved, and its
+        // accounts with it
+        await page.locator('#ipsList .ips-row[data-ip="203.0.113.8"] .ips-edit').click();
+        await page.locator("#ipsList .ips-in-ip").fill("203.0.113.9");
+        assert.equal(await page.locator("#ipsList .ips-moved").textContent(), x("The address changed: these were read as {ip}'s exit, so remove any that doesn't go out through the new one", { ip: "203.0.113.8" }));
+        assert.ok(await page.locator("#ipsList .ips-moved").isVisible());
+        await page.locator("#ipsList .ips-in-ip").fill("203.0.113.8");
+        assert.ok(await page.locator("#ipsList .ips-moved").isHidden());
+        assert.equal(await page.locator("#ipsList .ips-proxy-rm").getAttribute("aria-label"), x("Unlink {proxy}", { proxy: "tokyo.example:3128" }));
+        await page.locator("#ipsList .ips-proxy-rm").click();
+        assert.deepEqual(await chips(), []);
+        assert.equal(await page.locator("#ipsList .ips-in-name").inputValue(), "Tokyo 2");
+        await page.locator("#ipsList .ips-save").click();
+        await page.waitForFunction(() => !document.querySelector("#ipsList .ips-form"));
+        assert.deepEqual(seen.posts.at(-1).ips[1], { ip: "203.0.113.8", name: "Tokyo 2" });
+        assert.equal((await accountsOf(page))["203.0.113.8"], "none");
         assert.deepEqual(errors, []);
       });
     }

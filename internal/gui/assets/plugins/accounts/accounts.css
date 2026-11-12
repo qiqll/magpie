@@ -118,3 +118,12 @@
 .ips-tools { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .ips-import.busy { opacity: .6; }
 .ips-said { margin: 6px 2px; font-size: 12px; color: var(--muted); }
+/* an IP's form: the proxies it was read from, each unlinked (T-172) */
+.ips-proxies { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; font-size: 12px; color: var(--fg-2); }
+.ips-proxies-head { color: var(--muted); }
+.ips-proxy { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; padding: 1px 2px 1px 6px; border: 1px solid var(--line); border-radius: 6px; }
+.ips-proxy code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ips-proxy-rm { border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; line-height: 1; padding: 0 4px; cursor: pointer; }
+.ips-proxy-rm:hover { color: var(--red); }
+.ips-moved { flex: 1 1 100%; font-size: 12px; color: var(--muted); }
+.ips-moved[hidden] { display: none; }

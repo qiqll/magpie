@@ -7,14 +7,17 @@
 // accounts (T-170) reads the exit of every proxy an account goes through
 // and adds what isn't listed; each IP names the accounts that go out
 // through it with their state (page.js' acxRows), found by that state.
-// Run after app.js and page.js.
+// An IP's form lists the proxies it was read from, each unlinked there,
+// and an import checks every proxy again: one whose exit moved is moved to
+// the IP at its new exit, and said (T-172). Run after app.js and page.js.
 
 // the list as the server last said it and the revision it was read at
 // (a save made from an older one is refused), the form open (the index
-// edited, -1 for a new one, null for none) and its draft, the IP whose
+// edited, -1 for a new one, null for none) and its draft (proxies: those
+// the IP keeps, proxy: one read from a saved proxy), the IP whose
 // start date is being picked, the last error, and whether a save is under
 // way: the list takes no other change till it is answered (T-155 review M2)
-let ipsList = null, ipsRev = "", ipsEdit = null, ipsDraft = { ip: "", name: "", proxy: "" }, ipsRenewing = "", ipsErr = "", ipsSaving = false;
+let ipsList = null, ipsRev = "", ipsEdit = null, ipsDraft = { ip: "", name: "", proxy: "", proxies: [] }, ipsRenewing = "", ipsErr = "", ipsSaving = false;
 // Import from accounts under way, and what the last one did
 let ipsImporting = false, ipsSaid = "";
 // the accounts filter, kept per machine: "" every IP, "bound" those an
@@ -25,7 +28,7 @@ try { ipsFilter = localStorage.getItem("magpie.ipsFilter") || ""; } catch {}
 
 function ipsMount() {
   const add = $("#ipsAdd");
-  add.onclick = () => { ipsEdit = -1; ipsDraft = { ip: "", name: "", proxy: "" }; ipsErr = ""; ipsSaid = ""; ipsDraw(); };
+  add.onclick = () => { ipsEdit = -1; ipsDraft = { ip: "", name: "", proxy: "", proxies: [] }; ipsErr = ""; ipsSaid = ""; ipsDraw(); };
   $("#ipsImport").onclick = ipsImport;
 }
 
@@ -84,19 +87,19 @@ function ipsShown(proxy) {
   try { return new URL(proxy.includes("://") ? proxy : "http://" + proxy).host || "[proxy]"; } catch { return "[proxy]"; }
 }
 
-// ipsImport: the exit of each proxy an account goes through that no IP
-// was read from yet (proxy/check, four at a time), added as an IP of its
-// own, or told to the IP listed at that address; kept as one save. A
-// proxy that didn't answer is named, and nothing is guessed for it
+// ipsImport: the exit of each proxy an account goes through
+// (proxy/check, four at a time), added as an IP of its own, or told to
+// the IP listed at that address; one an IP was read from before whose
+// exit is another now leaves that IP for its new exit, and is said
+// (T-172). Kept as one save. A proxy that didn't answer is named, and
+// nothing is guessed or moved for it
 async function ipsImport() {
   if (ipsImporting || !ipsList) return;
   ipsErr = "";
   ipsSaid = "";
-  const known = new Set(ipsList.flatMap((x) => x.proxies || []));
-  const all = [...new Set(ipsBound().map(ipsProxyOf).filter(Boolean))];
-  const todo = all.filter((p) => !known.has(p));
+  const todo = [...new Set(ipsBound().map(ipsProxyOf).filter(Boolean))];
   if (!todo.length) {
-    ipsSaid = t(all.length ? "Every proxy an account goes through is listed already" : "No account has a proxy of its own or its subscription's");
+    ipsSaid = t("No account has a proxy of its own or its subscription's");
     return ipsDraw();
   }
   ipsImporting = true;
@@ -122,25 +125,35 @@ async function ipsImport() {
     const saved = (prefs || state?.settings)?.proxies || [];
     const next = ipsList.map((x) => ({ ...x, proxies: [...(x.proxies || [])] }));
     let added = 0, linked = 0;
-    const full = [];
+    const full = [], moved = [];
     for (const [p, raw] of found) {
       const ip = ipsCanon(raw);
       const x = next.find((y) => ipsCanon(y.ip) === ip);
+      // the IPs it was read from before at another address
+      const was = next.filter((y) => ipsCanon(y.ip) !== ip && y.proxies.includes(p));
+      if (x && x.proxies.length >= IPS_MAX_PROXIES && !x.proxies.includes(p)) {
+        full.push(x.ip);
+        continue;
+      }
+      for (const y of was) y.proxies = y.proxies.filter((q) => q !== p);
+      if (was.length) moved.push(ipsShown(p) + " (" + was.map((y) => y.ip).join(", ") + " → " + (x?.ip || ip) + ")");
       if (!x) {
         next.push({ ip, name: saved.find((s) => s.url === p)?.name || "", proxies: [p] });
         added++;
-      } else if (x.proxies.length >= IPS_MAX_PROXIES) full.push(x.ip);
-      else if (!x.proxies.includes(p)) {
+      } else if (!x.proxies.includes(p)) {
         x.proxies.push(p);
-        linked++;
+        if (!was.length) linked++;
       }
     }
-    if ((added || linked) && !await ipsKeep(next)) {
+    if ((added || linked || moved.length) && !await ipsKeep(next)) {
       if (!ipsErr) ipsErr = t("The import couldn't be saved: try it again");
       return;
     }
-    const parts = [t(added === 1 ? "1 IP added" : "{n} IPs added", { n: added })];
+    // nothing new and nothing unknown: every exit is as listed
+    const parts = [added || linked || moved.length || failed.length || full.length
+      ? t(added === 1 ? "1 IP added" : "{n} IPs added", { n: added }) : t("Every proxy an account goes through is listed already")];
     if (linked) parts.push(t(linked === 1 ? "1 proxy told to an IP listed" : "{n} proxies told to IPs listed", { n: linked }));
+    if (moved.length) parts.push(t("Moved to a new exit: {list}", { list: moved.join(", ") }));
     ipsSaid = parts.join(" · ");
     const errs = [];
     if (failed.length) errs.push(t("These proxies didn't answer, so their exit isn't known: {list}", { list: [...new Set(failed.map(ipsShown))].join(", ") }));
@@ -299,7 +312,7 @@ function ipsRow(x, i, accts, read) {
   const edit = el("button", "text ips-edit", t("Edit"));
   edit.type = "button";
   edit.disabled = ipsImporting;
-  edit.onclick = () => { ipsEdit = i; ipsDraft = { ip: x.ip, name: x.name || "", proxy: "" }; ipsErr = ""; ipsSaid = ""; ipsDraw(); };
+  edit.onclick = () => { ipsEdit = i; ipsDraft = { ip: x.ip, name: x.name || "", proxy: "", proxies: [...(x.proxies || [])] }; ipsErr = ""; ipsSaid = ""; ipsDraw(); };
   const rm = el("button", "text ips-remove", t("Remove"));
   rm.type = "button";
   rm.disabled = ipsImporting;
@@ -326,7 +339,7 @@ function ipsForm(i) {
   ip.placeholder = "203.0.113.7";
   ip.value = ipsDraft.ip;
   ip.setAttribute("aria-label", t("Exit IP"));
-  ip.oninput = () => { ipsDraft.ip = ip.value; };
+  ip.oninput = () => { ipsDraft.ip = ip.value; moved.hidden = !movedOff(); };
   const nm = el("input", "ips-in-name");
   nm.type = "text";
   nm.autocomplete = "off";
@@ -362,6 +375,29 @@ function ipsForm(i) {
     fields.append(from);
   }
   form.append(fields);
+  // the proxies the IP was read from, each unlinked here (T-172): one whose
+  // exit moved, or an address typed over, leaves them with nothing to say
+  // they no longer go out through it
+  const was = i < 0 ? "" : ipsList[i].ip;
+  const movedOff = () => !!(was && ipsDraft.proxies.length && ipsCanon(ipsDraft.ip.trim()) !== ipsCanon(was));
+  const moved = el("div", "ips-moved", t("The address changed: these were read as {ip}'s exit, so remove any that doesn't go out through the new one", { ip: was }));
+  moved.hidden = !movedOff();
+  if (ipsDraft.proxies.length) {
+    const box = el("div", "ips-proxies");
+    box.append(el("span", "ips-proxies-head", t("Proxies that go out through it")));
+    for (const p of ipsDraft.proxies) {
+      const chip = el("span", "ips-proxy");
+      chip.dataset.proxy = p;
+      const rm = el("button", "ips-proxy-rm", "×");
+      rm.type = "button";
+      rm.title = t("Unlink {proxy}", { proxy: ipsShown(p) });
+      rm.setAttribute("aria-label", rm.title);
+      rm.onclick = () => { ipsDraft.proxies = ipsDraft.proxies.filter((q) => q !== p); ipsDraw(); };
+      chip.append(el("code", "", ipsShown(p)), rm);
+      box.append(chip);
+    }
+    form.append(box, moved);
+  }
   const acts = el("span", "acts");
   const ok = el("button", "text primary ips-save", t("Save"));
   ok.type = "button";
@@ -372,7 +408,7 @@ function ipsForm(i) {
     ok.classList.add("busy");
     // read from a saved proxy: the IP is told it is that one's exit
     const told = (ps) => (ipsDraft.proxy && !(ps || []).includes(ipsDraft.proxy) ? [...(ps || []), ipsDraft.proxy] : ps);
-    const next = i < 0 ? [...ipsList, { ...v, proxies: told([]) }] : ipsList.map((y, j) => (j === i ? { ...y, ...v, proxies: told(y.proxies) } : y));
+    const next = i < 0 ? [...ipsList, { ...v, proxies: told([]) }] : ipsList.map((y, j) => (j === i ? { ...y, ...v, proxies: told(ipsDraft.proxies) } : y));
     // kept, the form closes; refused, ipsKeep drew it again with why
     if (await ipsKeep(next)) { ipsEdit = null; ipsDraw(); }
   };
