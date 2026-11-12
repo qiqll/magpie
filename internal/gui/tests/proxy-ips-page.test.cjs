@@ -504,3 +504,96 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     }
   }
 }
+
+// T-177: an import gives an IP with no start date the earliest of its
+// accounts' (accountRenewal, as /api/providers says it), keeps one the
+// user told and says when its accounts' earliest is another day, leaves
+// one whose accounts have none without, and run again changes nothing
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  for (const lang of LANGS) {
+    const x = (s, a) => tr(lang, s, a);
+    for (const width of [1000, 380]) {
+      test(`${engine} ${lang} ${width}: an import gives an IP its accounts' start date, and keeps one told`, async (t) => {
+        // alice (at 203.0.113.7) from 10-21 in Shanghai; bob and qa
+        // through Tokyo from 11-02 and 10-26, Relay's key with none;
+        // carol through HK with none
+        const providers = accountProviders();
+        providers[0].accountRenewal = { "alice@example.com": periodOf("2026-10-20T16:00:00Z"), "bob@example.com": periodOf("2026-11-01T16:00:00Z") };
+        providers[1].accountRenewal = { "qa@example.com": periodOf("2026-10-25T16:00:00Z") };
+        const seen = { posts: [], checks: [], rev: 1, providers, exits: { [TOKYO]: "203.0.113.8", [AT_IP]: "203.0.113.7", [HK]: "192.0.2.50" }, ips: [
+          { ip: "203.0.113.7", name: "Osaka", opened: "2026-10-17T04:00:00Z" },
+          { ip: "203.0.113.8", proxies: [TOKYO] },
+          { ip: "192.0.2.9", name: "Spare" },
+        ] };
+        const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+        t.after(() => browser.close());
+        const page = await (await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" })).newPage();
+        page.setDefaultTimeout(5000);
+        page.setDefaultNavigationTimeout(60000);
+        const errors = [];
+        page.on("pageerror", (e) => errors.push(e.message));
+        await page.route("**/*", serve(lang, seen));
+        await page.addInitScript(() => { try { if (!sessionStorage.getItem("set")) { localStorage.clear(); sessionStorage.setItem("set", "1"); } } catch {} });
+        await page.goto("http://magpie.test/?view=ips");
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 3);
+        const shown = (iso) => page.evaluate((iso) => new Date(iso).toLocaleDateString(intlLang(), { year: "numeric", month: "short", day: "numeric" }), iso);
+        // the click marks it under way at once, so this waits for its end
+        const imported = async () => {
+          await page.locator("#ipsImport").click();
+          await page.waitForFunction(() => !document.querySelector("#ipsImport").disabled);
+        };
+        const kept = async (own, theirs) => x("{ip}: its own {own}, its accounts' earliest {theirs}", { ip: "203.0.113.7", own: await shown(own), theirs: await shown(theirs) });
+        const osaka = await kept("2026-10-17T04:00:00Z", "2026-10-20T16:00:00Z");
+
+        // imported: Tokyo's IP takes qa's, the earliest of its accounts';
+        // Osaka keeps its own and says alice's is another day; HK's new
+        // IP and the spare one have no account with a date, so none
+        await imported();
+        assert.equal(seen.posts.length, 1);
+        assert.deepEqual(seen.posts[0].ips, [
+          { ip: "203.0.113.7", name: "Osaka", opened: "2026-10-17T04:00:00Z", proxies: [AT_IP] },
+          { ip: "203.0.113.8", opened: "2026-10-25T16:00:00Z", proxies: [TOKYO] },
+          { ip: "192.0.2.9", name: "Spare" },
+          { ip: "192.0.2.50", name: "", proxies: [HK] },
+        ]);
+        assert.equal(await page.locator("#ipsSaid").textContent(), [x("1 IP added"), x("1 proxy told to an IP listed"), x("1 IP given its accounts' start date"),
+          x("These IPs keep the start date told them: {list}", { list: osaka })].join(" · "));
+        assert.ok(await page.locator("#ipsErr").isHidden());
+        const pill = (ip) => page.locator(`#ipsList .ips-row[data-ip="${ip}"] .renew-pill`);
+        await page.waitForFunction(() => document.querySelector('#ipsList .ips-row[data-ip="203.0.113.8"] .renew-pill.ok'));
+        assert.equal(await pill("192.0.2.9").getAttribute("class"), "renew-pill none");
+        assert.equal(await pill("192.0.2.50").getAttribute("class"), "renew-pill none");
+        assert.ok(await wider(page) <= 0.5, `the page reaches ${await wider(page)}px past the window`);
+
+        // run again: nothing is saved, and the one told still says so
+        await imported();
+        assert.equal(seen.posts.length, 1);
+        assert.equal(await page.locator("#ipsSaid").textContent(), x("Every proxy an account goes through is listed already") + " · " + x("These IPs keep the start date told them: {list}", { list: osaka }));
+
+        // a date the user picks for Tokyo's IP is theirs: an import keeps it
+        await pill("203.0.113.8").click();
+        await page.locator("#ipsList .renew-date").fill("2026-11-05");
+        await page.locator("#ipsList .renew-save").click();
+        await page.waitForFunction(() => !document.querySelector("#ipsList .renew-edit"));
+        assert.equal(seen.posts.length, 2);
+        assert.equal(seen.posts[1].ips[1].opened, "2026-11-04T16:00:00.000Z");
+        await imported();
+        assert.equal(seen.posts.length, 2);
+        assert.equal(await page.locator("#ipsSaid").textContent(), x("Every proxy an account goes through is listed already") + " · " + x("These IPs keep the start date told them: {list}", {
+          list: osaka + "; " + x("{ip}: its own {own}, its accounts' earliest {theirs}", { ip: "203.0.113.8", own: await shown("2026-11-04T16:00:00.000Z"), theirs: await shown("2026-10-25T16:00:00Z") }) }));
+
+        // carol's date told since: with no proxy new, her IP taking it is
+        // saved on its own
+        seen.providers[0].accountRenewal["carol@example.com"] = periodOf("2026-11-03T16:00:00Z");
+        await page.reload();
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 4);
+        await imported();
+        assert.equal(seen.posts.length, 3);
+        assert.equal(seen.posts[2].ips[3].opened, "2026-11-03T16:00:00Z");
+        assert.deepEqual(seen.posts[2].ips.map((y) => y.opened), ["2026-10-17T04:00:00Z", "2026-11-04T16:00:00.000Z", undefined, "2026-11-03T16:00:00Z"]);
+        assert.ok((await page.locator("#ipsSaid").textContent()).startsWith(x("1 IP given its accounts' start date") + " · "));
+        assert.deepEqual(errors, []);
+      });
+    }
+  }
+}

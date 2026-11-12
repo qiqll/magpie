@@ -9,7 +9,8 @@
 // through it with their state (page.js' acxRows), found by that state.
 // An IP's form lists the proxies it was read from, each unlinked there,
 // and an import checks every proxy again: one whose exit moved is moved to
-// the IP at its new exit, and said (T-172). The list is found by a word,
+// the IP at its new exit, and said (T-172); one with no start date takes
+// its accounts' earliest (T-177). The list is found by a word,
 // its period as the pill says it, and its accounts, together (T-176).
 // Run after app.js and page.js.
 
@@ -56,13 +57,15 @@ function ipsMount() {
 // review H1), on or off as its editor ticks it. proxy is the one its
 // requests go through as provider.ProxyChoice picks it, its own (an
 // account by its name in lower case, a key by its id) or else its
-// provider's; "" for the global one or none (direct)
+// provider's; "" for the global one or none (direct). renew is an
+// account's paid period as the server worked it out (accountRenewal,
+// T-154), null for one with no start date and for a key
 function ipsBound() {
   const via = (p, own) => { const v = String(p.accountProxies?.[own] || p.proxy || "").trim(); return v === "direct" ? "" : v; };
-  const out = acxRows().map((r) => ({ p: r.p, id: r.p.id + "/" + acxLow(r.l.user), who: accountShownOf(r.p, r.l.user), sub: r.l.user, state: r.state, proxy: via(r.p, acxLow(r.l.user)) }));
+  const out = acxRows().map((r) => ({ p: r.p, id: r.p.id + "/" + acxLow(r.l.user), who: accountShownOf(r.p, r.l.user), sub: r.l.user, state: r.state, proxy: via(r.p, acxLow(r.l.user)), renew: r.renew || null }));
   for (const p of providers?.providers || []) {
     if (p.account?.logins?.length) continue;
-    for (const k of p.keyList || []) out.push({ p, id: p.id + "/" + k.id, who: p.name + " · " + (k.name || k.masked), sub: k.masked, state: k.on ? "on" : "off", proxy: via(p, k.id) });
+    for (const k of p.keyList || []) out.push({ p, id: p.id + "/" + k.id, who: p.name + " · " + (k.name || k.masked), sub: k.masked, state: k.on ? "on" : "off", proxy: via(p, k.id), renew: null });
   }
   return out;
 }
@@ -111,13 +114,15 @@ function ipsShown(proxy) {
 // (proxy/check, four at a time), added as an IP of its own, or told to
 // the IP listed at that address; one an IP was read from before whose
 // exit is another now leaves that IP for its new exit, and is said
-// (T-172). Kept as one save. A proxy that didn't answer is named, and
-// nothing is guessed or moved for it
+// (T-172). An IP with no start date then takes the earliest of its
+// accounts' (T-177). Kept as one save. A proxy that didn't answer is
+// named, and nothing is guessed or moved for it
 async function ipsImport() {
   if (ipsImporting || !ipsList) return;
   ipsErr = "";
   ipsSaid = "";
-  const todo = [...new Set(ipsBound().map(ipsProxyOf).filter(Boolean))];
+  const bound = ipsBound();
+  const todo = [...new Set(bound.map(ipsProxyOf).filter(Boolean))];
   if (!todo.length) {
     ipsSaid = t("No account has a proxy of its own or its subscription's");
     return ipsDraw();
@@ -168,7 +173,23 @@ async function ipsImport() {
         if (!was.length) linked++;
       }
     }
-    if ((added || linked || moved.length) && !await ipsKeep(next)) {
+    // each IP's accounts as the list now binds them: one with no start
+    // date takes their earliest, so its reminder comes no later than any
+    // of theirs; one told a date keeps it, the user's (T-177), and is
+    // said when their earliest is another day. Run again, nothing changes
+    const claimed = new Set(next.flatMap((y) => y.proxies));
+    const shown = (at) => new Date(at).toLocaleDateString(intlLang(), { year: "numeric", month: "short", day: "numeric" });
+    let dated = 0;
+    const apart = [];
+    for (const y of next) {
+      const first = ipsAccountsOf(y, bound, claimed).map((r) => r.renew?.opened).filter(Boolean).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+      if (!first) continue;
+      if (!y.opened) {
+        y.opened = first;
+        dated++;
+      } else if (renewDay(y.opened) !== renewDay(first)) apart.push(t("{ip}: its own {own}, its accounts' earliest {theirs}", { ip: y.ip, own: shown(y.opened), theirs: shown(first) }));
+    }
+    if ((added || linked || moved.length || dated) && !await ipsKeep(next)) {
       if (!ipsErr) ipsErr = t("The import couldn't be saved: try it again");
       return;
     }
@@ -176,8 +197,10 @@ async function ipsImport() {
     if (added) parts.push(t(added === 1 ? "1 IP added" : "{n} IPs added", { n: added }));
     if (linked) parts.push(t(linked === 1 ? "1 proxy told to an IP listed" : "{n} proxies told to IPs listed", { n: linked }));
     if (moved.length) parts.push(t("Moved to a new exit: {list}", { list: moved.join(", ") }));
+    if (dated) parts.push(t(dated === 1 ? "1 IP given its accounts' start date" : "{n} IPs given their accounts' start date", { n: dated }));
     // nothing new and nothing unknown: every exit is as listed
     if (!parts.length && !failed.length && !full.length && !stuck.length) parts.push(t("Every proxy an account goes through is listed already"));
+    if (apart.length) parts.push(t("These IPs keep the start date told them: {list}", { list: apart.join("; ") }));
     ipsSaid = parts.join(" · ");
     const errs = [];
     if (failed.length) errs.push(t("These proxies didn't answer, so their exit isn't known: {list}", { list: [...new Set(failed.map(ipsShown))].join(", ") }));
