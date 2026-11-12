@@ -51,11 +51,12 @@ func TestClosingWindowMarksPageOutOfSight(t *testing.T) {
 //
 // On a Mac whose screen is on, WebKit says the page is hidden once the
 // panel is ordered out, with a visibilitychange of its own; a locked one
-// says hidden all along and sends none. The page records that hiding as any
-// other, so the panel here is given WebKit's event after each order-out
-// whatever the screen is. Told from a listener, magpie's signal could reach
-// the page after Wails' Hide, then after the panel was shown again, and the
-// page reported marked=false play="running" from full suite runs.
+// says hidden all along and sends none. So the host gives the page WebKit's
+// event once the panel is ordered out, whatever the screen is, and magpie's
+// signal must be in by then. Told from a listener, which Wails runs in a
+// goroutine beside its own Hide, the signal could come after that event and
+// after the panel was shown again, and the page reported marked=false
+// play="running" from full suite runs.
 func TestPanelHiddenByWailsMarksPageOutOfSight(t *testing.T) {
 	out, err := runAppKit(t, 2*time.Minute, []string{"MAGPIE_TEST_WINDOW_VISIBILITY=panel"})
 	if err != nil || !strings.Contains(string(out), "window visibility: ok") {
@@ -104,6 +105,10 @@ window.magpieWindowVisibility = (visible) => {
   document.dispatchEvent(new Event("visibilitychange"));
   showing = false;
 };
+// WebKit's own hiding, as the host gives it: magpie's signal is in by then
+document.addEventListener("visibilitychange", (e) => {
+  if (e.webkitOwn && !outOfSight) fetch("/early");
+});
 // a hiding is what follows a hide: the shown signal's own event is not one,
 // though WebKit may still say hidden then
 document.addEventListener("visibilitychange", () => {
@@ -135,6 +140,9 @@ fetch("/ready");
 				default:
 				}
 				w.WriteHeader(http.StatusNoContent)
+			case "/early":
+				fmt.Println("window visibility: WebKit said the page hidden before magpie's signal was in")
+				os.Exit(1)
 			case "/report":
 				select {
 				case reports <- r.URL.Query():
@@ -160,13 +168,30 @@ fetch("/ready");
 			return nil
 		}
 	}
+	// WebKit's own visibilitychange once the panel is ordered out, as a Mac
+	// whose screen is on sends it; before the host waits for the page, so it
+	// never comes after the panel is shown again
+	webkitHides := func(w *application.WebviewWindow) {
+		for deadline := time.Now().Add(15 * time.Second); application.InvokeSyncWithResult(func() bool { return windowOpen(w) }); time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				fail("timed out waiting for the panel to be ordered out")
+			}
+		}
+		w.ExecJS(`document.dispatchEvent(Object.assign(new Event("visibilitychange"), { webkitOwn: true }))`)
+	}
 	// each way the window is closed: the main window by magpie; the panel
 	// by Wails, on a click elsewhere and on Escape
 	closes := map[string][]func(*host, *application.WebviewWindow){
 		"1": {func(h *host, _ *application.WebviewWindow) { application.InvokeSync(h.hideMain) }},
 		"panel": {
-			func(_ *host, w *application.WebviewWindow) { w.HandleWindowEvent(uint(events.Common.WindowLostFocus)) },
-			func(_ *host, w *application.WebviewWindow) { w.HandleKeyEvent("escape") },
+			func(_ *host, w *application.WebviewWindow) {
+				w.HandleWindowEvent(uint(events.Common.WindowLostFocus))
+				webkitHides(w)
+			},
+			func(_ *host, w *application.WebviewWindow) {
+				w.HandleKeyEvent("escape")
+				webkitHides(w)
+			},
 		},
 	}
 	check := func(report url.Values) {
@@ -190,15 +215,6 @@ fetch("/ready");
 				if which == "panel" {
 					win = h.makePanel()
 					h.panel = win
-					// WebKit's own visibilitychange once it is ordered out, as
-					// a Mac whose screen is on sends it
-					w := win
-					w.OnWindowEvent(events.Common.WindowLostFocus, func(*application.WindowEvent) {
-						for application.InvokeSyncWithResult(func() bool { return windowOpen(w) }) {
-							time.Sleep(time.Millisecond)
-						}
-						w.ExecJS(`document.dispatchEvent(new Event("visibilitychange"))`)
-					})
 					win.Show()
 					return
 				}

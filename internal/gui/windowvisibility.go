@@ -39,14 +39,16 @@ func showWebview(w *application.WebviewWindow) *application.WebviewWindow {
 }
 
 // sayWailsHides tells the panel's page when Wails hides the panel itself:
-// on a click elsewhere (HideOnFocusLost), the way it is mostly closed, and
-// on Escape (HideOnEscape), both a plain Hide that hideWebview never sees.
+// on a click elsewhere (HideOnFocusLost), the way it is mostly closed, a
+// plain Hide that hideWebview never sees, and on Escape, whose HideOnEscape
+// binding is replaced here by hideWebview.
 // A page never told it was hidden isn't told it is back either, so it kept
 // the settings it was drawn with: Settings' ¥ and 万 / 亿 never reached the
 // panel's Usage tab (blrbrzkj on Discord).
 //
-// The page is told from a hook, which Wails runs before any listener, so it
-// is told before HideOnFocusLost's Hide. Wails runs each listener in a
+// The page is told from a hook, which Wails runs before any listener, so the
+// signal is sent to it before HideOnFocusLost's Hide orders the panel out
+// (WebKit takes the two in the order sent). Wails runs each listener in a
 // goroutine of its own: as a listener, the Hide could come first, WebKit
 // (on a Mac whose screen is on) said hidden with the page not marked, and a
 // late signal could reach the page after the panel was shown again, which
