@@ -326,6 +326,10 @@ func (t *remoteTurn) tee(rc io.ReadCloser, ctype string) (io.ReadCloser, func())
 		if !ok {
 			return
 		}
+		// the remote's own id, which it holds the turn under, when this
+		// reply said it again for a caller that isn't magpie's (T-122);
+		// the items' marks stay as said, as the client sends them back
+		id = unmadeOriginal(rc, id)
 		kept := &remoteSent{key: t.key, input: t.sums, id: id, output: make([]itemMark, len(output))}
 		for i, it := range output {
 			kept.output[i] = markOf(it)

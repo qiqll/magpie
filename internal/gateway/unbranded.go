@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -686,15 +687,23 @@ func ownFailure(ctx context.Context, res map[string]any) map[string]any {
 	if res["isError"] != true || keepsBrandIn(ctx) {
 		return res
 	}
+	// res may be a job's, read by every call that waits on it: said in a
+	// copy, never in place
 	content, _ := res["content"].([]any)
-	for _, c := range content {
+	said := make([]any, len(content))
+	for i, c := range content {
+		said[i] = c
 		if m, ok := c.(map[string]any); ok && m["type"] == "text" {
 			if t, ok := m["text"].(string); ok {
+				m = maps.Clone(m)
 				m["text"] = unbrand(t)
+				said[i] = m
 			}
 		}
 	}
-	return res
+	out := maps.Clone(res)
+	out["content"] = said
+	return out
 }
 
 // ownRPCError is an MCP server's JSON-RPC error, its message magpie's
@@ -731,18 +740,30 @@ func madeID(w http.ResponseWriter, r *http.Request, kind string) string {
 }
 
 // A remote magpie answers this one as another magpie (magpieAsks), so the
-// replies it makes itself carry its made ids (resp_magpie_<n>,
-// msg_magpie_<n>, cmp_magpie_<n>) whoever asked this one. For a caller of
-// this one that doesn't keep magpie's words they are said here as madeID
-// says its own (T-122): <kind>_<n>, the remote's reply read so before any
-// of it is relayed, translated or kept for the next turn's delta
-// (remoteTurn.tee), so the ids the client sends back are the ones kept. The
-// leg between two magpies is as it was: the remote is asked as before, and
-// a magpie asking this one keeps the ids as they came.
+// replies it makes itself carry its made ids: resp_magpie_<n>, and the
+// tool-loop guard's msg_magpie_<n> as its encoders give it
+// (resp_msg_magpie_<n>, chatcmpl-msg_magpie_<n>, msg_magpie_<n>). For a
+// caller of this one that doesn't keep magpie's words they are said
+// without magpie (T-122): the remote's reply is read so before any of it
+// is relayed or translated, and only an id's value is said again (a
+// string under a key that ends in "id"), never the model's words. The
+// leg between two magpies is as it was: the remote is asked as before, a
+// magpie asking this one keeps the ids as they came, and the turn kept
+// for the next one's delta keeps the remote's own id (unmade.original),
+// which is the one it holds.
+
+// madeKindMost is the longest a made id's kind is read: resp_msg,
+// chatcmpl-msg.
+const madeKindMost = 32
 
 // madeIDMost is the longest made id read: a quote, a kind, _magpie_, the
 // nanoseconds and a quote.
-const madeIDMost = 1 + 16 + 8 + 20 + 1
+const madeIDMost = 1 + madeKindMost + 8 + 20 + 1
+
+// madeLookback is how much of a reply before an id is kept to read its
+// key by: a quote, a key such as "previous_response_id", a colon and a
+// few spaces.
+const madeLookback = 64
 
 var madeIDMid = []byte("_magpie_")
 
@@ -751,9 +772,14 @@ var madeIDMid = []byte("_magpie_")
 // read whole.
 type unmadeBody struct {
 	io.ReadCloser
+	buf  [32 << 10]byte
+	seen []byte // the last bytes given, to read the key of an id after them
 	pend []byte // read, not yet given
 	out  []byte // given, not yet read
 	err  error
+
+	mu   sync.Mutex
+	said map[string]string // an id said again: the remote's own
 }
 
 // unmadeReply is res, a remote magpie's reply, read by ctx's caller.
@@ -767,67 +793,138 @@ func unmadeReply(ctx context.Context, p provider.Provider, res *http.Response) {
 	res.Header.Del("Content-Length")
 }
 
+// unmadeOriginal is the remote's own id for id as rc, a remote magpie's
+// reply body, said it: id itself when rc said none so.
+func unmadeOriginal(rc io.Reader, id string) string {
+	u, ok := rc.(*unmadeBody)
+	if !ok {
+		return id
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if o, ok := u.said[id]; ok {
+		return o
+	}
+	return id
+}
+
 func (u *unmadeBody) Read(p []byte) (int, error) {
-	buf := make([]byte, 32<<10)
 	for len(u.out) == 0 {
 		if u.err != nil {
 			if len(u.pend) > 0 {
-				u.out, u.pend = unmadeIDs(u.pend), nil
+				u.give(len(u.pend))
 				continue
 			}
 			return 0, u.err
 		}
-		n, err := u.ReadCloser.Read(buf)
-		u.pend = append(u.pend, buf[:n]...)
+		n, err := u.ReadCloser.Read(u.buf[:])
+		u.pend = append(u.pend, u.buf[:n]...)
 		u.err = err
 		if err != nil {
 			continue
 		}
-		cut := madeIDHeld(u.pend)
-		u.out = unmadeIDs(u.pend[:cut])
-		u.pend = append([]byte(nil), u.pend[cut:]...)
+		u.give(madeIDHeld(u.pend))
 	}
 	n := copy(p, u.out)
 	u.out = u.out[n:]
 	return n, nil
 }
 
-// unmadeIDs is b with every JSON string that is a made id,
-// "<kind>_magpie_<n>", said "<kind>_<n>". A string the model wrote inside
-// another (a call's arguments) has its quotes escaped and is left as it is.
+// give says the first cut bytes held and makes them the next to be read.
+func (u *unmadeBody) give(cut int) {
+	if cut == 0 {
+		return
+	}
+	data := append(append([]byte(nil), u.seen...), u.pend[:cut]...)
+	said, ids := unmadeIDsFrom(data, len(u.seen))
+	if len(ids) > 0 {
+		u.mu.Lock()
+		if u.said == nil {
+			u.said = map[string]string{}
+		}
+		for k, v := range ids {
+			u.said[k] = v
+		}
+		u.mu.Unlock()
+	}
+	u.out = said[len(u.seen):]
+	u.seen = append([]byte(nil), data[max(0, len(data)-madeLookback):]...)
+	u.pend = append([]byte(nil), u.pend[cut:]...)
+}
+
+// unmadeIDs is b with every made id said without magpie.
 func unmadeIDs(b []byte) []byte {
-	if !bytes.Contains(b, madeIDMid) {
-		return b
+	out, _ := unmadeIDsFrom(b, 0)
+	return out
+}
+
+// unmadeIDsFrom is b with every JSON string at or after from that is an
+// id's value and ends in "_magpie_<n>" said with "_<n>" there, and each
+// id said again with the remote's own. b before from is only read, for
+// the key of an id just after it. A string the model wrote inside another
+// (a call's arguments) has its quotes escaped and is left as it is.
+func unmadeIDsFrom(b []byte, from int) ([]byte, map[string]string) {
+	if !bytes.Contains(b[from:], madeIDMid) {
+		return b, nil
 	}
 	var out []byte
-	last := 0
-	for i := 0; ; {
+	var ids map[string]string
+	last := from
+	for i := from; ; {
 		k := bytes.Index(b[i:], madeIDMid)
 		if k < 0 {
 			break
 		}
 		at := i + k
-		i = at + len(madeIDMid)
+		i = at + 1
 		open := at
-		for open > 0 && at-open < 16 && b[open-1] >= 'a' && b[open-1] <= 'z' {
+		for open > from && at-open < madeKindMost && madeKindByte(b[open-1]) {
 			open--
 		}
-		end := i
-		for end < len(b) && end-i < 20 && b[end] >= '0' && b[end] <= '9' {
+		end := at + len(madeIDMid)
+		for end < len(b) && end-at-len(madeIDMid) < 20 && b[end] >= '0' && b[end] <= '9' {
 			end++
 		}
 		if open == at || open == 0 || b[open-1] != '"' || open >= 2 && b[open-2] == '\\' ||
-			end == i || end >= len(b) || b[end] != '"' {
+			end == at+len(madeIDMid) || end >= len(b) || b[end] != '"' || !idValueAt(b, open-1) {
 			continue
 		}
 		out = append(out, b[last:at]...)
 		out = append(out, '_')
-		last = i
+		last = at + len(madeIDMid)
+		if ids == nil {
+			ids = map[string]string{}
+		}
+		ids[string(b[open:at])+"_"+string(b[last:end])] = string(b[open:end])
+		i = end
 	}
 	if out == nil {
-		return b
+		return b, nil
 	}
-	return append(out, b[last:]...)
+	return append(append(b[:from:from], out...), b[last:]...), ids
+}
+
+// madeKindByte is whether c may be in a made id's kind: resp, msg,
+// resp_msg, chatcmpl-msg.
+func madeKindByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c == '_' || c == '-'
+}
+
+// idValueAt is whether the string whose opening quote is at q is the
+// value of a key that ends in "id" (id, item_id, response_id).
+func idValueAt(b []byte, q int) bool {
+	j := q - 1
+	for j >= 0 && (b[j] == ' ' || b[j] == '\t') {
+		j--
+	}
+	if j < 0 || b[j] != ':' {
+		return false
+	}
+	j--
+	for j >= 0 && (b[j] == ' ' || b[j] == '\t') {
+		j--
+	}
+	return j >= 2 && b[j] == '"' && b[j-2] == 'i' && b[j-1] == 'd'
 }
 
 // madeIDHeld is where an unfinished made id may begin in b: the first
@@ -851,39 +948,36 @@ func madeIDHeld(b []byte) int {
 }
 
 // madeIDAt reads b, what follows a quote, as a made id: its length to its
-// closing quote, -1 for one cut short (a kind's letters, as much of
+// closing quote, -1 for one cut short (a kind's bytes, as much of
 // _magpie_ as came, digits), 0 for none.
 func madeIDAt(b []byte) int {
-	i := 0
-	for i < len(b) && i < 16 && b[i] >= 'a' && b[i] <= 'z' {
-		i++
-	}
-	switch {
-	case i == len(b):
-		return -1
-	case i == 0:
-		return 0
-	}
-	rest := b[i:]
-	if len(rest) < len(madeIDMid) {
-		if bytes.HasPrefix(madeIDMid, rest) {
+	for i := 0; i <= madeKindMost; i++ {
+		if i > 0 {
+			rest := b[i:]
+			if len(rest) < len(madeIDMid) {
+				if bytes.HasPrefix(madeIDMid, rest) {
+					return -1
+				}
+			} else if bytes.HasPrefix(rest, madeIDMid) {
+				j := i + len(madeIDMid)
+				d := j
+				for d < len(b) && d-j < 20 && b[d] >= '0' && b[d] <= '9' {
+					d++
+				}
+				switch {
+				case d == len(b):
+					return -1
+				case d > j && b[d] == '"':
+					return d + 1
+				}
+			}
+		}
+		if i == len(b) {
 			return -1
 		}
-		return 0
-	}
-	if !bytes.HasPrefix(rest, madeIDMid) {
-		return 0
-	}
-	j := i + len(madeIDMid)
-	d := j
-	for d < len(b) && d-j < 20 && b[d] >= '0' && b[d] <= '9' {
-		d++
-	}
-	switch {
-	case d == len(b):
-		return -1
-	case d > j && b[d] == '"':
-		return d + 1
+		if !madeKindByte(b[i]) {
+			return 0
+		}
 	}
 	return 0
 }
