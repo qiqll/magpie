@@ -35,6 +35,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -45,6 +46,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/yetone/magpie/internal/access"
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // keepsBrand is whether r's caller reads magpie's errors as they are: another
@@ -662,11 +664,17 @@ func theAt(s string) string {
 // words, unbrand'd to any other. Only magpie's own words go through it,
 // never the model's, the user's or a page's.
 func ownWords(ctx context.Context, msg string) string {
-	b, _ := ctx.Value(brandKey{}).(*brandWriter)
-	if b.keeps() {
+	if keepsBrandIn(ctx) {
 		return msg
 	}
 	return unbrand(msg)
+}
+
+// keepsBrandIn is whether the caller of ctx's request keeps magpie's words:
+// true for a request through no brandWriter.
+func keepsBrandIn(ctx context.Context) bool {
+	b, _ := ctx.Value(brandKey{}).(*brandWriter)
+	return b.keeps()
 }
 
 // KeepsBrand is whether r's caller reads magpie's own words as they are
@@ -692,6 +700,164 @@ func madeID(w http.ResponseWriter, r *http.Request, kind string) string {
 		return fmt.Sprintf("%s_magpie_%d", kind, time.Now().UnixNano())
 	}
 	return fmt.Sprintf("%s_%d", kind, time.Now().UnixNano())
+}
+
+// A remote magpie answers this one as another magpie (magpieAsks), so the
+// replies it makes itself carry its made ids (resp_magpie_<n>,
+// msg_magpie_<n>, cmp_magpie_<n>) whoever asked this one. For a caller of
+// this one that doesn't keep magpie's words they are said here as madeID
+// says its own (T-122): <kind>_<n>, the remote's reply read so before any
+// of it is relayed, translated or kept for the next turn's delta
+// (remoteTurn.tee), so the ids the client sends back are the ones kept. The
+// leg between two magpies is as it was: the remote is asked as before, and
+// a magpie asking this one keeps the ids as they came.
+
+// madeIDMost is the longest made id read: a quote, a kind, _magpie_, the
+// nanoseconds and a quote.
+const madeIDMost = 1 + 16 + 8 + 20 + 1
+
+var madeIDMid = []byte("_magpie_")
+
+// unmadeBody is a remote magpie's reply body with its made ids said
+// without magpie. A token cut across two reads is held back until it is
+// read whole.
+type unmadeBody struct {
+	io.ReadCloser
+	pend []byte // read, not yet given
+	out  []byte // given, not yet read
+	err  error
+}
+
+// unmadeReply is res, a remote magpie's reply, read by ctx's caller.
+func unmadeReply(ctx context.Context, p provider.Provider, res *http.Response) {
+	if !p.IsRemoteMagpie() || res == nil || res.StatusCode >= 400 || keepsBrandIn(ctx) {
+		return
+	}
+	res.Body = &unmadeBody{ReadCloser: res.Body}
+	// the length may change
+	res.ContentLength = -1
+	res.Header.Del("Content-Length")
+}
+
+func (u *unmadeBody) Read(p []byte) (int, error) {
+	buf := make([]byte, 32<<10)
+	for len(u.out) == 0 {
+		if u.err != nil {
+			if len(u.pend) > 0 {
+				u.out, u.pend = unmadeIDs(u.pend), nil
+				continue
+			}
+			return 0, u.err
+		}
+		n, err := u.ReadCloser.Read(buf)
+		u.pend = append(u.pend, buf[:n]...)
+		u.err = err
+		if err != nil {
+			continue
+		}
+		cut := madeIDHeld(u.pend)
+		u.out = unmadeIDs(u.pend[:cut])
+		u.pend = append([]byte(nil), u.pend[cut:]...)
+	}
+	n := copy(p, u.out)
+	u.out = u.out[n:]
+	return n, nil
+}
+
+// unmadeIDs is b with every JSON string that is a made id,
+// "<kind>_magpie_<n>", said "<kind>_<n>". A string the model wrote inside
+// another (a call's arguments) has its quotes escaped and is left as it is.
+func unmadeIDs(b []byte) []byte {
+	if !bytes.Contains(b, madeIDMid) {
+		return b
+	}
+	var out []byte
+	last := 0
+	for i := 0; ; {
+		k := bytes.Index(b[i:], madeIDMid)
+		if k < 0 {
+			break
+		}
+		at := i + k
+		i = at + len(madeIDMid)
+		open := at
+		for open > 0 && at-open < 16 && b[open-1] >= 'a' && b[open-1] <= 'z' {
+			open--
+		}
+		end := i
+		for end < len(b) && end-i < 20 && b[end] >= '0' && b[end] <= '9' {
+			end++
+		}
+		if open == at || open == 0 || b[open-1] != '"' || open >= 2 && b[open-2] == '\\' ||
+			end == i || end >= len(b) || b[end] != '"' {
+			continue
+		}
+		out = append(out, b[last:at]...)
+		out = append(out, '_')
+		last = i
+	}
+	if out == nil {
+		return b
+	}
+	return append(out, b[last:]...)
+}
+
+// madeIDHeld is where an unfinished made id may begin in b: the first
+// quote near its end that opens one cut short, past each one whole, len(b)
+// when none does. A made id ending near the end began within twice its
+// most, so its own opening quote is read, never its closing one as an
+// opening.
+func madeIDHeld(b []byte) int {
+	for q := max(0, len(b)-2*madeIDMost); q < len(b); q++ {
+		if b[q] != '"' {
+			continue
+		}
+		switch n := madeIDAt(b[q+1:]); {
+		case n < 0:
+			return q
+		case n > 0:
+			q += n // its closing quote
+		}
+	}
+	return len(b)
+}
+
+// madeIDAt reads b, what follows a quote, as a made id: its length to its
+// closing quote, -1 for one cut short (a kind's letters, as much of
+// _magpie_ as came, digits), 0 for none.
+func madeIDAt(b []byte) int {
+	i := 0
+	for i < len(b) && i < 16 && b[i] >= 'a' && b[i] <= 'z' {
+		i++
+	}
+	switch {
+	case i == len(b):
+		return -1
+	case i == 0:
+		return 0
+	}
+	rest := b[i:]
+	if len(rest) < len(madeIDMid) {
+		if bytes.HasPrefix(madeIDMid, rest) {
+			return -1
+		}
+		return 0
+	}
+	if !bytes.HasPrefix(rest, madeIDMid) {
+		return 0
+	}
+	j := i + len(madeIDMid)
+	d := j
+	for d < len(b) && d-j < 20 && b[d] >= '0' && b[d] <= '9' {
+		d++
+	}
+	switch {
+	case d == len(b):
+		return -1
+	case d > j && b[d] == '"':
+		return d + 1
+	}
+	return 0
 }
 
 // usageUnbrand is a relayed reply's writer for a caller that doesn't keep

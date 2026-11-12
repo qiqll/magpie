@@ -6378,6 +6378,9 @@ func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.P
 		if err == nil {
 			heardReply(ctx, p, res)
 			heardNet() // the network is up (offline.go)
+			// another magpie's made ids, for a caller that isn't magpie's
+			// (unbranded.go)
+			unmadeReply(ctx, p, res)
 		}
 	}()
 	// a way of a key's request that asks outside serve's tries waits for
