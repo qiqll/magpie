@@ -340,8 +340,9 @@ func TestPluginProxy(t *testing.T) {
 	// the vendor, on this computer, says it was asked direct. A name that
 	// resolves nowhere, as vendor.invalid was, still asks DNS, and a TUN
 	// proxy's fake-IP DNS (Clash's 198.18/15) answers it and holds the
-	// connection. 0.0.0.0 is no loopback name to host.js, so a proxy is
-	// used for it, and a direct dial of it stays on this computer.
+	// connection. 0.0.0.0 is neither loopback nor on the LAN to host.js
+	// (loopback, lanIP), so a proxy is used for it, and a direct dial of it
+	// stays on this computer.
 	vendorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "direct")
 	}))

@@ -58,12 +58,14 @@ func TestPluginCheckinGoesThroughItsProxy(t *testing.T) {
 	// only a proxy answers for it. A name that resolves nowhere, as
 	// vendor.invalid was, still asks DNS, and a TUN proxy's fake-IP DNS
 	// (Clash's 198.18/15) answers it and holds the connection past the
-	// step's minute. 0.0.0.0 is no loopback name to host.js, so the
-	// account's proxy is used, and a direct dial of it stays on this
-	// computer.
+	// step's minute. 0.0.0.0 is neither loopback nor on the LAN to
+	// host.js (loopback, lanIP), so the account's proxy is used, and a
+	// direct dial of it stays on this computer.
 	var ownDirect atomic.Bool
 	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ownDirect.CompareAndSwap(false, strings.HasSuffix(r.URL.Path, "/ck-own"))
+		if strings.HasSuffix(r.URL.Path, "/ck-own") {
+			ownDirect.Store(true)
+		}
 		http.Error(w, "not through a proxy", http.StatusForbidden)
 	}))
 	t.Cleanup(vendor.Close)
