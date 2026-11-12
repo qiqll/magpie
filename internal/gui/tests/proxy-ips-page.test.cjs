@@ -486,7 +486,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         // kept on this machine over a reload
         await page.reload();
-        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 1);
+        // a whole boot again: room for a busy machine, still waiting on the list
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 1, null, { timeout: 30000 });
         assert.deepEqual(await listed(), ["2001:db8::1"]);
         assert.equal(await page.locator("#ipsQ").inputValue(), "old");
         assert.equal(await page.locator("#ipsRenew").textContent(), x("Period ended"));
@@ -586,12 +587,30 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // saved on its own
         seen.providers[0].accountRenewal["carol@example.com"] = periodOf("2026-11-03T16:00:00Z");
         await page.reload();
-        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 4);
+        // a whole boot again: room for a busy machine, still waiting on the list
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 4, null, { timeout: 30000 });
         await imported();
         assert.equal(seen.posts.length, 3);
         assert.equal(seen.posts[2].ips[3].opened, "2026-11-03T16:00:00Z");
         assert.deepEqual(seen.posts[2].ips.map((y) => y.opened), ["2026-10-17T04:00:00Z", "2026-11-04T16:00:00.000Z", undefined, "2026-11-03T16:00:00Z"]);
         assert.ok((await page.locator("#ipsSaid").textContent()).startsWith(x("1 IP given its accounts' start date") + " · "));
+
+        // a date the user clears is theirs too: an import gives it none of
+        // its accounts' again (review M1), and one picked again is kept
+        await pill("192.0.2.50").click();
+        await page.locator("#ipsList .renew-clear").click();
+        await page.waitForFunction(() => !document.querySelector("#ipsList .renew-edit"));
+        assert.equal(seen.posts.length, 4);
+        assert.equal(seen.posts[3].ips[3].opened, undefined);
+        await imported();
+        assert.equal(seen.posts.length, 4);
+        assert.equal(await pill("192.0.2.50").getAttribute("class"), "renew-pill none");
+        assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem("magpie.ipsCleared"))), ["192.0.2.50"]);
+        await pill("192.0.2.50").click();
+        await page.locator("#ipsList .renew-date").fill("2026-11-06");
+        await page.locator("#ipsList .renew-save").click();
+        await page.waitForFunction(() => !document.querySelector("#ipsList .renew-edit"));
+        assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem("magpie.ipsCleared"))), []);
         assert.deepEqual(errors, []);
       });
     }

@@ -30,6 +30,17 @@ let ipsFilter = "";
 // the words searched for and the period filter (T-176), kept per machine
 // as the accounts filter is: "" every IP, else IPS_RENEW's
 let ipsQuery = "", ipsRenew = "";
+// the IPs whose start date the user cleared, by address: an import gives
+// them none of their accounts' (T-177 review M1); one told a date again
+// leaves it. Kept per machine, as ips.json is this computer's own
+let ipsCleared = [];
+try { ipsCleared = JSON.parse(localStorage.getItem("magpie.ipsCleared") || "[]"); } catch {}
+if (!Array.isArray(ipsCleared)) ipsCleared = [];
+function ipsClearedSet(ip, on) {
+  ipsCleared = ipsCleared.filter((c) => c !== ipsCanon(ip));
+  if (on) ipsCleared.push(ipsCanon(ip));
+  try { localStorage.setItem("magpie.ipsCleared", JSON.stringify(ipsCleared)); } catch {}
+}
 try {
   ipsFilter = localStorage.getItem("magpie.ipsFilter") || "";
   ipsQuery = localStorage.getItem("magpie.ipsQuery") || "";
@@ -177,17 +188,20 @@ async function ipsImport() {
     // date takes their earliest, so its reminder comes no later than any
     // of theirs; one told a date keeps it, the user's (T-177), and is
     // said when their earliest is another day. Run again, nothing changes
+    // the accounts as they are now, not as read before the checks: the
+    // providers may have been read again meanwhile (review M2)
+    const now = ipsBound();
     const claimed = new Set(next.flatMap((y) => y.proxies));
     const shown = (at) => new Date(at).toLocaleDateString(intlLang(), { year: "numeric", month: "short", day: "numeric" });
     let dated = 0;
     const apart = [];
     for (const y of next) {
-      const first = ipsAccountsOf(y, bound, claimed).map((r) => r.renew?.opened).filter(Boolean).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+      const first = ipsAccountsOf(y, now, claimed).map((r) => r.renew?.opened).filter(Boolean).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
       if (!first) continue;
-      if (!y.opened) {
+      if (!y.opened && !ipsCleared.includes(ipsCanon(y.ip))) {
         y.opened = first;
         dated++;
-      } else if (renewDay(y.opened) !== renewDay(first)) apart.push(t("{ip}: its own {own}, its accounts' earliest {theirs}", { ip: y.ip, own: shown(y.opened), theirs: shown(first) }));
+      } else if (y.opened && renewDay(y.opened) !== renewDay(first)) apart.push(t("{ip}: its own {own}, its accounts' earliest {theirs}", { ip: y.ip, own: shown(y.opened), theirs: shown(first) }));
     }
     if ((added || linked || moved.length || dated) && !await ipsKeep(next)) {
       if (!ipsErr) ipsErr = t("The import couldn't be saved: try it again");
@@ -313,7 +327,10 @@ function ipsDraw() {
   // the accounts filter: offered once there is an IP, bound to an account
   // or not (T-176); a state no IP's account is in is dropped
   const states = IPS_STATES.filter((k) => xs.some((x) => accts.get(x).some((r) => r.state === k)));
-  if (ipsFilter && !["bound", "unbound", ...states].includes(ipsFilter) && providers) ipsFilter = "";
+  if (ipsFilter && !["bound", "unbound", ...states].includes(ipsFilter) && providers) {
+    ipsFilter = "";
+    try { localStorage.setItem("magpie.ipsFilter", ""); } catch {}
+  }
   const n = (f) => xs.filter(f).length;
   const opts = [
     { v: "bound", name: t("Bound to accounts"), note: String(bound) },
@@ -370,7 +387,7 @@ function ipsRow(x, i, accts, read) {
   const name = el("div", "name");
   name.append(el("code", "ips-ip", x.ip));
   if (ipsRenewing === x.ip) {
-    name.append(renewEditor("ip/" + x.ip, x.renewal, (opened) => ipsKeep(ipsList.map((y, j) => (j === i ? { ...y, opened: opened || undefined } : y))),
+    name.append(renewEditor("ip/" + x.ip, x.renewal, (opened) => ipsKeep(ipsList.map((y, j) => (j === i ? { ...y, opened: opened || undefined } : y))).then((ok) => { if (ok) ipsClearedSet(x.ip, !opened); return ok; }),
       () => { ipsRenewing = ""; ipsDraw(); }));
   } else name.append(renewPill(x.renewal, () => { if (ipsImporting) return; ipsRenewing = x.ip; ipsDraw(); }));
   who.append(name);
