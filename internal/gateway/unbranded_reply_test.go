@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -208,5 +209,204 @@ func TestKeyHolderStreamErrorFrameSaysItsStatus(t *testing.T) {
 	}
 	if try == nil || try.Fail != failRate || try.Rest.Status != 429 {
 		t.Fatalf("the try: %+v", state.Routes[0].Tries)
+	}
+}
+
+// respMagpieUsage is a Responses usage with a plugin's fields for magpie.
+const respMagpieUsage = `"usage":{"input_tokens":300,"output_tokens":50,"total_tokens":350,"input_tokens_details":{"cached_tokens":120},"magpie_cache_unknown":true,"magpie_deferred":{"input_tokens":7,"output_tokens":2}}`
+
+// respMagpieUp is a Responses upstream whose reply, whole or streamed,
+// carries respMagpieUsage, and whose model wrote a magpie_ key in a call's
+// arguments.
+func respMagpieUp(w http.ResponseWriter, r *http.Request) {
+	b, _ := io.ReadAll(r.Body)
+	item := `{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"the magpie said \"magpie_deferred\""}]}`
+	call := `{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Bash","arguments":"{\"magpie_cache_unknown\":1}","status":"completed"}`
+	done := `{"id":"resp_1","object":"response","model":"m1","status":"completed","output":[` + item + `,` + call + `],` + respMagpieUsage + `}`
+	if !strings.Contains(string(b), `"stream":true`) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, done)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	io.WriteString(w, sse(
+		`data: {"type":"response.created","response":{"id":"resp_1","object":"response","status":"in_progress","output":[]}}`,
+		`data: {"type":"response.output_item.done","output_index":0,"item":`+item+`}`,
+		`data: {"type":"response.output_item.done","output_index":1,"item":`+call+`}`,
+		`data: {"type":"response.completed","response":`+done+`}`))
+}
+
+// checkNoMagpieUsage fails a key holder's reply got that tells a magpie_
+// usage field, or that lost the model's words or the usage's own counts
+// the reply before (ref) had.
+func checkNoMagpieUsage(t *testing.T, name, ref, got string) {
+	t.Helper()
+	const args = `{\"magpie_cache_unknown\":1}`
+	if m := magpieUsageKey.FindString(got); m != "" {
+		t.Errorf("%s: told %s: %.900s", name, m, got)
+	}
+	if strings.Contains(ref, `magpie said`) && !strings.Contains(got, `the magpie said \"magpie_deferred\"`) {
+		t.Errorf("%s: the model's words changed: %.900s", name, got)
+	}
+	if strings.Contains(ref, args) && !strings.Contains(got, args) {
+		t.Errorf("%s: the call's arguments changed: %.900s", name, got)
+	}
+	if strings.Contains(ref, `"cached_tokens":120`) && !strings.Contains(got, `"cached_tokens":120`) {
+		t.Errorf("%s: the usage's own counts changed: %.900s", name, got)
+	}
+}
+
+// T-119's guard reached Chat and Messages replies and Responses ones
+// translated from Chat. The rest of the ways a successful reply leaves
+// (T-123): a native Responses upstream's response.usage, whole and
+// streamed, and a group's member answering after another failed, through
+// the candidate loop's holdWriter. A key's holder is told no magpie_ usage
+// field; the owner and another magpie read the bytes as before.
+func TestNativeResponsesAndGroupSayNoMagpieUsage(t *testing.T) {
+	fresh(t)
+	t.Setenv("MAGPIE_ADDR", "")
+	up := httptest.NewServer(http.HandlerFunc(respMagpieUp))
+	defer up.Close()
+	var downAsked atomic.Int32
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		downAsked.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, `{"error":{"message":"down","type":"server_error"}}`)
+	}))
+	defer down.Close()
+	if err := provider.Save(provider.Provider{ID: "rs", Name: "RS", Key: "k", Responses: up.URL + "/v1", Models: []string{"m1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Save(provider.Provider{ID: "bad", Name: "Bad", Key: "k", Responses: down.URL + "/v1", Models: []string{"m1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SaveGroup(provider.Group{Name: "G", Members: []string{"bad/m1", "rs/m1"}, Routing: provider.Ordered}); err != nil {
+		t.Fatal(err)
+	}
+	_, secrets := newCaller(t, "Laptop")
+	s := New()
+	front := s.Front()
+	plain := socketEntry(s.dumpFirst(lanGuard(s.Handler()))) // Front without its brandWriter
+
+	told := 0
+	for _, a := range [][2]string{
+		{"/v1/responses", `{"model":"rs/m1","input":"hi"}`},
+		{"/v1/responses", `{"model":"rs/m1","stream":true,"input":"hi"}`},
+		{"/v1/responses", `{"model":"group/g","input":"hi"}`},
+		{"/v1/responses", `{"model":"group/g","stream":true,"input":"hi"}`},
+	} {
+		for _, c := range brandCallers(secrets[0]) {
+			refCode, ref := brandAsk(plain, c, "POST", a[0], a[1])
+			code, got := brandAsk(front, c, "POST", a[0], a[1])
+			name := c.name + ": " + a[1]
+			if code != 200 || refCode != 200 {
+				t.Fatalf("%s: %d (before %d) %.400s", name, code, refCode, got)
+			}
+			if c.keeps {
+				if replyStamps.ReplaceAllString(got, "#") != replyStamps.ReplaceAllString(ref, "#") {
+					t.Errorf("%s: answered %.600q, before %.600q", name, got, ref)
+				}
+				continue
+			}
+			if magpieUsageKey.MatchString(ref) {
+				told++
+			}
+			checkNoMagpieUsage(t, name, ref, got)
+			if !strings.Contains(a[1], `"stream":true`) && !json.Valid([]byte(got)) {
+				t.Errorf("%s: not JSON now: %s", name, got)
+			}
+		}
+	}
+	if told < 8 {
+		t.Errorf("only %d replies told magpie's usage fields before: the asks reach too few", told)
+	}
+	if downAsked.Load() == 0 {
+		t.Error("the group's first member was never asked: no reply went through the candidate loop's hold")
+	}
+}
+
+// A plugin's account that only streams (the Cursor plugin's), asked for a
+// whole Responses reply, is asked streamed and its stream gathered into
+// the one reply the client gets (gathers). That reply carries the
+// plugin's magpie_deferred to a key's holder no more than a relayed one
+// does (T-123); the owner's carries it as before.
+func TestGatheredReplySaysNoMagpieUsage(t *testing.T) {
+	fresh(t)
+	t.Setenv("MAGPIE_ADDR", "")
+	up := httptest.NewServer(http.HandlerFunc(respMagpieUp))
+	defer up.Close()
+	p := provider.PluginForTest("cursor", "cursor")
+	p.Name, p.Key, p.Models, p.Responses = "Cursor", "k", []string{"m1"}, up.URL+"/v1"
+	p.Account.Stream = true
+	const body = `{"model":"m1","input":"hi"}`
+	if !gathers(p, provider.Responses, []byte(body)) {
+		t.Fatal("the ask isn't gathered")
+	}
+	s := New()
+	var ref string
+	for _, keep := range []bool{true, false} {
+		rec := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+		b := &brandWriter{w: rec, r: r, length: -1, marked: true, keep: keep}
+		r = r.WithContext(context.WithValue(r.Context(), brandKey{}, b))
+		var u Usage
+		status, msg, _ := s.passthrough(b, r, p, provider.Responses, "m1", []byte(body), &u)
+		b.finish()
+		got := rec.Body.String()
+		if status != 200 || rec.Code != 200 || !json.Valid([]byte(got)) {
+			t.Fatalf("keep %v: %d %d %s %.600s", keep, status, rec.Code, msg, got)
+		}
+		if keep {
+			if !magpieUsageKey.MatchString(got) {
+				t.Fatalf("the owner's gathered reply has no magpie_ field to take out: %.600s", got)
+			}
+			ref = got
+			continue
+		}
+		checkNoMagpieUsage(t, "a key's holder", ref, got)
+	}
+}
+
+// A Responses socket's turn (Codex's) is a reply like any other: a key's
+// holder reads no magpie_ usage field in its frames, the owner's are as
+// the upstream sent them (T-123).
+func TestSocketTurnSaysNoMagpieUsage(t *testing.T) {
+	fresh(t)
+	t.Setenv("MAGPIE_ADDR", "")
+	sockUp(t, &respUp{reply: func(w http.ResponseWriter, r *http.Request, n int) { respMagpieUp(w, r) }})
+	_, secrets := newCaller(t, "Laptop")
+	_, ts := sockServer(t)
+	var ref string
+	for _, keyed := range []bool{false, true} {
+		h := http.Header{}
+		if keyed {
+			h.Set("Authorization", "Bearer "+secrets[0])
+		}
+		c, resp, err := dialSock(t, ts, "/v1/responses", h)
+		if err != nil {
+			code := 0
+			if resp != nil {
+				code = resp.StatusCode
+			}
+			t.Fatalf("keyed %v: %v (%d)", keyed, err, code)
+		}
+		frames := c.turn(create("", userHi))
+		if last(frames).Get("type").String() != "response.completed" {
+			t.Fatalf("keyed %v: %v", keyed, frames)
+		}
+		var all []string
+		for _, f := range frames {
+			all = append(all, f.Raw)
+		}
+		got := strings.Join(all, "\n")
+		if !keyed {
+			if !magpieUsageKey.MatchString(got) {
+				t.Fatalf("the owner's frames have no magpie_ field to take out: %.900s", got)
+			}
+			ref = got
+			continue
+		}
+		checkNoMagpieUsage(t, "a key's holder", ref, got)
 	}
 }
