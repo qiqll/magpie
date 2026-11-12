@@ -3177,6 +3177,10 @@ without the header is `other10000`'s on these three routes too, and
 `/v1/magpie/concurrency`'s `keys` are its key's group's alone. A call
 logged with no user (before the request without a user became
 `other10000`'s) is told to no user, only to the owner. The same 400 and 503 apply.
+`/v1/magpie/rests` tells such a request the rests of that user's accounts
+and keys alone (a model's rest on one of them too, a whole provider's
+none), `other10000`'s for a request with a key and without the header;
+this computer without a key (the Gateway page) is told every rest.
 `/v1/magpie/route` and the route-events feed still tell a request without
 the header every route, as before.
 

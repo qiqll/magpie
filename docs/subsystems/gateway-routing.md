@@ -733,7 +733,10 @@ those as they were).
 covers the five routes, another key's user of the same name and the
 unread file. `/v1/magpie/concurrency` tells such a request the lanes of
 the user's seats alone (`seatIn` over a lane's who) and no `active` (a
-request is counted in before its gateway key is known), and
+request is counted in before its gateway key is known), `/v1/magpie/rests`
+the rests of those seats alone, by the rest's id without its `/model`
+(`Server.rests` in [`rests_api.go`](../../internal/gateway/rests_api.go),
+T-166; `TestBoundUserToldItsOwnRests`), and
 `/v1/magpie/usage` the summary of its own calls (`Record.User` under a
 key of its group) that one of its seats answered (`Server.userCalls`,
 `usersOwn.filter` in [`usage_api.go`](../../internal/gateway/usage_api.go),
