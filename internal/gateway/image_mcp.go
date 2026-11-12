@@ -253,17 +253,19 @@ func (s *Server) imageMCPCall(r *http.Request, m mcpMessage) (any, map[string]an
 			// (its id says so), so is the call asking after it (T-157)
 			s.userDefaulted(r)
 		}
+		// a failure here is magpie's words (an error reply of its own
+		// among them), said as the caller reads them (T-124)
 		switch p.Name {
 		case GenerateImageTool:
-			return s.imageMCPDraw(r, p.Arguments), nil
+			return ownFailure(r.Context(), s.imageMCPDraw(r, p.Arguments)), nil
 		case GenerateVideoTool:
-			return s.imageMCPFilm(r, p.Arguments), nil
+			return ownFailure(r.Context(), s.imageMCPFilm(r, p.Arguments)), nil
 		case GenerationResultTool:
 			var a struct {
 				ID string `json:"id"`
 			}
 			json.Unmarshal(p.Arguments, &a)
-			return s.imageMCPResult(r, strings.TrimSpace(a.ID)), nil
+			return ownFailure(r.Context(), s.imageMCPResult(r, strings.TrimSpace(a.ID))), nil
 		}
 		return nil, map[string]any{"code": -32602, "message": "unknown tool " + p.Name + ": this server has " + GenerateImageTool + ", " + GenerateVideoTool + " and " + GenerationResultTool}
 	}

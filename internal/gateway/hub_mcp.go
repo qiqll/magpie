@@ -632,7 +632,7 @@ func (s *Server) hubMCPCall(r *http.Request, agent string, m mcpMessage) (any, m
 			return nil, map[string]any{"code": -32602, "message": "invalid params: " + err.Error()}
 		}
 		if MCPHub == nil || !MCPHub.On() {
-			return toolResult(errHubOff, true), nil
+			return toolResult(ownWords(r.Context(), errHubOff), true), nil
 		}
 		ts := hubTools(r.Context(), agent)
 		// the two tools an agent given its tools on demand calls them by
@@ -648,9 +648,9 @@ func (s *Server) hubMCPCall(r *http.Request, agent string, m mcpMessage) (any, m
 			return s.hubCall(r, agent, t, p.Arguments, p.Meta), nil
 		}
 		if agent == "" {
-			return nil, map[string]any{"code": -32602, "message": "unknown tool " + p.Name + ": no MCP server in magpie's Library gives it"}
+			return nil, ownRPCError(r.Context(), -32602, "unknown tool "+p.Name+": no MCP server in magpie's Library gives it")
 		}
-		return nil, map[string]any{"code": -32602, "message": "unknown tool " + p.Name + ": no MCP server switched on for " + agent + " in magpie's Library gives it"}
+		return nil, ownRPCError(r.Context(), -32602, "unknown tool "+p.Name+": no MCP server switched on for "+agent+" in magpie's Library gives it")
 	}
 	return nil, map[string]any{"code": -32601, "message": "method not found: " + m.Method}
 }

@@ -572,7 +572,7 @@ func (s *Server) browserMCPCall(r *http.Request, m mcpMessage) (any, map[string]
 		if one {
 			tool, args, wants, err := browserUnfold(p.Arguments)
 			if err != nil {
-				return toolResult(err.Error(), true), nil
+				return toolResult(ownWords(r.Context(), err.Error()), true), nil
 			}
 			json.Unmarshal(p.Arguments, &acted)
 			if tool == browserRecordTool {
@@ -599,18 +599,20 @@ func (s *Server) browserMCPCall(r *http.Request, m mcpMessage) (any, map[string]
 			case "use":
 				c, err := s.browser.choose(session, tabs.Browser)
 				if err != nil {
-					return said(toolResult(err.Error(), true)), nil
+					return said(toolResult(ownWords(r.Context(), err.Error()), true)), nil
 				}
 				return said(toolResult("Calls now go to "+c.id+" ("+c.name()+"). browser_tabs lists its tabs.", false)), nil
 			}
 		}
+		// why the call didn't reach the browser is magpie's words (T-124);
+		// what the browser answers, a page's among it, is as it came
 		out, err := s.browser.call(r.Context(), session, p.Name, p.Arguments)
 		if err != nil {
-			return said(toolResult(err.Error(), true)), nil
+			return said(toolResult(ownWords(r.Context(), err.Error()), true)), nil
 		}
 		var result map[string]any
 		if json.Unmarshal(out, &result) != nil || result["content"] == nil {
-			return toolResult("Magpie Browser answered with something that isn't a tool result: update it (magpie's Library → Magpie Browser)", true), nil
+			return toolResult(ownWords(r.Context(), "Magpie Browser answered with something that isn't a tool result: update it (magpie's Library → Magpie Browser)"), true), nil
 		}
 		// with two browsers connected, the list of tabs says whose they are
 		if p.Name == "browser_tabs" && (tabs.Action == "" || tabs.Action == "list") {

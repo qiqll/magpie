@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yetone/magpie/internal/gwtool"
+	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -200,6 +202,86 @@ func TestSealedNoteAndToolFailuresSayNoMagpie(t *testing.T) {
 			if rpcErr != nil || !strings.Contains(string(b), `"isError":true`) || saysMagpie(string(b)) != keep {
 				t.Errorf("keep %v: %s %v", keep, b, rpcErr)
 			}
+		}
+	}
+}
+
+// The image MCP's own failures (image generation off, an id it holds no
+// drawing for), the MCP hub's (off, a tool no server gives), the browser
+// MCP's (no browser connected) and the plugin tools MCP's (off, a plugin's
+// tool that failed, a tool the plugin doesn't give, the plugins not
+// loaded) say no magpie to a caller that doesn't keep magpie's words
+// (T-124). A caller that keeps them reads every word as before; a failed
+// result is still one (isError), a JSON-RPC error still its code.
+func TestMCPServersFailuresSayNoMagpie(t *testing.T) {
+	fresh(t)
+	st := settings.Load()
+	st.ImageGen = "off"
+	if err := settings.Save(st); err != nil {
+		t.Fatal(err)
+	}
+	fakePluginTools(t, []plugin.PluginTools{{Spec: "opencode-x", Tools: []plugin.Tool{{Name: "y"}}}})
+	runPluginTool = func(context.Context, string, string, json.RawMessage, string) (string, error) {
+		return "", errors.New("magpie's plugin host stopped")
+	}
+	s := New()
+	served := func(context.Context) ([]mcpTool, error) {
+		return []mcpTool{{spec: "opencode-x", Tool: plugin.Tool{Name: "y"}, name: "x_y"}}, nil
+	}
+	unloaded := func(context.Context) ([]mcpTool, error) { return nil, errors.New("the host is down") }
+	call := func(name, args string) mcpMessage {
+		return mcpMessage{Method: "tools/call", Params: []byte(`{"name":"` + name + `","arguments":` + args + `}`)}
+	}
+	cases := []struct {
+		name string
+		ask  func(r *http.Request) (any, map[string]any)
+	}{
+		{"image generation off", func(r *http.Request) (any, map[string]any) {
+			return s.imageMCPCall(r, call(GenerateImageTool, `{"prompt":"a bird"}`))
+		}},
+		{"video off", func(r *http.Request) (any, map[string]any) {
+			return s.imageMCPCall(r, call(GenerateVideoTool, `{"prompt":"a bird"}`))
+		}},
+		{"no such drawing", func(r *http.Request) (any, map[string]any) {
+			return s.imageMCPCall(r, call(GenerationResultTool, `{"id":"img_1"}`))
+		}},
+		{"the hub off", func(r *http.Request) (any, map[string]any) {
+			return s.hubMCPCall(r, "", call("x__y", `{}`))
+		}},
+		{"no browser", func(r *http.Request) (any, map[string]any) {
+			return s.browserMCPCall(r, call("browser_snapshot", `{}`))
+		}},
+		{"a plugin's tool failed", func(r *http.Request) (any, map[string]any) {
+			return s.toolsMCPServe(r, call("x_y", `{}`), "", served)
+		}},
+		{"a tool the plugin doesn't give", func(r *http.Request) (any, map[string]any) {
+			return s.toolsMCPServe(r, call("x_z", `{}`), "x", served)
+		}},
+		{"the plugins not loaded, listed", func(r *http.Request) (any, map[string]any) {
+			return s.toolsMCPServe(r, mcpMessage{Method: "tools/list"}, "", unloaded)
+		}},
+		{"the plugins not loaded, called", func(r *http.Request) (any, map[string]any) {
+			return s.toolsMCPServe(r, call("x_y", `{}`), "", unloaded)
+		}},
+	}
+	for _, keep := range []bool{true, false} {
+		for _, c := range cases {
+			r := brandedAs(httptest.NewRequest("POST", ImageMCPPath, nil), keep)
+			res, rpcErr := c.ask(r)
+			b, _ := json.Marshal(map[string]any{"result": res, "error": rpcErr})
+			failed := strings.Contains(string(b), `"isError":true`) || rpcErr != nil && rpcErr["code"] != nil
+			if !failed || saysMagpie(string(b)) != keep {
+				t.Errorf("keep %v: %s: %s", keep, c.name, b)
+			}
+		}
+	}
+	stop := gwtool.Gate()
+	defer stop()
+	for _, keep := range []bool{true, false} {
+		r := brandedAs(httptest.NewRequest("POST", ToolsMCPPath, nil), keep)
+		res, _ := s.toolsMCPServe(r, call("x_y", `{}`), "", served)
+		if b, _ := json.Marshal(res); !strings.Contains(string(b), "Plugin tools plugin is off") || saysMagpie(string(b)) != keep {
+			t.Errorf("keep %v: Plugin tools off: %s", keep, b)
 		}
 	}
 }

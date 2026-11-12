@@ -238,7 +238,7 @@ func (s *Server) toolsMCPServe(r *http.Request, m mcpMessage, one string, served
 	case "tools/list":
 		ts, err := servedTools(r.Context())
 		if err != nil {
-			return nil, map[string]any{"code": -32603, "message": "magpie couldn't load its plugins: " + err.Error()}
+			return nil, ownRPCError(r.Context(), -32603, "magpie couldn't load its plugins: "+err.Error())
 		}
 		list := make([]any, 0, len(ts))
 		for _, t := range ts {
@@ -262,23 +262,25 @@ func (s *Server) toolsMCPServe(r *http.Request, m mcpMessage, one string, served
 			return nil, map[string]any{"code": -32602, "message": "invalid params: " + err.Error()}
 		}
 		if !gwtool.Served(gwtool.PluginTools) {
-			return toolResult(errToolsOff, true), nil
+			return toolResult(ownWords(r.Context(), errToolsOff), true), nil
 		}
 		ts, err := servedTools(r.Context())
 		if err != nil {
-			return toolResult("magpie couldn't load its plugins: "+err.Error(), true), nil
+			return toolResult(ownWords(r.Context(), "magpie couldn't load its plugins: "+err.Error()), true), nil
 		}
 		for _, t := range ts {
 			if t.name == p.Name {
 				said, err := s.toolsMCPRun(r, t, p.Arguments)
 				if err != nil {
-					return toolResult(err.Error(), true), nil
+					// a key limit's refusal, or why the plugin's tool
+					// couldn't run, said as T-118 says an error (T-124)
+					return toolResult(ownWords(r.Context(), err.Error()), true), nil
 				}
 				return toolResult(said, false), nil
 			}
 		}
 		if one != "" {
-			return nil, map[string]any{"code": -32602, "message": "unknown tool " + p.Name + ": the plugin " + one + " isn't on in magpie, or gives no such tool"}
+			return nil, ownRPCError(r.Context(), -32602, "unknown tool "+p.Name+": the plugin "+one+" isn't on in magpie, or gives no such tool")
 		}
 		return nil, map[string]any{"code": -32602, "message": "unknown tool " + p.Name + ": no plugin that is on gives it"}
 	}

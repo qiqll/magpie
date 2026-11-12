@@ -677,6 +677,34 @@ func keepsBrandIn(ctx context.Context) bool {
 	return b.keeps()
 }
 
+// ownFailure is res, a tool's result magpie's own MCP server answers, as
+// ctx's caller reads it (T-124): a failure's text (isError) said through
+// ownWords, a result that succeeded as it is. Only for a server whose
+// failures are all magpie's words (the image MCP's), never one that
+// passes on what a page, a browser or another server said.
+func ownFailure(ctx context.Context, res map[string]any) map[string]any {
+	if res["isError"] != true || keepsBrandIn(ctx) {
+		return res
+	}
+	content, _ := res["content"].([]any)
+	for _, c := range content {
+		if m, ok := c.(map[string]any); ok && m["type"] == "text" {
+			if t, ok := m["text"].(string); ok {
+				m["text"] = unbrand(t)
+			}
+		}
+	}
+	return res
+}
+
+// ownRPCError is an MCP server's JSON-RPC error, its message magpie's
+// words, as ctx's caller reads it (T-124): a 200 reply's JSON-RPC error
+// is passed by brandWriter as it came (errorShaped), so it is said where
+// it is made.
+func ownRPCError(ctx context.Context, code int, msg string) map[string]any {
+	return map[string]any{"code": code, "message": ownWords(ctx, msg)}
+}
+
 // KeepsBrand is whether r's caller reads magpie's own words as they are
 // (keepsBrand), for a reply magpie answers outside Front: `magpie web`'s
 // page port when the gateway it hands a client route to doesn't answer
