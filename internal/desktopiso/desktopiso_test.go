@@ -19,7 +19,8 @@ import (
 
 // sandboxApps has Script look in a folder of the test's own instead of
 // /Applications, so a test never starts the Claude.app installed on the
-// machine, and gives that folder.
+// machine, and gives that folder. It swaps a package var, so no test that
+// calls it runs in parallel.
 func sandboxApps(t *testing.T) string {
 	t.Helper()
 	old := systemApps
@@ -110,6 +111,7 @@ func TestAddStartsDesktopOnTheFolder(t *testing.T) {
 	registered := noRegister(t)
 	sandboxApps(t)
 	home := t.TempDir()
+	t.Setenv("HOME", home)
 	out := filepath.Join(home, "args")
 	claudeApp := fakeClaude(t, filepath.Join(home, "Applications"), out)
 	dir := filepath.Join(home, "Library", "Application Support", "Claude-Magpie-3p")
@@ -210,6 +212,7 @@ func TestScriptQuotes(t *testing.T) {
 	}
 	sandboxApps(t)
 	home := t.TempDir()
+	t.Setenv("HOME", home)
 	out := filepath.Join(home, "args")
 	app := fakeClaude(t, home, out)
 	dir := filepath.Join(home, "it's $HOME `x`")
