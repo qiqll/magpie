@@ -481,8 +481,8 @@ type Lane struct {
 // idle, never left out.
 // active lists those requests one by one (Active), [] when idle. Bound
 // by user, a request that names its user is told the lanes of its own
-// accounts and keys (usersSeats), the gateway's counts as before, and no
-// active.
+// accounts and keys (usersSeats; one with a gateway key naming none
+// DefaultUser's, T-163), the gateway's counts as before, and no active.
 func (s *Server) concurrency(w http.ResponseWriter, r *http.Request) {
 	if !local(r) && !sharedWith(r) {
 		writeError(w, provider.Chat, http.StatusForbidden, "magpie's concurrency is told to another machine only when magpie is shared on the local network and the request carries its API key")

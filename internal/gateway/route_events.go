@@ -30,7 +30,8 @@ import (
 // shared (a read-only key reads them too, readOnlyRoutes), never to a
 // key held to a budget, models or accounts, which is told no one else's
 // requests. Bound by user, a request naming its user is told its own
-// requests alone, as GET /v1/magpie/route is (T-105, usersOwn.owns).
+// requests alone, as GET /v1/magpie/route is (T-105, usersOwn.owns); one
+// with a gateway key naming none is DefaultUser's (T-167).
 const (
 	routeSnapshotPath = "/v1/magpie/route-events/snapshot"
 	routeEventsPath   = "/v1/magpie/route-events"
@@ -285,7 +286,8 @@ func (s *Server) routeSnapshot(w http.ResponseWriter, r *http.Request) {
 // serving (streamsEnding: Shutdown would wait its whole drain for it),
 // when the key it came with is turned off, removed or runs out, when
 // magpie stops being shared with a reader on another machine, and, for
-// a reader naming its user, when user-accounts.json stops reading or
+// a reader bound by user (naming its user, or DefaultUser's for a key
+// naming none), when user-accounts.json stops reading or
 // magpie is no longer bound by user (usersOwnOf).
 func (s *Server) routeEvents(w http.ResponseWriter, r *http.Request) {
 	if !routeEventsAllowed(w, r) {

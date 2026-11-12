@@ -24,7 +24,8 @@ package gateway
 // no other provider's), and the route of its own requests alone. Bound
 // by user, a request that names its user is told the cards of its own
 // seats and the route of its own requests alone, as the quotas and
-// /v1/magpie/route tell it (T-090, T-099). A
+// /v1/magpie/route tell it (T-090, T-099), one with a gateway key naming
+// none DefaultUser's (T-163, T-167). A
 // read-only key may ask it, and is told the accounts' use without the
 // model (it may not ask for a route).
 //

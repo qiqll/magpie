@@ -3,6 +3,7 @@ package gateway
 import (
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 // Bound by user, a request is told the rests of the accounts and keys its
 // user is on alone (usersSeats; DefaultUser's for one with a gateway key
 // naming none, T-163), as /v1/magpie/concurrency tells their lanes
-// (T-166): a rest's id names its account. One without a key, the Gateway
+// (T-166, ownRest): a rest's id names its account. One without a key, the Gateway
 // page's OwnerRests, is told every rest.
 const RestsPath = "/v1/magpie/rests"
 
@@ -37,15 +38,26 @@ func (s *Server) rests(w http.ResponseWriter, r *http.Request) {
 	rests := Rests()
 	if own != nil {
 		for id := range rests {
-			// what it rests by, without the model one rests alone for;
-			// a provider's own rest names no seat, as no lane of it does
-			who, _, _ := strings.Cut(id, "/")
-			if !seatIn(own.seats, who) {
+			if !ownRest(own.seats, id) {
 				delete(rests, id)
 			}
 		}
 	}
 	writeJSON(w, 200, map[string]any{"object": "rests", "data": rests})
+}
+
+// ownRest says the rest id (Rests) is of an account or key on seats: what
+// it rests by, without the model one rests alone for, is a seat's who
+// (candidate.who). A provider's one key, or its own account, rests by the
+// provider's id alone (keyCandidate, accountCandidate), though its seat
+// is id#key: a rest by the bare id is told to a user on a seat of that
+// provider, which names no account.
+func ownRest(seats []userSeat, id string) bool {
+	who, _, _ := strings.Cut(id, "/")
+	if strings.ContainsAny(who, "#@") {
+		return seatIn(seats, who)
+	}
+	return slices.ContainsFunc(seats, func(st userSeat) bool { return seatOf(st, who) })
 }
 
 // Rests is what rests now in this process, by what it rests by: a

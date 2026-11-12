@@ -145,7 +145,7 @@ func (s *Server) sessionRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	seq, route := s.trace.sessionLatest(r.Context(), session, keep, after, wait)
 	if own != nil && route == nil {
-		writeError(w, provider.Chat, http.StatusNotFound, "no route of yours for that session: none of its requests named "+UserHeader+" as this one does under its key")
+		writeError(w, provider.Chat, http.StatusNotFound, "no route of yours for that session: none of its requests named "+UserHeader+" as this one does under its key ("+DefaultUser+" when it names none)")
 		return
 	}
 	out := map[string]any{"session": session, "seq": seq, "route": nil}

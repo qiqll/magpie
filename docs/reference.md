@@ -3177,8 +3177,9 @@ without the header is `other10000`'s on these three routes too, and
 logged with no user (before the request without a user became
 `other10000`'s) is told to no user, only to the owner. The same 400 and 503 apply.
 `/v1/magpie/rests` tells such a request the rests of that user's accounts
-and keys alone (a model's rest on one of them too, a whole provider's
-none), `other10000`'s for a request with a key and without the header;
+and keys alone (a model's rest on one of them too, and the rest of a
+provider it is on that names no account, as a provider's one key rests),
+`other10000`'s for a request with a key and without the header;
 this computer without a key (the Gateway page) is told every rest.
 `/v1/magpie/route` and the route-events feed tell a request with a key
 and without the header `other10000`'s routes alone too, as a request

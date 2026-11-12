@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // What rests in the process serving the gateway is told to a console on
@@ -70,21 +72,40 @@ func TestOwnerRestsTold(t *testing.T) {
 func TestBoundUserToldItsOwnRests(t *testing.T) {
 	fresh(t)
 	t.Setenv("MAGPIE_ADDR", "")
+	t.Cleanup(func() {
+		restingUntil.Lock()
+		restingUntil.m, restingUntil.note = map[string]time.Time{}, map[string]Rest{}
+		restingUntil.Unlock()
+	})
 	now := time.Now().UTC().Truncate(time.Second)
 	keys, secrets := newCaller(t, "Full")
+	// each rest and seat as the gateway names them: relay's two keys by
+	// id#key, solo's one key by solo alone though its seat is solo#key
+	// (keyCandidate, candidate.who), codex's accounts by codex@user
+	key := func(pid, k string, of int) candidate {
+		return keyCandidate(provider.Provider{ID: pid}, provider.KeyOn{KeyAccount: provider.KeyAccount{Key: k}, Of: of}, "m", nil)
+	}
+	relay, solo := key("relay", "relay-one", 2), key("solo", "solo-one", 1)
 	writeUsers(t, userFile{Keys: map[string]map[string]map[string]userBinding{
 		keys[0].ID: {
 			"codex": {"alice": {Who: "codex@a@x.com", Account: "a@x.com", At: now}},
-			"relay": {DefaultUser: {Who: "relay#abc", Account: "abc", At: now}},
+			"solo":  {"alice": {Who: solo.who(), Account: "one", At: now}},
+			"relay": {DefaultUser: {Who: relay.who(), Account: "one", At: now}},
 		},
 	}})
+	ids := []string{relay.restKey(), key("relay", "relay-two", 2).restKey(), solo.restKey(), solo.restID(),
+		"codex@a@x.com/gpt-5", "codex@b@x.com", "codex"}
 	until := time.Now().Add(20 * time.Minute)
 	restingUntil.Lock()
-	for _, id := range []string{"relay#abc", "codex@a@x.com/gpt-5", "codex@b@x.com", "codex"} {
+	for _, id := range ids {
 		restingUntil.m[id], restingUntil.note[id] = until, Rest{Why: failQuota}
 	}
 	restingUntil.Unlock()
-	every := "codex codex@a@x.com/gpt-5 codex@b@x.com relay#abc"
+	slices.Sort(ids)
+	every := strings.Join(ids, " ")
+	if solo.restKey() != "solo" || solo.who() == "solo" {
+		t.Fatalf("solo's one key rests as %q, seated as %q", solo.restKey(), solo.who())
+	}
 
 	do := func(s *Server, user string, keyed bool) (int, string) {
 		t.Helper()
@@ -114,11 +135,14 @@ func TestBoundUserToldItsOwnRests(t *testing.T) {
 		keyed bool
 		want  string
 	}{
-		{"alice", true, "codex@a@x.com/gpt-5"},
-		{"", true, "relay#abc"},          // no user named: DefaultUser's
-		{DefaultUser, true, "relay#abc"}, // as naming it
-		{"bob", true, ""},                // on no account
-		{"", false, every},               // this computer's owner
+		// her account's model rest, and solo's one key's (by solo alone);
+		// codex's own rest is told too, as she is on codex: it names no
+		// account
+		{"alice", true, "codex codex@a@x.com/gpt-5 solo solo/m"},
+		{"", true, relay.restKey()},          // no user named: DefaultUser's
+		{DefaultUser, true, relay.restKey()}, // as naming it
+		{"bob", true, ""},                    // on no account
+		{"", false, every},                   // this computer's owner
 	} {
 		if code, got := do(bound, c.user, c.keyed); code != 200 || got != c.want {
 			t.Errorf("user %q (keyed %v): %d %q, want %q", c.user, c.keyed, code, got, c.want)
@@ -127,14 +151,14 @@ func TestBoundUserToldItsOwnRests(t *testing.T) {
 	if code, got := do(New(), "", true); code != 200 || got != every {
 		t.Errorf("bound by session: %d %q, want %q", code, got, every)
 	}
-	if code, b := do(bound, "al ice\x00", true); code != http.StatusBadRequest || strings.Contains(b, "relay#abc") {
+	if code, b := do(bound, "al ice\x00", true); code != http.StatusBadRequest || strings.Contains(b, "relay#") {
 		t.Errorf("a user that can't be taken: %d %s", code, b)
 	}
 	if err := os.WriteFile(usersPath(), []byte(`{"keys":`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, user := range []string{"alice", ""} {
-		if code, b := do(bound, user, true); code != http.StatusServiceUnavailable || strings.Contains(b, "relay#abc") {
+		if code, b := do(bound, user, true); code != http.StatusServiceUnavailable || strings.Contains(b, "relay#") {
 			t.Errorf("unread users, user %q: %d %s", user, code, b)
 		}
 	}

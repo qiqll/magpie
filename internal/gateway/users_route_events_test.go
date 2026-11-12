@@ -113,6 +113,32 @@ func TestBoundUserToldItsOwnRouteEvents(t *testing.T) {
 			t.Errorf("snapshot for %q (bound by user %v): %v, want %s", c.user, c.base == srv.URL, agents, c.want)
 		}
 	}
+	// this computer without a key (magpie's own console): everyone's
+	req, _ := http.NewRequest("GET", srv.URL+routeSnapshotPath, nil)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var local routeSnap
+	if err := json.NewDecoder(res.Body).Decode(&local); err != nil || res.StatusCode != 200 || len(local.Routes) != 6 {
+		t.Errorf("snapshot here without a key: %d %+v %v, want all six routes", res.StatusCode, local, err)
+	}
+	res.Body.Close()
+	// a keyed stream naming no user, replayed from before the seed:
+	// DefaultUser's changes alone, its started and its try
+	{
+		res := get(srv.URL, routeEventsPath, secrets[0], "", "Last-Event-ID", cursor.Cursor)
+		if res.StatusCode != 200 {
+			t.Fatal(res.Status)
+		}
+		scan := bufio.NewScanner(res.Body)
+		for n := 0; n < 2; n++ {
+			if ev := mustActivity(t, scan); ev.Route.Agent != "default-a" {
+				t.Fatalf("no user told %s's change: %+v", ev.Route.Agent, ev)
+			}
+		}
+		res.Body.Close()
+	}
 	// replayed from before the seed: hers alone, the active count hers
 	stream := get(srv.URL, routeEventsPath, secrets[0], "alice", "Last-Event-ID", cursor.Cursor)
 	if stream.StatusCode != 200 {
