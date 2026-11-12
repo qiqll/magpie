@@ -173,7 +173,7 @@ func TestRemoteMagpieKeptTurnUnderItsOwnID(t *testing.T) {
 // unmadeBody says every made id that is an id's value whole, read in any
 // pieces, and leaves everything else as it came; it tells the remote's
 // own id for each it said.
-func TestUnmadeBody(t *testing.T) {
+func TestUnmadeBodySaysNoMagpie(t *testing.T) {
 	for in, want := range map[string]string{
 		`{"id":"resp_magpie_1762","item":{"id":"msg_magpie_1"}}`:                        `{"id":"resp_1762","item":{"id":"msg_1"}}`,
 		`data: {"id":"cmp_magpie_99"}` + "\n\n":                                         `data: {"id":"cmp_99"}` + "\n\n",
@@ -222,7 +222,7 @@ func TestUnmadeBody(t *testing.T) {
 // key's holder's reading of it said without magpie is a copy, so calls at
 // once don't write one map (a fatal error under -race and without), and
 // the owner's next reading of the job still says magpie (T-124).
-func TestOwnFailureLeavesTheJobsResult(t *testing.T) {
+func TestImageJobKeepsMagpieForTheOwner(t *testing.T) {
 	stored := toolResult("Image generation is off in magpie", true)
 	var wg sync.WaitGroup
 	for range 8 {
