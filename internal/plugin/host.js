@@ -426,6 +426,10 @@ function hostOf(input) {
   }
 }
 
+// 0.0.0.0 is neither loopback here nor on the LAN (lanIP): the proxy tests
+// (TestPluginProxy, TestPluginCheckinGoesThroughItsProxy) serve their vendor
+// at it, so a proxy is used for it and a direct dial stays on this computer.
+// Change them with it.
 function loopback(host) {
   return host === "localhost" || host.endsWith(".localhost") || host === "::1" || /^127\./.test(host)
 }
