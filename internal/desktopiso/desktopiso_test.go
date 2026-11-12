@@ -2,6 +2,7 @@ package desktopiso
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"image"
@@ -13,7 +14,35 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
+
+// sandboxApps has Script look in a folder of the test's own instead of
+// /Applications, so a test never starts the Claude.app installed on the
+// machine, and gives that folder.
+func sandboxApps(t *testing.T) string {
+	t.Helper()
+	old := systemApps
+	systemApps = t.TempDir()
+	t.Cleanup(func() { systemApps = old })
+	return systemApps
+}
+
+// runApp runs the app's script at p and gives what it wrote; it is killed
+// when it outlives the test's bound, so a script that reached a real
+// Desktop fails the test instead of holding the package to its timeout.
+func runApp(t *testing.T, p string, args ...string) ([]byte, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, p, args...)
+	cmd.WaitDelay = time.Second
+	b, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("%s still running after 30s: %s", p, b)
+	}
+	return b, err
+}
 
 // fakeClaude is a Claude.app whose executable, Claude, writes the
 // arguments it was started with to out, and whose icon is one blue PNG.
@@ -79,6 +108,7 @@ func TestAddStartsDesktopOnTheFolder(t *testing.T) {
 		t.Skip("the app's executable is a shell script")
 	}
 	registered := noRegister(t)
+	sandboxApps(t)
 	home := t.TempDir()
 	out := filepath.Join(home, "args")
 	claudeApp := fakeClaude(t, filepath.Join(home, "Applications"), out)
@@ -116,8 +146,7 @@ func TestAddStartsDesktopOnTheFolder(t *testing.T) {
 		t.Errorf("badge edge %v, want white", img.At(736, 560))
 	}
 
-	cmd := exec.Command(filepath.Join(p, "Contents", "MacOS", "claude-magpie"), "claude://open")
-	if b, err := cmd.CombinedOutput(); err != nil {
+	if b, err := runApp(t, filepath.Join(p, "Contents", "MacOS", "claude-magpie"), "claude://open"); err != nil {
 		t.Fatalf("%v: %s", err, b)
 	}
 	args, _ := os.ReadFile(out)
@@ -145,26 +174,30 @@ func TestAddStartsDesktopOnTheFolder(t *testing.T) {
 }
 
 // Claude.app moved since the app was made: it is looked for in the
-// Applications folders.
+// Applications folders, the system's and the user's.
 func TestScriptFindsClaudeMoved(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script")
 	}
+	apps := sandboxApps(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	out := filepath.Join(home, "args")
-	fakeClaude(t, filepath.Join(home, "Applications"), out)
 	dir := filepath.Join(home, "iso-3p")
 	s := filepath.Join(home, "run.sh")
 	os.WriteFile(s, []byte(Script(filepath.Join(home, "Gone", "Claude.app"), "Claude", dir)), 0o755)
-	if b, err := exec.Command(s).CombinedOutput(); err != nil {
-		t.Fatalf("%v: %s", err, b)
+	for _, where := range []string{apps, filepath.Join(home, "Applications")} {
+		os.Remove(out)
+		fakeClaude(t, where, out)
+		if b, err := runApp(t, s); err != nil {
+			t.Fatalf("Claude in %s: %v: %s", where, err, b)
+		}
+		if args, _ := os.ReadFile(out); string(args) != "--user-data-dir="+dir+"\n" {
+			t.Fatalf("Claude in %s: args %q", where, args)
+		}
+		os.RemoveAll(filepath.Join(where, "Claude.app"))
 	}
-	if args, _ := os.ReadFile(out); string(args) != "--user-data-dir="+dir+"\n" {
-		t.Fatalf("args %q", args)
-	}
-	os.RemoveAll(filepath.Join(home, "Applications"))
-	b, err := exec.Command(s).CombinedOutput()
+	b, err := runApp(t, s)
 	if err == nil || !strings.Contains(string(b), "not installed") {
 		t.Fatalf("no Claude: %v %s", err, b)
 	}
@@ -175,13 +208,14 @@ func TestScriptQuotes(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script")
 	}
+	sandboxApps(t)
 	home := t.TempDir()
 	out := filepath.Join(home, "args")
 	app := fakeClaude(t, home, out)
 	dir := filepath.Join(home, "it's $HOME `x`")
 	s := filepath.Join(home, "run.sh")
 	os.WriteFile(s, []byte(Script(app, "Claude", dir)), 0o755)
-	if b, err := exec.Command(s).CombinedOutput(); err != nil {
+	if b, err := runApp(t, s); err != nil {
 		t.Fatalf("%v: %s", err, b)
 	}
 	if args, _ := os.ReadFile(out); string(args) != "--user-data-dir="+dir+"\n" {

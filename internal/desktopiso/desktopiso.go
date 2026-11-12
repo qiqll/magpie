@@ -71,6 +71,11 @@ func Here(home string) string {
 	return ""
 }
 
+// systemApps is the Applications folder Script looks in after claudeApp;
+// a var so tests look in a folder of their own, never at the Claude.app
+// installed on the machine.
+var systemApps = "/Applications"
+
 // Script is the app's executable: Desktop's own executable exe in
 // claudeApp (else in /Applications or ~/Applications, where it may have
 // moved since) run on dir. A Desktop already running on dir is not started
@@ -83,7 +88,7 @@ func Script(claudeApp, exe, dir string) string {
 		"dir=" + q(dir) + "\n" +
 		"exe=" + q(exe) + "\n" +
 		"if /usr/bin/pgrep -f -- \"--user-data-dir=$dir( |\\$)\" >/dev/null 2>&1; then exit 0; fi\n" +
-		"for app in " + q(claudeApp) + " /Applications/Claude.app \"$HOME/Applications/Claude.app\"; do\n" +
+		"for app in " + q(claudeApp) + " " + q(filepath.Join(systemApps, "Claude.app")) + " \"$HOME/Applications/Claude.app\"; do\n" +
 		"\tif [ -x \"$app/Contents/MacOS/$exe\" ]; then\n" +
 		"\t\texec \"$app/Contents/MacOS/$exe\" --user-data-dir=\"$dir\" \"$@\"\n" +
 		"\tfi\n" +
