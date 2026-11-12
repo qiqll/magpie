@@ -448,6 +448,40 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await pick("#ipsRenew", x("Start date: any"));
         await shows(all);
 
+        // by its accounts' state: every state Models › Accounts says is
+        // offered, one no account is in too, and each finds the IPs with an
+        // account in it (the requester, 11-12: 按账号状态)
+        await page.locator("#ipsFilter").click();
+        const offered = await page.locator(".proto-menu .pm-item").allTextContents();
+        await page.keyboard.press("Escape");
+        for (const k of ["In rotation", "Paused", "Not in rotation", "Sign in again", "Sign-in refused · may be banned", "Banned", "Disabled"])
+          assert.ok(offered.some((o) => o.includes(x("An account: {state}", { state: x(k) }))), `${k} is offered`);
+        await pick("#ipsFilter", x("An account: {state}", { state: x("Banned") }));
+        assert.deepEqual(await shows(["203.0.113.8"]), ["203.0.113.8"]);
+        await pick("#ipsFilter", x("An account: {state}", { state: x("Disabled") }));
+        assert.deepEqual(await shows([]), []);
+        assert.equal(await page.locator("#ipsNote").textContent(), x("No IP matches the filter."));
+        await pick("#ipsFilter", x("Bound to accounts"));
+        assert.deepEqual(await shows(["203.0.113.7", "203.0.113.8"]), ["203.0.113.7", "203.0.113.8"]);
+        // with the period: banned and no start date, then banned and expired
+        await pick("#ipsFilter", x("An account: {state}", { state: x("Banned") }));
+        await pick("#ipsRenew", x("No start date"));
+        assert.deepEqual(await shows(["203.0.113.8"]), ["203.0.113.8"]);
+        await pick("#ipsRenew", x("Period ended"));
+        assert.deepEqual(await shows([]), []);
+        await pick("#ipsRenew", x("Start date: any"));
+        await pick("#ipsFilter", x("All IPs"));
+        await shows(all);
+
+        // a state's words typed find the IPs with an account in it, as its
+        // row says them and in English
+        await search(x("Banned"));
+        assert.deepEqual(await shows(["203.0.113.8"]), ["203.0.113.8"]);
+        await search("banned");
+        assert.deepEqual(await shows(["203.0.113.8"]), ["203.0.113.8"]);
+        await search(x("In rotation"));
+        assert.deepEqual(await shows(["203.0.113.7", "203.0.113.8"]), ["203.0.113.7", "203.0.113.8"]);
+
         // by a word: a name, an address in any case, a proxy as shown, an
         // account and its subscription; a proxy's login is never searched
         await search("seoul");

@@ -289,9 +289,10 @@ function ipsRenewIs(x, v) {
 
 // ipsMatches: whether what is typed (acxLow'd, as Models › Accounts'
 // search takes it) is in the IP's address, its name, a proxy it was read
-// from (as shown, its login left out) or an account going out through it
+// from (as shown, its login left out) or an account going out through it,
+// its state's words among them, as its row says them and in English
 function ipsMatches(x, accts, words) {
-  return !words || [x.ip, x.name, ...(x.proxies || []).map(ipsShown), ...accts.flatMap((r) => [r.who, r.sub, r.p.name])].some((s) => acxLow(s).includes(words));
+  return !words || [x.ip, x.name, ...(x.proxies || []).map(ipsShown), ...accts.flatMap((r) => [r.who, r.sub, r.p.name, t(ACX_SAID[r.state]), ACX_SAID[r.state]])].some((s) => acxLow(s).includes(words));
 }
 
 function ipsDraw() {
@@ -324,10 +325,11 @@ function ipsDraw() {
   });
   rpick.title = "";
   rpick.hidden = !xs.length && !ipsRenew;
-  // the accounts filter: offered once there is an IP, bound to an account
-  // or not (T-176); a state no IP's account is in is dropped
-  const states = IPS_STATES.filter((k) => xs.some((x) => accts.get(x).some((r) => r.state === k)));
-  if (ipsFilter && !["bound", "unbound", ...states].includes(ipsFilter) && providers) {
+  // the accounts filter, always in sight once the list is read, with every
+  // state Models › Accounts says, each with how many IPs have an account
+  // in it (T-176); a value no longer one of them is dropped
+  const states = IPS_STATES;
+  if (ipsFilter && !["bound", "unbound", ...states].includes(ipsFilter)) {
     ipsFilter = "";
     try { localStorage.setItem("magpie.ipsFilter", ""); } catch {}
   }
@@ -344,7 +346,7 @@ function ipsDraw() {
     ipsDraw();
   });
   pick.title = "";
-  pick.hidden = !xs.length && !ipsFilter;
+  pick.hidden = !ipsList;
   const words = acxLow(ipsQuery);
   const shows = (x) => (!ipsFilter || !providers || (ipsFilter === "bound" ? accts.get(x).length > 0
     : ipsFilter === "unbound" ? !accts.get(x).length : accts.get(x).some((r) => r.state === ipsFilter)))
