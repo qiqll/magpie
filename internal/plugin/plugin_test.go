@@ -405,11 +405,17 @@ func TestPluginProxy(t *testing.T) {
 	if err != nil || !slices.Contains(c.Models, "fake-own") || !slices.Contains(asked, vendor+"/models") || !slices.Contains(asked, vendor+"/usage") {
 		t.Fatalf("a check with its own proxy: %+v, %v; the proxy saw %q", c, err, asked)
 	}
-	// direct: the vendor answers it itself
+	// direct: the vendor answers it itself; on Windows a dial to 0.0.0.0
+	// fails at once instead, still on this computer
 	mu.Lock()
 	n := len(global) + len(own)
 	mu.Unlock()
-	if b, err := fetch(netproxy.With(ctx, "direct")); err != nil || b != "direct" {
+	b, err := fetch(netproxy.With(ctx, "direct"))
+	if runtime.GOOS == "windows" {
+		if err == nil {
+			t.Fatalf("direct, on Windows: answered %q", b)
+		}
+	} else if err != nil || b != "direct" {
 		t.Fatalf("direct: %q, %v", b, err)
 	}
 	mu.Lock()
