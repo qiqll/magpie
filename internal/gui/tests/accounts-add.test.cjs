@@ -33,29 +33,34 @@ const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString();
 function providersOf(seen) {
   const logins = [
     { user: "alice@example.com", plan: "max", active: true, on: true },
+    { user: "carol@example.com", plan: "pro", on: true },
     { user: "bob@example.com", plan: "pro", on: true },
     ...(seen.added ? [{ user: seen.added, token: true, on: true }] : []),
   ];
   return {
     providers: [{ id: "claude", name: "Claude", icon: "claude-color", chat: "", responses: "", anthropic: "", catalog: "", models: [], agents: [], fallback: [], headers: {}, keyList: [], proxy: "",
       account: { agent: "claude", agentName: "Claude", user: "alice@example.com", plan: "max", logins },
-      accountAdded: { "alice@example.com": daysAgo(20), "bob@example.com": daysAgo(3) } }],
+      accountAdded: { "alice@example.com": daysAgo(20), "bob@example.com": daysAgo(3), "carol@example.com": daysAgo(10) } }],
     presets: [], excluded: [], gateway: { running: true, window: true },
   };
 }
 const w = (name, used, trayKind) => ({ name, used, resetsAt: later, trayKind });
+// each order tells the three apart its own way: the providers' A C B,
+// name A B C, newest B C A, 5 hours C B A, 7 days C A B, 30 days' cost B A C
 const quotas = [
-  { provider: "claude", name: "Claude", user: "alice@example.com", windows: [w("5 hours", 42, "5h"), w("7 days", 18, "7d")] },
-  { provider: "claude", name: "Claude", user: "bob@example.com", windows: [w("5 hours", 90, "5h"), w("7 days", 64, "7d")] },
+  { provider: "claude", name: "Claude", user: "alice@example.com", windows: [w("5 hours", 42, "5h"), w("7 days", 50, "7d")] },
+  { provider: "claude", name: "Claude", user: "bob@example.com", windows: [w("5 hours", 90, "5h"), w("7 days", 10, "7d")] },
+  { provider: "claude", name: "Claude", user: "carol@example.com", windows: [w("5 hours", 95, "5h"), w("7 days", 80, "7d")] },
 ];
-// each period's usage by account: bob costs the most over 30 days
+// each period's usage by account
 const usageOf = (period) => ({ accounts: {
   "last:5h": [{ provider: "claude", account: "alice@example.com", calls: 3, errors: 0, input: 900, output: 100, cost: 0.5 }],
   today: [{ provider: "claude", account: "alice@example.com", calls: 8, errors: 0, input: 1000000, output: 92802, cost: 4.25 }],
   "7d": [{ provider: "claude", account: "alice@example.com", calls: 20, errors: 0, input: 2e6, output: 1e5, cost: 6 },
     { provider: "claude", account: "bob@example.com", calls: 4, errors: 0, input: 1000, output: 0, cost: 1 }],
   "30d": [{ provider: "claude", account: "alice@example.com", calls: 30, errors: 0, input: 3e6, output: 1e5, cost: 7 },
-    { provider: "claude", account: "bob@example.com", calls: 50, errors: 0, input: 4e6, output: 2e5, cost: 9 }],
+    { provider: "claude", account: "bob@example.com", calls: 50, errors: 0, input: 4e6, output: 2e5, cost: 9 },
+    { provider: "claude", account: "carol@example.com", calls: 2, errors: 0, input: 1e3, output: 0, cost: 1 }],
 }[period] || [] });
 
 function serve(lang, seen) {
@@ -80,6 +85,8 @@ function serve(lang, seen) {
     }
     if (url.pathname === "/api/proxy/check") {
       seen.checks.push(req.postDataJSON());
+      // held till the test lets it answer
+      if (seen.hold) await new Promise((r) => { seen.release = r; });
       return json({ source: "settings", through: { ip: req.postDataJSON().proxy.includes("plain") ? "198.51.100.88" : "198.51.100.77", loc: "US", ms: 80 }, direct: { ip: "192.0.2.1" } });
     }
     if (url.pathname === "/api/plugins") return json({ plugins: [] });
@@ -92,7 +99,6 @@ function serve(lang, seen) {
   };
 }
 
-const settle = (page) => page.waitForTimeout(150);
 const wider = (page, id) => page.evaluate((id) => Math.max(0, ...[...document.querySelectorAll(id + " *")].filter((e) => e.offsetParent).map((e) => e.getBoundingClientRect().right)) - document.documentElement.clientWidth, id);
 
 async function open(t, engine, lang, width, view, seen) {
@@ -116,7 +122,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       test(`${engine} ${lang} ${width}: Accounts adds a Claude account in place`, async (t) => {
         const seen = { starts: [], usage: [], quotaReads: [], cancels: 0, ipPosts: [], checks: [], ips: [], rev: 1 };
         const [page, errors] = await open(t, engine, lang, width, "accounts", seen);
-        await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 2);
+        await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 3);
         for (const [id, s] of [["#acxAdd", "Add account"], ["#acxReadAll", "Refresh all usage"], ["#acxReload", "Refresh list"]]) {
           assert.equal((await page.locator(id).textContent()).trim(), x(s));
           assert.ok(await page.locator(id).isVisible(), id + " in sight");
@@ -143,11 +149,31 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.waitForFunction(() => document.querySelector("#acxAdding .signing") && !document.querySelector("#acxAdding .signing.ready"));
         assert.deepEqual(seen.starts.map((s) => s.agent), ["claude"]);
         assert.ok(await wider(page, "#acxAdding") <= 0.5, "the sign-in inside the window");
+        // shutting Add account cancels it too (review H1)
+        await page.locator("#acxAdd").click();
+        await page.waitForFunction(() => signing === null);
+        assert.equal(seen.cancels, 1);
+        assert.equal(await page.locator("#acxAdding").isVisible(), false);
+        // and leaving the page (review M1)
+        await page.locator("#acxAdd").click();
+        await page.locator("#acxAdding .acx-add-type").click();
+        await page.locator("#acxAdding .sign-start").click();
+        await page.waitForFunction(() => signing?.state === "waiting");
+        await page.evaluate(() => show("agents"));
+        await page.waitForFunction(() => signing === null);
+        assert.equal(seen.cancels, 2);
+        await page.evaluate(() => show("accounts"));
+        await page.waitForFunction(() => !document.querySelector("#view-accounts").hidden);
+        assert.equal(await page.locator("#acxAdding").isVisible(), false);
         // Back cancels it and asks the type again
+        await page.locator("#acxAdd").click();
+        await page.locator("#acxAdding .acx-add-type").click();
+        await page.locator("#acxAdding .sign-start").click();
+        await page.waitForFunction(() => signing?.state === "waiting");
         await page.locator("#acxAdding .acx-add-back").click();
         await page.locator("#acxAdding .acx-add-type").waitFor();
         await page.waitForFunction(() => signing === null);
-        assert.equal(seen.cancels, 1);
+        assert.equal(seen.cancels, 3);
 
         // a setup-token: added here, said here, listed below, no editor
         await page.locator("#acxAdding .acx-add-type").click();
@@ -156,24 +182,24 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.locator("#acxAdding .claude-token button.primary").click();
         await page.locator("#acxAdding .acx-add-done").waitFor();
         assert.equal(await page.locator("#acxAdding .acx-add-done span").textContent(), x("{user} added: it is listed below", { user: "Claude setup-token 9f9f9f" }));
-        await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 3);
-        await settle(page);
+        await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 4);
         assert.equal(await page.locator("#modal").isVisible(), false, "signedIn's editor stays shut");
         assert.ok(await page.locator("#view-accounts").isVisible());
         assert.equal(await page.evaluate(() => editing), null);
         // Close shuts it
         await page.locator("#acxAdding .acx-add-close").click();
         assert.equal(await page.locator("#acxAdding").isVisible(), false);
-        // the Providers page is drawn when opened: Claude's three accounts
+        // the Providers page is drawn when opened, no editor open on it
         await page.evaluate(() => show("providers"));
         await page.waitForFunction(() => document.querySelector('#providers .row.provider[data-id="claude"]'));
+        assert.equal(await page.locator("#modal").isVisible(), false);
         assert.deepEqual(errors, []);
       });
 
       test(`${engine} ${lang} ${width}: Accounts' cards say each period, and Sort orders them`, async (t) => {
         const seen = { starts: [], usage: [], quotaReads: [], cancels: 0, ipPosts: [], checks: [], ips: [], rev: 1 };
         const [page, errors] = await open(t, engine, lang, width, "accounts", seen);
-        await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 2);
+        await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 3);
         // the list alone reads no period but the last 5 hours
         assert.deepEqual(seen.usage.filter((p) => p !== "last:5h"), []);
         await page.locator("#acxView button", { hasText: x("Card view") }).click();
@@ -194,28 +220,24 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.ok(await wider(page, "#acxList") <= 0.5, "the cards inside the window");
 
         const users = () => page.locator("#acxList .acx-card").evaluateAll((cs) => cs.map((c) => c.dataset.user));
-        assert.deepEqual(await users(), ["alice@example.com", "bob@example.com"]);
+        const A = "alice@example.com", B = "bob@example.com", C = "carol@example.com";
+        assert.deepEqual(await users(), [A, C, B]);
         assert.equal(await page.locator("#acxSort").textContent(), x("Providers' order"));
+        // a pick waits for the button to say it, which the same draw does
         const pick = async (name) => {
           await page.locator("#acxSort").click();
           await page.locator(".sess-menu .pm-item").filter({ has: page.locator(".pm-name").getByText(name, { exact: true }) }).click();
-          await settle(page);
+          await page.waitForFunction((name) => document.querySelector("#acxSort").textContent === name, name);
         };
-        await pick(x("30 days' cost, most first"));
-        assert.deepEqual(await users(), ["bob@example.com", "alice@example.com"]);
-        await pick(x("5 hours used, most first"));
-        assert.deepEqual(await users(), ["bob@example.com", "alice@example.com"]);
-        await pick(x("Newest first"));
-        assert.deepEqual(await users(), ["bob@example.com", "alice@example.com"]);
-        await pick(x("Name"));
-        assert.deepEqual(await users(), ["alice@example.com", "bob@example.com"]);
-        await pick(x("7 days used, most first"));
-        assert.deepEqual(await users(), ["bob@example.com", "alice@example.com"]);
+        for (const [name, order] of [["30 days' cost, most first", [B, A, C]], ["5 hours used, most first", [C, B, A]], ["Newest first", [B, C, A]], ["Name", [A, B, C]], ["7 days used, most first", [C, A, B]]]) {
+          await pick(x(name));
+          assert.deepEqual(await users(), order, name);
+        }
         // kept per machine
         await page.reload();
-        await page.waitForFunction(() => document.querySelectorAll("#acxList .acx-card").length === 2);
+        await page.waitForFunction(() => document.querySelectorAll("#acxList .acx-card").length === 3);
         assert.equal(await page.locator("#acxSort").textContent(), x("7 days used, most first"));
-        assert.deepEqual(await users(), ["bob@example.com", "alice@example.com"]);
+        assert.deepEqual(await users(), [C, A, B]);
         assert.deepEqual(errors, []);
       });
 
@@ -256,6 +278,28 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.waitForFunction(() => !document.querySelector("#ipsList .ips-form"));
         assert.deepEqual(seen.checks.map((c) => c.proxy), ["http://plain.example:3128"]);
         assert.deepEqual(seen.ipPosts.at(-1).ips[0], { ip: "198.51.100.88", name: "Osaka", proxies: ["http://plain.example:3128"] });
+
+        // Cancel while Save reads the exit: nothing kept, no other form
+        // written into (review M2, M3)
+        const posts = seen.ipPosts.length;
+        seen.hold = true;
+        await page.locator("#ipsAdd").click();
+        await page.locator("#ipsList .ips-in-proxy").fill("http://slow.example:3128");
+        seen.release = null;
+        await page.locator("#ipsList .ips-save").click();
+        // the check asked and held
+        while (!seen.release) await new Promise((r) => setTimeout(r, 10));
+        await page.locator("#ipsList .ips-cancel").click();
+        await page.locator('#ipsList .ips-row[data-ip="198.51.100.77"] .ips-edit').click();
+        seen.hold = false;
+        const answered = page.waitForResponse((r) => r.url().endsWith("/api/proxy/check"));
+        seen.release();
+        await answered;
+        // what the page does with the answer is done in its next turns
+        await page.evaluate(() => new Promise((r) => setTimeout(r, 0)));
+        await page.evaluate(() => new Promise((r) => setTimeout(r, 0)));
+        assert.equal(seen.ipPosts.length, posts, "nothing saved");
+        assert.equal(await page.locator("#ipsList .ips-in-ip").inputValue(), "198.51.100.77", "the form opened since keeps its address");
         assert.deepEqual(errors, []);
       });
     }

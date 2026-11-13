@@ -429,17 +429,22 @@ function ipsRow(x, i, accts, read) {
 // draft's address (proxy/check, as Read from a saved proxy asks it), or why
 // not in the form's error; true once read. b is busy meanwhile.
 async function ipsReadExit(b) {
-  const proxy = (ipsDraft.proxy || "").trim();
-  if (!proxy) return false;
+  const proxy = (ipsDraft.proxy || "").trim(), d = ipsDraft, at = ipsEdit;
+  if (!proxy || b?.classList.contains("busy")) return false;
   b?.classList.add("busy");
   ipsErr = "";
   let exit = "";
   try {
     const out = await api("proxy/check", { proxy });
+    // the form closed or another opened meanwhile: nothing written (review M2)
+    if (ipsDraft !== d || ipsEdit !== at) return false;
     exit = out?.through?.ip || "";
     if (exit) ipsDraft.ip = exit;
     else ipsErr = t("The proxy didn't answer: {error}", { error: out?.through?.error || "" });
-  } catch (e) { ipsErr = t(e.message); }
+  } catch (e) {
+    if (ipsDraft !== d || ipsEdit !== at) return false;
+    ipsErr = t(e.message);
+  }
   ipsDraw();
   return !!exit;
 }
@@ -548,9 +553,12 @@ function ipsForm(i) {
     const typed = (ipsDraft.proxy || "").trim();
     // no address but a proxy: its exit is the address
     if (!ipsDraft.ip.trim() && typed) {
+      const d = ipsDraft;
       ok.classList.add("busy");
-      if (!await ipsReadExit()) return;
+      const read = await ipsReadExit();
       ok.classList.remove("busy");
+      // canceled, or another form opened, while it was read: not kept (review M3)
+      if (!read || ipsEdit !== i || ipsDraft !== d) return;
     }
     const v = { ip: ipsDraft.ip.trim(), name: ipsDraft.name.trim() };
     if (!v.ip) return ip.focus();

@@ -27,8 +27,7 @@ let acxUsage = null, acxUsageAt = 0;
 let acxSpans = {}, acxSpansAt = 0;
 // Add account (需求方 2026-11-13): "" closed, "type" its type picked,
 // else the agent signing in here; and the account it added
-// (signedIn's justAdded, told from one it named before this sign-in)
-let acxAdding = "", acxAdded1 = "", acxJustWas = "";
+let acxAdding = "", acxAdded1 = "";
 // what the list was drawn from, so a change elsewhere draws it again
 let acxSeen = null, acxWatch = 0;
 // the account whose start date is being picked (renewEditor, T-154), by
@@ -41,7 +40,7 @@ function acxMount() {
   q.setAttribute("aria-label", t("Search accounts"));
   q.oninput = () => { acxQuery = q.value; acxKeep(); acxDraw(); };
   q.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape" && q.value) { q.value = ""; q.oninput(); } };
-  $("#acxAdd").onclick = () => { acxAdding = acxAdding ? "" : "type"; acxAdded1 = ""; acxAddDraw(); };
+  $("#acxAdd").onclick = () => { if (acxAdding) acxAddClose(); else { acxAdding = "type"; acxAdded1 = ""; acxAddDraw(); } };
   // every account's allowance read again, as the Usage page's Refresh all
   const all = $("#acxReadAll");
   all.title = t("Read every account's allowance again");
@@ -68,7 +67,8 @@ function acxSpansLoad(again) {
   if (!acxSpansWanted() || (!again && Date.now() - acxSpansAt < 60e3)) return Promise.resolve();
   acxSpansAt = Date.now();
   const zone = typeof usageZoneQ === "function" ? usageZoneQ() : "";
-  return Promise.all(ACX_SPANS.map(([k]) => api("usage?period=" + k + zone).then((u) => { acxSpans[k] = u?.accounts || []; }, () => {})));
+  // a failed read is asked again on the next draw's load (review L4)
+  return Promise.all(ACX_SPANS.map(([k]) => api("usage?period=" + k + zone).then((u) => { acxSpans[k] = u?.accounts || []; }, () => { acxSpansAt = 0; })));
 }
 
 // acxLoad: the providers (the shell's, loads: "providers"), the allowances
@@ -103,8 +103,9 @@ function acxFollow() {
     if (view !== "accounts" || document.hidden) {
       if (view !== "accounts") {
         clearInterval(acxWatch); acxWatch = 0;
-        // Add account closes with the page, unless a sign-in is under way
-        if (acxAdding && signing?.agent !== acxAdding) { acxAdding = acxAdded1 = ""; acxAddDraw(); }
+        // Add account closes with the page, its sign-in canceled, as an
+        // editor left on Providers takes its sign-in with it (review M1)
+        if (acxAdding) acxAddClose();
       }
       return;
     }
@@ -755,15 +756,33 @@ function acxRow(r) {
 // sign-in draws itself with renderProviders, so while this is open on this
 // page that draws here instead: the providers' page is drawn on its next
 // opening (providersBehind), and the editor signedIn opens on the account
-// added stays shut. A sign-in canceled goes back to the type.
+// added stays shut. A sign-in canceled goes back to the type; one under
+// way is canceled when Add account is shut or the page left (review H1, M1).
 const ACX_ADD_TYPES = ["claude"];
 const acxRenderProviders = renderProviders;
 renderProviders = function (quiet) {
   if (view !== "accounts" || !acxAdding) return acxRenderProviders(quiet);
+  closeProtoMenu(); // a menu open on a button this redraw takes out
   providersBehind = true;
   if (!signing && editing !== null) { editing = null; adding = false; draft = null; }
   acxAddDraw();
 };
+
+// signedIn names the account its sign-in added: one of ours is said here
+// (review L1: not justAdded, which is cleared after 2s)
+const acxSignedIn = signedIn;
+signedIn = function (st) {
+  if (acxAdding && acxAdding !== "type" && signing?.agent === acxAdding) acxAdded1 = st.user || subOf(st.agent)?.name || st.agent;
+  return acxSignedIn(st);
+};
+
+// acxAddClose: Add account shut, its sign-in canceled
+function acxAddClose() {
+  const ours = acxAdding && acxAdding !== "type" && signing?.agent === acxAdding;
+  acxAdding = acxAdded1 = "";
+  if (ours) cancelSignIn();
+  acxAddDraw();
+}
 
 function acxAddDraw() {
   const box = $("#acxAdding");
@@ -773,10 +792,7 @@ function acxAddDraw() {
   box.replaceChildren();
   if (!acxAdding) return;
   // its sign-in ended: added (signedIn names it), or canceled
-  if (acxAdding !== "type" && signing?.agent !== acxAdding) {
-    if (justAdded && justAdded !== acxJustWas) acxAdded1 = justAdded;
-    if (!acxAdded1) acxAdding = "type";
-  }
+  if (acxAdding !== "type" && signing?.agent !== acxAdding && !acxAdded1) acxAdding = "type";
   const head = el("div", "acx-add-head");
   head.append(el("b", "", t("Add account")));
   if (acxAdding !== "type") head.append(el("span", "acx-add-step", subOf(acxAdding)?.name || acxAdding));
@@ -785,12 +801,12 @@ function acxAddDraw() {
     const back = el("button", "text acx-add-back", t("Back to the types"));
     back.type = "button";
     back.title = t("Pick another type of account");
-    back.onclick = () => { if (signing?.agent === acxAdding) cancelSignIn(); acxAdding = "type"; acxAddDraw(); };
+    back.onclick = () => { const ours = signing?.agent === acxAdding; acxAdding = "type"; if (ours) cancelSignIn(); acxAddDraw(); };
     head.append(back);
   }
   const close = el("button", "text acx-add-close", t("Close"));
   close.type = "button";
-  close.onclick = () => { if (acxAdding !== "type" && signing?.agent === acxAdding) cancelSignIn(); acxAdding = acxAdded1 = ""; acxAddDraw(); };
+  close.onclick = acxAddClose;
   head.append(close);
   box.append(head);
   if (acxAdding === "type") {
@@ -805,7 +821,7 @@ function acxAddDraw() {
       const words = el("span", "acx-add-words");
       words.append(el("b", "", sub.name), el("span", "", sub.plans || ""));
       b.append(icon(sub.icon || agent, true), words);
-      b.onclick = () => { acxAdding = agent; acxAdded1 = ""; acxJustWas = justAdded; readySignIn(agent); };
+      b.onclick = () => { acxAdding = agent; acxAdded1 = ""; readySignIn(agent); };
       tiles.append(b);
     }
     box.append(tiles);
@@ -816,7 +832,7 @@ function acxAddDraw() {
     done.append(el("span", "", t("{user} added: it is listed below", { user: acxAdded1 })));
     const more = el("button", "text primary acx-add-more", t("Add one more account"));
     more.type = "button";
-    more.onclick = () => { acxAdded1 = ""; acxJustWas = justAdded; readySignIn(acxAdding); };
+    more.onclick = () => { acxAdded1 = ""; readySignIn(acxAdding); };
     done.append(more);
     box.append(done);
     return;
