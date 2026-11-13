@@ -53,8 +53,9 @@ try {
 // every place a proxy is picked: a sign-in's Proxy and Through menus
 // (signInProxyChoices) and Saved… beside a proxy's login (savedProxyFill)
 // (需求方 2026-11-13: an IP added here wasn't offered when adding an
-// account). Read when one of them is drawn, again once 30s old, and kept
-// as this page reads and saves the list.
+// account). Read as Models › Accounts opens and when one of them is
+// drawn, again once 30s old, and kept as this page reads and saves the
+// list; a menu is made as it opens, so it has them once read.
 let ipsPicks = null, ipsPicksAt = 0, ipsPicksAsk = null;
 function ipsPicksSet(xs) {
   const seen = new Set();

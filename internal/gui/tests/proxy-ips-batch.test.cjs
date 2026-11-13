@@ -20,6 +20,13 @@ const path = require("node:path");
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
 const { strings } = require("./strings.cjs");
+// a click on a menu's anchor once it is in view and its scroll has been
+// told: Playwright scrolls an anchor into view as it clicks, and that
+// scroll's event, told a frame later, closes the menu it opened
+const settle = async (loc) => {
+  await loc.scrollIntoViewIfNeeded();
+  await loc.page().evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+};
 
 const assets = path.resolve(__dirname, "../assets");
 const { I18N } = strings();
@@ -169,6 +176,12 @@ test("each format a batch line is written in is read as the proxy it names", asy
     ["1.2.3.4:80:u:p:q", "ERR"],
   ];
   for (const [line, want, type] of cases) assert.equal(await read(line, type), want, line);
+  // a proxy is the same however its scheme and host are cased, or with
+  // no scheme as an import may keep it (review L2)
+  assert.deepEqual(await page.evaluate(() => [ipsProxyKey("HTTP://U:p@Gate.Example:80") === ipsProxyKey("http://U:p@gate.example:80"), ipsProxyKey("10.0.0.1:80") === ipsProxyKey("http://10.0.0.1:80"), ipsProxyKey("http://a:b@10.0.0.1:80") === ipsProxyKey("http://a:c@10.0.0.1:80")]), [true, true, false]);
+  // a line not read shows no password (review L3)
+  assert.deepEqual(await page.evaluate(() => ["http://user:p:w@x@1.2.3.4:99999", "1.2.3.4:80:user:secret:more", "a b c secret e", "not a proxy"].map(ipsBatchMask)),
+    ["http://user:••••••@1.2.3.4:99999", "1.2.3.4:80:user:••••••", "a b c ••••••", "not a proxy"]);
   assert.deepEqual(errors, []);
 });
 
@@ -187,7 +200,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await pp.waitFor();
         // the IPs are read as the sign-in is drawn
         await page.waitForFunction(() => window.ipProxies().length === 1);
-        await pp.scrollIntoViewIfNeeded();
+        await settle(pp);
         await pp.click();
         const menu = page.locator(".proto-menu");
         await menu.waitFor();
@@ -208,13 +221,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.locator(".editor .accts .acc.add").first().click();
         await page.locator(".editor .signing .sign-start").click();
         await pp.waitFor();
-        await pp.scrollIntoViewIfNeeded();
+        await settle(pp);
         await pp.click();
         await page.locator(".proto-menu .pm-item", { hasText: x("Custom…") }).click();
         const typed = box.locator("input.paste-proxy");
         await typed.waitFor();
         const saved = box.locator(".proxy-ask .saved-proxy");
         await saved.waitFor();
+        await settle(saved);
         await saved.click();
         await page.locator(".proto-menu .pm-item", { hasText: "203.0.113.7 · Osaka" }).click();
         assert.equal(await typed.inputValue(), OSAKA_SHOWN);
@@ -226,7 +240,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const seen = { posts: [], checks: [], pastes: [], rev: 1, ips: [{ ip: "203.0.113.7", name: "Osaka", proxies: [OSAKA] }],
           exits: { "socks5://erin:pw6@proxy.example.com:9000": "198.51.100.42" } };
         const { page, errors } = await open(engine, width, lang, seen, "?view=ips", t);
-        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 1);
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 1, null, { timeout: 30000 });
         await page.locator("#ipsBatch").click();
         const box = page.locator("#ipsBatchBox");
         await box.waitFor();
@@ -264,7 +278,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const seen = { posts: [], checks: [], pastes: [], rev: 1, ips: [{ ip: "203.0.113.7", name: "Osaka", proxies: [OSAKA] }],
           exits: { "https://10.0.0.1:3128": "203.0.113.7", "https://10.0.0.2:3128": "198.51.100.9" } };
         const { page, errors } = await open(engine, width, lang, seen, "?view=ips", t);
-        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 1);
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 1, null, { timeout: 30000 });
         await page.locator("#ipsBatch").click();
         const box = page.locator("#ipsBatchBox");
         await box.locator(".ips-batch-type-pick").click();
@@ -296,7 +310,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const many = Array.from({ length: 498 }, (_, i) => ({ ip: "10.1." + (i >> 8) + "." + (i & 255) }));
         const seen = { posts: [], checks: [], pastes: [], rev: 1, ips: many, exits: {}, hold: true };
         const { page, errors } = await open(engine, width, lang, seen, "?view=ips", t);
-        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 498);
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 498, null, { timeout: 30000 });
         await page.locator("#ipsBatch").click();
         const box = page.locator("#ipsBatchBox");
         await box.locator(".ips-batch-in").fill("192.0.2.1:80\n192.0.2.2:80\n192.0.2.3:80\nslow.example.com:80");

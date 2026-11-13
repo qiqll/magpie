@@ -175,7 +175,7 @@ window.savedProxyFill = function (auth, addr, after) {
   window.ipProxiesRead?.().then(() => savedProxyButton(auth, addr, after, true));
 };
 function savedProxyButton(auth, addr, after, again) {
-  const ps = [...(state?.settings || prefs)?.proxies || []];
+  const ps = [...(state?.settings || prefs)?.proxies || []], saved = ps.length;
   for (const x of window.ipProxies?.() || []) if (!ps.some((p) => p.url === x.url)) ps.push(x);
   const drawn = JSON.stringify(ps);
   if (again && auth.savedDrawn === drawn) return;
@@ -193,7 +193,7 @@ function savedProxyButton(auth, addr, after, again) {
       for (const f of auth.querySelectorAll("input.proxy-credential")) f.oninput?.();
       auth.querySelector(".typed-proxy-check")?.redraw?.();
       after?.();
-    }, "Saved proxies");
+    }, ps.length > saved ? "Saved proxies and proxy IPs" : "Saved proxies");
   };
   // before Test, whose result line takes the row's whole width
   const at = auth.querySelector(".typed-proxy-test");

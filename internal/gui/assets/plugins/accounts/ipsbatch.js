@@ -9,6 +9,8 @@
 // listed already is skipped and said. Run after ips.js.
 
 const IPS_BATCH_MAX = 100;
+// the formats it reads, as its help says them, each in the window's words
+const IPS_BATCH_FORMATS = ["type://host:port:username:password[refresh URL]", "type://username:password@host:port[refresh URL]", "type://[IPv6]:port:username:password", "type://username:password@[IPv6]:port", "username:password:host:port", "host port username password"];
 // the most IPs the server keeps (renewal.MaxIPs)
 const IPS_BATCH_MAX_IPS = 500;
 // the types a proxy can be kept as (settings.CheckProxy), by what a line
@@ -94,14 +96,26 @@ function ipsBatchParse(line, type) {
   return { type, host: hp.host, v6: !!hp.v6, port: hp.port, user, pass, ip: hp.ip, url };
 }
 
+// ipsBatchMask: a line not read, as its row shows it: what may be a
+// password masked, the part between a login's : and @, or the fourth part
+// on of a line split by : or spaces (review L3)
+function ipsBatchMask(s) {
+  // to the last @, as a password may have one
+  if (s.includes("@")) return s.replace(/^((?:[a-z][a-z0-9+.-]*:\/\/)?[^:@]*:).*@/i, "$1••••••@");
+  const parts = /\s/.test(s) ? s.split(/\s+/) : ipsBatchColons(s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, ""));
+  if (parts.length < 4) return s;
+  const head = /\s/.test(s) ? parts.slice(0, 3).join(" ") + " " : s.slice(0, s.length - parts.slice(3).join(":").length);
+  return head + "••••••";
+}
+
 // ipsBatchLines: each line typed that says something, as its number and
 // what was read; one read twice is said so
 function ipsBatchLines() {
   const seen = new Set();
   return ipsBatchText.split(/\r?\n/).map((text, i) => ({ n: i + 1, text })).filter((l) => l.text.trim() && !l.text.trim().startsWith("#")).map((l) => {
     const x = { ...l, ...ipsBatchParse(l.text, ipsBatchType) };
-    if (x.url && seen.has(x.url)) return { ...l, err: t("The same proxy as a line above") };
-    if (x.url) seen.add(x.url);
+    if (x.url && seen.has(ipsProxyKey(x.url))) return { ...l, err: t("The same proxy as a line above") };
+    if (x.url) seen.add(ipsProxyKey(x.url));
     return x;
   });
 }
@@ -130,7 +144,7 @@ function ipsBatchMerge(list, rows) {
   const next = list.map((x) => ({ ...x, proxies: [...(x.proxies || [])] }));
   const out = { next, added: 0, linked: 0, listed: [], unknown: [], full: [], over: [], unchecked: [] };
   for (const x of rows) {
-    if (next.some((y) => y.proxies.includes(x.url))) { out.listed.push(x); continue; }
+    if (next.some((y) => ipsBatchHas(y, x))) { out.listed.push(x); continue; }
     const ip = ipsBatchChecks[x.url]?.ip || x.ip;
     if (!ip) { out.unknown.push(x); continue; }
     const y = next.find((z) => ipsCanon(z.ip) === ip);
@@ -143,7 +157,16 @@ function ipsBatchMerge(list, rows) {
   return out;
 }
 
-const ipsBatchListed = (x) => (ipsList || []).some((y) => (y.proxies || []).includes(x.url));
+// ipsProxyKey: a proxy as it is told apart from another: its scheme and
+// host in lower case, a bare one http (review L2)
+function ipsProxyKey(u) {
+  try {
+    const x = new URL(u.includes("://") ? u : "http://" + u);
+    return x.protocol.toLowerCase() + "//" + x.username + ":" + x.password + "@" + x.host.toLowerCase();
+  } catch { return u; }
+}
+const ipsBatchHas = (y, x) => (y.proxies || []).some((p) => ipsProxyKey(p) === ipsProxyKey(x.url));
+const ipsBatchListed = (x) => (ipsList || []).some((y) => ipsBatchHas(y, x));
 const ipsBatchAddr = (x) => (x.v6 ? "[" + x.host + "]" : x.host) + ":" + x.port;
 
 function ipsBatchOpen() {
@@ -172,7 +195,7 @@ function ipsBatchDraw() {
   if (!ipsBatchOn) return box.replaceChildren();
   const help = el("div", "ips-batch-help");
   help.append(el("div", "ips-batch-head", t("Batch add proxies")),
-    el("pre", "ips-batch-formats", ["type://host:port:username:password[refresh URL]", "type://username:password@host:port[refresh URL]", "type://[IPv6]:port:username:password", "type://username:password@[IPv6]:port", "username:password:host:port", "host port username password"].join("\n")));
+    el("pre", "ips-batch-formats", IPS_BATCH_FORMATS.map((f) => t(f)).join("\n")));
   const rules = el("ol", "ips-batch-rules");
   for (const s of [
     t("One proxy a line, at most {n} at a time. A host and a port are needed; the username and password are optional and may come before or after them.", { n: IPS_BATCH_MAX }),
@@ -187,7 +210,7 @@ function ipsBatchDraw() {
   ta.autocomplete = "off";
   ta.rows = 8;
   ta.value = ipsBatchText;
-  ta.placeholder = t("For example:") + "\n192.168.0.1:8000\n192.168.0.1:8000:username:password\nsocks5://192.168.0.1:8000[https://example.com/refresh]\nhttp://username:password@192.168.0.1:8000\nhttp://[2001:db8::e13]:8000:username:password";
+  ta.placeholder = [t("For example:"), "192.168.0.1:8000", t("192.168.0.1:8000:username:password"), "socks5://192.168.0.1:8000[https://example.com/refresh]", t("http://username:password@192.168.0.1:8000"), t("http://[2001:db8::e13]:8000:username:password")].join("\n");
   ta.setAttribute("aria-label", t("Proxies, one a line"));
   ta.onkeydown = (e) => e.stopPropagation();
   const bar = el("div", "ips-batch-bar");
@@ -229,7 +252,7 @@ function ipsBatchDraw() {
       row.dataset.line = x.n;
       row.append(el("span", "ips-batch-n", String(x.n)));
       if (x.err) {
-        row.append(el("code", "ips-batch-text", x.text.trim()), el("span", "ips-batch-why", x.err));
+        row.append(el("code", "ips-batch-text", ipsBatchMask(x.text.trim())), el("span", "ips-batch-why", x.err));
       } else {
         const c = ipsBatchChecks[x.url], listed = ipsBatchListed(x);
         row.append(el("span", "ips-batch-type", x.type.toUpperCase()), el("code", "ips-batch-addr", ipsBatchAddr(x)));
