@@ -5,6 +5,14 @@
 .acx-tools .acx-q { width: 220px; }
 .acx-sum { margin: 2px 2px 8px; font-size: 12px; color: var(--muted); }
 .acx-sum .acx-warn { color: var(--red); }
+/* Accounts' summary as a row of chips, black, white and grey, the ones to
+   act on red (需求方 2026-11-13); the " · " between them kept in its text
+   but drawn at no size */
+#acxSum { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; font-size: 0; }
+#acxSum:empty { display: none; }
+#acxSum > span { padding: 3px 10px; border-radius: 999px; font-size: 12px; line-height: 16px; color: var(--fg-2); background: var(--card); box-shadow: inset 0 0 0 1px var(--line); font-variant-numeric: tabular-nums; }
+#acxSum > span:first-child { color: var(--card); background: var(--fg); box-shadow: none; font-weight: 600; }
+#acxSum > span.acx-warn { color: var(--red); background: var(--red-soft); box-shadow: none; }
 .acx-list[hidden] { display: none; }
 .row.acx { flex-wrap: wrap; row-gap: 6px; }
 .row.acx .who { flex: 1 1 200px; }
@@ -15,18 +23,19 @@
 .acx-grow.busy { opacity: .6; }
 .acx-grad, .acx-grad:hover { cursor: default; background: var(--pill); }
 .acx-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.acx-state { flex: none; padding: 1px 7px; border-radius: 9px; font-size: 11px; font-weight: 500; color: var(--muted); background: var(--pill); }
-.acx-state.on { color: var(--green); background: var(--green-soft); }
-.acx-state.paused { color: var(--amber); background: var(--amber-soft); }
-.acx-state.again { color: var(--red); background: var(--red-soft); }
-.acx-state.banned { color: var(--red); background: var(--red-soft); }
-.acx-state.disabled { color: var(--muted); background: var(--pill); }
+/* a state's badge: grey words, its colour in the dot alone */
+.acx-state { --dot: var(--faint); flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 7px; border-radius: 9px; font-size: 11px; font-weight: 500; color: var(--fg-2); background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
+.acx-state::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--dot); }
+.acx-state.on { --dot: var(--green); }
+.acx-state.paused { --dot: var(--amber); }
+.acx-state.again, .acx-state.banned { --dot: var(--red); color: var(--red); }
+.acx-state.disabled { --dot: var(--faint); color: var(--muted); }
 .row.acx.off .acx-name, .row.acx.off .ic { opacity: .6; }
 .acx-meters { display: flex; flex-direction: column; gap: 3px; width: 190px; flex: none; }
 .acx-meter { display: grid; grid-template-columns: minmax(0, 5.5em) 1fr 3em; align-items: center; gap: 7px; font-size: 11.5px; color: var(--muted); }
 .acx-wn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.acx-bar { height: 5px; border-radius: 3px; background: var(--pill); overflow: hidden; }
-.acx-bar > span { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+.acx-bar { height: 5px; border-radius: 3px; background: var(--line-2); overflow: hidden; }
+.acx-bar > span { display: block; height: 100%; border-radius: 3px; background: var(--fg-2); }
 .acx-meter.high .acx-bar > span { background: var(--amber); }
 .acx-meter.full .acx-bar > span { background: var(--red); }
 .acx-pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-2); }
@@ -46,28 +55,44 @@
 /* Card view (after CLIProxyAPI's credentials page): a grid of cards,
    each who and its state, its facts, every window with its reset, the
    last 5 hours' numbers and its actions */
-.acx-list.acx-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 10px; background: none; box-shadow: none; border: 0; }
-.acx-card { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 12px 14px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); }
+.acx-list.acx-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; background: none; box-shadow: none; border: 0; }
+.acx-card { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 14px 16px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(0, 0, 0, .03); transition: border-color .15s, box-shadow .15s; }
+.acx-card:hover { border-color: var(--faint); box-shadow: 0 4px 16px rgba(0, 0, 0, .06); }
+/* one to act on: its edge a little red */
+.acx-card.again, .acx-card.authfail, .acx-card.banned { border-color: color-mix(in srgb, var(--red) 30%, var(--line)); }
 .acx-card.off .acx-name, .acx-card.off .acx-head .ic { opacity: .6; }
+.acx-card.disabled, .acx-card.banned { background: var(--card-2); }
 .acx-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .acx-head .who { flex: 1; min-width: 0; }
-.acx-head .name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 3px; font-weight: 550; }
+.acx-head .name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 3px; font-weight: 600; color: var(--fg); }
 .acx-head .sub { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.acx-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 0; font-size: 12px; }
+.acx-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; padding-bottom: 12px; border-bottom: 1px dashed var(--line); font-size: 12px; }
 .acx-facts dt { color: var(--muted); }
 .acx-facts dd { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-2); }
 .acx-facts .acx-unknown { color: var(--muted); }
-.acx-wins { display: flex; flex-direction: column; gap: 4px; }
+.acx-wins { display: flex; flex-direction: column; gap: 10px; }
+/* a card's allowances by kind (需求方 2026-11-13): each kind's name over
+   its windows */
+.acx-qg { display: flex; flex-direction: column; gap: 4px; }
+.acx-qk { font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+/* a window named only its kind: its bar the whole width but the share */
+.acx-card .acx-meter.plain { grid-template-columns: 1fr 3em; }
+.acx-meter.plain .acx-wn { display: none; }
+.acx-card .acx-meter.plain .acx-reset { grid-column: 1 / -1; }
+.acx-qtext { display: grid; grid-template-columns: minmax(0, 6.5em) minmax(0, 1fr); align-items: baseline; gap: 7px; font-size: 11.5px; color: var(--muted); }
+.acx-qv { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--fg); font-weight: 550; font-variant-numeric: tabular-nums; }
 .acx-card .acx-meter { grid-template-columns: minmax(0, 6.5em) 1fr 3em; }
 .acx-card .acx-reset { grid-column: 2 / -1; margin-top: -2px; font-size: 10.5px; color: var(--muted); }
 .acx-card .acx-reset:empty { display: none; }
-.acx-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding: 8px 0 0; border-top: 1px solid var(--line); }
+.acx-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding: 10px 0 0; border-top: 1px solid var(--line); }
 .acx-stat { display: flex; flex-direction: column; min-width: 0; font-size: 11px; color: var(--muted); }
 .acx-stat b { font-size: 13px; font-weight: 550; color: var(--fg); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
 .acx-stat.bad b { color: var(--red); }
 /* wrapped too: a card's row of five ran left into the card beside it
    (T-146) */
-.acx-card .acts { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+.acx-card .acts { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line-2); }
+.acx-card .acts .text:not(.primary) { color: var(--fg-2); }
+.acx-card .acts .text:not(.primary):hover { color: var(--fg); }
 .acx-card .quota-refresh { width: 22px; height: 22px; margin: 0; opacity: 1; }
 #acxView[hidden], .acx-tools .sess-pick[hidden] { display: none; }
 /* a narrow window: who on its own line, the windows and requests under it */
@@ -85,7 +110,7 @@
 .acx-held-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .acx-held-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acx-held-until { color: var(--muted); white-space: nowrap; }
-.acx-state.authfail { color: var(--amber); background: var(--amber-soft); }
+.acx-state.authfail { --dot: var(--amber); color: var(--amber); }
 /* a paid period's pill and its date editor (renew.js), on an account's
    row (T-154) and an IP's (T-155): quiet until it is due */
 .renew-pill { flex: 0 1 auto; min-width: 0; max-width: 100%; padding: 1px 7px; border: 0; border-radius: 9px; font: inherit; font-size: 11px; font-weight: 500; color: var(--muted); background: var(--pill); cursor: pointer; white-space: normal; overflow-wrap: anywhere; text-align: left; }
@@ -140,7 +165,13 @@
 
 /* Add account, Refresh all usage and Refresh list over the list, and the
    sign-in Add account opens (acxAddDraw) */
-.acx-top { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 2px 0 8px; }
+.acx-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 4px 0 10px; }
+/* Add account filled black on white (white on black dark), the other two
+   outlined grey */
+.acx-top .text { padding: 4px 12px; border-radius: 7px; font-size: 12.5px; font-weight: 500; color: var(--fg-2); box-shadow: inset 0 0 0 1px var(--line); background: var(--card); }
+.acx-top .text:hover { color: var(--fg); box-shadow: inset 0 0 0 1px var(--faint); }
+.acx-top .acx-add { color: var(--card); background: var(--fg); box-shadow: none; }
+.acx-top .acx-add:hover, .acx-top .acx-add.on { color: var(--card); background: var(--fg-2); box-shadow: none; }
 .acx-top .busy { opacity: .6; }
 .acx-adding { margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
 .acx-adding[hidden] { display: none; }
@@ -155,10 +186,17 @@
 .acx-adding .signing { border: 1px solid var(--line); border-radius: 10px; }
 .acx-add-done { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; font-size: 12.5px; }
 /* a card's letter, and its vendor's logo at the right */
-.acx-avatar { flex: none; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; font-weight: 600; font-size: 14px; color: #fff; background: hsl(var(--acx-hue, 210) 45% 42%); }
-.acx-head > .ic:last-child { margin-left: auto; }
+/* the letter on one of four greys, the same for a name each time */
+.acx-avatar { flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; font-weight: 600; font-size: 14px; color: var(--card); background: var(--fg); }
+.acx-avatar[data-tone="1"] { background: var(--fg-2); }
+.acx-avatar[data-tone="2"] { color: var(--fg); background: var(--pill); box-shadow: inset 0 0 0 1px var(--line); }
+.acx-avatar[data-tone="3"] { color: var(--fg); background: var(--card); box-shadow: inset 0 0 0 1px var(--faint); }
+/* its vendor's logo grey, in its own colours under the pointer */
+.acx-head > .ic:last-child { margin-left: auto; filter: grayscale(1); opacity: .7; transition: filter .15s, opacity .15s; }
+.acx-card:hover .acx-head > .ic:last-child { filter: none; opacity: 1; }
 /* today's, 7 and 30 days' cost and requests on a card */
-.acx-spans { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 8px; border-radius: 8px; background: var(--card-2); }
-.acx-span { display: flex; flex-direction: column; min-width: 0; font-size: 11px; color: var(--muted); }
+.acx-spans { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; padding: 8px 0; border-radius: 9px; background: var(--card-2); box-shadow: inset 0 0 0 1px var(--line-2); }
+.acx-span { display: flex; flex-direction: column; min-width: 0; padding: 0 10px; font-size: 11px; color: var(--muted); }
+.acx-span + .acx-span { border-left: 1px solid var(--line); }
 .acx-span b { font-size: 13px; font-weight: 550; color: var(--fg); font-variant-numeric: tabular-nums; }
 .acx-span-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

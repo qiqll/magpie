@@ -603,12 +603,90 @@ function acxRenew(r) {
     () => { acxRenewing = ""; acxDraw(); });
 }
 
+// the kinds of allowance a card groups its windows by (需求方 2026-11-13),
+// in this order
+const ACX_QKINDS = [["5h", "5 hours"], ["7d", "Weekly"], ["month", "Monthly"], ["model", "Per model"], ["credit", "Credits and balance"], ["other", "Other"]];
+// the names that say no more than their kind: the kind's heading says it,
+// and the window's bar is drawn without it
+const ACX_QPLAIN = [["5h", /^5 ?h(ours?)?$/i], ["7d", /^(7 days|weekly|week)$/i], ["month", /^(month|monthly|30 days)$/i]];
+const acxQPlain = (k, w) => ACX_QPLAIN.some(([q, re]) => q === k && re.test(String(w.name || "").trim()));
+// acxQKind: a window's kind — by how the menu bar names it (trayKind), else
+// by its name; a wallet or a count in a unit is credit, one model's or a
+// pool's per model, a row of text other
+function acxQKind(w) {
+  if (w.text) return "other";
+  if (w.balance != null) return "credit";
+  const tk = w.trayKind || "";
+  if (tk && !tk.startsWith("name:")) {
+    if (tk === "5h") return "5h";
+    if (tk === "7d" || tk.startsWith("7d:")) return w.trayExtra ? "model" : "7d";
+    if (tk === "month" || tk.startsWith("month:")) return "month";
+  }
+  const n = String(w.name || "").trim();
+  for (const [k, re] of ACX_QPLAIN) if (re.test(n)) return k;
+  if (w.unit) return "credit";
+  if (w.family || w.pool || w.trayExtra) return "model";
+  return "other";
+}
+
+// acxQText: a window that is a figure, not a share: its name and what it
+// says (a wallet's balance left, a plugin's row of text)
+function acxQText(w) {
+  const row = el("div", "acx-qtext");
+  const said = w.display || (w.balance != null ? fmtN(w.balance) + (w.unit ? " " + w.unit : "") : "");
+  row.append(el("span", "acx-wn", t(w.name)), el("span", "acx-qv", said || "—"));
+  row.title = t(w.name) + (said ? " · " + said : "");
+  return row;
+}
+
+// acxQuotaBox: a card's allowances, each kind under its name: the windows
+// with a share as bars with their reset, a wallet's or a plugin's figure
+// as text, and an API key's balance as credit
+function acxQuotaBox(q) {
+  const box = el("div", "acx-wins");
+  if (q?.error) {
+    box.append(el("span", "acx-err", t("Couldn't read its usage")));
+    return box;
+  }
+  const by = new Map();
+  for (const w of q?.windows || []) {
+    const k = acxQKind(w);
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(w);
+  }
+  if (q?.balance) {
+    if (!by.has("credit")) by.set("credit", []);
+    by.get("credit").push({ name: "Balance", display: q.balance, text: true });
+  }
+  if (!by.size) {
+    box.append(el("span", "acx-none", "—"));
+    return box;
+  }
+  for (const [k, said] of ACX_QKINDS) {
+    const ws = by.get(k);
+    if (!ws) continue;
+    const g = el("div", "acx-qg");
+    g.dataset.kind = k;
+    g.append(el("div", "acx-qk", t(said)));
+    for (const w of ws) {
+      if (w.text || w.balance != null) { g.append(acxQText(w)); continue; }
+      const m = acxMeter(w, true);
+      if (acxQPlain(k, w)) m.classList.add("plain");
+      g.append(m);
+    }
+    box.append(g);
+  }
+  return box;
+}
+
 // acxMeter: a window as a bar, its name and the share used; with its
-// reset beside it on a card (long)
+// reset beside it on a card (long), and its count where the vendor counts
+// one (120 / 500 credits)
 function acxMeter(w, long) {
   const pct = Math.max(0, Math.min(100, Math.round(w.unlimited ? 0 : w.used || 0)));
   const m = el("div", "acx-meter" + (pct >= 90 ? " full" : pct >= 70 ? " high" : ""));
-  const reset = w.resetsAt ? resetText(new Date(w.resetsAt)) : "";
+  const count = w.limit > 0 ? fmtN(w.amount || 0) + " / " + fmtN(w.limit) + (w.unit ? " " + w.unit : "") : "";
+  const reset = [count, w.resetsAt ? resetText(new Date(w.resetsAt)) : ""].filter(Boolean).join(" · ");
   m.title = t(w.name) + " · " + (w.unlimited ? t("Unlimited") : t("{n}% used", { n: pct })) + (reset ? " · " + reset : "");
   const bar = el("span", "acx-bar");
   const fill = el("span", "");
@@ -639,7 +717,7 @@ function acxCard(r) {
   const head = el("div", "acx-head");
   const [who, alias] = acxWho(r);
   who.append(el("div", "sub", [p.name, alias ? l.user : ""].filter(Boolean).join(" · ")));
-  // its letter on a colour of its own (the same each time), its vendor's
+  // its letter on a grey of its own (the same each time), its vendor's
   // logo at the right (需求方 2026-11-13, after the screenshot)
   head.append(acxAvatar(alias || l.user), who, icon(p.icon || a.agent, true));
   card.append(head);
@@ -667,12 +745,7 @@ function acxCard(r) {
   if (proxy) fact("Proxy", "acx-proxy", proxyShown(proxy));
   card.append(facts);
 
-  const wins = el("div", "acx-wins");
-  const ws = acxWindows(q);
-  for (const w of ws) wins.append(acxMeter(w, true));
-  if (q?.error) wins.append(el("span", "acx-err", t("Couldn't read its usage")));
-  else if (!ws.length) wins.append(el("span", "acx-none", q?.balance ? q.balance : "—"));
-  card.append(wins);
+  card.append(acxQuotaBox(q));
 
   const stats = el("div", "acx-stats");
   stats.title = t("In the last 5 hours, through the gateway: {n} tokens", { n: fmtN(r.tokens) });
@@ -691,13 +764,14 @@ function acxCard(r) {
   return card;
 }
 
-// acxAvatar: a name's first letter on a hue worked out from the name
+// acxAvatar: a name's first letter on a grey worked out from the name
 function acxAvatar(name) {
   const s = String(name || "?").trim() || "?";
   let h = 0;
   for (const c of acxLow(s)) h = (h * 31 + c.codePointAt(0)) % 360;
   const a = el("span", "acx-avatar", [...s][0].toUpperCase());
-  a.style.setProperty("--acx-hue", String(h));
+  // one of a few greys, the same each time, so cards side by side tell apart
+  a.dataset.tone = String(h % 4);
   a.setAttribute("aria-hidden", "true");
   return a;
 }

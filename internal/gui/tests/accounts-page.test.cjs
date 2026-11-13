@@ -81,7 +81,9 @@ const quotas = [
   { provider: "claude", name: "Claude", user: "alice@example.com", windows: [w("5 hours", 42, "5h"), w("7 days", 18, "7d")] },
   { provider: "claude", name: "Claude", user: "bob@example.com", windows: [w("5 hours", 100, "5h"), w("7 days", 64, "7d")] },
   { provider: "claude", name: "Claude", user: "carol@example.com", error: "401" },
-  { provider: "codex", name: "Codex", user: "ops@example.com", windows: [w("5 hours", 73, "5h"), w("Weekly", 100, "7d")] },
+  // a count in credits and a row of text, beside its 5 hours and week: a
+  // card shows each under its kind (需求方 2026-11-13), a row the two bars
+  { provider: "codex", name: "Codex", user: "ops@example.com", windows: [w("5 hours", 73, "5h"), w("Weekly", 100, "7d"), { name: "Credits", used: 24, amount: 120, limit: 500, unit: "credits", resetsAt: later }, { name: "Extra usage", used: 0, text: true, display: "$3.20 spent" }] },
   // two weeks of one span, as Antigravity's pools: the menu bar's kinds
   // are "7d:<name>" (trayChoices); one used up, one with room
   { provider: "codex", name: "Codex", user: "qa@example.com", windows: [w("5 hours", 0, "5h"), w("Gemini · 7 days", 100, "7d:gemini · 7 days"), w("Claude · 7 days", 7, "7d:claude · 7 days")] },
@@ -272,6 +274,7 @@ const cardsOf = (page) => page.evaluate(() => [...document.querySelectorAll("#ac
   facts: Object.fromEntries([...c.querySelectorAll(".acx-facts dd")].map((d) => [d.className, d.textContent])),
   windows: [...c.querySelectorAll(".acx-meter")].map((m) => [m.querySelector(".acx-pct").textContent, !!m.querySelector(".acx-reset")?.textContent]),
   stats: [...c.querySelectorAll(".acx-stat b")].map((b) => b.textContent),
+  kinds: [...c.querySelectorAll(".acx-qg")].map((g) => [g.dataset.kind, g.querySelectorAll(".acx-meter").length, g.querySelectorAll(".acx-qtext").length]),
   acts: [...c.querySelectorAll(".acts .text")].map((b) => b.textContent),
 })));
 
@@ -323,6 +326,15 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // every window, each with its reset
         assert.deepEqual(card("alice@example.com").windows, [["42%", true], ["18%", true]]);
         assert.deepEqual(card("carol@example.com").windows, []);
+        // each window under its kind: 5 hours, weekly (a pool's week too),
+        // a count in credits with its count, a row of text as its text
+        assert.deepEqual(card("alice@example.com").kinds, [["5h", 1, 0], ["7d", 1, 0]]);
+        assert.deepEqual(card("qa@example.com").kinds, [["5h", 1, 0], ["7d", 2, 0]]);
+        assert.deepEqual(card("ops@example.com").kinds, [["5h", 1, 0], ["7d", 1, 0], ["credit", 1, 0], ["other", 0, 1]]);
+        assert.deepEqual(card("carol@example.com").kinds, []);
+        const ops = page.locator('#acxList .acx-card[data-user="ops@example.com"]');
+        assert.match(await ops.locator('.acx-qg[data-kind="credit"] .acx-reset').textContent(), new RegExp("^" + (await page.evaluate(() => fmtN(120) + " / " + fmtN(500))) + " credits"));
+        assert.equal(await ops.locator('.acx-qg[data-kind="other"] .acx-qv').textContent(), "$3.20 spent");
         // the last 5 hours: requests, failed, tokens, cost
         const [calls, failed, tokens, cost] = card("alice@example.com").stats;
         assert.deepEqual([calls, failed, cost], ["128", "3", "$1.50"]);
