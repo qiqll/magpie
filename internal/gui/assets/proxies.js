@@ -163,12 +163,23 @@ function typedProxyTest(auth, addr) {
 }
 
 // savedProxyFill adds Saved… to a proxy's login row (auth): the saved
-// proxy picked is put in addr, its login moved into the row's fields as a
-// pasted one is, then after is called. None in the saved list's own form.
-// A typed proxy's row (proxyLoginRow) gets its Test here too.
+// proxy picked, or a proxy a Proxy IPs one goes out through (ipProxies,
+// drawn again once they are read, if they change what it lists: a menu
+// open from it stays), is put in addr, its login moved into the row's
+// fields as a pasted one is, then after is called. None in the saved
+// list's own form. A typed proxy's row (proxyLoginRow) gets its Test here
+// too.
 window.savedProxyFill = function (auth, addr, after) {
   if (auth.classList.contains("proxy-login")) typedProxyTest(auth, addr);
-  const ps = (state?.settings || prefs)?.proxies || [];
+  savedProxyButton(auth, addr, after);
+  window.ipProxiesRead?.().then(() => savedProxyButton(auth, addr, after, true));
+};
+function savedProxyButton(auth, addr, after, again) {
+  const ps = [...(state?.settings || prefs)?.proxies || []];
+  for (const x of window.ipProxies?.() || []) if (!ps.some((p) => p.url === x.url)) ps.push(x);
+  const drawn = JSON.stringify(ps);
+  if (again && auth.savedDrawn === drawn) return;
+  auth.savedDrawn = drawn;
   auth.querySelector(".saved-proxy")?.remove();
   if (!ps.length || auth.closest(".saved-proxies")) return;
   const b = el("button", "link saved-proxy", t("Saved…"));
@@ -188,7 +199,7 @@ window.savedProxyFill = function (auth, addr, after) {
   const at = auth.querySelector(".typed-proxy-test");
   if (at) at.before(b);
   else auth.append(b);
-};
+}
 
 // pastePickFill draws, beside a sign-in's Callback URL field, the proxy
 // the address is traded through (T-110): the global one, Direct, a saved
@@ -197,6 +208,7 @@ window.savedProxyFill = function (auth, addr, after) {
 // above instead. Finish sign-in sends flow.pasteVia (pasteViaOf).
 window.pastePickFill = function (box, sub, flow) {
   box.replaceChildren();
+  window.ipProxiesRead?.();
   if (flow.proxyFixed) {
     box.append(el("span", "s proxy-fixed", t("This sign-in keeps the proxy it started through. To finish it through another, pick it from Proxy above: the sign-in starts again.")));
     return;

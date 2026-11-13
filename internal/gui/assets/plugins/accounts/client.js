@@ -49,8 +49,8 @@ magpie.plugin("accounts", (ctx) => {
   // Models › Proxy IPs (T-155): the proxy exit IPs paid by the month, each
   // with its start date and the period pill Accounts' rows have (renew.js),
   // and the accounts going out through it (T-170), found by a word, its
-  // period or its accounts (T-176); ips.js, after app.js
-  // and page.js, is its code
+  // period or its accounts (T-176), and proxies are pasted in a batch
+  // (ipsbatch.js); ips.js, after app.js and page.js, is its code
   ctx.slots.add("page", {
     key: "ips",
     title: "Proxy IPs",
@@ -60,7 +60,8 @@ magpie.plugin("accounts", (ctx) => {
   <div class="list ips-list" id="ipsList" hidden></div>
   <p class="acx-err ips-err" id="ipsErr" role="alert" hidden></p>
   <p class="ips-said" id="ipsSaid" role="status" hidden></p>
-  <div class="ips-tools"><button class="text ips-add" id="ipsAdd" type="button" hidden data-t>Add IP</button><button class="text ips-import" id="ipsImport" type="button" hidden data-t>Import from accounts</button></div>
+  <div class="ips-tools"><button class="text ips-add" id="ipsAdd" type="button" hidden data-t>Add IP</button><button class="text ips-import" id="ipsImport" type="button" hidden data-t>Import from accounts</button><button class="text ips-batch" id="ipsBatch" type="button" hidden data-t>Batch add</button></div>
+  <div class="ips-batch-box" id="ipsBatchBox" hidden></div>
   <p class="usage-note acx-note" id="ipsNote"></p>
 `,
     mount() { ipsMount(); },

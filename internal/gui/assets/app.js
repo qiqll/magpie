@@ -12878,8 +12878,8 @@ function signInThrough(sub, v) {
   startPluginSignIn(sub, f?.method, f?.inputs || {}, o);
 }
 
-// signInProxyChoices: global, none, the subscription's, its accounts', or
-// typed; no global while the subscription has its own and accounts.
+// signInProxyChoices: global, none, the subscription's, its accounts', a
+// saved or Proxy IPs one, or typed; no global with its own and accounts.
 function signInProxyChoices(sub) {
   const p = providers?.providers?.find((x) => x.account?.agent === sub.agent);
   const own = (p?.proxy || "").trim();
@@ -12896,17 +12896,16 @@ function signInProxyChoices(sub) {
   opts.push({ v: "direct", name: "Direct", note: "Through no proxy" });
   if (own) add(own, t("{name}'s proxy", { name: sub.name }));
   for (const [u, v] of Object.entries(p?.accountProxies || {})) add((v || "").trim(), t("{user}'s proxy", { user: u }));
-  for (const x of (state?.settings || prefs)?.proxies || []) add(x.url, x.name);
+  for (const x of [...(state?.settings || prefs)?.proxies || [], ...window.ipProxies?.() || []]) add(x.url, x.name);
   if (signing.proxy) add(signing.proxy, "");
   opts.push({ v: "\x01", name: "Custom…", note: "http://, https:// or socks5://" });
   return opts;
 }
 
-// signInProxyLink: the proxy the sign-in goes through, a link that picks
-// another.
+// signInProxyLink: the sign-in's proxy, a link that picks another.
 function signInProxyLink(sub) {
+  window.ipProxiesRead?.();
   const b = el("button", "link via", t("Proxy: {proxy}", { proxy: proxyName(signing.proxy) }));
-  // the whole address too, which a narrow sheet cuts short
   b.title = proxyName(signing.proxy) + "\n" + t("The sign-in goes through this proxy, as the account's requests will. One picked here is kept as the account's.");
   b.setAttribute("aria-haspopup", "menu");
   b.setAttribute("aria-expanded", "false");

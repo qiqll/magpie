@@ -47,6 +47,25 @@ try {
   ipsRenew = localStorage.getItem("magpie.ipsRenew") || "";
 } catch {}
 
+// ipsPicks: each proxy an IP here goes out through, as { url, name }, for
+// every place a proxy is picked: a sign-in's Proxy and Through menus
+// (signInProxyChoices) and Saved… beside a proxy's login (savedProxyFill)
+// (需求方 2026-11-13: an IP added here wasn't offered when adding an
+// account). Read when one of them is drawn, again once 30s old, and kept
+// as this page reads and saves the list.
+let ipsPicks = null, ipsPicksAt = 0, ipsPicksAsk = null;
+function ipsPicksSet(xs) {
+  const seen = new Set();
+  ipsPicks = xs.flatMap((x) => (x.proxies || []).filter((u) => !seen.has(u) && seen.add(u)).map((url) => ({ url, name: x.name ? x.ip + " · " + x.name : x.ip })));
+  ipsPicksAt = Date.now();
+}
+window.ipProxies = () => ipsPicks || [];
+window.ipProxiesRead = function () {
+  if (ipsPicks && Date.now() - ipsPicksAt < 30e3) return Promise.resolve(ipsPicks);
+  return (ipsPicksAsk ||= api("ips").then((got) => { ipsPicksSet(got.ips || []); return ipsPicks; }, () => ipsPicks || [])
+    .finally(() => { ipsPicksAsk = null; }));
+};
+
 function ipsMount() {
   const q = $("#ipsQ");
   q.value = ipsQuery;
@@ -60,6 +79,7 @@ function ipsMount() {
   const add = $("#ipsAdd");
   add.onclick = () => { ipsEdit = -1; ipsDraft = { ip: "", name: "", proxies: [], proxy: "" }; ipsErr = ""; ipsSaid = ""; ipsDraw(); };
   $("#ipsImport").onclick = ipsImport;
+  $("#ipsBatch").onclick = ipsBatchOpen;
 }
 
 // ipsBound: what can go out through a proxy of its own, each as
@@ -239,6 +259,7 @@ async function ipsLoad() {
     ipsList = got.ips || [];
     ipsRev = got.rev || "";
     ipsErr = "";
+    ipsPicksSet(ipsList);
   } catch (e) {
     ipsList = null;
     ipsErr = t("Couldn't read the IPs: {error}", { error: e.message });
@@ -259,6 +280,7 @@ async function ipsKeep(next) {
     ipsList = got.ips || [];
     ipsRev = got.rev || "";
     ipsErr = "";
+    ipsPicksSet(ipsList);
     return true;
   } catch (e) {
     // read again first: a read that went through clears the last error
@@ -359,10 +381,13 @@ function ipsDraw() {
   if (ipsEdit === -1) list.append(ipsForm(-1));
   list.hidden = !list.childElementCount;
   if (typing) list.querySelector(".ips-form ." + typing.split(" ")[0])?.focus();
-  $("#ipsAdd").hidden = !ipsList || ipsEdit !== null;
+  $("#ipsAdd").hidden = !ipsList || ipsEdit !== null || ipsBatchOn;
   $("#ipsAdd").disabled = ipsImporting;
+  // Batch add (ipsbatch.js), its form open in place of these
+  $("#ipsBatch").hidden = !ipsList || ipsEdit !== null || ipsBatchOn;
+  $("#ipsBatch").disabled = ipsImporting;
   const imp = $("#ipsImport");
-  imp.hidden = !ipsList || ipsEdit !== null || !providers;
+  imp.hidden = !ipsList || ipsEdit !== null || !providers || ipsBatchOn;
   imp.classList.toggle("busy", ipsImporting);
   imp.disabled = ipsImporting;
   imp.textContent = t(ipsImporting ? "Reading the accounts' proxies…" : "Import from accounts");
