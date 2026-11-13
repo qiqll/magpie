@@ -2599,8 +2599,11 @@ audio, videos, Codex's backend) has a user: one with a user the header
 can't take is a 400 that says why, and nothing is sent. One that names
 no user (no `X-Magpie-User`, or a blank one) is the user `other10000`'s:
 a user like any other, bound to accounts of its own and held to its
-tier's, as a request that names `other10000` itself is, so every caller
-that names none shares that one user's accounts. Like any user it is
+tier's share, as a request that names `other10000` itself is, so every
+caller that names none shares that one user's accounts. Unlike any other
+user it has no most accounts of a provider: its tier's `max_accounts`
+doesn't hold it, and it is given a spare as each it has is out, till
+every account of the provider is. Like any user it is
 one per gateway key, and one for all the keys that share their users
 (and callers with no key): their callers that name no user share its
 accounts, its tier's count and its usage, which any of them can read by

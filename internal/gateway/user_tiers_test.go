@@ -160,6 +160,26 @@ func TestUserTierSetsItsAccounts(t *testing.T) {
 	}
 }
 
+// A request that names no user, DefaultUser's, is held to no number of
+// accounts (需求方 2026-11-13): it is given a spare as each it has is out,
+// past its tier's max_accounts, till every account is; a user named, of
+// the same default tier, still stops at its 2.
+func TestDefaultUserHasNoMostAccounts(t *testing.T) {
+	codexSignedIn(t, "b@example.com", "c@example.com", "d@example.com", "e@example.com")
+	out, asked := limitUpstream(t)
+	s := byUser(New())
+	got, rec := spend(t, s, DefaultUser, "", out, asked)
+	if len(got) != 5 || rec.Code != 429 || strings.Contains(refusedWhy(s), "at its tier") {
+		t.Fatalf("%s: answered by %v, then %d %s %s", DefaultUser, got, rec.Code, refusedWhy(s), rec.Body.String())
+	}
+	if n := len(seatsIn(t, "codex")[DefaultUser]); n != 5 {
+		t.Fatalf("%s on %d accounts", DefaultUser, n)
+	}
+	if r := lastRoute(s); r.User == nil || r.User.Tier != "free" {
+		t.Fatalf("route %+v", r.User)
+	}
+}
+
 // A request that leaves the tier out is of the tier its user's binding
 // keeps: a user bound at pro is given pro's accounts, not the default's,
 // and the binding keeps pro. A user bound to none is of the default, as

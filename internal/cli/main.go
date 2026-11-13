@@ -132,7 +132,7 @@ const usage = `magpie — one place to pick every agent's model
                                   run the gateway alone (the app runs it too); --web serves magpie web's page too, from the same process (127.0.0.1:3430 unless told);
                                   with a certificate and key (PEM; MAGPIE_TLS_CERT, MAGPIE_TLS_KEY) other computers reach both over https://
                                   --bind=session (the default) keeps each conversation where its affinity says; --bind=user keeps each user
-                                  named in X-Magpie-User on accounts of its own (one without is the user other10000's), as many of a provider
+                                  named in X-Magpie-User on accounts of its own (one without is the user other10000's, held to no number), as many of a provider
                                   as its tier (X-Magpie-User-Tier) has in user-tiers.json (free 2, plus 3, pro 4, max 5 without one); MAGPIE_BIND
   magpie daemon [install|uninstall|start|stop|restart|status]
                                   magpie serve as a service of yours, from boot or login and started again when it stops (systemd --user on Linux, launchd on the Mac)

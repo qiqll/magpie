@@ -1062,6 +1062,12 @@ func bindUser(keyID, user string, tier Tier, named bool, p provider.Provider, ca
 	// the tier the request named, kept as the binding's
 	keepTier := func() bool { return named && setTier(keyID, p.ID, user, tier.Name) }
 	ub := &UserBound{User: user, Tier: tier.Name, key: keyID, pid: p.ID, max: tier.MaxAccounts, tier: tier}
+	// DefaultUser, every request that names no user, is held to no
+	// number of accounts (需求方 2026-11-13): its tier's share and when a
+	// spare is added still hold
+	if user == DefaultUser {
+		ub.max = math.MaxInt
+	}
 	// users idle for days let go of their seats before any are counted;
 	// never written over a file that doesn't read, but this request seen
 	// all the same
