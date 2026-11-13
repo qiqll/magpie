@@ -290,6 +290,9 @@ func usageRoutes(mux *http.ServeMux, w Windows) {
 		// and which an account can't spend for another window used up,
 		// for the accounts' sum (#4791)
 		qs = provider.WithHeldWindows(qs, usage.Clock())
+		// and a Claude account's Sonnet and Fable weeks, 0% before their
+		// first request (claudeModelWeeks)
+		qs = claudeModelWeeks(qs)
 		// and which the menu bar can show, by kind, for Settings to pick
 		// among (settings.TrayWindows)
 		qs = withTrayKinds(qs)
@@ -312,7 +315,7 @@ func usageRoutes(mux *http.ServeMux, w Windows) {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 		provider.RefreshUsage(ctx, id, r.URL.Query().Get("user"))
-		writeJSON(rw, withTrayKinds(provider.WithHeldWindows(provider.WithWindowStarts(usage.WithWindowHolds(provider.InProviderOrder(provider.WithCheckins(provider.Quotas(ctx))), usage.Clock()), usage.Clock()), usage.Clock())))
+		writeJSON(rw, withTrayKinds(claudeModelWeeks(provider.WithHeldWindows(provider.WithWindowStarts(usage.WithWindowHolds(provider.InProviderOrder(provider.WithCheckins(provider.Quotas(ctx))), usage.Clock()), usage.Clock()), usage.Clock()))))
 	})
 	// WorkBuddy's daily check-in pressed now, from the Usage card, for
 	// each account not in yet today, as `magpie accounts checkin` does; the
