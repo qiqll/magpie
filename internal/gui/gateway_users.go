@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/usage"
 )
 
 // usersShown is how many users the Gateway page is given at a time: a
@@ -91,6 +93,70 @@ type userJSON struct {
 	// within an hour; left out for one bound before it was kept
 	Used time.Time     `json:"used,omitzero"`
 	Keys []userKeyJSON `json:"keys"`
+	// Today is what it sent the provider today, in the reader's zone,
+	// under each of its row's keys (another group's user of the name is
+	// another row): nil when it sent nothing (需求方 2026-11-13)
+	Today *userTodayJSON `json:"today,omitempty"`
+}
+
+// userTodayJSON is a user's calls to a provider today: requests, tokens in
+// and out (cache aside, as the Usage page's Tokens), and their cost in USD
+// at the ledger's prices, Unpriced those with tokens but no known price.
+type userTodayJSON struct {
+	Calls    int     `json:"calls"`
+	Tokens   int     `json:"tokens"`
+	Cost     float64 `json:"cost"`
+	Unpriced int     `json:"unpriced,omitempty"`
+}
+
+// usersTodayMemo keeps the last worked-out day of users' calls a little
+// while: the page asks again for each search typed, and the day's log is
+// read once for them all.
+var usersTodayMemo struct {
+	sync.Mutex
+	since time.Time
+	at    time.Time
+	by    map[[3]string]*userTodayJSON
+}
+
+// usersToday is every user's calls today in zone, by provider (as it is
+// named now, a renamed one's older calls under its new id), user and the
+// gateway key it came with ("" none, as userKey binds it), the calls that
+// named a user only; a rejected call, which went to no provider, is none.
+func usersToday(zone *time.Location) map[[3]string]*userTodayJSON {
+	now := usage.Clock().In(zone)
+	since := usage.Today.Since(now)
+	m := &usersTodayMemo
+	m.Lock()
+	defer m.Unlock()
+	if m.by != nil && m.since.Equal(since) && now.Sub(m.at) >= 0 && now.Sub(m.at) < 20*time.Second {
+		return m.by
+	}
+	by := map[[3]string]*userTodayJSON{}
+	cost, renamed := usage.NewCoster(), provider.UsageRenames()
+	usage.Visit(since, func(r usage.Record) {
+		if r.User == "" || r.IsRejected() || r.Time.Before(since) {
+			return
+		}
+		k := [3]string{renamed.Of(r.Provider, r.Time), r.User, r.CallerKeyID}
+		d := by[k]
+		if d == nil {
+			d = &userTodayJSON{}
+			by[k] = d
+		}
+		// a try handed on is no request, but its tokens were spent
+		if !r.HandedOn {
+			d.Calls++
+		}
+		d.Tokens += r.Input + r.Output
+		if c, priced := cost(r); priced {
+			d.Cost += c
+		} else {
+			d.Unpriced++
+		}
+	})
+	m.since, m.at, m.by = since, now, by
+	return by
 }
 
 // userKeyJSON is a user's binding under one gateway key: its accounts,
@@ -184,6 +250,28 @@ func (m userMerged) shown(p providerShown, keyNames map[string]string, keyGone f
 	return u
 }
 
+// todayOf is u's calls today under each of its keys, each key once; nil
+// for none.
+func todayOf(today map[[3]string]*userTodayJSON, u userJSON) *userTodayJSON {
+	var out *userTodayJSON
+	seen := map[string]bool{}
+	for _, k := range u.Keys {
+		d := today[[3]string{u.Provider, u.User, k.Key}]
+		if seen[k.Key] || d == nil {
+			continue
+		}
+		seen[k.Key] = true
+		if out == nil {
+			out = &userTodayJSON{}
+		}
+		out.Calls += d.Calls
+		out.Tokens += d.Tokens
+		out.Cost += d.Cost
+		out.Unpriced += d.Unpriced
+	}
+	return out
+}
+
 // gatewayUserRoutes serves the Gateway page's User bindings: each
 // provider's accounts with how many of the caller's users are bound to
 // them and whether each is out, and the users with their first and spare
@@ -255,6 +343,7 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			out["accounts"] = userAccounts(merged, byID, seats, bind.rests, nameOf, providerGone)
 		}
 		words := strings.Fields(strings.ToLower(q))
+		today := usersToday(usage.Zone(r.URL.Query().Get("tz")))
 		users := []userJSON{}
 		matched := 0
 		for _, m := range merged {
@@ -274,7 +363,9 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			if len(users) == usersShown {
 				continue
 			}
-			users = append(users, m.shown(p, keyNames, keyGone))
+			u := m.shown(p, keyNames, keyGone)
+			u.Today = todayOf(today, u)
+			users = append(users, u)
 		}
 		out["matched"], out["users"] = matched, users
 		writeJSON(w, out)

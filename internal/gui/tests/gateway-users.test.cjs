@@ -38,7 +38,7 @@ const providers = {
 };
 const seat = (p, a) => `${p}@${a}`;
 const everyone = [
-  { user: "1", provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), spares: [{ account: "b@x.com", seat: seat("antigravity", "b@x.com"), at }], key: "k1", keyName: "Tenant A", at, tier: "pro", used },
+  { user: "1", provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), spares: [{ account: "b@x.com", seat: seat("antigravity", "b@x.com"), at }], key: "k1", keyName: "Tenant A", at, tier: "pro", used, today: { calls: 42, tokens: 12345, cost: 1.5 } },
   { user: "2", provider: "antigravity", providerName: "Antigravity", account: "b@x.com", seat: seat("antigravity", "b@x.com"), spares: [{ account: "f@x.com", seat: seat("antigravity", "f@x.com"), at }], key: "k1", keyName: "Tenant A", at },
   { user: "3", provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), spares: [{ account: "e@x.com", seat: seat("antigravity", "e@x.com"), at }], key: "", keyName: "", at },
   { user: "4", provider: "codex", providerName: "ChatGPT", account: "c@x.com", seat: seat("codex", "c@x.com"), key: "gone", keyName: "", keyGone: true, at },
@@ -243,6 +243,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.doesNotMatch(unknownKey, new RegExp(w.removed));
         assert.doesNotMatch(unknownKey, new RegExp(w.bound), "no time is said for a binding without one");
         assert.equal(await userRows.nth(0).locator("button.copy").count(), 1, "the user's id has a copy button");
+        // its id said as one, and its use today at the right; one that sent
+        // nothing today says "—" (需求方 2026-11-13)
+        assert.equal(await userRows.nth(0).locator(".user-id-v").textContent(), "1");
+        assert.equal(await userRows.nth(0).locator(".user-today b").textContent(), "$1.50");
+        assert.equal(await userRows.nth(0).locator(".user-today-n").textContent(), await page.evaluate(() => t("{n} req · {tok} tok", { n: fmtN(42), tok: fmtN(12345) })));
+        assert.equal(await userRows.nth(1).locator(".user-today.idle b").textContent(), "—");
+        // the bound time is its date, how long ago in its title
+        assert.equal(await userRows.nth(0).locator(".user-at").getAttribute("title"), await page.evaluate((a) => ago(a), at));
 
         // nothing runs past the page's width, the long id included
         const over = await page.locator("#view-gateway").evaluate((v) => {

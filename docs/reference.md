@@ -2914,8 +2914,12 @@ answer now (out, why and until when, one model's rest naming the model;
 "can answer"; one no longer on its provider said so), and the users with
 their first account and spares in order, each marked first or spare with
 its state, provider, gateway key, tier (the default's for one bound before
-tiers), when they were bound and when they last sent the provider a
-request ("last used", none for a binding from before it was kept), 200 at a time,
+tiers), the user's id marked as one, the date they were bound (how long
+ago in its tip) and when they last sent the provider a request ("last
+used", none for a binding from before it was kept), and at the right
+what they sent it today, in the reader's zone, under the row's own keys
+(cost, requests and tokens in and out, from the usage log; "—" for
+nothing today), 200 at a time,
 narrowed by a search, which matches a spare's account too. The same id
 sent with several gateway keys that share their users (and without a
 key) is one user, as the gateway counts it, so it is one row (the file

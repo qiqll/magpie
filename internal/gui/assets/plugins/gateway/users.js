@@ -34,7 +34,12 @@ async function loadUserBinds() {
   const read = ++userBindsRead;
   const q = userQuery.trim();
   let out;
-  try { out = await api("gateway/users" + (q ? "?q=" + encodeURIComponent(q) : "")); } catch (e) {
+  // today's use is the reader's day, in the zone the Usage page reads in
+  const zone = typeof usageZone === "function" ? usageZone() : "";
+  const qs = new URLSearchParams();
+  if (q) qs.set("q", q);
+  if (zone) qs.set("tz", zone);
+  try { out = await api("gateway/users" + (qs.size ? "?" + qs : "")); } catch (e) {
     out = { error: e.why ? t("user-accounts.json can't be read: {why}", { why: e.why }) : e.message };
   }
   if (read !== userBindsRead) return;
@@ -172,6 +177,22 @@ function userModeSays(m) {
 // aren't known
 const userTierOf = (k) => k.tier || userBindMode?.tiers?.default || "";
 
+// userToday: what a user sent its provider today under its row's keys —
+// the cost, the requests and tokens — "—" when nothing
+function userToday(u) {
+  const d = u.today;
+  const box = el("div", "user-today" + (d ? "" : " idle"));
+  box.append(el("span", "user-today-k", t("Today")));
+  if (!d) {
+    box.append(el("b", "", "—"));
+    box.title = t("Nothing sent today");
+    return box;
+  }
+  box.append(el("b", "", fmtCost(d) || fmtCost({ cost: 0, unpriced: 0 })), el("span", "user-today-n", t("{n} req · {tok} tok", { n: fmtN(d.calls), tok: fmtN(d.tokens) })));
+  box.title = t("Today, under its own gateway keys: {n} requests, {tok} tokens", { n: fmtN(d.calls), tok: fmtN(d.tokens) });
+  return box;
+}
+
 function renderUserBinds() {
   const block = $("#userBindsBlock");
   if (!block) return;
@@ -250,11 +271,12 @@ function renderUserBinds() {
     const same = tiers.every((x) => x === tiers[0]);
     const keys = u.keys.map((k, i) => userKeyLabel(k) + (!same && tiers[i] ? ` (${t("tier {tier}", { tier: tiers[i] })})` : "")).join(", ");
     const sub = el("div", "sub wraps", [u.providerName, keys, ...(same && tiers[0] ? [t("tier {tier}", { tier: tiers[0] })] : [])].join(" · "));
-    // when it was first bound, under any key; a file edited by hand may
-    // leave the time out
+    // when it was first bound, under any key, as a date and how long ago
+    // in its title (需求方 2026-11-13); a file edited by hand may leave the
+    // time out
     if (u.at && !u.at.startsWith("0001-")) {
-      const when = el("span", "", " · " + t("bound {when}", { when: ago(u.at) }));
-      when.title = stamp(u.at);
+      const when = el("span", "user-at", " · " + t("bound {when}", { when: stamp(u.at) }));
+      when.title = ago(u.at);
       sub.append(when);
     }
     // when it last sent the provider a request, under any key; none kept for one bound
@@ -264,10 +286,13 @@ function renderUserBinds() {
       used.title = stamp(u.used);
       sub.append(used);
     }
-    const name = el("div", "name", u.user);
+    // the user's id, said as one by its "ID" mark (需求方 2026-11-13),
+    // drawn by the style so the name's text is the id alone
+    const name = el("div", "name user-id");
+    name.append(el("span", "user-id-v", u.user));
     name.title = u.user; // a long id is cut short in its row
     who.append(name, seats, sub);
-    row.append(icon(u.icon || "generic"), who, copyBtn(u.user, t("User id")));
+    row.append(icon(u.icon || "generic"), who, userToday(u), copyBtn(u.user, t("User id")));
     list.append(row);
   }
   if ((out.matched || 0) > users.length) {

@@ -3340,6 +3340,17 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .user-seat-held { display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: 0 6px; min-width: 0; }
 .user-seat-held .user-unbind { padding: 0 4px; min-height: 0; font-size: inherit; white-space: nowrap; }
 .user-seat.out::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--amber); vertical-align: 1px; }
+/* a user's id, said as one, and its use today at the row's right
+   (需求方 2026-11-13) */
+.user-bind .user-id { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.user-bind .user-id::before { content: "ID"; flex: none; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: .04em; line-height: 16px; color: var(--muted); background: var(--pill); }
+.user-id-v { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--code); font-size: 12.5px; }
+.user-today { flex: none; display: flex; flex-direction: column; align-items: flex-end; min-width: 6.5em; padding: 0 4px; font-size: 11px; color: var(--muted); }
+.user-today b { font-size: 13px; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+.user-today.idle b { color: var(--faint); font-weight: 500; }
+.user-today-k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; }
+.user-today-n { white-space: nowrap; font-variant-numeric: tabular-nums; }
+@media (max-width: 620px) { .user-bind { flex-wrap: wrap; } .user-bind .who { flex-basis: calc(100% - 40px); } .user-today { flex-direction: row; align-items: baseline; gap: 8px; margin-left: 30px; } }
 /* no gateway key yet: said in its card as Recent calls says it has none */
 #gatewayKeys .none { padding: 13px 14px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
 #view-gateway .row-head .find { margin-right: 8px; }
