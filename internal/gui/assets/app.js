@@ -12968,15 +12968,14 @@ function copilotHostSwitch(sub) {
   return b;
 }
 
-// signAsk: a sign-in that asks one value first (Copilot's GHE.com host, a
-// Claude setup-token); its sheet is in signsheets.js, loaded when asked for
+// signAsk: a sign-in asking one value first; its sheet in signsheets.js
 async function signAsk(flow) {
   try { await import("./signsheets.js"); } catch (err) { return statusErr(err); }
   stopSignIn();
   signing = flow;
   renderProviders();
 }
-const startClaudeToken = () => signAsk({ agent: "claude", state: "token", token: "" });
+const startClaudeToken = () => signAsk({ agent: "claude", state: "token", token: "", picked: signing?.picked });
 
 // dropSigningIn: an editor closing leaves no sign-in waiting (#526); an
 // import being read finishes.

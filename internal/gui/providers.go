@@ -3287,17 +3287,35 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 	// Claude Code takes in CLAUDE_CODE_OAUTH_TOKEN: nothing is asked of
 	// Anthropic, and the token is never echoed back.
 	mux.HandleFunc("POST /api/signin/claude-token", func(rw http.ResponseWriter, r *http.Request) {
-		var in struct{ Token string }
+		// the proxy picked for it, kept as a sign-in keeps its own: none
+		// sent leaves the proxies as they are (需求方 2026-11-13: one
+		// picked before Use a setup-token was dropped)
+		var in struct {
+			Token string
+			Proxy *string
+		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&in); err != nil {
 			fail(rw, err)
 			return
+		}
+		if in.Proxy != nil {
+			if err := settings.CheckProxy(*in.Proxy); err != nil {
+				fail(rw, err)
+				return
+			}
 		}
 		user, err := provider.AddClaudeSetupToken(in.Token)
 		if err != nil {
 			fail(rw, err)
 			return
 		}
-		writeJSON(rw, map[string]string{"user": user})
+		out := map[string]string{"user": user}
+		if in.Proxy != nil {
+			if err := provider.KeepSignInProxy("claude", user, *in.Proxy); err != nil {
+				out["error"] = "added, but its proxy wasn't kept: " + err.Error()
+			}
+		}
+		writeJSON(rw, out)
 	})
 	// Accounts brought in from another tool's export (Antigravity's, from
 	// Antigravity Cockpit, Antigravity Manager, CLIProxyAPI; ChatGPT's and

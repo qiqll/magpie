@@ -115,6 +115,7 @@ func AddClaudeSetupToken(token string) (string, error) {
 	if _, err := addLogin(l); err != nil {
 		return "", err
 	}
+	noteSignedIn("claude", l.User)
 	return l.User, nil
 }
 

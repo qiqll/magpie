@@ -161,6 +161,10 @@ func keyProxies(p Provider) map[string]string {
 	return out
 }
 
+// KeepSignInProxy is keepSignInProxy for an account not added by a
+// sign-in flow: a Claude setup-token's, given the proxy picked before it.
+func KeepSignInProxy(id, user, proxy string) error { return keepSignInProxy(id, user, proxy) }
+
 // keepSignInProxy keeps the proxy an account of the subscription id was
 // signed in through, picked for that sign-in, as the one its requests go
 // through (#1663): the subscription's when the account is its only one,

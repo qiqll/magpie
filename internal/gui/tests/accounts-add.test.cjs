@@ -38,7 +38,7 @@ function providersOf(seen) {
     ...(seen.added ? [{ user: seen.added, token: true, on: true }] : []),
   ];
   return {
-    providers: [{ id: "claude", name: "Claude", icon: "claude-color", chat: "", responses: "", anthropic: "", catalog: "", models: [], agents: [], fallback: [], headers: {}, keyList: [], proxy: "",
+    providers: [{ id: "claude", name: "Claude", icon: "claude-color", chat: "", responses: "", anthropic: "", catalog: "", models: [], agents: [], fallback: [], headers: {}, keyList: [], proxy: seen.subProxy || "",
       account: { agent: "claude", agentName: "Claude", user: "alice@example.com", plan: "max", logins },
       accountAdded: { "alice@example.com": daysAgo(20), "bob@example.com": daysAgo(3), "carol@example.com": daysAgo(10) } }],
     presets: [], excluded: [], gateway: { running: true, window: true },
@@ -78,7 +78,7 @@ function serve(lang, seen) {
     if (url.pathname === "/api/signin") { seen.starts.push(req.postDataJSON()); return json({ id: "s1", agent: "claude", state: "waiting", url: "https://vendor.example/oauth" }); }
     if (url.pathname === "/api/signin/s1/cancel") { seen.cancels++; return json({}); }
     if (url.pathname === "/api/signin/s1") return json({ id: "s1", state: "waiting", url: "https://vendor.example/oauth" });
-    if (url.pathname === "/api/signin/claude-token") { seen.added = "Claude setup-token 9f9f9f"; return json({ user: seen.added }); }
+    if (url.pathname === "/api/signin/claude-token") { (seen.tokens ||= []).push(req.postDataJSON()); seen.added = "Claude setup-token 9f9f9f"; return json({ user: seen.added }); }
     if (url.pathname === "/api/ips") {
       if (req.method() === "POST") { const b = req.postDataJSON(); seen.ipPosts.push(b); seen.ips = b.ips; seen.rev++; }
       return json({ ips: seen.ips, rev: "r" + seen.rev, days: 30, warnDays: 5 });
@@ -193,6 +193,67 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.evaluate(() => show("providers"));
         await page.waitForFunction(() => document.querySelector('#providers .row.provider[data-id="claude"]'));
         assert.equal(await page.locator("#modal").isVisible(), false);
+        assert.deepEqual(errors, []);
+      });
+
+      // 需求方 2026-11-13: a proxy picked as the first account was added,
+      // which was a setup-token's, wasn't bound to it: the pick is kept
+      // into the setup-token's sheet, which offers its own pick (a Proxy
+      // IPs one among them) and sends it with the token; and an account
+      // going through its subscription's proxy (a subscription's only
+      // account keeps the one it signed in through there) says it
+      test(`${engine} ${lang} ${width}: a proxy picked for a setup-token's account is sent with it`, async (t) => {
+        const OSAKA = "socks5://u:s3cret@203.0.113.7:1080", OSAKA_SHOWN = "socks5://203.0.113.7:1080";
+        const seen = { starts: [], usage: [], quotaReads: [], cancels: 0, ipPosts: [], checks: [], ips: [{ ip: "203.0.113.7", name: "Osaka", proxies: [OSAKA] }], rev: 1, subProxy: "http://me:pw@10.0.0.9:3128" };
+        const [page, errors] = await open(t, engine, lang, width, "accounts", seen);
+        await page.waitForFunction(() => document.querySelectorAll("#acxList .row.acx").length === 3);
+        assert.match(await page.locator('#acxList .row.acx[data-user="alice@example.com"] .sub').textContent(), /http:\/\/10\.0\.0\.9:3128/, "the subscription's proxy is said");
+        assert.doesNotMatch(await page.locator("#acxList").textContent(), /me:pw/);
+        // the IPs' proxies are read as the page opens
+        await page.waitForFunction(() => window.ipProxies().length === 1);
+
+        // picked before Use a setup-token…
+        await page.locator("#acxAdd").click();
+        await page.locator("#acxAdding .acx-add-type").click();
+        await page.locator("#acxAdding .signing.ready button.via").click();
+        await page.locator(".proto-menu .pm-item", { hasText: OSAKA_SHOWN }).click();
+        await page.locator("#acxAdding .ready-token").click();
+        const via = page.locator("#acxAdding .claude-token .token-via");
+        await via.waitFor();
+        assert.equal(await via.textContent(), x("Proxy: {proxy}", { proxy: OSAKA_SHOWN }));
+        await page.locator("#acxAdding .claude-token input[type=password]").fill("sk-ant-oat01-test");
+        await page.locator("#acxAdding .claude-token button.primary").click();
+        await page.locator("#acxAdding .acx-add-done").waitFor();
+        assert.deepEqual(seen.tokens, [{ token: "sk-ant-oat01-test", proxy: OSAKA }]);
+
+        // typed in the setup-token's own sheet, with its login
+        await page.locator("#acxAdding .acx-add-close").click();
+        await page.locator("#acxAdd").click();
+        await page.locator("#acxAdding .acx-add-type").click();
+        await page.locator("#acxAdding .ready-token").click();
+        await via.waitFor();
+        assert.equal(await via.textContent(), x("Proxy: {proxy}", { proxy: x("Global proxy") }));
+        await via.click();
+        await page.locator(".proto-menu .pm-item", { hasText: x("Custom…") }).click();
+        await page.locator("#acxAdding .token-proxy").fill("http://10.0.0.5:3128");
+        const [user, pass] = await page.locator("#acxAdding .claude-token input.proxy-credential").all();
+        await user.fill("me");
+        await pass.fill("p@ss");
+        await page.locator("#acxAdding .claude-token input[type=password]:not(.proxy-credential)").fill("sk-ant-oat01-two");
+        await page.locator("#acxAdding .claude-token button.primary").click();
+        await page.locator("#acxAdding .acx-add-done").waitFor();
+        assert.deepEqual(seen.tokens[1], { token: "sk-ant-oat01-two", proxy: "http://me:p%40ss@10.0.0.5:3128" });
+
+        // none picked: none sent, the proxies left as they are
+        await page.locator("#acxAdding .acx-add-close").click();
+        await page.locator("#acxAdd").click();
+        await page.locator("#acxAdding .acx-add-type").click();
+        await page.locator("#acxAdding .ready-token").click();
+        await page.locator("#acxAdding .claude-token input[type=password]").fill("sk-ant-oat01-three");
+        await page.locator("#acxAdding .claude-token button.primary").click();
+        await page.locator("#acxAdding .acx-add-done").waitFor();
+        assert.deepEqual(seen.tokens[2], { token: "sk-ant-oat01-three" });
+        assert.ok(await wider(page, "#acxAdding") <= 0.5);
         assert.deepEqual(errors, []);
       });
 

@@ -50,6 +50,34 @@ window.claudeTokenSheet = function () {
   tt.append(el("span", "n", label),
     el("span", "s", t("Paste the token {cmd} printed. magpie gives it to Claude Code for this account's requests only; Claude Code itself stays signed in as it is.", { cmd: "claude setup-token" })),
     el("span", "s", t("A setup-token can't tell its email or allowance: the account is named by the token, and its allowance shows once a reply tells it.")));
+  // the proxy its requests go through, picked here or before Use a
+  // setup-token… (需求方 2026-11-13: one picked before was dropped, and
+  // had to be set again in the provider's editor); none picked leaves the
+  // proxies as they are
+  const via = el("button", "link via token-via", t("Proxy: {proxy}", { proxy: flow.picked === undefined ? t("Global proxy") : proxyName(flow.picked) }));
+  via.type = "button";
+  via.setAttribute("aria-haspopup", "menu");
+  via.onclick = (e) => {
+    e.stopPropagation();
+    openProtoMenu(via, signInProxyChoices(subOf("claude") || { agent: "claude", name: "Claude" }), flow.askProxy ? "\x01" : flow.picked || "", (v) => {
+      if (signing !== flow) return;
+      flow.askProxy = v === "\x01";
+      if (!flow.askProxy) flow.picked = v;
+      renderProviders();
+    }, "Sign in through");
+  };
+  tt.append(el("span", "acts", via));
+  let cp = null;
+  if (flow.askProxy) {
+    const ask = el("span", "callback-form proxy-ask");
+    cp = input(flow.picked || "", "http://127.0.0.1:7890");
+    cp.className = "token-proxy";
+    cp.setAttribute("aria-label", t("Proxy"));
+    const login = proxyLoginRow(cp, (v) => { flow.picked = v.trim() || undefined; });
+    for (const f of [cp, ...login.querySelectorAll("input")]) f.onkeydown = (e) => e.stopPropagation();
+    ask.append(cp, login);
+    tt.append(ask);
+  }
   const form = el("form", "callback-form");
   const inp = input(flow.token || "", "sk-ant-oat01-…", "password");
   inp.setAttribute("aria-label", label);
@@ -64,9 +92,10 @@ window.claudeTokenSheet = function () {
     flow.busy = true;
     go.disabled = true;
     try {
-      const r = await api("signin/claude-token", { token: inp.value });
+      const r = await api("signin/claude-token", { token: inp.value, ...(flow.picked !== undefined ? { proxy: flow.picked } : {}) });
       if (signing !== flow) return;
       await signedIn({ agent: "claude", user: r.user, token: true });
+      if (r.error) status(r.error, "err");
     } catch (err) {
       if (signing !== flow) return;
       flow.busy = false;
@@ -81,7 +110,13 @@ window.claudeTokenSheet = function () {
   const close = el("button", "text", t("Cancel"));
   close.onclick = cancelSignIn;
   box.append(close);
-  setTimeout(() => { if (inp.isConnected) inp.focus({ preventScroll: true }); });
+  // the token box, or the proxy's address once Custom… is picked, unless
+  // a box of the sheet has the focus already: a late focus took what was
+  // typed in the proxy's login into the token (需求方 2026-11-13)
+  setTimeout(() => {
+    if (!inp.isConnected || box.contains(document.activeElement) && document.activeElement !== box) return;
+    (cp && !cp.value ? cp : inp).focus({ preventScroll: true });
+  });
   return box;
 };
 

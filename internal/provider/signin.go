@@ -884,6 +884,9 @@ func (s *signInFlow) finish(out SignInState) bool {
 		s.mu.Unlock()
 		// signing in again brings back an account removed from magpie
 		_ = ShowAccount(agent)
+		if !out.Again {
+			noteSignedIn(agent, out.User)
+		}
 		if chosen {
 			// the proxy picked for it is the account's from now on
 			if err := keepSignInProxy(agent, out.User, proxy); err != nil {

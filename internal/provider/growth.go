@@ -1853,6 +1853,18 @@ func leftIn(was, next []savedLogin, renamed map[loginAccount]loginAccount) []log
 	return left
 }
 
+// noteSignedIn writes now as when the account user of agent was added,
+// as a sign-in in magpie adds one it didn't list (signInFlow.finish, a
+// setup-token): logins.json's first write takes its accounts for ones
+// from before, so the first account of a new install was never held by
+// the growth policy nor showed one (需求方 2026-11-13). One with a time
+// keeps it.
+func noteSignedIn(agent, user string) {
+	if user != "" {
+		noteAdded([]loginAccount{{labelProvider(agent), accountKey(user)}}, nil, nil)
+	}
+}
+
 // noteAdded writes now as when each account of added was added, and moves
 // each renamed account's time to its new name, in providers.json. An
 // account that has a time keeps it: one back in the list after it fell out

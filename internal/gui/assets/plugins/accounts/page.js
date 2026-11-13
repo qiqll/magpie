@@ -75,6 +75,8 @@ function acxSpansLoad(again) {
 // as the Usage page reads them, and the last 5 hours' requests; drawn once
 // each comes in, and kept drawn while the page is open (acxFollow)
 async function acxLoad(again) {
+  // the proxies Proxy IPs keeps, offered when an account is added
+  window.ipProxiesRead?.();
   acxFollow();
   if (providers) acxDraw();
   else acxSkeleton();
@@ -709,6 +711,16 @@ function acxDay(at) {
   return s;
 }
 
+// acxProxyOf: the proxy an account's requests go through, as
+// provider.ProxyOfLogin picks it: its own, else its subscription's, which
+// a subscription's only account signed in through a proxy keeps
+// (keepSignInProxy; 需求方 2026-11-13: the first account's showed none);
+// "" for the global one or Direct
+function acxProxyOf(p, user) {
+  const v = String(p.accountProxies?.[acxLow(user)] || p.proxy || "").trim();
+  return v === "direct" ? "" : v;
+}
+
 // acxCard: an account's card (after CLIProxyAPI's credentials page) —
 // who and its state; its provider, plan, when it was added, when its
 // plan ends and its proxy; every window with its reset; and the last 5
@@ -745,7 +757,7 @@ function acxCard(r) {
   // its growth policy, picked here for it alone (T-133), once the policies are read
   if (r.added && growthAccountOpts(p).length) fact("Growth policy", "acx-gpf", acxGrowthFact(r));
   if (l.until) fact("Plan ends", "acx-until", acxDay(l.until));
-  const proxy = p.accountProxies?.[acxLow(l.user)] || "";
+  const proxy = acxProxyOf(p, l.user);
   if (proxy) fact("Proxy", "acx-proxy", proxyShown(proxy));
   card.append(facts);
 
@@ -806,7 +818,7 @@ function acxRow(r) {
   row.dataset.user = l.user;
   row.append(icon(p.icon || a.agent, true));
   const [who, alias] = acxWho(r);
-  const proxy = p.accountProxies?.[acxLow(l.user)] || "";
+  const proxy = acxProxyOf(p, l.user);
   const sub = [p.name, alias ? l.user : "", l.plan ? accountPlan({ agent: a.agent, builtin: a.builtin, plan: l.plan }) : "", proxy ? t("Proxy: {proxy}", { proxy: proxyShown(proxy) }) : ""].filter(Boolean);
   who.append(el("div", "sub", sub.join(" · ")));
   row.append(who);
