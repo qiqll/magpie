@@ -12975,7 +12975,7 @@ async function signAsk(flow) {
   signing = flow;
   renderProviders();
 }
-const startClaudeToken = () => signAsk({ agent: "claude", state: "token", token: "", picked: signing?.picked });
+const startClaudeToken = () => signAsk({ agent: "claude", state: "token", token: "", picked: signing?.agent === "claude" ? signing.picked : undefined });
 
 // dropSigningIn: an editor closing leaves no sign-in waiting (#526); an
 // import being read finishes.

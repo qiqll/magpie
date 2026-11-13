@@ -161,9 +161,22 @@ func keyProxies(p Provider) map[string]string {
 	return out
 }
 
-// KeepSignInProxy is keepSignInProxy for an account not added by a
-// sign-in flow: a Claude setup-token's, given the proxy picked before it.
-func KeepSignInProxy(id, user, proxy string) error { return keepSignInProxy(id, user, proxy) }
+// signInProxyRefused is why keepSignInProxy would refuse proxy for a
+// new account of the subscription id, asked before the account is added
+// (review 4): one that isn't valid, or the global one while the
+// subscription has a proxy of its own and other accounts.
+func signInProxyRefused(id, proxy string) error {
+	proxy = strings.TrimSpace(proxy)
+	if err := settings.CheckProxy(proxy); err != nil {
+		return err
+	}
+	if proxy == "" && len(Logins(id)) > 0 {
+		if p, ok := storedPicks(id); ok && p.Proxy != "" {
+			return errors.New("an account can't follow the global proxy while its subscription has a proxy of its own")
+		}
+	}
+	return nil
+}
 
 // keepSignInProxy keeps the proxy an account of the subscription id was
 // signed in through, picked for that sign-in, as the one its requests go

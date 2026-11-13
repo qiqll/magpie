@@ -715,10 +715,9 @@ function acxDay(at) {
 // provider.ProxyOfLogin picks it: its own, else its subscription's, which
 // a subscription's only account signed in through a proxy keeps
 // (keepSignInProxy; 需求方 2026-11-13: the first account's showed none);
-// "" for the global one or Direct
+// "" for the global one, "direct" for none (said as Direct, review 9)
 function acxProxyOf(p, user) {
-  const v = String(p.accountProxies?.[acxLow(user)] || p.proxy || "").trim();
-  return v === "direct" ? "" : v;
+  return String(p.accountProxies?.[acxLow(user)] || p.proxy || "").trim();
 }
 
 // acxCard: an account's card (after CLIProxyAPI's credentials page) —
@@ -758,7 +757,7 @@ function acxCard(r) {
   if (r.added && growthAccountOpts(p).length) fact("Growth policy", "acx-gpf", acxGrowthFact(r));
   if (l.until) fact("Plan ends", "acx-until", acxDay(l.until));
   const proxy = acxProxyOf(p, l.user);
-  if (proxy) fact("Proxy", "acx-proxy", proxyShown(proxy));
+  if (proxy) fact("Proxy", "acx-proxy", proxyName(proxy));
   card.append(facts);
 
   card.append(acxQuotaBox(q));
@@ -819,7 +818,7 @@ function acxRow(r) {
   row.append(icon(p.icon || a.agent, true));
   const [who, alias] = acxWho(r);
   const proxy = acxProxyOf(p, l.user);
-  const sub = [p.name, alias ? l.user : "", l.plan ? accountPlan({ agent: a.agent, builtin: a.builtin, plan: l.plan }) : "", proxy ? t("Proxy: {proxy}", { proxy: proxyShown(proxy) }) : ""].filter(Boolean);
+  const sub = [p.name, alias ? l.user : "", l.plan ? accountPlan({ agent: a.agent, builtin: a.builtin, plan: l.plan }) : "", proxy ? t("Proxy: {proxy}", { proxy: proxyName(proxy) }) : ""].filter(Boolean);
   who.append(el("div", "sub", sub.join(" · ")));
   row.append(who);
 

@@ -92,31 +92,51 @@ func checkClaudeSetupToken(token string) (string, error) {
 // sign-in is left as it is. It answers the account's name; a token already
 // saved answers the account that has it.
 func AddClaudeSetupToken(token string) (string, error) {
+	user, _, err := AddClaudeSetupTokenThrough(token, nil)
+	return user, err
+}
+
+// AddClaudeSetupTokenThrough is AddClaudeSetupToken with the proxy picked
+// for the account (nil: none picked, the proxies left as they are), kept
+// as a sign-in keeps its own (keepSignInProxy). A proxy that couldn't be
+// kept for a new account is refused before the account is added; a token
+// saved already answers its account, added false, its proxy untouched.
+func AddClaudeSetupTokenThrough(token string, proxy *string) (user string, added bool, err error) {
 	if settings.AccountDiscoveryOff() {
-		return "", errAccountDiscoveryOff
+		return "", false, errAccountDiscoveryOff
 	}
-	token, err := checkClaudeSetupToken(token)
+	token, err = checkClaudeSetupToken(token)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	loginsMu.Lock()
 	for _, l := range readLogins() {
 		if l.Agent == "claude" && claudeSetupToken(l.Auth) == token {
 			loginsMu.Unlock()
-			return l.User, nil
+			return l.User, false, nil
 		}
 	}
 	loginsMu.Unlock()
+	if proxy != nil {
+		if err := signInProxyRefused("claude", *proxy); err != nil {
+			return "", false, err
+		}
+	}
 	auth, err := json.Marshal(claudeTokenAuth{SetupToken: token})
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	l := savedLogin{Agent: "claude", User: claudeTokenName(token), Auth: auth}
 	if _, err := addLogin(l); err != nil {
-		return "", err
+		return "", false, err
 	}
 	noteSignedIn("claude", l.User)
-	return l.User, nil
+	if proxy != nil {
+		if err := keepSignInProxy("claude", l.User, *proxy); err != nil {
+			return l.User, true, fmt.Errorf("added, but its proxy wasn't kept: %w", err)
+		}
+	}
+	return l.User, true, nil
 }
 
 // ClaudeDirToken is the setup-token of the saved Claude account whose

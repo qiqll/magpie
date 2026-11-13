@@ -54,7 +54,10 @@ window.claudeTokenSheet = function () {
   // setup-token… (需求方 2026-11-13: one picked before was dropped, and
   // had to be set again in the provider's editor); none picked leaves the
   // proxies as they are
-  const via = el("button", "link via token-via", t("Proxy: {proxy}", { proxy: flow.picked === undefined ? t("Global proxy") : proxyName(flow.picked) }));
+  // none picked: the account goes through its subscription's, as
+  // provider.ProxyOfLogin picks it (review 3)
+  const own = String(providers?.providers?.find((x) => x.account?.agent === "claude")?.proxy || "").trim();
+  const via = el("button", "link via token-via", t("Proxy: {proxy}", { proxy: proxyName(flow.picked === undefined ? own : flow.picked) }));
   via.type = "button";
   via.setAttribute("aria-haspopup", "menu");
   via.onclick = (e) => {

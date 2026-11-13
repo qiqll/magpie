@@ -3298,22 +3298,14 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			fail(rw, err)
 			return
 		}
-		if in.Proxy != nil {
-			if err := settings.CheckProxy(*in.Proxy); err != nil {
-				fail(rw, err)
-				return
-			}
-		}
-		user, err := provider.AddClaudeSetupToken(in.Token)
-		if err != nil {
+		user, added, err := provider.AddClaudeSetupTokenThrough(in.Token, in.Proxy)
+		if user == "" {
 			fail(rw, err)
 			return
 		}
-		out := map[string]string{"user": user}
-		if in.Proxy != nil {
-			if err := provider.KeepSignInProxy("claude", user, *in.Proxy); err != nil {
-				out["error"] = "added, but its proxy wasn't kept: " + err.Error()
-			}
+		out := map[string]any{"user": user, "added": added}
+		if err != nil {
+			out["error"] = err.Error()
 		}
 		writeJSON(rw, out)
 	})

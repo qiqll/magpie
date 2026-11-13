@@ -180,8 +180,8 @@ test("each format a batch line is written in is read as the proxy it names", asy
   // no scheme as an import may keep it (review L2)
   assert.deepEqual(await page.evaluate(() => [ipsProxyKey("HTTP://U:p@Gate.Example:80") === ipsProxyKey("http://U:p@gate.example:80"), ipsProxyKey("10.0.0.1:80") === ipsProxyKey("http://10.0.0.1:80"), ipsProxyKey("http://a:b@10.0.0.1:80") === ipsProxyKey("http://a:c@10.0.0.1:80")]), [true, true, false]);
   // a line not read shows no password (review L3)
-  assert.deepEqual(await page.evaluate(() => ["http://user:p:w@x@1.2.3.4:99999", "1.2.3.4:80:user:secret:more", "a b c secret e", "not a proxy"].map(ipsBatchMask)),
-    ["http://user:••••••@1.2.3.4:99999", "1.2.3.4:80:user:••••••", "a b c ••••••", "not a proxy"]);
+  assert.deepEqual(await page.evaluate(() => ["http://user:p:w@x@1.2.3.4:99999", "1.2.3.4:80:user:secret:more", "a b c secret e", "not a proxy", "host port user p@ss", "1.2.3.4:8000:user:p@ss:x", "1.2.3.4:99999@user:p@ss"].map(ipsBatchMask)),
+    ["http://user:••••••@1.2.3.4:99999", "1.2.3.4:80:user:••••••", "a b c ••••••", "not a proxy", "host port user ••••••", "1.2.3.4:8000:user:••••••", "1.2.3.4:99999@user:••••••"]);
   assert.deepEqual(errors, []);
 });
 

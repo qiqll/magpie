@@ -232,7 +232,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.locator("#acxAdding .acx-add-type").click();
         await page.locator("#acxAdding .ready-token").click();
         await via.waitFor();
-        assert.equal(await via.textContent(), x("Proxy: {proxy}", { proxy: x("Global proxy") }));
+        // none picked: its subscription's, which it goes through (review 3)
+        assert.equal(await via.textContent(), x("Proxy: {proxy}", { proxy: "http://10.0.0.9:3128" }));
         await via.click();
         await page.locator(".proto-menu .pm-item", { hasText: x("Custom…") }).click();
         await page.locator("#acxAdding .token-proxy").fill("http://10.0.0.5:3128");

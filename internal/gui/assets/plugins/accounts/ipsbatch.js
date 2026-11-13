@@ -100,8 +100,16 @@ function ipsBatchParse(line, type) {
 // password masked, the part between a login's : and @, or the fourth part
 // on of a line split by : or spaces (review L3)
 function ipsBatchMask(s) {
-  // to the last @, as a password may have one
-  if (s.includes("@")) return s.replace(/^((?:[a-z][a-z0-9+.-]*:\/\/)?[^:@]*:).*@/i, "$1••••••@");
+  const at = s.lastIndexOf("@"), hp = /^(\[[^\]]*\]|[^:]+):\d+$/;
+  if (at >= 0 && !/\s/.test(s)) {
+    const after = s.slice(at + 1), f = s.indexOf("@"), login = s.slice(f + 1), c = login.indexOf(":");
+    // username:password@host:port, a URL's among them: to the last @, as
+    // a password may have one
+    if (s.includes("://") || hp.test(after)) return s.replace(/^((?:[a-z][a-z0-9+.-]*:\/\/)?[^:@]*:).*@/i, "$1••••••@");
+    // host:port@username:password: what follows the login's :
+    if (hp.test(s.slice(0, f)) && c >= 0) return s.slice(0, f + 1) + login.slice(0, c + 1) + "••••••";
+  }
+  // split by : or spaces (an @ in the password among them, review 8)
   const parts = /\s/.test(s) ? s.split(/\s+/) : ipsBatchColons(s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, ""));
   if (parts.length < 4) return s;
   const head = /\s/.test(s) ? parts.slice(0, 3).join(" ") + " " : s.slice(0, s.length - parts.slice(3).join(":").length);
