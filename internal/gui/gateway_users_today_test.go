@@ -15,7 +15,7 @@ func forgetUsersToday(t *testing.T) {
 	t.Helper()
 	drop := func() {
 		usersTodayMemo.Lock()
-		usersTodayMemo.by = nil
+		usersTodayMemo.days = nil
 		usersTodayMemo.Unlock()
 	}
 	drop()
@@ -24,7 +24,7 @@ func forgetUsersToday(t *testing.T) {
 
 // A bound user's row says what it sent its provider today, under its own
 // row's keys only: yesterday's calls, another provider's, another key
-// group's user of the same name, calls naming no user and rejected ones
+// group's user of the same name, calls naming no user, rejected ones and ones an app reported itself
 // are none of it; a try handed on is no request but its tokens count; and
 // a user that sent nothing today says nothing (需求方 2026-11-13).
 func TestGatewayUsersToday(t *testing.T) {
@@ -46,9 +46,10 @@ func TestGatewayUsersToday(t *testing.T) {
 	at := day.Add(time.Hour).UTC().Format(time.RFC3339)
 	writeUsers(t, fmt.Sprintf(`{
   "users": {"codex": {"alice": {"who": "codex@a@x.com", "account": "a@x.com", "at": %q},
-                      "idle": {"who": "codex@a@x.com", "account": "a@x.com", "at": %q}}},
+                      "idle": {"who": "codex@a@x.com", "account": "a@x.com", "at": %q},
+                      "far": {"who": "codex@a@x.com", "account": "a@x.com", "at": %q}}},
   "keys": {%q: {"codex": {"alice": {"who": "codex@b@x.com", "account": "b@x.com", "at": %q}}}}
-}`, at, at, keyID, at))
+}`, at, at, at, keyID, at))
 	rec := func(at time.Time, prov, user, key string, in, out int, f func(*usage.Record)) {
 		r := usage.Record{Time: at, Agent: "codex", Provider: prov, Model: "gpt-5", Input: in, Output: out, Status: 200, User: user, CallerKeyID: key}
 		if f != nil {
@@ -60,13 +61,23 @@ func TestGatewayUsersToday(t *testing.T) {
 	rec(day.Add(2*time.Hour), "codex", "alice", "", 100, 20, nil)
 	rec(day.Add(3*time.Hour), "codex", "alice", "", 50, 0, func(r *usage.Record) { r.HandedOn = true; r.Status = 429 })
 	rec(day.Add(3*time.Hour), "codex", "alice", "", 7, 3, nil)
-	rec(day.Add(4*time.Hour), "claude", "alice", "", 5000, 5000, nil)                                                   // another provider
-	rec(day.Add(4*time.Hour), "codex", "alice", keyID, 9000, 9000, nil)                                                 // Tenant A's alice
-	rec(day.Add(4*time.Hour), "codex", "", "", 4000, 4000, nil)                                                         // no user
-	rec(day.Add(4*time.Hour), "", "alice", "", 3000, 3000, func(r *usage.Record) { r.Rejected = true; r.Status = 429 }) // rejected
+	rec(day.Add(4*time.Hour), "claude", "alice", "", 5000, 5000, nil)                                                      // another provider
+	rec(day.Add(4*time.Hour), "codex", "alice", keyID, 9000, 9000, nil)                                                    // Tenant A's alice
+	rec(day.Add(4*time.Hour), "codex", "", "", 4000, 4000, nil)                                                            // no user
+	rec(day.Add(4*time.Hour), "", "alice", "", 3000, 3000, func(r *usage.Record) { r.Rejected = true; r.Status = 429 })    // rejected
+	rec(day.Add(4*time.Hour), "codex", "alice", "", 2000, 2000, func(r *usage.Record) { r.Source = usage.SourceReported }) // reported by an app
+	// far's day is Kiritimati's (UTC+14): a minute before it began is
+	// yesterday there, a minute after it today
+	far, err := time.LoadLocation("Pacific/Kiritimati")
+	if err != nil {
+		t.Skip(err)
+	}
+	farDay := usage.Today.Since(now.In(far))
+	rec(farDay.Add(-time.Minute), "codex", "far", "", 600, 0, nil)
+	rec(farDay.Add(time.Minute), "codex", "far", "", 40, 2, nil)
 
 	code, out := gatewayUsers(t, "")
-	if code != 200 || len(out.Users) != 3 {
+	if code != 200 || len(out.Users) != 4 {
 		t.Fatalf("%d %+v", code, out)
 	}
 	type said struct{ calls, tokens int }
@@ -87,6 +98,10 @@ func TestGatewayUsersToday(t *testing.T) {
 	}
 	if s, ok := got["idle/"]; !ok || s != nil {
 		t.Fatalf("idle: %v %+v", ok, s)
+	}
+	// in the reader's zone
+	if _, out := gatewayUsers(t, "?q=far&tz=Pacific%2FKiritimati"); len(out.Users) != 1 || out.Users[0].Today == nil || out.Users[0].Today.Calls != 1 || out.Users[0].Today.Tokens != 42 {
+		t.Fatalf("far in Kiritimati: %+v", out.Users)
 	}
 	// a search's users say it too
 	if _, out := gatewayUsers(t, "?q=tenant"); len(out.Users) != 1 || out.Users[0].Today == nil || out.Users[0].Today.Calls != 1 {

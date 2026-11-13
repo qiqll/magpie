@@ -109,53 +109,89 @@ type userTodayJSON struct {
 	Unpriced int     `json:"unpriced,omitempty"`
 }
 
-// usersTodayMemo keeps the last worked-out day of users' calls a little
-// while: the page asks again for each search typed, and the day's log is
-// read once for them all.
+// usersTodayMemo keeps each zone's day of users' calls a little while,
+// by when its day began: the page asks again for each search typed, and
+// the day's log is read once for them all. A day being read holds its own
+// lock, so readers in another zone wait for none of it, and those in the
+// same zone wait for the one read (review M4).
 var usersTodayMemo struct {
 	sync.Mutex
-	since time.Time
-	at    time.Time
-	by    map[[3]string]*userTodayJSON
+	days map[int64]*usersTodayDay
 }
+
+type usersTodayDay struct {
+	sync.Mutex
+	at time.Time
+	by map[[3]string]*userTodayJSON
+}
+
+// usersTodayKept is how many zones' days are kept at once.
+const usersTodayKept = 3
 
 // usersToday is every user's calls today in zone, by provider (as it is
 // named now, a renamed one's older calls under its new id), user and the
 // gateway key it came with ("" none, as userKey binds it), the calls that
-// named a user only; a rejected call, which went to no provider, is none.
+// named a user only. A rejected call, which went to no provider, is none,
+// and so is one an app reported itself, which never went through the
+// gateway; another computer's synced calls aren't in usage.jsonl (Visit).
 func usersToday(zone *time.Location) map[[3]string]*userTodayJSON {
 	now := usage.Clock().In(zone)
 	since := usage.Today.Since(now)
 	m := &usersTodayMemo
 	m.Lock()
-	defer m.Unlock()
-	if m.by != nil && m.since.Equal(since) && now.Sub(m.at) >= 0 && now.Sub(m.at) < 20*time.Second {
-		return m.by
+	if m.days == nil {
+		m.days = map[int64]*usersTodayDay{}
+	}
+	d := m.days[since.Unix()]
+	if d == nil {
+		// the zone's day read least lately makes room
+		for len(m.days) >= usersTodayKept {
+			var old int64
+			var oldAt time.Time
+			first := true
+			for k, x := range m.days {
+				x.Lock()
+				at := x.at
+				x.Unlock()
+				if first || at.Before(oldAt) {
+					old, oldAt, first = k, at, false
+				}
+			}
+			delete(m.days, old)
+		}
+		d = &usersTodayDay{}
+		m.days[since.Unix()] = d
+	}
+	m.Unlock()
+	d.Lock()
+	defer d.Unlock()
+	if d.by != nil && now.Sub(d.at) >= 0 && now.Sub(d.at) < 20*time.Second {
+		return d.by
 	}
 	by := map[[3]string]*userTodayJSON{}
 	cost, renamed := usage.NewCoster(), provider.UsageRenames()
 	usage.Visit(since, func(r usage.Record) {
-		if r.User == "" || r.IsRejected() || r.Time.Before(since) {
+		if r.User == "" || r.IsRejected() || r.IsReported() || r.Time.Before(since) {
 			return
 		}
 		k := [3]string{renamed.Of(r.Provider, r.Time), r.User, r.CallerKeyID}
-		d := by[k]
-		if d == nil {
-			d = &userTodayJSON{}
-			by[k] = d
+		t := by[k]
+		if t == nil {
+			t = &userTodayJSON{}
+			by[k] = t
 		}
 		// a try handed on is no request, but its tokens were spent
 		if !r.HandedOn {
-			d.Calls++
+			t.Calls++
 		}
-		d.Tokens += r.Input + r.Output
+		t.Tokens += r.Input + r.Output
 		if c, priced := cost(r); priced {
-			d.Cost += c
+			t.Cost += c
 		} else {
-			d.Unpriced++
+			t.Unpriced++
 		}
 	})
-	m.since, m.at, m.by = since, now, by
+	d.at, d.by = now, by
 	return by
 }
 

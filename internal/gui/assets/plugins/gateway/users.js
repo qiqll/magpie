@@ -39,7 +39,9 @@ async function loadUserBinds() {
   const qs = new URLSearchParams();
   if (q) qs.set("q", q);
   if (zone) qs.set("tz", zone);
-  try { out = await api("gateway/users" + (qs.size ? "?" + qs : "")); } catch (e) {
+  // its text, not URLSearchParams' size, which WebKit before Safari 17 hasn't (review H1)
+  const qt = qs.toString();
+  try { out = await api("gateway/users" + (qt ? "?" + qt : "")); } catch (e) {
     out = { error: e.why ? t("user-accounts.json can't be read: {why}", { why: e.why }) : e.message };
   }
   if (read !== userBindsRead) return;
@@ -188,7 +190,8 @@ function userToday(u) {
     box.title = t("Nothing sent today");
     return box;
   }
-  box.append(el("b", "", fmtCost(d) || fmtCost({ cost: 0, unpriced: 0 })), el("span", "user-today-n", t("{n} req · {tok} tok", { n: fmtN(d.calls), tok: fmtN(d.tokens) })));
+  // calls with no known price only are no $0 (#3406): "—" (review M1)
+  box.append(el("b", "", fmtCost(d) || (d.unpriced ? "—" : fmtCost({ cost: 0, unpriced: 0 }))), el("span", "user-today-n", t("{n} req · {tok} tok", { n: fmtN(d.calls), tok: fmtN(d.tokens) })));
   box.title = t("Today, under its own gateway keys: {n} requests, {tok} tokens", { n: fmtN(d.calls), tok: fmtN(d.tokens) });
   return box;
 }

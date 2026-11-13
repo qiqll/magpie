@@ -610,17 +610,21 @@ const ACX_QKINDS = [["5h", "5 hours"], ["7d", "Weekly"], ["month", "Monthly"], [
 // and the window's bar is drawn without it
 const ACX_QPLAIN = [["5h", /^5 ?h(ours?)?$/i], ["7d", /^(7 days|weekly|week)$/i], ["month", /^(month|monthly|30 days)$/i]];
 const acxQPlain = (k, w) => ACX_QPLAIN.some(([q, re]) => q === k && re.test(String(w.name || "").trim()));
+// acxQMoney: a window counted in money or credits, by its unit or name
+const acxQMoney = (w) => !!w.unit || /\$|credit|spend|on-demand|extra usage|balance/i.test(String(w.name || "") + " " + String(w.display || ""));
 // acxQKind: a window's kind — by how the menu bar names it (trayKind), else
 // by its name; a wallet or a count in a unit is credit, one model's or a
 // pool's per model, a row of text other
 function acxQKind(w) {
   if (w.text) return "other";
   if (w.balance != null) return "credit";
+  // one the menu bar shows only when picked (trayExtra) is one model's, a
+  // family's or a pool's, or money set aside (review M2)
+  if (w.trayExtra) return w.family || w.pool || w.capsSome || !acxQMoney(w) ? "model" : "credit";
   const tk = w.trayKind || "";
   if (tk && !tk.startsWith("name:")) {
-    if (tk === "5h") return "5h";
-    if (tk === "7d" || tk.startsWith("7d:")) return w.trayExtra ? "model" : "7d";
-    if (tk === "month" || tk.startsWith("month:")) return "month";
+    // "5h:<name>", "7d:<name>": two of one span, Antigravity's pools
+    for (const k of ["5h", "7d", "month"]) if (tk === k || tk.startsWith(k + ":")) return k;
   }
   const n = String(w.name || "").trim();
   for (const [k, re] of ACX_QPLAIN) if (re.test(n)) return k;

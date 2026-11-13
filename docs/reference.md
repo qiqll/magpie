@@ -2914,8 +2914,8 @@ answer now (out, why and until when, one model's rest naming the model;
 "can answer"; one no longer on its provider said so), and the users with
 their first account and spares in order, each marked first or spare with
 its state, provider, gateway key, tier (the default's for one bound before
-tiers), the user's id marked as one, the date they were bound (how long
-ago in its tip) and when they last sent the provider a request ("last
+tiers), the user's id marked as one, the date and time they were bound
+(how long ago in its tip) and when they last sent the provider a request ("last
 used", none for a binding from before it was kept), and at the right
 what they sent it today, in the reader's zone, under the row's own keys
 (cost, requests and tokens in and out, from the usage log; "—" for
