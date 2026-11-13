@@ -8,10 +8,10 @@
 // reader left them: a word, the provider, the state, the gateway key, when
 // it was added, whether its 5 hours and its week have room, and which the
 // user marked show ("" neither banned nor disabled, "banned", "disabled",
-// "any")
-let acxQuery = "", acxProv = "", acxState = "all", acxKey = "", acxAdded = "", acx5h = "", acx7d = "", acxBanned = "", acxView = "list";
-try { ({ q: acxQuery = "", p: acxProv = "", s: acxState = "all", k: acxKey = "", a: acxAdded = "", h5: acx5h = "", h7: acx7d = "", b: acxBanned = "", v: acxView = "list" } = JSON.parse(localStorage.getItem("magpie.acxFilter") || "{}")); } catch {}
-const acxKeep = () => { try { localStorage.setItem("magpie.acxFilter", JSON.stringify({ q: acxQuery, p: acxProv, s: acxState, k: acxKey, a: acxAdded, h5: acx5h, h7: acx7d, b: acxBanned, v: acxView })); } catch {} };
+// "any"), and the order (ACX_SORTS', "" the providers' own)
+let acxQuery = "", acxProv = "", acxState = "all", acxKey = "", acxAdded = "", acx5h = "", acx7d = "", acxBanned = "", acxView = "list", acxSort = "";
+try { ({ q: acxQuery = "", p: acxProv = "", s: acxState = "all", k: acxKey = "", a: acxAdded = "", h5: acx5h = "", h7: acx7d = "", b: acxBanned = "", v: acxView = "list", o: acxSort = "" } = JSON.parse(localStorage.getItem("magpie.acxFilter") || "{}")); } catch {}
+const acxKeep = () => { try { localStorage.setItem("magpie.acxFilter", JSON.stringify({ q: acxQuery, p: acxProv, s: acxState, k: acxKey, a: acxAdded, h5: acx5h, h7: acx7d, b: acxBanned, v: acxView, o: acxSort })); } catch {} };
 // the gateway keys that work, each with the accounts it may use, as the
 // gateway holds it (/api/accounts/keys), and when read
 let acxKeys = null, acxKeysAt = 0;
@@ -22,6 +22,13 @@ let acxKeysFailed = false;
 let acxHolds = null, acxHoldHours = 12, acxHoldsAt = 0;
 // the last 5 hours' requests by account (usage's accounts), and when read
 let acxUsage = null, acxUsageAt = 0;
+// today's, the last 7 and 30 days' by account, by period, and when read:
+// read for the cards and the order by cost alone (acxSpansWanted)
+let acxSpans = {}, acxSpansAt = 0;
+// Add account (需求方 2026-11-13): "" closed, "type" its type picked,
+// else the agent signing in here; and the account it added
+// (signedIn's justAdded, told from one it named before this sign-in)
+let acxAdding = "", acxAdded1 = "", acxJustWas = "";
 // what the list was drawn from, so a change elsewhere draws it again
 let acxSeen = null, acxWatch = 0;
 // the account whose start date is being picked (renewEditor, T-154), by
@@ -34,6 +41,34 @@ function acxMount() {
   q.setAttribute("aria-label", t("Search accounts"));
   q.oninput = () => { acxQuery = q.value; acxKeep(); acxDraw(); };
   q.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape" && q.value) { q.value = ""; q.oninput(); } };
+  $("#acxAdd").onclick = () => { acxAdding = acxAdding ? "" : "type"; acxAdded1 = ""; acxAddDraw(); };
+  // every account's allowance read again, as the Usage page's Refresh all
+  const all = $("#acxReadAll");
+  all.title = t("Read every account's allowance again");
+  all.onclick = () => {
+    if (all.classList.contains("busy")) return;
+    all.classList.add("busy");
+    loadQuotas("all").finally(() => { all.classList.remove("busy"); if (view === "accounts") acxDraw(); });
+  };
+  const re = $("#acxReload");
+  re.title = t("Read the accounts, their requests and the gateway keys again");
+  re.onclick = () => {
+    if (re.classList.contains("busy")) return;
+    re.classList.add("busy");
+    acxLoad(true).finally(() => re.classList.remove("busy"));
+  };
+}
+
+// acxSpansWanted: the cards show today's, 7 and 30 days' requests and
+// cost, and the order by cost is by 30 days'
+const acxSpansWanted = () => acxView === "cards" || acxSort === "cost30";
+const ACX_SPANS = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"]];
+// acxSpansLoad reads them when wanted and a minute old, or asked again
+function acxSpansLoad(again) {
+  if (!acxSpansWanted() || (!again && Date.now() - acxSpansAt < 60e3)) return Promise.resolve();
+  acxSpansAt = Date.now();
+  const zone = typeof usageZoneQ === "function" ? usageZoneQ() : "";
+  return Promise.all(ACX_SPANS.map(([k]) => api("usage?period=" + k + zone).then((u) => { acxSpans[k] = u?.accounts || []; }, () => {})));
 }
 
 // acxLoad: the providers (the shell's, loads: "providers"), the allowances
@@ -53,6 +88,7 @@ async function acxLoad(again) {
     (!acxHolds || again || Date.now() - acxHoldsAt > 30e3 ? api("auth-holds").then(acxHoldsRead, () => {}) : Promise.resolve()),
     // the growth policies an account can pick (plugins/growth/pick.js, T-133)
     growthListLoad(again),
+    acxSpansLoad(again),
   ];
   for (const r of reads) r.then(() => { if (view === "accounts") acxDraw(); });
   await Promise.all(reads);
@@ -65,7 +101,11 @@ function acxFollow() {
   if (acxWatch) return;
   acxWatch = setInterval(() => {
     if (view !== "accounts" || document.hidden) {
-      if (view !== "accounts") { clearInterval(acxWatch); acxWatch = 0; }
+      if (view !== "accounts") {
+        clearInterval(acxWatch); acxWatch = 0;
+        // Add account closes with the page, unless a sign-in is under way
+        if (acxAdding && signing?.agent !== acxAdding) { acxAdding = acxAdded1 = ""; acxAddDraw(); }
+      }
       return;
     }
     // not under a start date being typed: its box would lose a half-typed
@@ -134,7 +174,15 @@ function acxRows() {
       // its paid period from the start date the user told, as the server
       // worked it out (provider.AccountOpened, renewal.Of, T-154)
       const renew = p.accountRenewal?.[acxLow(l.user)] || null;
-      out.push({ p, a, l, sub, state, banned, disabled, off, authFailed, again, act, q, added, firstUsed, growth, pick, graduated, skipped, renew, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
+      // today's, 7 and 30 days' the same way, once read
+      const spans = {};
+      for (const [k] of ACX_SPANS) {
+        if (!acxSpans[k]) continue;
+        const gs = acxSpans[k].filter((g) => g.provider === p.id && acxLow(g.account) === acxLow(l.user));
+        const n = (f) => gs.reduce((m, g) => m + (g[f] || 0), 0);
+        spans[k] = { calls: n("calls"), tokens: n("input") + n("output"), cost: n("cost"), unpriced: n("unpriced") };
+      }
+      out.push({ p, a, l, sub, state, banned, disabled, off, authFailed, again, act, q, added, firstUsed, growth, pick, graduated, skipped, renew, spans, calls: sum("calls"), errors: sum("errors"), tokens: sum("input") + sum("output"), cost: sum("cost"), unpriced: sum("unpriced") });
     }
   }
   return out;
@@ -149,6 +197,22 @@ const ACX_ADDED = [["7", "Added in the last 7 days"], ["30", "Added in the last 
 // disabled (one with both is in each), or every one
 const ACX_BANNED = [["banned", "Banned"], ["disabled", "Disabled"], ["any", "All"]];
 const ACX_ROOM = { "5h": [["room", "5 hours: room left"], ["out", "5 hours: used up"]], "7d": [["room", "7 days: room left"], ["out", "7 days: used up"]] };
+// the orders offered beside the providers' own ("")
+const ACX_SORTS = [["added", "Newest first"], ["5h", "5 hours used, most first"], ["7d", "7 days used, most first"], ["cost30", "30 days' cost, most first"], ["name", "Name"]];
+// acxUsedOf: the most used of an account's 5 hours or weeks, -1 unread
+const acxUsedOf = (q, kind) => Math.max(-1, ...acxWindowsOf(q, kind).map((w) => (w.unlimited ? 0 : w.used || 0)));
+// acxSorted: rows in the order picked, the providers' own among equals
+function acxSorted(rows) {
+  const by = {
+    added: (r) => -(new Date(r.added || 0).getTime() || 0),
+    "5h": (r) => -acxUsedOf(r.q, "5h"),
+    "7d": (r) => -acxUsedOf(r.q, "7d"),
+    cost30: (r) => -(r.spans["30d"]?.cost || 0),
+  }[acxSort];
+  if (acxSort === "name") return rows.map((r, i) => [acxLow(accountNameOf(r.p, r.l.user) || r.l.user), i, r]).sort((x, y) => x[0].localeCompare(y[0]) || x[1] - y[1]).map((x) => x[2]);
+  if (!by) return rows;
+  return rows.map((r, i) => [by(r), i, r]).sort((x, y) => x[0] - y[0] || x[1] - y[1]).map((x) => x[2]);
+}
 
 // acxWindows: an account's windows as bars, a failed reading's none
 const acxWindows = (q) => (q && !q.error ? q.windows || [] : []).filter((w) => !w.text);
@@ -269,23 +333,25 @@ function acxDraw() {
   fixed("#acx5h", "5 hours: any", ACX_ROOM["5h"], acx5h, "5 hours", (v) => { acx5h = v; });
   fixed("#acx7d", "7 days: any", ACX_ROOM["7d"], acx7d, "7 days", (v) => { acx7d = v; });
   fixed("#acxBanned", "Normal", ACX_BANNED, acxBanned, "Status", (v) => { acxBanned = v; });
+  if (!ACX_SORTS.some(([v]) => v === acxSort)) acxSort = "";
+  fixed("#acxSort", "Providers' order", ACX_SORTS, acxSort, "Sort accounts", (v) => { acxSort = v; acxSpansLoad().then(() => { if (view === "accounts") acxDraw(); }); });
   if (!ACX_VIEWS.some(([v]) => v === acxView)) acxView = "list";
   const vw = $("#acxView");
-  vw.replaceChildren(segs(ACX_VIEWS.map(([k, n]) => [k, t(n)]), acxView, (k) => { acxView = k; acxKeep(); acxDraw(); }));
+  vw.replaceChildren(segs(ACX_VIEWS.map(([k, n]) => [k, t(n)]), acxView, (k) => { acxView = k; acxKeep(); acxDraw(); acxSpansLoad().then(() => { if (view === "accounts") acxDraw(); }); }));
   vw.hidden = !all.length;
   const st = $("#acxState");
   st.replaceChildren(segs(ACX_STATES.map(([k, n]) => [k, t(n)]), acxState, (k) => { acxState = k; acxKeep(); acxDraw(); }));
   st.hidden = !all.length;
 
   const words = acxLow(acxQuery);
-  const rows = all.filter((r) => (!acxProv || r.p.id === acxProv)
+  const rows = acxSorted(all.filter((r) => (!acxProv || r.p.id === acxProv)
     && (acxBanned === "any" || (acxBanned ? r[acxBanned] : !r.off))
     && (acxState === "all" || r.state === acxState)
     && acxKeyAllows(key, r)
     && (!acxAdded || acxAddedMatches(r.added, acxAdded))
     && (!acx5h || acxRoom(r.q, "5h") === acx5h)
     && (!acx7d || acxRoom(r.q, "7d") === acx7d)
-    && (!words || [r.l.user, accountNameOf(r.p, r.l.user), r.p.name, r.l.plan].some((s) => acxLow(s).includes(words))));
+    && (!words || [r.l.user, accountNameOf(r.p, r.l.user), r.p.name, r.l.plan].some((s) => acxLow(s).includes(words)))));
 
   const n = (k) => all.filter((r) => r.state === k).length;
   const sum = $("#acxSum");
@@ -319,7 +385,7 @@ function acxDraw() {
   const note = $("#acxNote");
   note.replaceChildren();
   if (!all.length) {
-    note.append(el("span", "", t("No subscription account yet. Add one in Providers: it is listed here once signed in.") + " "));
+    note.append(el("span", "", t("No subscription account yet. Add one with Add account, or in Providers: it is listed here once signed in.") + " "));
     const go = el("button", "link", t("Open Providers"));
     go.onclick = () => show("providers");
     note.append(go);
@@ -572,7 +638,9 @@ function acxCard(r) {
   const head = el("div", "acx-head");
   const [who, alias] = acxWho(r);
   who.append(el("div", "sub", [p.name, alias ? l.user : ""].filter(Boolean).join(" · ")));
-  head.append(icon(p.icon || a.agent, true), who);
+  // its letter on a colour of its own (the same each time), its vendor's
+  // logo at the right (需求方 2026-11-13, after the screenshot)
+  head.append(acxAvatar(alias || l.user), who, icon(p.icon || a.agent, true));
   card.append(head);
 
   const facts = el("dl", "acx-facts");
@@ -616,10 +684,38 @@ function acxCard(r) {
   stat("errors" + (r.errors ? " bad" : ""), fmtN(r.errors), "Failed");
   stat("tokens", fmtN(r.tokens), "Tokens");
   stat("cost", fmtCost({ cost: r.cost, unpriced: r.unpriced }) || "—", "Cost");
-  card.append(stats);
+  card.append(stats, acxSpansBox(r));
 
   card.append(acxActs(r));
   return card;
+}
+
+// acxAvatar: a name's first letter on a hue worked out from the name
+function acxAvatar(name) {
+  const s = String(name || "?").trim() || "?";
+  let h = 0;
+  for (const c of acxLow(s)) h = (h * 31 + c.codePointAt(0)) % 360;
+  const a = el("span", "acx-avatar", [...s][0].toUpperCase());
+  a.style.setProperty("--acx-hue", String(h));
+  a.setAttribute("aria-hidden", "true");
+  return a;
+}
+
+// acxSpansBox: today's, the last 7 and 30 days' cost, requests and tokens
+// through the gateway, each "—" till read
+function acxSpansBox(r) {
+  const box = el("div", "acx-spans");
+  for (const [k, n] of ACX_SPANS) {
+    const x = r.spans[k];
+    const c = el("div", "acx-span");
+    c.dataset.span = k;
+    const cost = x ? fmtCost(x) || (x.calls ? "—" : fmtCost({ cost: 0, unpriced: 0 })) : "—";
+    c.append(el("span", "acx-span-k", t(n)), el("b", "", cost),
+      el("span", "acx-span-n", x ? t("{n} req · {tok} tok", { n: fmtN(x.calls), tok: fmtN(x.tokens) }) : t("Not loaded yet")));
+    if (x) c.title = t("{period}, through the gateway: {n} requests, {tok} tokens", { period: t(n), n: fmtN(x.calls), tok: fmtN(x.tokens) });
+    box.append(c);
+  }
+  return box;
 }
 
 // acxRow: an account's row — who, its state, its windows, its requests,
@@ -651,4 +747,79 @@ function acxRow(r) {
 
   row.append(acxActs(r));
   return row;
+}
+
+// Add account (需求方 2026-11-13: 账号页加添加按钮，先选账号类型再进入
+// 添加流程，当前只需支持 Claude): its type first, then the sign-in
+// Providers runs (readySignIn, renderSigning in app.js) drawn here. The
+// sign-in draws itself with renderProviders, so while this is open on this
+// page that draws here instead: the providers' page is drawn on its next
+// opening (providersBehind), and the editor signedIn opens on the account
+// added stays shut. A sign-in canceled goes back to the type.
+const ACX_ADD_TYPES = ["claude"];
+const acxRenderProviders = renderProviders;
+renderProviders = function (quiet) {
+  if (view !== "accounts" || !acxAdding) return acxRenderProviders(quiet);
+  providersBehind = true;
+  if (!signing && editing !== null) { editing = null; adding = false; draft = null; }
+  acxAddDraw();
+};
+
+function acxAddDraw() {
+  const box = $("#acxAdding");
+  if (!box) return;
+  $("#acxAdd").classList.toggle("on", !!acxAdding);
+  box.hidden = !acxAdding;
+  box.replaceChildren();
+  if (!acxAdding) return;
+  // its sign-in ended: added (signedIn names it), or canceled
+  if (acxAdding !== "type" && signing?.agent !== acxAdding) {
+    if (justAdded && justAdded !== acxJustWas) acxAdded1 = justAdded;
+    if (!acxAdded1) acxAdding = "type";
+  }
+  const head = el("div", "acx-add-head");
+  head.append(el("b", "", t("Add account")));
+  if (acxAdding !== "type") head.append(el("span", "acx-add-step", subOf(acxAdding)?.name || acxAdding));
+  head.append(el("span", "grow"));
+  if (acxAdding !== "type" && !acxAdded1) {
+    const back = el("button", "text acx-add-back", t("Back to the types"));
+    back.type = "button";
+    back.title = t("Pick another type of account");
+    back.onclick = () => { if (signing?.agent === acxAdding) cancelSignIn(); acxAdding = "type"; acxAddDraw(); };
+    head.append(back);
+  }
+  const close = el("button", "text acx-add-close", t("Close"));
+  close.type = "button";
+  close.onclick = () => { if (acxAdding !== "type" && signing?.agent === acxAdding) cancelSignIn(); acxAdding = acxAdded1 = ""; acxAddDraw(); };
+  head.append(close);
+  box.append(head);
+  if (acxAdding === "type") {
+    box.append(el("p", "acx-add-note", t("Pick the type of account to add.")));
+    const tiles = el("div", "acx-add-types");
+    for (const agent of ACX_ADD_TYPES) {
+      const sub = subOf(agent);
+      if (!sub) continue;
+      const b = el("button", "acx-add-type");
+      b.type = "button";
+      b.dataset.agent = agent;
+      const words = el("span", "acx-add-words");
+      words.append(el("b", "", sub.name), el("span", "", sub.plans || ""));
+      b.append(icon(sub.icon || agent, true), words);
+      b.onclick = () => { acxAdding = agent; acxAdded1 = ""; acxJustWas = justAdded; readySignIn(agent); };
+      tiles.append(b);
+    }
+    box.append(tiles);
+    return;
+  }
+  if (acxAdded1) {
+    const done = el("div", "acx-add-done");
+    done.append(el("span", "", t("{user} added: it is listed below", { user: acxAdded1 })));
+    const more = el("button", "text primary acx-add-more", t("Add one more account"));
+    more.type = "button";
+    more.onclick = () => { acxAdded1 = ""; acxJustWas = justAdded; readySignIn(acxAdding); };
+    done.append(more);
+    box.append(done);
+    return;
+  }
+  box.append(renderSigning(subOf(acxAdding)));
 }

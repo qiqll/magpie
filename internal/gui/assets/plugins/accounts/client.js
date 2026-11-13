@@ -2,8 +2,9 @@
 // provider, on one page (需求方 2026-11-04, after CLIProxyAPI's credentials
 // page): each one's state, its allowances' windows, the requests it served
 // in the last 5 hours and its proxy, found by provider, state or a word,
-// and used, paused, signed in again or read again in place. Adding and
-// removing one stay in the provider's editor, which Open goes to.
+// and used, paused, signed in again or read again in place. Add account
+// signs one in here, as Providers does (需求方 2026-11-13: Claude for now);
+// removing one stays in the provider's editor, which Open goes to.
 //
 // A page the accounts plugin adds to the window (kernel.js), its words in
 // i18n.js beside this file. This file registers the page and its markup,
@@ -24,10 +25,17 @@ magpie.plugin("accounts", (ctx) => {
     <button class="sess-pick" id="acx5h" type="button"></button>
     <button class="sess-pick" id="acx7d" type="button"></button>
     <button class="sess-pick" id="acxBanned" type="button"></button>
+    <button class="sess-pick" id="acxSort" type="button"></button>
     <span class="grow"></span>
     <div id="acxState"></div>
     <div id="acxView"></div>
   </div>
+  <div class="acx-top">
+    <button class="text primary acx-add" id="acxAdd" type="button" data-t>Add account</button>
+    <button class="text acx-read-all" id="acxReadAll" type="button" data-t>Refresh all usage</button>
+    <button class="text acx-reload" id="acxReload" type="button" data-t>Refresh list</button>
+  </div>
+  <div class="acx-adding" id="acxAdding" hidden></div>
   <div class="acx-held" id="acxHeld" hidden></div>
   <p class="acx-sum" id="acxSum" role="status"></p>
   <div class="list acx-list" id="acxList"></div>

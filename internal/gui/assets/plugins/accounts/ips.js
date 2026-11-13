@@ -20,7 +20,7 @@
 // the IP keeps, one read from a saved proxy among them), the IP whose
 // start date is being picked, the last error, and whether a save is under
 // way: the list takes no other change till it is answered (T-155 review M2)
-let ipsList = null, ipsRev = "", ipsEdit = null, ipsDraft = { ip: "", name: "", proxies: [] }, ipsRenewing = "", ipsErr = "", ipsSaving = false;
+let ipsList = null, ipsRev = "", ipsEdit = null, ipsDraft = { ip: "", name: "", proxies: [], proxy: "" }, ipsRenewing = "", ipsErr = "", ipsSaving = false;
 // Import from accounts under way, and what the last one did
 let ipsImporting = false, ipsSaid = "";
 // the accounts filter, kept per machine: "" every IP, "bound" those an
@@ -58,7 +58,7 @@ function ipsMount() {
   };
   q.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape" && q.value) { q.value = ""; q.oninput(); } };
   const add = $("#ipsAdd");
-  add.onclick = () => { ipsEdit = -1; ipsDraft = { ip: "", name: "", proxies: [] }; ipsErr = ""; ipsSaid = ""; ipsDraw(); };
+  add.onclick = () => { ipsEdit = -1; ipsDraft = { ip: "", name: "", proxies: [], proxy: "" }; ipsErr = ""; ipsSaid = ""; ipsDraw(); };
   $("#ipsImport").onclick = ipsImport;
 }
 
@@ -411,7 +411,7 @@ function ipsRow(x, i, accts, read) {
   const edit = el("button", "text ips-edit", t("Edit"));
   edit.type = "button";
   edit.disabled = ipsImporting;
-  edit.onclick = () => { ipsEdit = i; ipsDraft = { ip: x.ip, name: x.name || "", proxies: [...(x.proxies || [])] }; ipsErr = ""; ipsSaid = ""; ipsDraw(); };
+  edit.onclick = () => { ipsEdit = i; ipsDraft = { ip: x.ip, name: x.name || "", proxies: [...(x.proxies || [])], proxy: "" }; ipsErr = ""; ipsSaid = ""; ipsDraw(); };
   const rm = el("button", "text ips-remove", t("Remove"));
   rm.type = "button";
   rm.disabled = ipsImporting;
@@ -423,6 +423,25 @@ function ipsRow(x, i, accts, read) {
   acts.append(edit, rm);
   row.append(acts);
   return row;
+}
+
+// ipsReadExit: the typed proxy's exit as Cloudflare sees it put in the
+// draft's address (proxy/check, as Read from a saved proxy asks it), or why
+// not in the form's error; true once read. b is busy meanwhile.
+async function ipsReadExit(b) {
+  const proxy = (ipsDraft.proxy || "").trim();
+  if (!proxy) return false;
+  b?.classList.add("busy");
+  ipsErr = "";
+  let exit = "";
+  try {
+    const out = await api("proxy/check", { proxy });
+    exit = out?.through?.ip || "";
+    if (exit) ipsDraft.ip = exit;
+    else ipsErr = t("The proxy didn't answer: {error}", { error: out?.through?.error || "" });
+  } catch (e) { ipsErr = t(e.message); }
+  ipsDraw();
+  return !!exit;
 }
 
 // ipsForm: an IP's address and name, new (i -1) or the one at i; with
@@ -447,6 +466,29 @@ function ipsForm(i) {
   nm.setAttribute("aria-label", t("Its name (optional)"));
   nm.oninput = () => { ipsDraft.name = nm.value; };
   fields.append(ip, nm);
+  // the proxy that goes out through it, typed with its login in fields of
+  // their own, as Settings › Network's saved proxies take one (需求方
+  // 2026-11-13: IP 添加中没有账户名密码的地方); kept with the IP on Save,
+  // and Read its exit fills the address from it
+  const px = el("input", "ips-in-proxy");
+  px.type = "text";
+  px.spellcheck = false;
+  px.autocomplete = "off";
+  px.placeholder = "http://127.0.0.1:7890";
+  px.value = ipsDraft.proxy || "";
+  px.setAttribute("aria-label", t("Proxy address"));
+  const login = proxyLoginRow(px, (v) => { ipsDraft.proxy = v; exit.disabled = !px.value.trim(); });
+  // each box its own first class, so a redraw puts the focus back in it
+  const [user, pass] = login.querySelectorAll("input.proxy-credential");
+  user.className = "ips-in-user proxy-credential";
+  pass.className = "ips-in-pass proxy-credential";
+  const exit = el("button", "text ips-read-exit", t("Read its exit IP"));
+  exit.type = "button";
+  exit.disabled = !px.value.trim();
+  exit.title = t("Fill in the address the proxy's requests leave from, as Cloudflare sees it");
+  exit.onclick = () => ipsReadExit(exit);
+  login.prepend(px);
+  login.append(exit);
   const saved = (prefs || state?.settings)?.proxies || [];
   if (saved.length) {
     const from = el("button", "sess-pick ips-from", t("Read from a saved proxy"));
@@ -473,7 +515,7 @@ function ipsForm(i) {
     };
     fields.append(from);
   }
-  form.append(fields);
+  form.append(fields, login);
   // the proxies the IP was read from, each unlinked here (T-172): one whose
   // exit moved, or an address typed over, leaves them with nothing to say
   // they no longer go out through it
@@ -502,22 +544,30 @@ function ipsForm(i) {
   const ok = el("button", "text primary ips-save", t("Save"));
   ok.type = "button";
   ok.onclick = async () => {
+    if (ok.classList.contains("busy")) return;
+    const typed = (ipsDraft.proxy || "").trim();
+    // no address but a proxy: its exit is the address
+    if (!ipsDraft.ip.trim() && typed) {
+      ok.classList.add("busy");
+      if (!await ipsReadExit()) return;
+      ok.classList.remove("busy");
+    }
     const v = { ip: ipsDraft.ip.trim(), name: ipsDraft.name.trim() };
     if (!v.ip) return ip.focus();
-    if (ok.classList.contains("busy")) return;
     ok.classList.add("busy");
-    // the proxies kept; one read from a saved proxy here leaves any other
-    // IP it was read from before, as an import moves it (review L4)
-    const ps = ipsDraft.proxies, fresh = ps.filter((p) => !had.includes(p));
+    // the proxies kept, the one typed among them; one read from a saved
+    // proxy here leaves any other IP it was read from before, as an import
+    // moves it (review L4)
+    const ps = typed && !ipsDraft.proxies.includes(typed) ? [...ipsDraft.proxies, typed] : ipsDraft.proxies, fresh = ps.filter((p) => !had.includes(p));
     const off = (y) => (fresh.some((p) => (y.proxies || []).includes(p)) ? { ...y, proxies: y.proxies.filter((p) => !fresh.includes(p)) } : y);
     const next = i < 0 ? [...ipsList.map(off), { ...v, proxies: ps }] : ipsList.map((y, j) => (j === i ? { ...y, ...v, proxies: ps } : off(y)));
     // kept, the form closes; refused, ipsKeep drew it again with why
-    if (await ipsKeep(next)) { ipsEdit = null; ipsDraw(); }
+    if (await ipsKeep(next)) { ipsEdit = null; ipsDraft.proxy = ""; ipsDraw(); }
   };
   const no = el("button", "text ips-cancel", t("Cancel"));
   no.type = "button";
   no.onclick = () => { ipsEdit = null; ipsErr = ""; ipsDraw(); };
-  for (const box of [ip, nm]) box.onkeydown = (e) => {
+  for (const box of [ip, nm, px, user, pass]) box.onkeydown = (e) => {
     e.stopPropagation();
     if (e.key === "Enter") ok.click();
     if (e.key === "Escape") no.click();
