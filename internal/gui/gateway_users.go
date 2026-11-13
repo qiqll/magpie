@@ -53,11 +53,16 @@ type userAccountJSON struct {
 // key's group (another group's user of the name is another), when it was
 // bound to the account under any of its keys (zero when a file edited by
 // hand left it out), and whether the account is its spare under each.
+// Key, KeyName and KeyGone are its row's first key (userJSON's), for the
+// page to tell two users of one id on one account apart (review M1).
 type accountUserJSON struct {
-	User  string    `json:"user"`
-	Group string    `json:"-"`
-	At    time.Time `json:"at,omitzero"`
-	Spare bool      `json:"spare,omitempty"`
+	User    string    `json:"user"`
+	Group   string    `json:"-"`
+	At      time.Time `json:"at,omitzero"`
+	Spare   bool      `json:"spare,omitempty"`
+	Key     string    `json:"key,omitempty"`
+	KeyName string    `json:"keyName,omitempty"`
+	KeyGone bool      `json:"keyGone,omitempty"`
 }
 
 // seatOutJSON is why an account can't answer now, and until when: Out
@@ -170,15 +175,19 @@ func (t *userTodayJSON) add(r usage.Record, cost func(usage.Record) (float64, bo
 }
 
 // seatOfRecord is the seat of the account or key that answered r, under
-// provider p (its id now), "" for neither.
+// provider p (its id now), lower-cased as an account's Seat is: its
+// account's, else its key's, else the provider's own (candidate.who() of
+// one with neither, a local server's), "" for a call to no provider.
 func seatOfRecord(p string, r usage.Record) string {
 	switch {
+	case p == "":
+		return ""
 	case r.ProviderAccount != "":
-		return p + "@" + strings.ToLower(r.ProviderAccount)
+		return strings.ToLower(p + "@" + r.ProviderAccount)
 	case r.ProviderKeyID != "":
 		return strings.ToLower(p + "#" + r.ProviderKeyID)
 	}
-	return ""
+	return strings.ToLower(p)
 }
 
 // usersTodayKept is how many zones' days are kept at once.
@@ -436,7 +445,7 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			if bind.idleHours > 0 {
 				out["idleHours"] = bind.idleHours
 			}
-			accounts := userAccounts(merged, byID, seats, bind.rests, nameOf, providerGone)
+			accounts := userAccounts(merged, byID, seats, bind.rests, nameOf, providerGone, keyNames, keyGone)
 			for i := range accounts {
 				if d := today.seats[accounts[i].Seat]; d != nil {
 					c := *d
@@ -512,7 +521,7 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 // user bound to it under several gateway keys of a group is counted once, and as a
 // spare only when it is the first under none of them.
 func userAccounts(users []userMerged, byID map[string]provider.Provider, seats map[string]map[string]bool, rests map[string]gateway.Rest,
-	nameOf func(string) providerShown, providerGone func(string) bool) []userAccountJSON {
+	nameOf func(string) providerShown, providerGone func(string) bool, keyNames map[string]string, keyGone func(string) bool) []userAccountJSON {
 	accounts := []userAccountJSON{}
 	at := map[string]int{}
 	count := func(pid, who, account string, spare bool, bound accountUserJSON) {
@@ -562,7 +571,8 @@ func userAccounts(users []userMerged, byID map[string]provider.Provider, seats m
 		}
 		for _, s := range own {
 			seat := strings.ToLower(s.who)
-			count(m[0].Provider, s.who, s.account, spare[seat], accountUserJSON{User: m[0].User, Group: m[0].Group, At: at[seat], Spare: spare[seat]})
+			count(m[0].Provider, s.who, s.account, spare[seat], accountUserJSON{User: m[0].User, Group: m[0].Group, At: at[seat], Spare: spare[seat],
+				Key: m[0].Key, KeyName: keyNames[m[0].Key], KeyGone: keyGone(m[0].Key)})
 		}
 	}
 	// each account's users, the earliest bound first (a time left out

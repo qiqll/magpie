@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/access"
+	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/usage"
 )
 
@@ -138,9 +139,11 @@ func TestGatewayAccountsBoundAndToday(t *testing.T) {
 	writeUsers(t, fmt.Sprintf(`{
   "users": {"codex": {"alice": {"who": "codex@a@x.com", "account": "A@x.com", "at": %q},
                       "bob": {"who": "codex@b@x.com", "account": "b@x.com", "at": %q, "more": [{"who": "codex@a@x.com", "account": "A@x.com", "at": %q}]},
-                      "carol": {"who": "codex@b@x.com", "account": "b@x.com"}}},
+                      "carol": {"who": "codex@b@x.com", "account": "b@x.com"}},
+            "relay": {"dan": {"who": %q, "account": "First"}},
+            "local": {"eve": {"who": "local", "account": "local"}}},
   "keys": {%q: {"codex": {"alice": {"who": "codex@a@x.com", "account": "A@x.com", "at": %q}}}}
-}`, f(t2), f(t1), f(t3), keyID, f(t1)))
+}`, f(t2), f(t1), f(t3), "relay#"+provider.KeyID("sk-1"), keyID, f(t1)))
 	rec := func(at time.Time, acct, user string, in, out int, fn func(*usage.Record)) {
 		r := usage.Record{Time: at, Agent: "codex", Provider: "codex", ProviderAccount: acct, Model: "gpt-5", Input: in, Output: out, Status: 200, User: user}
 		if fn != nil {
@@ -154,15 +157,31 @@ func TestGatewayAccountsBoundAndToday(t *testing.T) {
 	rec(day.Add(3*time.Hour), "A@x.com", "bob", 5, 5, func(r *usage.Record) { r.HandedOn = true; r.Status = 429 })     // handed on: tokens, no request
 	rec(day.Add(3*time.Hour), "A@x.com", "bob", 900, 900, func(r *usage.Record) { r.Rejected = true; r.Status = 429 }) // rejected
 	rec(day.Add(3*time.Hour), "c@x.com", "", 700, 700, nil)                                                            // another account
-	rec(day.Add(3*time.Hour), "A@x.com", "", 800, 800, func(r *usage.Record) { r.Source = usage.SourceReported })      // reported by an app
+	rec(day.Add(3*time.Hour), "A@x.com", "", 800, 800, func(r *usage.Record) { r.Source = usage.SourceReported })
+	// a key's seat, and a provider's with neither account nor key
+	rec(day.Add(3*time.Hour), "", "dan", 11, 1, func(r *usage.Record) { r.Provider, r.ProviderKeyID = "relay", provider.KeyID("sk-1") })
+	rec(day.Add(3*time.Hour), "", "eve", 3, 2, func(r *usage.Record) { r.Provider = "local" }) // reported by an app
 
 	code, out := gatewayUsers(t, "")
-	if code != 200 || len(out.Accounts) != 2 {
+	if code != 200 || len(out.Accounts) != 4 {
 		t.Fatalf("%d %+v", code, out)
 	}
-	a, b := out.Accounts[0], out.Accounts[1]
-	if a.Seat != "codex@a@x.com" || b.Seat != "codex@b@x.com" {
+	by := map[string]userAccountJSON{}
+	for _, x := range out.Accounts {
+		by[x.Seat] = x
+	}
+	a, b := by["codex@a@x.com"], by["codex@b@x.com"]
+	if a.Seat == "" || b.Seat == "" {
 		t.Fatalf("accounts: %+v", out.Accounts)
+	}
+	for seat, want := range map[string]int{"relay#" + provider.KeyID("sk-1"): 12, "local": 5} {
+		if d := by[seat].Today; d == nil || d.Calls != 1 || d.Tokens != want {
+			t.Errorf("%s today: %+v", seat, d)
+		}
+	}
+	// alice's two rows each name their key, for the page to tell them apart
+	if a.Bound[0].Key != keyID || a.Bound[0].KeyName != "Tenant A" || a.Bound[1].Key != "" {
+		t.Errorf("alice's keys: %+v", a.Bound)
 	}
 	type bound struct {
 		user  string

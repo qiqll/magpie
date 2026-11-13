@@ -207,10 +207,15 @@ const USER_BOUND_SHOWN = 8;
 function userBoundList(a) {
   const box = el("div", "user-bound");
   const bound = a.bound || [];
-  const said = (b) => b.user + (b.at && !b.at.startsWith("0001-") ? " · " + t("bound {when}", { when: stamp(b.at) }) : "") + (b.spare ? ` (${t("spare")})` : "");
+  // an id bound under two key groups is two users: each named with its
+  // key (review M1)
+  const twice = new Set(bound.filter((b, i) => bound.findIndex((x) => x.user === b.user) !== i).map((b) => b.user));
+  const keyOf = (b) => twice.has(b.user) ? userKeyLabel(b) : "";
+  const said = (b) => b.user + (keyOf(b) ? ` (${keyOf(b)})` : "") + (b.at && !b.at.startsWith("0001-") ? " · " + t("bound {when}", { when: stamp(b.at) }) : "") + (b.spare ? ` (${t("spare")})` : "");
   for (const b of bound.slice(0, USER_BOUND_SHOWN)) {
     const chip = el("span", "user-bound-u" + (b.spare ? " spare" : ""));
     chip.append(el("span", "user-id-v", b.user));
+    if (keyOf(b)) chip.append(el("span", "user-bound-key", keyOf(b)));
     if (b.at && !b.at.startsWith("0001-")) {
       const when = el("span", "user-at", t("bound {when}", { when: stamp(b.at) }));
       when.title = ago(b.at);

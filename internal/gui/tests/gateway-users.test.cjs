@@ -61,7 +61,7 @@ const withKeys = (u) => u.keys ? u : { ...u, keys: [{ key: u.key, keyName: u.key
 const tiers = { default: "free", tiers: [{ name: "free", credits: 1000, max_accounts: 2, share: 2 }, { name: "pro", credits: 5000, max_accounts: 4, share: 1 }, { name: "team", credits: 0, max_accounts: 6, share: 0 }], aliases: { 1: "free", 4: "pro", P: "pro" } };
 const accounts = [
   { provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), users: 2, spares: 0, out: "quota", outUntil: back, outKnown: true,
-    bound: [{ user: "1", at }, { user: "3", at }], today: { calls: 7, tokens: 900, cost: 0.25 } },
+    bound: [{ user: "1", at, key: "k1", keyName: "Tenant A" }, { user: "3", at }, { user: "1", at }], today: { calls: 7, tokens: 900, cost: 0.25 } },
   { provider: "antigravity", providerName: "Antigravity", account: "b@x.com", seat: seat("antigravity", "b@x.com"), users: 2, spares: 1, outKnown: true,
     bound: [{ user: "2", at }, { user: "1", at, spare: true }] },
   // more users than its row names: the rest counted; one bound without a time says none
@@ -222,7 +222,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // how long ago in its title, a spare marked; and what went through
         // it today, "—" for nothing (需求方 2026-11-13)
         const boundOf = (i) => accountRows.nth(i).locator(".user-bound-u .user-id-v").allTextContents();
-        assert.deepEqual(await boundOf(0), ["1", "3"]);
+        assert.deepEqual(await boundOf(0), ["1", "3", "1"]);
+        // one id under two key groups names each one's key; an id once names none (review M1)
+        assert.deepEqual(await accountRows.nth(0).locator(".user-bound-u").evaluateAll((cs) => cs.map((c) => c.querySelector(".user-bound-key")?.textContent || "")),
+          ["Tenant A", "", await page.evaluate(() => t("without a gateway key"))]);
         assert.deepEqual(await boundOf(1), ["2", "1"]);
         const aChip = accountRows.nth(0).locator(".user-bound-u").first();
         assert.equal(await aChip.locator(".user-at").textContent(), await page.evaluate((a) => t("bound {when}", { when: stamp(a) }), at));
