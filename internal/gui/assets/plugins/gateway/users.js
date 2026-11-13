@@ -179,9 +179,10 @@ function userModeSays(m) {
 // aren't known
 const userTierOf = (k) => k.tier || userBindMode?.tiers?.default || "";
 
-// userToday: what a user sent its provider today under its row's keys —
-// the cost, the requests and tokens — "—" when nothing
-function userToday(u) {
+// userToday: what a user sent its provider today under its row's keys,
+// or (account) what the gateway sent through an account today, whoever
+// asked — the cost, the requests and tokens — "—" when nothing
+function userToday(u, account) {
   const d = u.today;
   const box = el("div", "user-today" + (d ? "" : " idle"));
   box.append(el("span", "user-today-k", t("Today")));
@@ -192,7 +193,35 @@ function userToday(u) {
   }
   // calls with no known price only are no $0 (#3406): "—" (review M1)
   box.append(el("b", "", fmtCost(d) || (d.unpriced ? "—" : fmtCost({ cost: 0, unpriced: 0 }))), el("span", "user-today-n", t("{n} req · {tok} tok", { n: fmtN(d.calls), tok: fmtN(d.tokens) })));
-  box.title = t("Today, under its own gateway keys: {n} requests, {tok} tokens", { n: fmtN(d.calls), tok: fmtN(d.tokens) });
+  box.title = t(account ? "Today, through this account: {n} requests, {tok} tokens" : "Today, under its own gateway keys: {n} requests, {tok} tokens", { n: fmtN(d.calls), tok: fmtN(d.tokens) });
+  return box;
+}
+
+// how many of an account's users its row names; the rest are counted
+const USER_BOUND_SHOWN = 8;
+
+// userBoundList: the users bound to an account (需求方 2026-11-13), the
+// earliest bound first, each its id and the date it was bound to the
+// account, how long ago in its title, a spare marked; past
+// USER_BOUND_SHOWN the rest counted, every one in the list's title
+function userBoundList(a) {
+  const box = el("div", "user-bound");
+  const bound = a.bound || [];
+  const said = (b) => b.user + (b.at && !b.at.startsWith("0001-") ? " · " + t("bound {when}", { when: stamp(b.at) }) : "") + (b.spare ? ` (${t("spare")})` : "");
+  for (const b of bound.slice(0, USER_BOUND_SHOWN)) {
+    const chip = el("span", "user-bound-u" + (b.spare ? " spare" : ""));
+    chip.append(el("span", "user-id-v", b.user));
+    if (b.at && !b.at.startsWith("0001-")) {
+      const when = el("span", "user-at", t("bound {when}", { when: stamp(b.at) }));
+      when.title = ago(b.at);
+      chip.append(when);
+    }
+    if (b.spare) chip.append(el("span", "user-at", t("spare")));
+    chip.title = said(b);
+    box.append(chip);
+  }
+  if (bound.length > USER_BOUND_SHOWN) box.append(el("span", "user-at", t("+{n} more", { n: bound.length - USER_BOUND_SHOWN })));
+  box.title = bound.map(said).join("\n");
   return box;
 }
 
@@ -224,8 +253,9 @@ function renderUserBinds() {
     const row = el("div", "row model user-account" + (a.gone ? " gone" : !a.outKnown || a.out ? " out" : ""));
     const who = el("div", "who");
     who.append(el("div", "name", a.account), el("div", "sub wraps", userAccountSays(a)));
+    if (a.bound?.length) who.append(userBoundList(a));
     const n = t(a.users === 1 ? "{n} user" : "{n} users", { n: a.users });
-    row.append(icon(a.icon || "generic"), who, el("span", "note", a.spares ? t("{users}, {n} as a spare", { users: n, n: a.spares }) : n));
+    row.append(icon(a.icon || "generic"), who, el("span", "note", a.spares ? t("{users}, {n} as a spare", { users: n, n: a.spares }) : n), userToday(a, true));
     accounts.append(row);
   }
 

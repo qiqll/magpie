@@ -3345,12 +3345,17 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .user-bind .user-id { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .user-bind .user-id::before { content: "ID"; flex: none; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: .04em; line-height: 16px; color: var(--muted); background: var(--pill); }
 .user-id-v { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--code); font-size: 12.5px; }
+.user-bound { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 3px; }
+.user-bound-u { display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; min-width: 0; padding: 1px 7px; border-radius: 4px; background: var(--pill); }
+.user-bound-u .user-id-v { font-size: 12px; color: var(--fg); }
+.user-bound-u .user-at { flex: none; font-size: 11px; color: var(--muted); }
+.user-bound-u.spare .user-id-v { color: var(--muted); }
 .user-today { flex: none; display: flex; flex-direction: column; align-items: flex-end; min-width: 6.5em; padding: 0 4px; font-size: 11px; color: var(--muted); }
 .user-today b { font-size: 13px; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
 .user-today.idle b { color: var(--faint); font-weight: 500; }
 .user-today-k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; }
 .user-today-n { white-space: nowrap; font-variant-numeric: tabular-nums; }
-@media (max-width: 620px) { .user-bind { flex-wrap: wrap; } .user-bind .who { flex-basis: calc(100% - 40px); } .user-today { flex-direction: row; align-items: baseline; gap: 8px; margin-left: 30px; } }
+@media (max-width: 620px) { .user-bind, .user-account { flex-wrap: wrap; } .user-bind .who, .user-account .who { flex-basis: calc(100% - 40px); } .user-today { flex-direction: row; align-items: baseline; gap: 8px; margin-left: 30px; } }
 /* no gateway key yet: said in its card as Recent calls says it has none */
 #gatewayKeys .none { padding: 13px 14px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
 #view-gateway .row-head .find { margin-right: 8px; }

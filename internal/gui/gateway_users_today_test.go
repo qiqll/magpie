@@ -108,3 +108,85 @@ func TestGatewayUsersToday(t *testing.T) {
 		t.Fatalf("searched: %+v", out.Users)
 	}
 }
+
+// An account's row names the users bound to it, the earliest bound first,
+// each with when it was bound to that account (a spare's own time, the
+// earliest under any of its keys) and marked a spare where it is one; and
+// says what went through the account today, whoever asked: a call naming
+// no user too, never another account's, a rejected one's or yesterday's;
+// an account with nothing today says nothing (需求方 2026-11-13).
+func TestGatewayAccountsBoundAndToday(t *testing.T) {
+	sandboxHome(t)
+	noGateway(t)
+	forgetUsersToday(t)
+	now := holdUsageClock(t, time.Date(2026, 11, 13, 15, 0, 0, 0, time.Local))
+	day := usage.Today.Since(now)
+	if _, err := access.Update("add-key", access.Change{Name: "Tenant A"}); err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := access.List()
+	var keyID string
+	for _, k := range keys {
+		if k.Name == "Tenant A" {
+			keyID = k.ID
+		}
+	}
+	t1, t2, t3 := day.Add(-48*time.Hour).UTC(), day.Add(-24*time.Hour).UTC(), day.Add(time.Hour).UTC()
+	f := func(x time.Time) string { return x.Format(time.RFC3339) }
+	// alice: A first under no key since t2, and under Tenant A since t1, so
+	// t1; bob: A a spare since t3 (B its first); carol: B first, no time
+	writeUsers(t, fmt.Sprintf(`{
+  "users": {"codex": {"alice": {"who": "codex@a@x.com", "account": "A@x.com", "at": %q},
+                      "bob": {"who": "codex@b@x.com", "account": "b@x.com", "at": %q, "more": [{"who": "codex@a@x.com", "account": "A@x.com", "at": %q}]},
+                      "carol": {"who": "codex@b@x.com", "account": "b@x.com"}}},
+  "keys": {%q: {"codex": {"alice": {"who": "codex@a@x.com", "account": "A@x.com", "at": %q}}}}
+}`, f(t2), f(t1), f(t3), keyID, f(t1)))
+	rec := func(at time.Time, acct, user string, in, out int, fn func(*usage.Record)) {
+		r := usage.Record{Time: at, Agent: "codex", Provider: "codex", ProviderAccount: acct, Model: "gpt-5", Input: in, Output: out, Status: 200, User: user}
+		if fn != nil {
+			fn(&r)
+		}
+		usage.Append(r)
+	}
+	rec(day.Add(-time.Minute), "A@x.com", "alice", 1000, 1000, nil) // yesterday
+	rec(day.Add(2*time.Hour), "A@x.com", "alice", 100, 20, nil)
+	rec(day.Add(2*time.Hour), "a@X.com", "", 30, 0, nil)                                                               // no user, the account's name in another case
+	rec(day.Add(3*time.Hour), "A@x.com", "bob", 5, 5, func(r *usage.Record) { r.HandedOn = true; r.Status = 429 })     // handed on: tokens, no request
+	rec(day.Add(3*time.Hour), "A@x.com", "bob", 900, 900, func(r *usage.Record) { r.Rejected = true; r.Status = 429 }) // rejected
+	rec(day.Add(3*time.Hour), "c@x.com", "", 700, 700, nil)                                                            // another account
+	rec(day.Add(3*time.Hour), "A@x.com", "", 800, 800, func(r *usage.Record) { r.Source = usage.SourceReported })      // reported by an app
+
+	code, out := gatewayUsers(t, "")
+	if code != 200 || len(out.Accounts) != 2 {
+		t.Fatalf("%d %+v", code, out)
+	}
+	a, b := out.Accounts[0], out.Accounts[1]
+	if a.Seat != "codex@a@x.com" || b.Seat != "codex@b@x.com" {
+		t.Fatalf("accounts: %+v", out.Accounts)
+	}
+	type bound struct {
+		user  string
+		at    time.Time
+		spare bool
+	}
+	said := func(bs []accountUserJSON) []bound {
+		var out []bound
+		for _, x := range bs {
+			out = append(out, bound{x.User, x.At.UTC(), x.Spare})
+		}
+		return out
+	}
+	// alice twice, once a row per key group; bob a spare
+	if got, want := said(a.Bound), []bound{{"alice", t1, false}, {"alice", t2, false}, {"bob", t3, true}}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("A's users: %v, want %v", got, want)
+	}
+	if got, want := said(b.Bound), []bound{{"bob", t1, false}, {"carol", time.Time{}, false}}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("b's users: %v, want %v", got, want)
+	}
+	if a.Today == nil || a.Today.Calls != 2 || a.Today.Tokens != 160 {
+		t.Fatalf("A today: %+v", a.Today)
+	}
+	if b.Today != nil {
+		t.Fatalf("b today: %+v", b.Today)
+	}
+}

@@ -60,9 +60,13 @@ const withKeys = (u) => u.keys ? u : { ...u, keys: [{ key: u.key, keyName: u.key
 // user-tiers.json as the serving magpie holds to it
 const tiers = { default: "free", tiers: [{ name: "free", credits: 1000, max_accounts: 2, share: 2 }, { name: "pro", credits: 5000, max_accounts: 4, share: 1 }, { name: "team", credits: 0, max_accounts: 6, share: 0 }], aliases: { 1: "free", 4: "pro", P: "pro" } };
 const accounts = [
-  { provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), users: 2, spares: 0, out: "quota", outUntil: back, outKnown: true },
-  { provider: "antigravity", providerName: "Antigravity", account: "b@x.com", seat: seat("antigravity", "b@x.com"), users: 2, spares: 1, outKnown: true },
-  { provider: "codex", providerName: "ChatGPT", account: "c@x.com", seat: seat("codex", "c@x.com"), users: 3, spares: 0, gone: true, outKnown: false },
+  { provider: "antigravity", providerName: "Antigravity", account: "a@x.com", seat: seat("antigravity", "a@x.com"), users: 2, spares: 0, out: "quota", outUntil: back, outKnown: true,
+    bound: [{ user: "1", at }, { user: "3", at }], today: { calls: 7, tokens: 900, cost: 0.25 } },
+  { provider: "antigravity", providerName: "Antigravity", account: "b@x.com", seat: seat("antigravity", "b@x.com"), users: 2, spares: 1, outKnown: true,
+    bound: [{ user: "2", at }, { user: "1", at, spare: true }] },
+  // more users than its row names: the rest counted; one bound without a time says none
+  { provider: "codex", providerName: "ChatGPT", account: "c@x.com", seat: seat("codex", "c@x.com"), users: 10, spares: 0, gone: true, outKnown: false,
+    bound: [...Array(9)].map((_, i) => ({ user: "u" + i, at })).concat([{ user: "6" }]) },
   { provider: "removed", providerName: "removed", account: "d@x.com", seat: seat("removed", "d@x.com"), users: 1, spares: 0, gone: true, providerGone: true, outKnown: false },
   // the serving magpie didn't say what rests: unknown, never "can answer"
   { provider: "antigravity", providerName: "Antigravity", account: "e@x.com", seat: seat("antigravity", "e@x.com"), users: 1, spares: 1, outKnown: false },
@@ -214,6 +218,24 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await sub(5), `Antigravity · ${w.model}`, "one model out says which");
         assert.equal(await sub(6), `Antigravity · ${w.unknown}`, "a time passed is unknown, never able to answer");
         assert.equal((await accountRows.nth(1).locator(".note").textContent()).trim(), w.spareNote);
+        // each account names its users, the date each was bound to it with
+        // how long ago in its title, a spare marked; and what went through
+        // it today, "—" for nothing (需求方 2026-11-13)
+        const boundOf = (i) => accountRows.nth(i).locator(".user-bound-u .user-id-v").allTextContents();
+        assert.deepEqual(await boundOf(0), ["1", "3"]);
+        assert.deepEqual(await boundOf(1), ["2", "1"]);
+        const aChip = accountRows.nth(0).locator(".user-bound-u").first();
+        assert.equal(await aChip.locator(".user-at").textContent(), await page.evaluate((a) => t("bound {when}", { when: stamp(a) }), at));
+        assert.equal(await aChip.locator(".user-at").getAttribute("title"), await page.evaluate((a) => ago(a), at));
+        assert.deepEqual(await accountRows.nth(1).locator(".user-bound-u").evaluateAll((cs) => cs.map((c) => c.classList.contains("spare"))), [false, true]);
+        assert.equal(await accountRows.nth(1).locator(".user-bound-u.spare .user-at").last().textContent(), await page.evaluate(() => t("spare")));
+        assert.equal(await accountRows.nth(2).locator(".user-bound-u").count(), 8);
+        assert.equal(await accountRows.nth(2).locator(".user-bound > .user-at").textContent(), await page.evaluate(() => t("+{n} more", { n: 2 })));
+        assert.match(await accountRows.nth(2).locator(".user-bound").getAttribute("title"), /^u0 · .*\n6$/s, "every user in the list's title, one with no time without one");
+        assert.equal(await accountRows.nth(3).locator(".user-bound").count(), 0, "an account a page has no users of names none");
+        assert.equal(await accountRows.nth(0).locator(".user-today b").textContent(), "$0.250");
+        assert.equal(await accountRows.nth(0).locator(".user-today-n").textContent(), await page.evaluate(() => t("{n} req · {tok} tok", { n: fmtN(7), tok: fmtN(900) })));
+        assert.equal(await accountRows.nth(1).locator(".user-today.idle b").textContent(), "—");
         for (const [i, out] of [[0, true], [1, false], [4, true], [5, true]]) {
           assert.equal(await accountRows.nth(i).evaluate((r) => r.classList.contains("out")), out, `account ${i} marked out`);
         }

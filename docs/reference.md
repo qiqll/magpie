@@ -2911,7 +2911,11 @@ they are used again once it is on), each provider's accounts with how
 many users are on each and how many of them as a spare, whether it can
 answer now (out, why and until when, one model's rest naming the model;
 "status unknown" when the magpie serving the gateway doesn't say, never
-"can answer"; one no longer on its provider said so), and the users with
+"can answer"; one no longer on its provider said so), the users bound to
+it (each id with the date it was bound to that account, a spare marked,
+the earliest first; eight named, the rest counted, all in its tip) and at
+the right what went through it today, in the reader's zone, whoever asked
+(a call naming no user too; "—" for nothing), and the users with
 their first account and spares in order, each marked first or spare with
 its state, provider, gateway key, tier (the default's for one bound before
 tiers), the user's id marked as one, the date and time they were bound

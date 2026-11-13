@@ -39,6 +39,25 @@ type userAccountJSON struct {
 	// itself is no longer magpie's
 	Gone         bool `json:"gone,omitempty"`
 	ProviderGone bool `json:"providerGone,omitempty"`
+	// Bound is the users bound to it, the earliest bound first, each with
+	// when it was bound to this account (需求方 2026-11-13: the account's
+	// rows say who is on it, since when, and what it spent today)
+	Bound []accountUserJSON `json:"bound"`
+	// Today is what the gateway sent through the account today, in the
+	// reader's zone, whoever asked (a call naming no user too): nil for
+	// nothing
+	Today *userTodayJSON `json:"today,omitempty"`
+}
+
+// accountUserJSON is one user bound to an account: its id, its gateway
+// key's group (another group's user of the name is another), when it was
+// bound to the account under any of its keys (zero when a file edited by
+// hand left it out), and whether the account is its spare under each.
+type accountUserJSON struct {
+	User  string    `json:"user"`
+	Group string    `json:"-"`
+	At    time.Time `json:"at,omitzero"`
+	Spare bool      `json:"spare,omitempty"`
 }
 
 // seatOutJSON is why an account can't answer now, and until when: Out
@@ -123,6 +142,43 @@ type usersTodayDay struct {
 	sync.Mutex
 	at time.Time
 	by map[[3]string]*userTodayJSON
+	// seats is the day's calls by the account or key that answered them,
+	// as an account's seat names it (candidate.who(): "codex@a@x.com",
+	// "openai#<key id>"), whoever asked
+	seats map[string]*userTodayJSON
+}
+
+// usersTodayOf is a zone's day of calls: by provider, user and gateway
+// key (usersToday), and by the account that answered (seats).
+type usersTodayOf struct {
+	by    map[[3]string]*userTodayJSON
+	seats map[string]*userTodayJSON
+}
+
+// add counts r in t: a try handed on is no request, but its tokens were
+// spent.
+func (t *userTodayJSON) add(r usage.Record, cost func(usage.Record) (float64, bool)) {
+	if !r.HandedOn {
+		t.Calls++
+	}
+	t.Tokens += r.Input + r.Output
+	if c, priced := cost(r); priced {
+		t.Cost += c
+	} else {
+		t.Unpriced++
+	}
+}
+
+// seatOfRecord is the seat of the account or key that answered r, under
+// provider p (its id now), "" for neither.
+func seatOfRecord(p string, r usage.Record) string {
+	switch {
+	case r.ProviderAccount != "":
+		return p + "@" + strings.ToLower(r.ProviderAccount)
+	case r.ProviderKeyID != "":
+		return strings.ToLower(p + "#" + r.ProviderKeyID)
+	}
+	return ""
 }
 
 // usersTodayKept is how many zones' days are kept at once.
@@ -134,7 +190,7 @@ const usersTodayKept = 3
 // named a user only. A rejected call, which went to no provider, is none,
 // and so is one an app reported itself, which never went through the
 // gateway; another computer's synced calls aren't in usage.jsonl (Visit).
-func usersToday(zone *time.Location) map[[3]string]*userTodayJSON {
+func usersToday(zone *time.Location) usersTodayOf {
 	now := usage.Clock().In(zone)
 	since := usage.Today.Since(now)
 	m := &usersTodayMemo
@@ -166,33 +222,36 @@ func usersToday(zone *time.Location) map[[3]string]*userTodayJSON {
 	d.Lock()
 	defer d.Unlock()
 	if d.by != nil && now.Sub(d.at) >= 0 && now.Sub(d.at) < 20*time.Second {
-		return d.by
+		return usersTodayOf{d.by, d.seats}
 	}
-	by := map[[3]string]*userTodayJSON{}
+	by, seats := map[[3]string]*userTodayJSON{}, map[string]*userTodayJSON{}
 	cost, renamed := usage.NewCoster(), provider.UsageRenames()
 	usage.Visit(since, func(r usage.Record) {
-		if r.User == "" || r.IsRejected() || r.IsReported() || r.Time.Before(since) {
+		if r.IsRejected() || r.IsReported() || r.Time.Before(since) {
 			return
 		}
-		k := [3]string{renamed.Of(r.Provider, r.Time), r.User, r.CallerKeyID}
+		p := renamed.Of(r.Provider, r.Time)
+		if seat := seatOfRecord(p, r); seat != "" {
+			t := seats[seat]
+			if t == nil {
+				t = &userTodayJSON{}
+				seats[seat] = t
+			}
+			t.add(r, cost)
+		}
+		if r.User == "" {
+			return
+		}
+		k := [3]string{p, r.User, r.CallerKeyID}
 		t := by[k]
 		if t == nil {
 			t = &userTodayJSON{}
 			by[k] = t
 		}
-		// a try handed on is no request, but its tokens were spent
-		if !r.HandedOn {
-			t.Calls++
-		}
-		t.Tokens += r.Input + r.Output
-		if c, priced := cost(r); priced {
-			t.Cost += c
-		} else {
-			t.Unpriced++
-		}
+		t.add(r, cost)
 	})
-	d.at, d.by = now, by
-	return by
+	d.at, d.by, d.seats = now, by, seats
+	return usersTodayOf{by, seats}
 }
 
 // userKeyJSON is a user's binding under one gateway key: its accounts,
@@ -288,11 +347,11 @@ func (m userMerged) shown(p providerShown, keyNames map[string]string, keyGone f
 
 // todayOf is u's calls today under each of its keys, each key once; nil
 // for none.
-func todayOf(today map[[3]string]*userTodayJSON, u userJSON) *userTodayJSON {
+func todayOf(today usersTodayOf, u userJSON) *userTodayJSON {
 	var out *userTodayJSON
 	seen := map[string]bool{}
 	for _, k := range u.Keys {
-		d := today[[3]string{u.Provider, u.User, k.Key}]
+		d := today.by[[3]string{u.Provider, u.User, k.Key}]
 		if seen[k.Key] || d == nil {
 			continue
 		}
@@ -367,6 +426,7 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 				strings.Compare(a[0].Account, b[0].Account), strings.Compare(a[0].User, b[0].User))
 		})
 		out := map[string]any{"total": len(merged)}
+		today := usersToday(usage.Zone(r.URL.Query().Get("tz")))
 		if q == "" {
 			bind := servingBinding()
 			out["mode"] = bind.mode
@@ -376,10 +436,16 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			if bind.idleHours > 0 {
 				out["idleHours"] = bind.idleHours
 			}
-			out["accounts"] = userAccounts(merged, byID, seats, bind.rests, nameOf, providerGone)
+			accounts := userAccounts(merged, byID, seats, bind.rests, nameOf, providerGone)
+			for i := range accounts {
+				if d := today.seats[accounts[i].Seat]; d != nil {
+					c := *d
+					accounts[i].Today = &c
+				}
+			}
+			out["accounts"] = accounts
 		}
 		words := strings.Fields(strings.ToLower(q))
-		today := usersToday(usage.Zone(r.URL.Query().Get("tz")))
 		users := []userJSON{}
 		matched := 0
 		for _, m := range merged {
@@ -449,14 +515,14 @@ func userAccounts(users []userMerged, byID map[string]provider.Provider, seats m
 	nameOf func(string) providerShown, providerGone func(string) bool) []userAccountJSON {
 	accounts := []userAccountJSON{}
 	at := map[string]int{}
-	count := func(pid, who, account string, spare bool) {
+	count := func(pid, who, account string, spare bool, bound accountUserJSON) {
 		seat := strings.ToLower(who)
 		k := pid + "\x00" + seat
 		i, ok := at[k]
 		if !ok {
 			p := nameOf(pid)
 			i, at[k] = len(accounts), len(accounts)
-			a := userAccountJSON{Provider: pid, ProviderName: p.name, Icon: p.icon, Account: account, Seat: seat, ProviderGone: providerGone(pid)}
+			a := userAccountJSON{Provider: pid, ProviderName: p.name, Icon: p.icon, Account: account, Seat: seat, ProviderGone: providerGone(pid), Bound: []accountUserJSON{}}
 			a.Gone = a.ProviderGone || seats[pid] != nil && !seats[pid][seat]
 			if pp, ok := byID[pid]; ok && !a.Gone {
 				so, found := gateway.UserSeatOut(pp, who, rests)
@@ -475,10 +541,12 @@ func userAccounts(users []userMerged, byID map[string]provider.Provider, seats m
 		if spare {
 			accounts[i].Spares++
 		}
+		accounts[i].Bound = append(accounts[i].Bound, bound)
 	}
 	for _, m := range users {
 		var own []userSeat
-		spare := map[string]bool{} // seat → a spare under every key it is under
+		spare := map[string]bool{}   // seat → a spare under every key it is under
+		at := map[string]time.Time{} // seat → the earliest it was bound under any key
 		for _, r := range m {
 			for i, s := range seatsOf(r) {
 				seat := strings.ToLower(s.who)
@@ -487,11 +555,28 @@ func userAccounts(users []userMerged, byID map[string]provider.Provider, seats m
 					own = append(own, s)
 				}
 				spare[seat] = (was || !ok) && i > 0
+				if t := at[seat]; !s.at.IsZero() && (t.IsZero() || s.at.Before(t)) {
+					at[seat] = s.at
+				}
 			}
 		}
 		for _, s := range own {
-			count(m[0].Provider, s.who, s.account, spare[strings.ToLower(s.who)])
+			seat := strings.ToLower(s.who)
+			count(m[0].Provider, s.who, s.account, spare[seat], accountUserJSON{User: m[0].User, Group: m[0].Group, At: at[seat], Spare: spare[seat]})
 		}
+	}
+	// each account's users, the earliest bound first (a time left out
+	// last), then by id
+	for _, a := range accounts {
+		slices.SortStableFunc(a.Bound, func(x, y accountUserJSON) int {
+			if x.At.IsZero() != y.At.IsZero() {
+				if x.At.IsZero() {
+					return 1
+				}
+				return -1
+			}
+			return cmp.Or(x.At.Compare(y.At), strings.Compare(x.User, y.User), strings.Compare(x.Group, y.Group))
+		})
 	}
 	slices.SortStableFunc(accounts, func(a, b userAccountJSON) int {
 		return cmp.Or(strings.Compare(a.ProviderName, b.ProviderName), strings.Compare(a.Provider, b.Provider), strings.Compare(a.Account, b.Account))
