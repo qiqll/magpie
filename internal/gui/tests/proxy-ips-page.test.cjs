@@ -101,7 +101,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.route("**/*", serve(lang, seen));
         await page.addInitScript(() => { try { if (!sessionStorage.getItem("set")) { localStorage.clear(); sessionStorage.setItem("set", "1"); } } catch {} });
         await page.goto("http://magpie.test/?view=ips");
-        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 3);
+        // a whole boot: room for a busy machine, as after a reload
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 3, null, { timeout: 30000 });
         assert.equal(await page.locator("#pageTitle").textContent(), x("Proxy IPs"));
         assert.equal(await page.locator('#nav button[data-view="ips"] span').textContent(), x("Proxy IPs"));
         const ends = (iso) => page.evaluate((iso) => new Date(iso).toLocaleDateString(intlLang(), { year: "numeric", month: "short", day: "numeric" }), iso);
@@ -240,7 +241,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.route("**/*", serve(lang, seen));
         await page.addInitScript(() => { try { if (!sessionStorage.getItem("set")) { localStorage.clear(); sessionStorage.setItem("set", "1"); } } catch {} });
         await page.goto("http://magpie.test/?view=ips");
-        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 2);
+        // a whole boot: room for a busy machine, as after a reload
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 2, null, { timeout: 30000 });
         const on = "on " + x("In rotation"), banned = "banned " + x("Banned");
 
         // before any import: the proxy at a listed IP names its account
@@ -422,7 +424,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.route("**/*", serve(lang, seen));
         await page.addInitScript(() => { try { if (!sessionStorage.getItem("set")) { localStorage.clear(); sessionStorage.setItem("set", "1"); } } catch {} });
         await page.goto("http://magpie.test/?view=ips");
-        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 4);
+        // a whole boot: room for a busy machine, as after a reload
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 4, null, { timeout: 30000 });
         const listed = () => page.evaluate(() => [...document.querySelectorAll("#ipsList .ips-row")].map((r) => r.dataset.ip));
         const shows = (ips) => page.waitForFunction((ips) => [...document.querySelectorAll("#ipsList .ips-row")].map((r) => r.dataset.ip).join() === ips.join(), ips).then(listed);
         const pick = async (id, name) => {
@@ -570,7 +573,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.route("**/*", serve(lang, seen));
         await page.addInitScript(() => { try { if (!sessionStorage.getItem("set")) { localStorage.clear(); sessionStorage.setItem("set", "1"); } } catch {} });
         await page.goto("http://magpie.test/?view=ips");
-        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 3);
+        // a whole boot: room for a busy machine, as after a reload
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 3, null, { timeout: 30000 });
         const shown = (iso) => page.evaluate((iso) => new Date(iso).toLocaleDateString(intlLang(), { year: "numeric", month: "short", day: "numeric" }), iso);
         // the click marks it under way at once, so this waits for its end
         const imported = async () => {

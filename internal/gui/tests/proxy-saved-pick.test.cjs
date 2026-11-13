@@ -19,6 +19,14 @@ const path = require("node:path");
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
 const { strings } = require("./strings.cjs");
+// a click on a menu's anchor once it is in view and its scroll has been
+// told: Playwright scrolls an anchor into view as it clicks, and that
+// scroll's event, told a frame later, closes the menu it opened (the
+// window closes a menu on the reader's scroll)
+const settle = async (loc) => {
+  await loc.scrollIntoViewIfNeeded();
+  await loc.page().evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+};
 const { watchSettingsReads, settingsDrawn } = require("./reader.cjs");
 
 const assets = path.resolve(__dirname, "../assets");
@@ -120,7 +128,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const pp = box.locator("button.paste-via");
         await pp.waitFor();
         assert.equal((await pp.textContent()).trim(), w("Through: {proxy}", { proxy: w("Global proxy") }));
-        await pp.scrollIntoViewIfNeeded();
+        await settle(pp);
         await pp.click();
         const menu = page.locator(".proto-menu");
         await menu.waitFor();
@@ -150,7 +158,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const box = page.locator(".editor .signing");
         const pp = box.locator("button.paste-via");
         await pp.waitFor();
-        await pp.scrollIntoViewIfNeeded();
+        await settle(pp);
         await pp.click();
         await page.locator(".proto-menu .pm-item", { hasText: w("Custom…") }).click();
         const typed = box.locator("input.paste-proxy");
@@ -193,7 +201,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // Proxy above's Custom…: the address and its login, tested as typed
         const via = box.locator(".acts .via");
         await via.waitFor();
-        await via.scrollIntoViewIfNeeded();
+        await settle(via);
         await via.click();
         await page.locator(".proto-menu .pm-item", { hasText: w("Custom…") }).click();
         const form = box.locator("form.proxy-ask");
@@ -222,6 +230,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await form.locator("input").first().fill("http://10.2.2.2:8080");
         assert.equal(await said.isHidden(), false);
         // a saved proxy picked into the row tests that one instead
+        await settle(form.locator(".saved-proxy"));
         await form.locator(".saved-proxy").click();
         await page.locator(".proto-menu .pm-item", { hasText: HOME_SHOWN }).click();
         assert.equal(await said.isHidden(), true, "the other address's result goes with it");
@@ -238,7 +247,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         // Through: …'s Custom… beside the pasted address
         const pp = box.locator("button.paste-via");
-        await pp.scrollIntoViewIfNeeded();
+        await settle(pp);
         await pp.click();
         await page.locator(".proto-menu .pm-item", { hasText: w("Custom…") }).click();
         const typed = box.locator("input.paste-proxy");

@@ -3189,7 +3189,8 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .signing .acts .link { color: var(--fg-2); }
 /* the proxy the sign-in goes through (#1663): a long address ends in an
    ellipsis inside the sheet */
-.signing .acts .via { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.signing .acts .via, .signing .paste-pick .via { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.signing .paste-pick { min-width: 0; max-width: 100%; }
 .signing .devcode { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; }
 .signing .devcode code { font: var(--code-style, normal) 600 17px/1.2 var(--code-font, var(--code)); font-stretch: var(--code-stretch, 100%); letter-spacing: .12em; padding: 4px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); user-select: all; }
 /* the sign-in link, one line, selected whole with a click */

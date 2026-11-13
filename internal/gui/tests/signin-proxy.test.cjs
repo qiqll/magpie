@@ -18,6 +18,14 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
+// a click on a menu's anchor once it is in view and its scroll has been
+// told: Playwright scrolls an anchor into view as it clicks, and that
+// scroll's event, told a frame later, closes the menu it opened (the
+// window closes a menu on the reader's scroll)
+const settle = async (loc) => {
+  await loc.scrollIntoViewIfNeeded();
+  await loc.page().evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+};
 
 const assets = path.resolve(__dirname, "../assets");
 const SUB = "http://u:secret@10.0.0.1:7890", SHOWN = "http://10.0.0.1:7890", BOB = "socks5://10.0.0.2:1080";
@@ -131,6 +139,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // in sight first: Playwright scrolls to what it clicks
         await via.scrollIntoViewIfNeeded();
         const before = await scrolls();
+        await settle(via);
         await via.click();
         const menu = page.locator(".proto-menu");
         await menu.waitFor();
@@ -153,6 +162,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // sign-in started again drew the link anew at the editor's foot,
         // partly under its bar at 380: in sight first, as above
         await via.scrollIntoViewIfNeeded();
+        await settle(via);
         await via.click();
         await menu.locator(".pm-item", { hasText: w.custom }).click();
         const form = box.locator("form.proxy-ask");
@@ -188,6 +198,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await via.waitFor();
         assert.deepEqual(seen.starts, [{ agent: "codex" }]);
         assert.equal((await via.textContent()).trim(), w.via.replace("{p}", w.global));
+        await settle(via);
         await via.click();
         const menu = page.locator(".proto-menu");
         assert.deepEqual(await menu.locator(".pm-item .pm-name").allTextContents(), [w.global, w.direct, w.custom]);
