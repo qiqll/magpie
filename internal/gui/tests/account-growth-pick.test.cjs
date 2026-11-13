@@ -153,10 +153,21 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // ramping up, no pick: the policies, Follow the subscription ticked, then Skip
         // a marker is opened from the middle of the window and its menu read
         // once faded in: one at the window's edge (ops@ at 380px) can leave
-        // a fixed menu past it under load
+        // a fixed menu past it under load. The reader wheels it there: the
+        // app puts back a scroll that isn't the reader's for 4s after a
+        // click (the Card view's), a test's scrollIntoView included, which
+        // left a card's marker below a 380px window and its menu past it
         const open = async (sel) => {
-          await page.locator(sel).evaluate((e) => e.scrollIntoView({ block: "center" }));
-          await page.locator(sel).click();
+          const l = page.locator(sel);
+          await page.mouse.move(width / 2, 400);
+          for (let i = 0; i < 60; i++) {
+            const { top, bottom } = await l.evaluate((e) => { const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; });
+            const dy = bottom > 800 - 250 ? 80 : top < 150 ? -80 : 0;
+            if (!dy) break;
+            await page.mouse.wheel(0, dy);
+            await page.waitForTimeout(40);
+          }
+          await l.click();
           await page.waitForFunction(() => getComputedStyle(document.querySelector(".proto-menu")).opacity === "1");
           return menu(page);
         };
