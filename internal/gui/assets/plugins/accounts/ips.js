@@ -23,6 +23,8 @@
 let ipsList = null, ipsRev = "", ipsEdit = null, ipsDraft = { ip: "", name: "", proxies: [], proxy: "" }, ipsRenewing = "", ipsErr = "", ipsSaving = false;
 // Import from accounts under way, and what the last one did
 let ipsImporting = false, ipsSaid = "";
+// an import or a batch add (ipsbatch.js) under way: the rows wait for it
+const ipsHeld = () => ipsImporting || ipsBatchBusy;
 // the accounts filter, kept per machine: "" every IP, "bound" those an
 // account goes through, "unbound" those none does, or an account state
 // (ACX_SAID's) one of its accounts is in
@@ -398,6 +400,7 @@ function ipsDraw() {
   const err = $("#ipsErr");
   err.textContent = ipsErr;
   err.hidden = !ipsErr;
+  if (ipsBatchOn && !$("#ipsBatchBox").childElementCount) ipsBatchDraw();
   $("#ipsNote").textContent = ipsList && !xs.length && ipsEdit === null
     ? t("No IP yet. Add the exit IPs of the proxies you pay for by the month, or import those your accounts go through: magpie reminds you here 5 days before each one's 30 days end.")
     : xs.length && !list.childElementCount ? t("No IP matches the filter.")
@@ -416,7 +419,7 @@ function ipsRow(x, i, accts, read) {
   if (ipsRenewing === x.ip) {
     name.append(renewEditor("ip/" + x.ip, x.renewal, (opened) => ipsKeep(ipsList.map((y, j) => (j === i ? { ...y, opened: opened || undefined } : y))).then((ok) => { if (ok) ipsClearedSet(x.ip, !opened); return ok; }),
       () => { ipsRenewing = ""; ipsDraw(); }));
-  } else name.append(renewPill(x.renewal, () => { if (ipsImporting) return; ipsRenewing = x.ip; ipsDraw(); }));
+  } else name.append(renewPill(x.renewal, () => { if (ipsHeld()) return; ipsRenewing = x.ip; ipsDraw(); }));
   who.append(name);
   if (x.name) who.append(el("div", "sub", x.name));
   if (read) {
@@ -435,13 +438,13 @@ function ipsRow(x, i, accts, read) {
   const acts = el("span", "acts");
   const edit = el("button", "text ips-edit", t("Edit"));
   edit.type = "button";
-  edit.disabled = ipsImporting;
+  edit.disabled = ipsHeld();
   edit.onclick = () => { ipsEdit = i; ipsDraft = { ip: x.ip, name: x.name || "", proxies: [...(x.proxies || [])], proxy: "" }; ipsErr = ""; ipsSaid = ""; ipsDraw(); };
   const rm = el("button", "text ips-remove", t("Remove"));
   rm.type = "button";
-  rm.disabled = ipsImporting;
+  rm.disabled = ipsHeld();
   rm.onclick = async () => {
-    if (ipsSaving || ipsImporting || !await confirmRemoval(x.name ? x.ip + " (" + x.name + ")" : x.ip, "Its start date and reminder go with it.")) return;
+    if (ipsSaving || ipsHeld() || !await confirmRemoval(x.name ? x.ip + " (" + x.name + ")" : x.ip, "Its start date and reminder go with it.")) return;
     rm.classList.add("busy");
     ipsKeep(ipsList.filter((y) => y.ip !== x.ip));
   };
@@ -588,6 +591,9 @@ function ipsForm(i) {
     const v = { ip: ipsDraft.ip.trim(), name: ipsDraft.name.trim() };
     if (!v.ip) return ip.focus();
     ok.classList.add("busy");
+    // a save under way (a batch's) is waited for, then built on (review H4)
+    while (ipsSaving || ipsBatchBusy) await new Promise((r) => setTimeout(r, 50));
+    if (ipsEdit !== i) return;
     // the proxies kept, the one typed among them; one read from a saved
     // proxy here leaves any other IP it was read from before, as an import
     // moves it (review L4)

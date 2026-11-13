@@ -187,6 +187,10 @@ magpie.strings({
     "Add 1 proxy": "添加 1 个代理",
     "Add {n} proxies": "添加 {n} 个代理",
     "Listed already, so skipped: {list}": "已在列表中，已跳过：{list}",
+    "Too many parts: write it as username:password@host:port": "段数太多：请写成 账号:密码@主机:端口",
+    "Read either way: write it as username:password@host:port": "两种读法都成立：请写成 账号:密码@主机:端口",
+    "Not checked, so kept under the IP they connect to: {list}": "未检测，按连接的 IP 记录：{list}",
+    "At most {n} IPs are kept, so these weren't added: {list}": "最多保存 {n} 个 IP，以下未添加：{list}",
   },
   "zh-TW": {
     "Per model": "依模型",
@@ -374,6 +378,10 @@ magpie.strings({
     "Add 1 proxy": "新增 1 個代理",
     "Add {n} proxies": "新增 {n} 個代理",
     "Listed already, so skipped: {list}": "已在列表中，已略過：{list}",
+    "Too many parts: write it as username:password@host:port": "段數太多：請寫成 帳號:密碼@主機:連接埠",
+    "Read either way: write it as username:password@host:port": "兩種讀法都成立：請寫成 帳號:密碼@主機:連接埠",
+    "Not checked, so kept under the IP they connect to: {list}": "未檢測，依連線的 IP 記錄：{list}",
+    "At most {n} IPs are kept, so these weren't added: {list}": "最多儲存 {n} 個 IP，以下未新增：{list}",
   },
   ja: {
     "Per model": "モデル別",
@@ -561,6 +569,10 @@ magpie.strings({
     "Add 1 proxy": "1 個のプロキシを追加",
     "Add {n} proxies": "{n} 個のプロキシを追加",
     "Listed already, so skipped: {list}": "一覧にあるため飛ばしました：{list}",
+    "Too many parts: write it as username:password@host:port": "区切りが多すぎます：ユーザー名:パスワード@ホスト:ポート の形で書いてください",
+    "Read either way: write it as username:password@host:port": "どちらの形にも読めます：ユーザー名:パスワード@ホスト:ポート の形で書いてください",
+    "Not checked, so kept under the IP they connect to: {list}": "未検査のため接続先の IP で保存：{list}",
+    "At most {n} IPs are kept, so these weren't added: {list}": "保存できる IP は {n} 個までのため、次は追加されませんでした：{list}",
   },
   de: {
     "Per model": "Je Modell",
@@ -748,5 +760,9 @@ magpie.strings({
     "Add 1 proxy": "1 Proxy hinzufügen",
     "Add {n} proxies": "{n} Proxys hinzufügen",
     "Listed already, so skipped: {list}": "Bereits gelistet, daher übersprungen: {list}",
+    "Too many parts: write it as username:password@host:port": "Zu viele Teile: als Benutzername:Passwort@Host:Port schreiben",
+    "Read either way: write it as username:password@host:port": "Auf beide Arten lesbar: als Benutzername:Passwort@Host:Port schreiben",
+    "Not checked, so kept under the IP they connect to: {list}": "Nicht geprüft, daher unter der IP gespeichert, mit der sie verbinden: {list}",
+    "At most {n} IPs are kept, so these weren't added: {list}": "Höchstens {n} IPs werden gespeichert, daher nicht hinzugefügt: {list}",
   },
 });

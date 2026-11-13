@@ -56,6 +56,7 @@ function serve(lang, seen) {
     if (url.pathname === "/api/proxy/check") {
       const asked = req.postDataJSON().proxy;
       seen.checks.push(asked);
+      if (seen.hold) await (seen.held ||= new Promise((r) => { seen.release = r; }));
       const exit = seen.exits[asked];
       if (!exit) return json({ source: "saved", through: { error: "dial tcp: i/o timeout" }, direct: { ip: "192.0.2.1" } });
       return json({ source: "saved", through: { ip: exit, loc: "JP", ms: 80 }, direct: { ip: "192.0.2.1" } });
@@ -155,6 +156,17 @@ test("each format a batch line is written in is read as the proxy it names", asy
     ["192.168.0.1:70000", "ERR"],
     ["300.1.1.1:8000", "ERR"],
     ["user:pass:other:8000", "ERR"],
+    // review: a dotted username with a numeric password reads as the login
+    ["proxy.user:12345:1.2.3.4:8080", "socks5://proxy.user:12345@1.2.3.4:8080"],
+    ["1.2.3.4:80:5.6.7.8:90", "ERR"],
+    // a login escaped in a pasted URL isn't escaped twice
+    ["http://u%40x:p%3Aq@1.2.3.4:80", "http://u%40x:p%3Aq@1.2.3.4:80"],
+    // a comment, an empty username, a refresh URL of hex digits
+    ["1.2.3.4:80 # office", "socks5://1.2.3.4:80"],
+    ["1.2.3.4 8080 user pass with space", "ERR"],
+    ["1.2.3.4:80::pass", "socks5://:pass@1.2.3.4:80"],
+    ["1.2.3.4:80:u:p[deadbeef]", "socks5://u:p@1.2.3.4:80"],
+    ["1.2.3.4:80:u:p:q", "ERR"],
   ];
   for (const [line, want, type] of cases) assert.equal(await read(line, type), want, line);
   assert.deepEqual(errors, []);
@@ -241,7 +253,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(seen.checks, ["socks5://erin:pw6@proxy.example.com:9000"]);
         assert.equal(seen.posts.length, 1);
         assert.deepEqual(seen.posts[0].ips, [{ ip: "203.0.113.7", name: "Osaka", proxies: [OSAKA] }, ...KEPT.map(([ip, p]) => ({ ip, name: "", proxies: [p] }))]);
-        assert.equal(await page.locator("#ipsSaid").textContent(), x("{n} IPs added", { n: 8 }) + " · " + x("Listed already, so skipped: {list}", { list: "203.0.113.7:1080" }));
+        assert.equal(await page.locator("#ipsSaid").textContent(), x("{n} IPs added", { n: 8 }) + " · "
+          + x("Not checked, so kept under the IP they connect to: {list}", { list: KEPT.slice(0, 7).map(([, p]) => p.replace(/^.*[@/]/, "")).join(", ") })
+          + " · " + x("Listed already, so skipped: {list}", { list: "203.0.113.7:1080" }));
         assert.equal(await page.locator("#ipsBatch").isVisible(), true);
         assert.deepEqual(errors, []);
       });
@@ -269,12 +283,35 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           { ip: "198.51.100.9", name: "", proxies: ["https://10.0.0.2:3128"] },
           { ip: "10.0.0.3", name: "", proxies: ["https://10.0.0.3:3128"] },
         ]);
-        assert.equal(await page.locator("#ipsSaid").textContent(), x("{n} IPs added", { n: 2 }) + " · " + x("1 proxy told to an IP listed"));
+        assert.equal(await page.locator("#ipsSaid").textContent(), x("{n} IPs added", { n: 2 }) + " · " + x("1 proxy told to an IP listed") + " · " + x("Not checked, so kept under the IP they connect to: {list}", { list: "10.0.0.3:3128" }));
         assert.equal(await page.locator("#ipsErr").textContent(), x("These proxies didn't answer, so their exit isn't known: {list}", { list: "host.example.net:3128" }));
         // the type picked is kept for the next batch
         await page.locator("#ipsBatch").click();
         await box.locator(".ips-batch-in").fill("10.0.0.9:3128");
         assert.equal(await box.locator(".ips-batch-type").textContent(), "HTTPS");
+        assert.deepEqual(errors, []);
+      });
+
+      test(`${engine} ${lang} ${width}: a batch past 500 IPs keeps what fits, and rows wait while it is added`, async (t) => {
+        const many = Array.from({ length: 498 }, (_, i) => ({ ip: "10.1." + (i >> 8) + "." + (i & 255) }));
+        const seen = { posts: [], checks: [], pastes: [], rev: 1, ips: many, exits: {}, hold: true };
+        const { page, errors } = await open(engine, width, lang, seen, "?view=ips", t);
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row").length === 498);
+        await page.locator("#ipsBatch").click();
+        const box = page.locator("#ipsBatchBox");
+        await box.locator(".ips-batch-in").fill("192.0.2.1:80\n192.0.2.2:80\n192.0.2.3:80\nslow.example.com:80");
+        await box.locator(".ips-batch-add").click();
+        // the name host is being checked: no row can be edited or removed
+        await page.waitForFunction(() => document.querySelector("#ipsBatchBox .ips-batch-add.busy"));
+        assert.equal(await page.locator("#ipsList .ips-row .ips-edit").first().isDisabled(), true);
+        assert.equal(await page.locator("#ipsList .ips-row .ips-remove").first().isDisabled(), true);
+        seen.release();
+        await page.waitForFunction(() => !document.querySelector("#ipsBatchBox .ips-batch-in"));
+        assert.equal(seen.posts.length, 1);
+        assert.deepEqual(seen.posts[0].ips.slice(498).map((x) => x.ip), ["192.0.2.1", "192.0.2.2"]);
+        assert.equal(await page.locator("#ipsErr").textContent(), x("These proxies didn't answer, so their exit isn't known: {list}", { list: "slow.example.com:80" }) + " "
+          + x("At most {n} IPs are kept, so these weren't added: {list}", { n: 500, list: "192.0.2.3:80" }));
+        assert.equal(await page.locator("#ipsList .ips-row .ips-edit").first().isDisabled(), false);
         assert.deepEqual(errors, []);
       });
     }

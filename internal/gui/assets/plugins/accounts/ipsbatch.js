@@ -9,6 +9,8 @@
 // listed already is skipped and said. Run after ips.js.
 
 const IPS_BATCH_MAX = 100;
+// the most IPs the server keeps (renewal.MaxIPs)
+const IPS_BATCH_MAX_IPS = 500;
 // the types a proxy can be kept as (settings.CheckProxy), by what a line
 // may write; "socks" is SOCKS5
 const IPS_BATCH_TYPES = { http: "http", https: "https", socks5: "socks5", socks5h: "socks5h", socks: "socks5" };
@@ -35,15 +37,27 @@ function ipsBatchHostPort(h, p) {
   return x && { ...x, port: String(+p) };
 }
 
+// ipsBatchColons: s split at each : outside [ ], an empty part kept
+function ipsBatchColons(s) {
+  const parts = [];
+  let cur = "";
+  for (let i = 0; i < s.length; i++) {
+    const j = s[i] === "[" ? s.indexOf("]", i) : -1;
+    if (j > 0) { cur += s.slice(i, j + 1); i = j; } else if (s[i] === ":") { parts.push(cur); cur = ""; } else cur += s[i];
+  }
+  return [...parts, cur];
+}
+
 // ipsBatchParse: a line as { type, host, port, user, pass, ip, url }, or
 // { err }. Read: [type://]host:port[:user[:password]],
 // [type://]user:password:host:port, [type://]user:password@host:port,
 // host:port@user:password, each with an IPv6 host in [ ], the parts split
-// by : or by spaces, and a [refresh URL] at the end
+// by : or by spaces; a [refresh URL] and a " # comment" at the end are
+// read past. A line that reads as host:port:user:password and as
+// user:password:host:port alike takes the one whose host is an IP, and is
+// said ambiguous when both or neither are (review H1)
 function ipsBatchParse(line, type) {
-  let s = line.trim();
-  const r = /\[([^[\]]*)\]$/.exec(s);
-  if (r && !/^[0-9a-f:.]+$/i.test(r[1])) s = s.slice(0, r.index).trim();
+  let s = line.trim().replace(/\s+#.*$/, "").replace(/\[[^\]]*\]$/, "").trim();
   const m = /^([a-z][a-z0-9+.-]*):\/\//i.exec(s);
   if (m) {
     type = IPS_BATCH_TYPES[m[1].toLowerCase()];
@@ -60,12 +74,19 @@ function ipsBatchParse(line, type) {
       hp = ipsBatchHostPort(...split(a).slice(1));
       login = b;
     }
+    // a login pasted from a URL is escaped already (review H2)
+    const dec = (v) => { try { return decodeURIComponent(v); } catch { return v; } };
     const c = login.indexOf(":");
-    [user, pass] = c < 0 ? [login, ""] : [login.slice(0, c), login.slice(c + 1)];
+    [user, pass] = (c < 0 ? [login, ""] : [login.slice(0, c), login.slice(c + 1)]).map(dec);
   } else {
-    const parts = s.match(/\[[^\]]*\]|[^:\s]+/g) || [];
-    if (parts.length >= 2 && (hp = ipsBatchHostPort(parts[0], parts[1]))) [user, pass] = [parts[2] || "", parts.slice(3).join(":")];
-    else if (parts.length === 4 && (hp = ipsBatchHostPort(parts[2], parts[3]))) [user, pass] = [parts[0], parts[1]];
+    // the parts, an empty one kept (::pass is no username, review M2)
+    const parts = /\s/.test(s) ? s.split(/\s+/) : ipsBatchColons(s);
+    if (parts.length > 4) return { err: t("Too many parts: write it as username:password@host:port") };
+    const first = parts.length >= 2 && ipsBatchHostPort(parts[0], parts[1]);
+    const last = parts.length === 4 && ipsBatchHostPort(parts[2], parts[3]);
+    if (first && last && !first.ip === !last.ip) return { err: t("Read either way: write it as username:password@host:port") };
+    if (first && (!last || first.ip)) [hp, user, pass] = [first, parts[2] || "", parts[3] || ""];
+    else if (last) [hp, user, pass] = [last, parts[0], parts[1]];
   }
   if (!hp) return { err: t("No host and port found in it") };
   const enc = encodeURIComponent;
@@ -107,12 +128,14 @@ async function ipsBatchCheck(rows, draw) {
 // one with no IP known, one whose IP is told IPS_MAX_PROXIES already
 function ipsBatchMerge(list, rows) {
   const next = list.map((x) => ({ ...x, proxies: [...(x.proxies || [])] }));
-  const out = { next, added: 0, linked: 0, listed: [], unknown: [], full: [] };
+  const out = { next, added: 0, linked: 0, listed: [], unknown: [], full: [], over: [], unchecked: [] };
   for (const x of rows) {
     if (next.some((y) => y.proxies.includes(x.url))) { out.listed.push(x); continue; }
     const ip = ipsBatchChecks[x.url]?.ip || x.ip;
     if (!ip) { out.unknown.push(x); continue; }
     const y = next.find((z) => ipsCanon(z.ip) === ip);
+    if (!y && next.length >= IPS_BATCH_MAX_IPS) { out.over.push(x); continue; }
+    if (!ipsBatchChecks[x.url]?.ip && (!y || y.proxies.length < IPS_MAX_PROXIES)) out.unchecked.push(x);
     if (!y) { next.push({ ip, name: "", proxies: [x.url] }); out.added++; }
     else if (y.proxies.length >= IPS_MAX_PROXIES) out.full.push(x);
     else { y.proxies.push(x.url); out.linked++; }
@@ -246,6 +269,7 @@ function ipsBatchDraw() {
     ipsBatchBusy = true;
     ipsBatchErr = "";
     redraw();
+    ipsDraw();
     let kept = false, out;
     try {
       const rows = ipsBatchLines().filter((x) => x.url);
@@ -259,15 +283,17 @@ function ipsBatchDraw() {
       if (!kept) { ipsBatchErr = ipsErr || t("The import couldn't be saved: try it again"); ipsErr = ""; ipsDraw(); }
     } finally {
       ipsBatchBusy = false;
-      if (!kept) redraw();
+      if (!kept) { redraw(); ipsDraw(); }
     }
     if (!kept) return;
     const parts = [];
     if (out.added) parts.push(t(out.added === 1 ? "1 IP added" : "{n} IPs added", { n: out.added }));
     if (out.linked) parts.push(t(out.linked === 1 ? "1 proxy told to an IP listed" : "{n} proxies told to IPs listed", { n: out.linked }));
+    if (out.unchecked.length) parts.push(t("Not checked, so kept under the IP they connect to: {list}", { list: out.unchecked.map(ipsBatchAddr).join(", ") }));
     if (out.listed.length) parts.push(t("Listed already, so skipped: {list}", { list: out.listed.map(ipsBatchAddr).join(", ") }));
     const errs = [];
     if (out.unknown.length) errs.push(t("These proxies didn't answer, so their exit isn't known: {list}", { list: out.unknown.map(ipsBatchAddr).join(", ") }));
+    if (out.over.length) errs.push(t("At most {n} IPs are kept, so these weren't added: {list}", { n: IPS_BATCH_MAX_IPS, list: out.over.map(ipsBatchAddr).join(", ") }));
     if (out.full.length) errs.push(t("These IPs are told {n} proxies already, so no more were added: {list}", { n: IPS_MAX_PROXIES, list: [...new Set(out.full.map((x) => ipsBatchChecks[x.url]?.ip || x.ip))].join(", ") }));
     ipsBatchClose();
     ipsSaid = parts.join(" · ");
