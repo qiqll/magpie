@@ -1505,6 +1505,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	importRoutes(mux)
 	usageRoutes(mux, w)
 	callerKeyRoutes(mux)
+	areaRoutes(mux)
 	accountsKeyRoutes(mux)
 	gatewayUserRoutes(mux)
 	sessionRoutes(mux, w)

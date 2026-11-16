@@ -849,6 +849,11 @@ magpie.plugin("gateway", (ctx) => {
   <div class="list" id="userBindAccounts"></div>
   <div class="list" id="userBinds"></div>
 </section>
+<section id="areasBlock" hidden>
+  <div class="row-head"><span class="label" data-t>Areas</span><span class="grow"></span><button class="text" id="addArea" data-t>Add area</button></div>
+  <p class="usage-note" data-t>An area's admin adds, removes and reads the usage of the accounts its area owns, from magpie-console. Requests are routed as before: an area's accounts serve every request as any account does.</p>
+  <section id="areas"></section>
+</section>
 <p class="usage-note gw-keys-off" id="gatewayKeysOff" hidden data-t>Gateway keys are for other computers, a tunnel to this one such as Cloudflare Tunnel, and web pages: they are added here once Share on local network is on, or a web page is listed in Settings. Agents on this computer need none.</p>
 <div class="row-head"><button class="fold" id="foldConnect" aria-expanded="true" aria-controls="connect"><span class="label" data-t>Connect</span></button><span class="grow"></span><span class="note" id="connectNote"></span></div>
 <section class="list connect" id="connect"></section>
@@ -904,7 +909,7 @@ magpie.plugin("gateway", (ctx) => {
     // both reads' promises go back to the kernel's error boundary: one
     // that throws as it draws breaks the page with Try again
     open() {
-      return Promise.all([loadGatewayKeys(), loadUserBinds()]); // users.js
+      return Promise.all([loadGatewayKeys(), loadUserBinds(), loadAreas()]); // users.js, areas.js
     },
   });
 });

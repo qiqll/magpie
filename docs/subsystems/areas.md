@@ -123,10 +123,31 @@ area yet, nor are Sign in with ChatGPT and file imports.
 - Each sign-in is read, pasted into and cancelled by the area that started
   it alone (`areaSignIns`).
 
+## The owner's window
+
+Gateway → Areas ([`plugins/gateway/areas.js`](../../internal/gui/assets/plugins/gateway/areas.js),
+[`internal/gui/areas.go`](../../internal/gui/areas.go), `/api/areas`): make,
+rename, turn off and delete an area, pick the providers and subscriptions its
+admin may add, give it an account no area owns or take one back (the account
+stays in magpie), copy or rotate its admin key, make, copy, rotate or remove
+the console's key, and set the admin allow list. A new key's value is copied
+as it is made. The window's Gateway keys list leaves admin keys out
+(`gatewayOnly`); they are kept last in the store, so `move-key`'s index is
+the same in both.
+
+## Accounts removed elsewhere
+
+An area's account removed by anyone (the window, `magpie accounts`, its
+admin) is released at the removal's choke point once it went through:
+`provider.RemoveKey`, `RemoveKeys`, `ForgetLogin` (`releaseArea`). A key
+replaced in place (`ReplaceKey`) moves the area's ownership to its new
+fingerprint. One the area couldn't be told of lists as `gone`.
+
 ## Verification
 
 `go test -race ./internal/area`; `go test ./internal/gateway -run
 'TestAdmin|TestReadOnlyKeyEveryRoute|TestKeySlotEveryRoute'`; `go test
-./internal/provider -run TestAreaSignIn`. `TestAdminKeyEveryRoute` fails
+./internal/provider -run 'TestAreaSignIn|TestAreaLetsGo'`; `go test ./internal/gui -run
+TestAreasRoutes`. `TestAdminKeyEveryRoute` fails
 when a route is under `/v1/magpie/admin` and in no role's list, or when an
 admin key reaches any other route or an upstream.

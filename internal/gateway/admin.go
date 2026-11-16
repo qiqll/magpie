@@ -836,3 +836,38 @@ func adminAllowed(r *http.Request) (string, bool) {
 	}
 	return a.String(), false
 }
+
+// AreaCatalog is what an area may be given: the providers that take API
+// keys and the subscriptions it may sign in to (the window's Areas).
+func AreaCatalog() map[string]any {
+	return map[string]any{"providers": keyProviders(), "signIns": signInWays()}
+}
+
+// AreaView is an area as the window shows it: as the console reads it,
+// with its accounts.
+func AreaView(a area.Area) any {
+	return struct {
+		adminArea
+		List []adminAccount `json:"list"`
+	}{areaOf(a, time.Now()), areaAccounts(a)}
+}
+
+// UnownedAccounts are magpie's accounts and keys no area owns, which the
+// owner may give one.
+func UnownedAccounts() []any {
+	out := []any{}
+	for _, p := range provider.All() {
+		for _, r := range p.AccountIDs() {
+			ref := p.ID + "/" + r.ID
+			if owner, contested, err := area.Owner(ref); err != nil || owner != "" || contested {
+				continue
+			}
+			acc := adminAccount{ID: ref, Provider: p.ID, ProviderName: p.Name, Gone: true}
+			describe(&acc, p, r.ID)
+			if !acc.Gone {
+				out = append(out, acc)
+			}
+		}
+	}
+	return out
+}

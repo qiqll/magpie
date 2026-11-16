@@ -11,6 +11,7 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
 const { fixture } = require("./fixtures/caller-keys.cjs");
+const { reach } = require("./reader.cjs");
 
 const saved = { en: "Gateway key order saved", zh: "网关密钥的顺序已保存", "zh-TW": "閘道金鑰的順序已儲存", ja: "ゲートウェイキーの順番を保存しました", de: "Reihenfolge der Gateway-Schlüssel gespeichert" };
 
@@ -38,7 +39,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const grip = (i) => rows.nth(i).locator(".grip").evaluate((g) => getComputedStyle(g).opacity);
       await page.mouse.move(2, 2);
       await page.waitForFunction(() => getComputedStyle(document.querySelector("#gatewayKeys .acc[data-key] .grip")).opacity === "0");
-      await rows.nth(1).hover({ position: { x: 40, y: 10 } });
+      // brought into sight by the wheel, then pointed at: Playwright's hover
+      // scrolls the view itself, which the app puts back, and the pointer
+      // lands elsewhere once the page scrolls at all (the Areas below)
+      await reach(page, rows.nth(1));
+      const at = await rows.nth(1).boundingBox();
+      await page.mouse.move(at.x + 40, at.y + 10);
       await page.waitForFunction(() => getComputedStyle(document.querySelectorAll("#gatewayKeys .acc[data-key] .grip")[1]).opacity === "1");
       assert.equal(await grip(0), "0", "only the row under the pointer has its grip");
       const box = await rows.nth(1).locator(".grip").boundingBox(), row = await rows.nth(1).boundingBox();

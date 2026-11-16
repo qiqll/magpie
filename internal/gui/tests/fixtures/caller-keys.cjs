@@ -112,6 +112,8 @@ function fixture(lang, theme, events, options = {}) {
     // options.keysError: the list can't be read
     if (url.pathname === "/api/caller-keys" && options.keysError) return route.fulfill({ status: 500, json: { error: options.keysError } });
     if (url.pathname === "/api/caller-keys") return json({ keys });
+    // the Gateway page's Areas (plugins/gateway/areas.js): none made yet
+    if (url.pathname === "/api/areas") return json({ areas: [], consoleKey: null, unowned: [], catalog: { providers: [], signIns: [] }, adminAllowIPs: [] });
     if (url.pathname === "/api/caller-keys/models") return json({ models: [
       ...(options.groups ? [
         { id: "group/coding", name: "Coding", group: true },

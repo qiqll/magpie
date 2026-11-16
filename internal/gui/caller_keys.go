@@ -73,7 +73,7 @@ func callerKeyRoutes(mux *http.ServeMux) {
 			fail(w, err)
 			return
 		}
-		writeJSON(w, map[string]any{"keys": withLimits(keys), "accountNames": provider.AccountNames()})
+		writeJSON(w, map[string]any{"keys": withLimits(gatewayOnly(keys)), "accountNames": provider.AccountNames()})
 	})
 	// the models a key may be held to (#882), and the accounts and keys
 	// (#905): the routing groups, then each provider's models, then its
@@ -202,6 +202,13 @@ func callerKeyRoutes(mux *http.ServeMux) {
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, map[string]any{"keys": withLimits(keys), "accountNames": provider.AccountNames(), "secret": secret})
+		writeJSON(w, map[string]any{"keys": withLimits(gatewayOnly(keys)), "accountNames": provider.AccountNames(), "secret": secret})
 	})
+}
+
+// gatewayOnly are keys without the admin keys, which the Areas section
+// shows: kept last in the store (access.firstAdmin), so a key's place in
+// this list is its place there, which move-key takes.
+func gatewayOnly(keys []access.Key) []access.Key {
+	return slices.DeleteFunc(slices.Clone(keys), func(k access.Key) bool { return k.Admin != "" })
 }
