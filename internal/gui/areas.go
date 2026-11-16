@@ -33,10 +33,7 @@ func readAreas() (areasState, error) {
 	if err != nil {
 		return areasState{}, err
 	}
-	st := areasState{Areas: []any{}, Unowned: gateway.UnownedAccounts(), Catalog: gateway.AreaCatalog()}
-	for _, a := range all {
-		st.Areas = append(st.Areas, gateway.AreaView(a))
-	}
+	st := areasState{Areas: gateway.AreaViews(all), Unowned: gateway.UnownedAccounts(), Catalog: gateway.AreaCatalog()}
 	keys, err := access.List()
 	if err != nil {
 		return areasState{}, err

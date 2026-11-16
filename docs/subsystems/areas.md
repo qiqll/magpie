@@ -120,7 +120,10 @@ and reply bodies are in magpie-console's `docs/magpie-api.md`.
   (`usage.Visit`) and keeps those an area account answered from its
   `Added` on: a key's by `ProviderKeyID`, an account's by `Record.Account()`
   under its provider. An area with no account spent nothing; it is never
-  given the whole ledger.
+  given the whole ledger. The areas list (the console's `areas`, the
+  window's `/api/areas`) gives every area its `today` from one visit
+  (`areasToday`), by the same rules; `TestAdminAreasTodayIsEachAreasUsage`
+  holds it to each area's own usage.
 
 ## Area sign-ins
 

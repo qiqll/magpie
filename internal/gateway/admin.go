@@ -529,6 +529,37 @@ type AreaUsage struct {
 
 var periodNames = map[usage.Period]string{usage.Today: "today", usage.Week: "7d", usage.Month: "30d"}
 
+// areaMatch is how the ledger names one of an area's accounts: a key by
+// its fingerprint, an account by Record.Account(), counted from added.
+type areaMatch struct {
+	ref, name string
+	key       bool
+	added     time.Time
+}
+
+// names says whether r is m's call, whenever it was made.
+func (m areaMatch) names(r usage.Record) bool {
+	return m.key && r.ProviderKeyID != "" && r.ProviderKeyID == m.name ||
+		!m.key && m.name != "" && strings.EqualFold(r.Account(), m.name)
+}
+
+// areaMatches are accs' uncontested accounts by provider.
+func areaMatches(accs []adminAccount) map[string][]areaMatch {
+	byProvider := map[string][]areaMatch{}
+	for _, acc := range accs {
+		if acc.Contested {
+			continue
+		}
+		pid, ref, _ := strings.Cut(acc.ID, "/")
+		m := areaMatch{ref: acc.ID, key: acc.Kind == "key", added: acc.Added, name: acc.Name}
+		if m.key {
+			m.name = ref // the fingerprint the ledger keeps
+		}
+		byProvider[pid] = append(byProvider[pid], m)
+	}
+	return byProvider
+}
+
 // areaUsage is what a's accounts answered over p, each from the time the
 // area got it: a key's calls by its fingerprint, an account's by the name
 // the ledger keeps (Record.Account) under its provider.
@@ -536,23 +567,7 @@ func areaUsage(a area.Area, p usage.Period, loc *time.Location, now time.Time) A
 	now = now.In(loc)
 	since := p.Since(now)
 	out := AreaUsage{Period: periodNames[p], Zone: loc.String(), Since: since, ByModel: []modelShare{}, ByAccount: []adminShare{}, ByDay: []dayShare{}}
-	type match struct {
-		ref, name string
-		key       bool
-		added     time.Time
-	}
-	byProvider := map[string][]match{}
-	for _, acc := range areaAccounts(a) {
-		if acc.Contested {
-			continue
-		}
-		pid, ref, _ := strings.Cut(acc.ID, "/")
-		m := match{ref: acc.ID, key: acc.Kind == "key", added: acc.Added, name: acc.Name}
-		if m.key {
-			m.name = ref // the fingerprint the ledger keeps
-		}
-		byProvider[pid] = append(byProvider[pid], m)
-	}
+	byProvider := areaMatches(areaAccounts(a))
 	if len(byProvider) == 0 {
 		return out // no account, nothing spent: never the whole ledger
 	}
@@ -577,8 +592,7 @@ func areaUsage(a area.Area, p usage.Period, loc *time.Location, now time.Time) A
 			if r.Time.Before(m.added) {
 				continue
 			}
-			if m.key && r.ProviderKeyID != "" && r.ProviderKeyID == m.name ||
-				!m.key && m.name != "" && strings.EqualFold(r.Account(), m.name) {
+			if m.names(r) {
 				owned = m.ref
 				break
 			}
@@ -632,18 +646,103 @@ type adminArea struct {
 	Today     adminTotals `json:"today"`
 }
 
+// areasToday is what each area's accounts answered today in loc, by
+// area id: areaUsage(a, usage.Today, loc, now).Totals for each, from one
+// visit of the ledger however many areas there are. accs[i] are
+// areas[i]'s accounts.
+func areasToday(areas []area.Area, accs [][]adminAccount, loc *time.Location, now time.Time) map[string]adminTotals {
+	out := make(map[string]adminTotals, len(areas))
+	type areaOwn struct {
+		area int
+		areaMatch
+	}
+	byProvider := map[string][]areaOwn{}
+	for i := range areas {
+		out[areas[i].ID] = adminTotals{}
+		for pid, ms := range areaMatches(accs[i]) {
+			for _, m := range ms {
+				byProvider[pid] = append(byProvider[pid], areaOwn{i, m})
+			}
+		}
+	}
+	if len(byProvider) == 0 {
+		return out // no account, nothing spent: never the whole ledger
+	}
+	since := usage.Today.Since(now.In(loc))
+	totals := make([]adminTotals, len(areas))
+	// owners are the accounts a provider, key and account name are, worked
+	// out once for the calls that share them; counted[i] is the call area i
+	// last counted, so an area with two accounts naming one call counts it
+	// once
+	type hit struct {
+		area  int
+		added time.Time
+	}
+	owners := map[[3]string][]hit{}
+	counted := make([]int, len(areas))
+	n := 0
+	cost := usage.NewCoster()
+	usage.Visit(since, func(r usage.Record) {
+		if r.Time.Before(since) {
+			return
+		}
+		ms := byProvider[r.Provider]
+		if len(ms) == 0 {
+			return
+		}
+		k := [3]string{r.Provider, r.ProviderKeyID, r.Account()}
+		hits, ok := owners[k]
+		if !ok {
+			for _, m := range ms {
+				if m.names(r) {
+					hits = append(hits, hit{m.area, m.added})
+				}
+			}
+			owners[k] = hits
+		}
+		n++
+		var c float64
+		var priced, costed bool
+		for _, h := range hits {
+			if r.Time.Before(h.added) || counted[h.area] == n {
+				continue
+			}
+			counted[h.area] = n
+			if !costed {
+				c, priced = cost(r)
+				costed = true
+			}
+			totals[h.area].add(r, c, priced)
+		}
+	})
+	for i, a := range areas {
+		out[a.ID] = totals[i]
+	}
+	return out
+}
+
 func areaOf(a area.Area, now time.Time) adminArea {
-	out := adminArea{ID: a.ID, Note: a.Note, Off: a.Off, Created: a.Created, Providers: a.Providers, SignIns: a.SignIns, Accounts: len(a.Accounts)}
-	if out.Providers == nil {
-		out.Providers = []string{}
+	return areasOf([]area.Area{a}, [][]adminAccount{areaAccounts(a)}, now)[0]
+}
+
+// areasOf are areas as the console reads them, accs[i] being areas[i]'s
+// accounts.
+func areasOf(areas []area.Area, accs [][]adminAccount, now time.Time) []adminArea {
+	today := areasToday(areas, accs, time.Local, now)
+	out := make([]adminArea, 0, len(areas))
+	for _, a := range areas {
+		v := adminArea{ID: a.ID, Note: a.Note, Off: a.Off, Created: a.Created, Providers: a.Providers, SignIns: a.SignIns, Accounts: len(a.Accounts), Today: today[a.ID]}
+		if v.Providers == nil {
+			v.Providers = []string{}
+		}
+		if v.SignIns == nil {
+			v.SignIns = []string{}
+		}
+		if k, ok, _ := access.AreaKey(a.ID); ok {
+			v.AdminKey = k.Name
+		}
+		out = append(out, v)
 	}
-	if out.SignIns == nil {
-		out.SignIns = []string{}
-	}
-	if k, ok, _ := access.AreaKey(a.ID); ok {
-		out.AdminKey = k.Name
-	}
-	out.Today = areaUsage(a, usage.Today, time.Local, now).Totals
 	return out
 }
 
@@ -668,12 +767,11 @@ func (s *Server) adminAreas(w http.ResponseWriter, r *http.Request, c adminCall)
 		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
 		return
 	}
-	out := []adminArea{}
-	now := time.Now()
-	for _, a := range areas {
-		out = append(out, areaOf(a, now))
+	accs := make([][]adminAccount, len(areas))
+	for i, a := range areas {
+		accs[i] = areaAccounts(a)
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, areasOf(areas, accs, time.Now()))
 }
 
 func (s *Server) adminArea(w http.ResponseWriter, r *http.Request, c adminCall) {
@@ -909,13 +1007,21 @@ func AreaCatalog() map[string]any {
 	return map[string]any{"providers": keyProviders(), "signIns": signInWays()}
 }
 
-// AreaView is an area as the window shows it: as the console reads it,
-// with its accounts.
-func AreaView(a area.Area) any {
-	return struct {
-		adminArea
-		List []adminAccount `json:"list"`
-	}{areaOf(a, time.Now()), areaAccounts(a)}
+// AreaViews are areas as the window shows them: as the console reads
+// them, with their accounts.
+func AreaViews(areas []area.Area) []any {
+	accs := make([][]adminAccount, len(areas))
+	for i, a := range areas {
+		accs[i] = areaAccounts(a)
+	}
+	out := make([]any, 0, len(areas))
+	for i, v := range areasOf(areas, accs, time.Now()) {
+		out = append(out, struct {
+			adminArea
+			List []adminAccount `json:"list"`
+		}{v, accs[i]})
+	}
+	return out
 }
 
 // UnownedAccounts are magpie's accounts and keys no area owns, which the
