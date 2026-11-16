@@ -490,15 +490,27 @@ type adminShare struct {
 	adminTotals
 }
 
+// modelShare and dayShare are a model's and a day's, named as
+// magpie-console's docs/magpie-api.md has them.
+type modelShare struct {
+	Model string `json:"model"`
+	adminTotals
+}
+
+type dayShare struct {
+	Day string `json:"day"`
+	adminTotals
+}
+
 // AreaUsage is what an area's accounts spent over a period.
 type AreaUsage struct {
 	Period    string       `json:"period"`
 	Zone      string       `json:"zone"`
 	Since     time.Time    `json:"since"`
 	Totals    adminTotals  `json:"totals"`
-	ByModel   []adminShare `json:"byModel"`
+	ByModel   []modelShare `json:"byModel"`
 	ByAccount []adminShare `json:"byAccount"`
-	ByDay     []adminShare `json:"byDay"`
+	ByDay     []dayShare   `json:"byDay"`
 }
 
 var periodNames = map[usage.Period]string{usage.Today: "today", usage.Week: "7d", usage.Month: "30d"}
@@ -509,7 +521,7 @@ var periodNames = map[usage.Period]string{usage.Today: "today", usage.Week: "7d"
 func areaUsage(a area.Area, p usage.Period, loc *time.Location, now time.Time) AreaUsage {
 	now = now.In(loc)
 	since := p.Since(now)
-	out := AreaUsage{Period: periodNames[p], Zone: loc.String(), Since: since, ByModel: []adminShare{}, ByAccount: []adminShare{}, ByDay: []adminShare{}}
+	out := AreaUsage{Period: periodNames[p], Zone: loc.String(), Since: since, ByModel: []modelShare{}, ByAccount: []adminShare{}, ByDay: []dayShare{}}
 	type match struct {
 		ref, name string
 		key       bool
@@ -564,14 +576,14 @@ func areaUsage(a area.Area, p usage.Period, loc *time.Location, now time.Time) A
 		share(days, r.Time.In(loc).Format(time.DateOnly)).add(r, c, priced)
 	})
 	for _, s := range models {
-		out.ByModel = append(out.ByModel, *s)
+		out.ByModel = append(out.ByModel, modelShare{s.ID, s.adminTotals})
 	}
 	for _, s := range accounts {
 		s.Name = names[s.ID]
 		out.ByAccount = append(out.ByAccount, *s)
 	}
 	for _, s := range days {
-		out.ByDay = append(out.ByDay, *s)
+		out.ByDay = append(out.ByDay, dayShare{s.ID, s.adminTotals})
 	}
 	most := func(x, y adminShare) int {
 		if x.Cost != y.Cost {
@@ -582,9 +594,11 @@ func areaUsage(a area.Area, p usage.Period, loc *time.Location, now time.Time) A
 		}
 		return y.Requests - x.Requests
 	}
-	slices.SortFunc(out.ByModel, most)
+	slices.SortFunc(out.ByModel, func(x, y modelShare) int {
+		return most(adminShare{adminTotals: x.adminTotals}, adminShare{adminTotals: y.adminTotals})
+	})
 	slices.SortFunc(out.ByAccount, most)
-	slices.SortFunc(out.ByDay, func(x, y adminShare) int { return strings.Compare(x.ID, y.ID) })
+	slices.SortFunc(out.ByDay, func(x, y dayShare) int { return strings.Compare(x.Day, y.Day) })
 	return out
 }
 

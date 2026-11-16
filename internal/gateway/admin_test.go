@@ -341,7 +341,7 @@ func TestAdminUsageIsTheAreasAccounts(t *testing.T) {
 		return u
 	}
 	u := read(study)
-	if u.Totals.Requests != 1 || u.Totals.Input != 10 || u.Totals.Output != 2 || len(u.ByModel) != 1 || len(u.ByAccount) != 1 || u.ByAccount[0].Name != "mine" {
+	if u.Totals.Requests != 1 || u.Totals.Input != 10 || u.Totals.Output != 2 || len(u.ByModel) != 1 || u.ByModel[0].Model != "m1" || len(u.ByDay) != 1 || u.ByDay[0].Day == "" || len(u.ByAccount) != 1 || u.ByAccount[0].Name != "mine" {
 		t.Fatalf("study's usage: %+v", u)
 	}
 	if u := read(empty); u.Totals.Requests != 0 || u.Totals.Input != 0 {
