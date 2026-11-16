@@ -14,6 +14,7 @@ import (
 
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/testenv"
 )
 
@@ -32,6 +33,16 @@ func TestPluginFailover(t *testing.T) {
 	old := allowances
 	allowances = provider.Allowances
 	t.Cleanup(func() { allowances = old })
+	// accounts signed in in magpie are new to the growth policy
+	// (1354b6dd6), and Standard's day 0 holds full@fake at 50% of its
+	// spent five hours, as a cap of the user's: never tried, where this
+	// test is about one spent weighed last. The policy's hold is
+	// growth_*_test's
+	if err := settings.EditGrowth(func([]settings.GrowthPolicy, string) ([]settings.GrowthPolicy, string, error) {
+		return nil, settings.GrowthNone, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	var mu sync.Mutex
 	var tried []string          // each request's account, as its token names it
