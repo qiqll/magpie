@@ -108,6 +108,11 @@ func TestSignInDoneOnceTheAccountIsBack(t *testing.T) {
 			// what the sign-in reads as the moment its account is shown again
 			var mu sync.Mutex
 			id, back := "", ""
+			// a plugin's refresh, started by its sign-in above or by All,
+			// tells catalog.Touched in the background: it ends before
+			// Changed is swapped, and what this test starts ends before it
+			// is put back (Settle, told after, runs later)
+			quietCatalog()
 			was := catalog.Changed
 			catalog.Changed = func() {
 				mu.Lock()
@@ -117,7 +122,7 @@ func TestSignInDoneOnceTheAccountIsBack(t *testing.T) {
 					back = st.State
 				}
 			}
-			t.Cleanup(func() { catalog.Changed = was })
+			t.Cleanup(func() { quietCatalog(); catalog.Changed = was })
 
 			st := c.signIn(t)
 			mu.Lock()
@@ -188,6 +193,14 @@ func TestSignInCanceledWhileTheAccountComesBack(t *testing.T) {
 	if _, ok := find(All(), "codex"); !ok {
 		t.Fatal("the account isn't listed after its sign-in")
 	}
+}
+
+// quietCatalog waits for the plugins' refreshes in the background and the
+// hooks they told (catalog.Touched, which reads catalog.Changed) to end, so
+// a test can swap Changed without racing them.
+func quietCatalog() {
+	plugin.Refreshed()
+	plugin.Told()
 }
 
 // fakeCodexSignIn signs in to Codex (me@example.com, personal Pro,
