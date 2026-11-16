@@ -123,15 +123,30 @@ func signInStateOf(c adminCall, st provider.SignInState) adminSignInState {
 func claimOnDone(id string) func(provider.SignInState) provider.SignInState {
 	return func(st provider.SignInState) provider.SignInState {
 		pid := subscriptionOf(st.Agent)
-		if st.Again || pid == "" {
+		ref := pid + "/" + provider.LoginID(st.Agent, st.User)
+		if st.Again {
+			// the area's own, signed in again: its sign-in renewed
+			if a, err := area.Get(id); err == nil && ownsRef(a, ref) {
+				return st
+			}
 			st.State, st.Error = "conflict", "this account is in magpie already, so it stays where it is"
 			return st
 		}
-		if err := area.Claim(id, pid+"/"+provider.LoginID(st.Agent, st.User)); err != nil {
+		if pid == "" {
+			st.State, st.Error = "failed", "no area signs in to "+st.Agent
+			return st
+		}
+		if err := area.Claim(id, ref); err != nil {
 			st.State = "conflict"
 			st.Error = "signed in, but the account couldn't be made this area's: " + err.Error()
 			if !errors.Is(err, area.ErrTaken) {
+				// the area deleted, or areas.json unread: an account
+				// added for it alone is taken out again, rather than
+				// left serving the owner as nobody's
 				st.State = "failed"
+				if ferr := provider.ForgetLogin(st.Agent, st.User); ferr != nil {
+					log.Printf("admin: area %s's %s account, not claimed, not removed either: %v", id, st.Agent, ferr)
+				}
 			}
 			log.Printf("admin: area %s signed in to %s, not claimed: %v", id, st.Agent, err)
 			return st
@@ -179,6 +194,12 @@ func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall
 	areaSignIns.Lock()
 	if areaSignIns.m == nil {
 		areaSignIns.m = map[string]string{}
+	}
+	// those magpie no longer has: not kept till it quits
+	for sid := range areaSignIns.m {
+		if _, ok := provider.SignInStatus(sid); !ok {
+			delete(areaSignIns.m, sid)
+		}
 	}
 	areaSignIns.m[st.ID] = c.area.ID
 	areaSignIns.Unlock()
@@ -240,18 +261,31 @@ func (s *Server) adminClaudeToken(w http.ResponseWriter, r *http.Request, c admi
 		adminNotFoundErr(w)
 		return
 	}
-	user, added, err := provider.AddClaudeSetupTokenThrough(in.Token, nil)
+	if len(c.area.Accounts) >= adminAccountsLimit {
+		adminError(w, http.StatusConflict, adminConflict, "an area has at most 500 accounts")
+		return
+	}
+	user, err := provider.ClaudeTokenUser(in.Token)
 	if err != nil {
 		adminError(w, http.StatusBadRequest, adminBadRequest, err.Error())
 		return
 	}
-	if !added {
-		adminError(w, http.StatusConflict, adminConflict, "this token is in magpie already")
-		return
-	}
+	// owned first, as a key is: the account is the area's from the moment
+	// it is in magpie, and one magpie has (the owner's, another area's)
+	// is never written over
 	ref := pid + "/" + provider.LoginID("claude", user)
 	if err := area.Claim(c.area.ID, ref); err != nil {
 		adminClaimErr(w, err)
+		return
+	}
+	_, added, err := provider.AddClaudeSetupTokenThrough(in.Token, nil)
+	if err != nil || !added {
+		area.Release(ref)
+		if err == nil || errors.Is(err, provider.ErrClaudeTokenName) {
+			adminError(w, http.StatusConflict, adminConflict, "this account is in magpie already")
+			return
+		}
+		adminError(w, http.StatusBadRequest, adminBadRequest, err.Error())
 		return
 	}
 	log.Printf("admin: area %s (%s) added a Claude setup-token", c.area.ID, c.area.Note)
@@ -263,4 +297,21 @@ func (s *Server) adminClaudeToken(w http.ResponseWriter, r *http.Request, c admi
 		}
 	}
 	writeJSON(w, http.StatusCreated, adminAccount{ID: ref, Provider: pid, Kind: "account", Name: user})
+}
+
+// CancelAreaSignIns cancels the sign-ins area id started: one turned off
+// or deleted adds no account.
+func CancelAreaSignIns(id string) {
+	var ids []string
+	areaSignIns.Lock()
+	for sid, a := range areaSignIns.m {
+		if a == id {
+			ids = append(ids, sid)
+			delete(areaSignIns.m, sid)
+		}
+	}
+	areaSignIns.Unlock()
+	for _, sid := range ids {
+		provider.CancelSignIn(sid)
+	}
 }

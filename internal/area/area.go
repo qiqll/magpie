@@ -246,6 +246,18 @@ func Release(ref string) error {
 	})
 }
 
+// ReleaseProvider takes every account of provider pid from the areas
+// that own them: the provider was deleted, its keys with it. A provider
+// of the same id added later doesn't bring them back to an area.
+func ReleaseProvider(pid string) error {
+	return change(func(f *file) error {
+		for i := range f.Areas {
+			f.Areas[i].Accounts = slices.DeleteFunc(f.Areas[i].Accounts, func(c Account) bool { return strings.HasPrefix(c.Ref, pid+"/") })
+		}
+		return nil
+	})
+}
+
 // Rename moves ownership of from to to (a key's value replaced in place
 // gets a new fingerprint), in whichever area owns it.
 func Rename(from, to string) error {

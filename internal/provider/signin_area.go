@@ -8,44 +8,53 @@ import (
 // An area's admin signs in to a subscription through the gateway's admin
 // routes (docs/subsystems/areas.md), from a browser elsewhere. Such a
 // sign-in records the account and nothing more: the agent on this
-// computer is never signed in to it (addLoginOf), and no two sign-ins
-// to one agent run over each other. While one runs, an area's or the
-// owner's, an area's is refused; while an area's runs, every other is
-// refused rather than replacing it, as one of the owner's replaces
-// another of the owner's.
+// computer is never signed in to it (addLoginOf). An area's starts only
+// while no other sign-in to its agent is under way, and never cancels
+// one; the owner's always starts, and replaces every other, an area's
+// included, as one of the owner's always replaced another: an area can't
+// keep the owner from signing in.
+//
+// Every sign-in is held in signIns.starting from its reservation until it
+// is listed (replaceSignIns) or over, so one being started (a CLI being
+// launched) is seen by another starting beside it.
 
 // ErrSignInBusy: another sign-in to the agent is under way.
 var ErrSignInBusy = errors.New("another sign-in to this subscription is under way: wait for it to end, or cancel it, and start again")
 
-// reserveSignIn lets s start, or says why it can't: a sign-in to its
-// agent under way that it may not replace. An area's is held as pending
-// until it is listed (replaceSignIns), so two started at once can't both
-// pass.
+// reserveSignIn lets s start, or says why it can't: an area's, while
+// another sign-in to its agent is under way.
 func reserveSignIn(s *signInFlow, o SignInOptions) error {
 	s.area, s.onDone = o.Area, o.Done
-	agent := s.st.Agent
 	signIns.Lock()
 	defer signIns.Unlock()
-	if p := signIns.pending[agent]; p != nil && !p.over.Load() {
+	if s.area && liveBeside(s) {
 		return ErrSignInBusy
 	}
-	for _, f := range signIns.m {
-		if f.st.Agent == agent && !f.over.Load() && (f.area || s.area) {
-			return ErrSignInBusy
+	signIns.starting[s] = true
+	return nil
+}
+
+// liveBeside: another sign-in to s's agent, listed or starting, isn't
+// over. Called with signIns held.
+func liveBeside(s *signInFlow) bool {
+	agent := s.st.Agent
+	for f := range signIns.starting {
+		if f != s && f.st.Agent == agent && !f.over.Load() {
+			return true
 		}
 	}
-	if s.area {
-		signIns.pending[agent] = s
+	for _, f := range signIns.m {
+		if f != s && f.st.Agent == agent && !f.over.Load() {
+			return true
+		}
 	}
-	return nil
+	return false
 }
 
 // unreserveSignIn lets go of s's reservation, once it ended.
 func unreserveSignIn(s *signInFlow) {
 	signIns.Lock()
-	if signIns.pending[s.st.Agent] == s {
-		delete(signIns.pending, s.st.Agent)
-	}
+	delete(signIns.starting, s)
 	signIns.Unlock()
 }
 
@@ -53,15 +62,7 @@ func unreserveSignIn(s *signInFlow) {
 func SignInBusy(agent string) bool {
 	signIns.Lock()
 	defer signIns.Unlock()
-	if p := signIns.pending[agent]; p != nil && !p.over.Load() {
-		return true
-	}
-	for _, f := range signIns.m {
-		if f.st.Agent == agent && !f.over.Load() {
-			return true
-		}
-	}
-	return false
+	return liveBeside(&signInFlow{st: SignInState{Agent: agent}})
 }
 
 // areaSignIn: ctx is an area's sign-in's (via).

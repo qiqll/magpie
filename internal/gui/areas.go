@@ -133,12 +133,16 @@ func areaAction(r *http.Request, action, id, note, ref string, off *bool, provid
 		if note != "" {
 			s.Note = &note
 		}
-		_, err := areas.Update(id, s)
+		a, err := areas.Update(id, s)
+		if err == nil && a.Off {
+			gateway.CancelAreaSignIns(id)
+		}
 		return "", err
 	case "delete":
 		if err := areas.Delete(id); err != nil {
 			return "", err
 		}
+		gateway.CancelAreaSignIns(id)
 		return "", access.RemoveArea(id)
 	case "rotate":
 		if _, err := areas.Get(id); err != nil {

@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/yetone/magpie/internal/area"
+	"log"
 	"maps"
 	"net"
 	"net/url"
@@ -1959,6 +1961,10 @@ func Delete(id string) error {
 	_, account := find(Accounts(), id) // read before providersMu is taken
 	if err := deleteRead(id, account); err != nil || account {
 		return err
+	}
+	// its keys went with it: no area owns them still (docs/subsystems/areas.md)
+	if err := area.ReleaseProvider(id); err != nil {
+		log.Printf("areas: %s deleted, its areas not told: %v", id, err)
 	}
 	// its StepFun sign-in goes with it, not to a provider added later
 	// under the same id

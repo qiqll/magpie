@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -271,6 +272,21 @@ func TestAdminWhoAndWhence(t *testing.T) {
 	if c, b := do("GET", AdminPath+"/me", otherPeer, study, "", "X-Forwarded-For", "192.168.1.9"); c != http.StatusForbidden || !strings.Contains(b, adminIPNotAllowed) {
 		t.Fatal("from off the admin allow list:", c, b)
 	}
+	// a proxy or tunnel here: someone else's, refused unless the proxy is
+	// trusted, and then judged by the address it names
+	for _, h := range []string{"X-Forwarded-For", "Cf-Connecting-IP", "Forwarded"} {
+		if c, b := do("GET", AdminPath+"/me", loopback, study, "", h, "203.0.113.9"); c != http.StatusForbidden || !strings.Contains(b, adminIPNotAllowed) {
+			t.Fatal("through a proxy here,", h, c, b)
+		}
+	}
+	t.Setenv("MAGPIE_TRUST_PROXY", "1")
+	if c, b := do("GET", AdminPath+"/me", loopback, study, "", "X-Forwarded-For", "203.0.113.9"); c != http.StatusForbidden {
+		t.Fatal("a trusted proxy's client off the list:", c, b)
+	}
+	if c, b := do("GET", AdminPath+"/me", loopback, study, "", "X-Forwarded-For", "203.0.113.9, 192.168.1.20"); c != 200 {
+		t.Fatal("a trusted proxy's client on the list:", c, b)
+	}
+	t.Setenv("MAGPIE_TRUST_PROXY", "")
 	c, b := do("GET", AdminPath+"/me", loopback, study, "")
 	if c != 200 || !strings.Contains(b, `"role":"area"`) || !strings.Contains(b, "娱乐") {
 		t.Fatal("me:", c, b)
@@ -392,5 +408,64 @@ func TestAdminSignInClaims(t *testing.T) {
 	areaSignIns.Unlock()
 	if !ownSignIn(adminCall{area: area.Area{ID: a}}, "si-a") || ownSignIn(adminCall{area: area.Area{ID: b}}, "si-a") || ownSignIn(adminCall{area: area.Area{ID: a}}, "") {
 		t.Fatal("a sign-in read by an area that didn't start it")
+	}
+}
+
+// An area signing in again to its own account stays done; one deleted
+// before its sign-in ends gets no account, and nothing is left in magpie.
+func TestAdminSignInAgainAndGone(t *testing.T) {
+	do, console, _ := adminWorld(t)
+	a, _ := makeArea(t, do, console, "A")
+	done := provider.SignInState{Agent: "codex", User: "own@example.com", State: "done"}
+	if st := claimOnDone(a)(done); st.State != "done" {
+		t.Fatal("first:", st)
+	}
+	again := done
+	again.Again = true
+	if st := claimOnDone(a)(again); st.State != "done" {
+		t.Fatal("its own signed in again:", st)
+	}
+	if st := claimOnDone("ar_gone")(provider.SignInState{Agent: "codex", User: "late@example.com", State: "done"}); st.State != "failed" {
+		t.Fatal("a deleted area's:", st)
+	}
+}
+
+// An account two areas list (areas.json written by hand) is contested:
+// listed as such to each, removed by neither, counted in neither's usage.
+func TestAdminContestedAccount(t *testing.T) {
+	do, console, _ := adminWorld(t)
+	aID, aKey := makeArea(t, do, console, "A", "plan")
+	bID, _ := makeArea(t, do, console, "B", "plan")
+	b, _ := json.Marshal(map[string]string{"provider": "plan", "name": "k", "key": "sk-shared-000000001"})
+	if c, body := do("POST", AdminPath+"/accounts/key", lanPeer, aKey, string(b)); c != http.StatusCreated {
+		t.Fatal(c, body)
+	}
+	ref := "plan/" + provider.KeyID("sk-shared-000000001")
+	// B is given it too, by hand
+	raw, _ := os.ReadFile(area.Path())
+	var f struct {
+		Version int         `json:"version"`
+		Areas   []area.Area `json:"areas"`
+	}
+	json.Unmarshal(raw, &f)
+	for i := range f.Areas {
+		if f.Areas[i].ID == bID {
+			f.Areas[i].Accounts = append(f.Areas[i].Accounts, area.Account{Ref: ref, Added: time.Now()})
+		}
+	}
+	out, _ := json.Marshal(f)
+	os.WriteFile(area.Path(), out, 0o600)
+	time.Sleep(10 * time.Millisecond) // a new mtime for the read cache
+	c, body := do("GET", AdminPath+"/accounts", lanPeer, aKey, "")
+	if c != 200 || !strings.Contains(body, `"contested":true`) {
+		t.Fatal("listed:", c, body)
+	}
+	rb, _ := json.Marshal(map[string]string{"id": ref})
+	if c, body := do("POST", AdminPath+"/accounts/remove", lanPeer, aKey, string(rb)); c != http.StatusNotFound {
+		t.Fatal("a contested account removed:", c, body)
+	}
+	usage.Append(usage.Record{Time: time.Now(), Provider: "plan", ProviderKeyID: provider.KeyID("sk-shared-000000001"), Model: "m1", Status: 200, Input: 9})
+	if c, body := do("GET", AdminPath+"/areas/"+aID+"/usage?period=today", lanPeer, console, ""); c != 200 || !strings.Contains(body, `"requests":0`) {
+		t.Fatal("a contested account's calls counted:", c, body)
 	}
 }

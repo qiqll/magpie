@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
 	"slices"
 	"strings"
@@ -246,17 +247,30 @@ func (s *Server) adminCatalog(w http.ResponseWriter, r *http.Request, c adminCal
 // adminAccount is an account as the admin routes tell it: never a key's
 // value, nor a token.
 type adminAccount struct {
-	ID           string    `json:"id"`
-	Provider     string    `json:"provider"`
-	ProviderName string    `json:"providerName"`
-	Kind         string    `json:"kind"` // "key" | "account"
-	Name         string    `json:"name"`
-	Masked       string    `json:"masked,omitempty"`
-	Plan         string    `json:"plan,omitempty"`
-	On           bool      `json:"on"`
-	SignedOut    bool      `json:"signedOut,omitempty"`
-	Gone         bool      `json:"gone,omitempty"` // removed from magpie by its owner
-	Added        time.Time `json:"added"`
+	ID           string `json:"id"`
+	Provider     string `json:"provider"`
+	ProviderName string `json:"providerName"`
+	Kind         string `json:"kind"` // "key" | "account"
+	Name         string `json:"name"`
+	Masked       string `json:"masked,omitempty"`
+	Plan         string `json:"plan,omitempty"`
+	On           bool   `json:"on"`
+	SignedOut    bool   `json:"signedOut,omitempty"`
+	Gone         bool   `json:"gone,omitempty"` // removed from magpie by its owner
+	// Contested: another area has it too (areas.json written by hand):
+	// neither removes it nor is told what it spent until the owner settles it
+	Contested bool      `json:"contested,omitempty"`
+	Added     time.Time `json:"added"`
+}
+
+// ownsRef: ref is a's, and no other area's too (contested: areas.json
+// written by hand), which no admin manages.
+func ownsRef(a area.Area, ref string) bool {
+	if !a.Has(ref) {
+		return false
+	}
+	owner, contested, err := area.Owner(ref)
+	return err == nil && !contested && owner == a.ID
 }
 
 // areaAccounts are a's accounts as they stand in magpie now.
@@ -264,7 +278,7 @@ func areaAccounts(a area.Area) []adminAccount {
 	out := []adminAccount{}
 	for _, owned := range a.Accounts {
 		pid, ref, _ := strings.Cut(owned.Ref, "/")
-		acc := adminAccount{ID: owned.Ref, Provider: pid, Name: ref, Added: owned.Added, Gone: true}
+		acc := adminAccount{ID: owned.Ref, Provider: pid, Name: ref, Added: owned.Added, Gone: true, Contested: !ownsRef(a, owned.Ref)}
 		if p, err := provider.Find(pid); err == nil {
 			acc.ProviderName = p.Name
 			describe(&acc, *p, ref)
@@ -390,7 +404,7 @@ func (s *Server) adminRemove(w http.ResponseWriter, r *http.Request, c adminCall
 	if !decodeAdmin(w, r, &in) {
 		return
 	}
-	if !c.area.Has(in.ID) {
+	if !ownsRef(c.area, in.ID) {
 		adminNotFoundErr(w)
 		return
 	}
@@ -529,6 +543,9 @@ func areaUsage(a area.Area, p usage.Period, loc *time.Location, now time.Time) A
 	}
 	byProvider := map[string][]match{}
 	for _, acc := range areaAccounts(a) {
+		if acc.Contested {
+			continue
+		}
 		pid, ref, _ := strings.Cut(acc.ID, "/")
 		m := match{ref: acc.ID, key: acc.Kind == "key", added: acc.Added, name: acc.Name}
 		if m.key {
@@ -733,8 +750,11 @@ func (s *Server) adminCreateArea(w http.ResponseWriter, r *http.Request, c admin
 	}
 	_, secret, err := access.AddAdmin(access.AdminArea, a.ID, a.Note+" admin")
 	if err != nil {
-		area.Delete(a.ID) // no area without its admin key
-		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
+		// no area without its admin key
+		if derr := area.Delete(a.ID); derr != nil {
+			log.Printf("admin: area %s made, its admin key not (%v), and the area not deleted: %v", a.ID, err, derr)
+		}
+		adminError(w, http.StatusServiceUnavailable, "admin_key_unsaved", "the area's admin key couldn't be saved: "+err.Error())
 		return
 	}
 	log.Printf("admin: the console made area %s (%s)", a.ID, a.Note)
@@ -758,6 +778,9 @@ func (s *Server) adminUpdateArea(w http.ResponseWriter, r *http.Request, c admin
 	if err != nil {
 		areaErr(w, err)
 		return
+	}
+	if a.Off {
+		CancelAreaSignIns(a.ID)
 	}
 	writeJSON(w, http.StatusOK, areaOf(a, time.Now()))
 }
@@ -787,6 +810,7 @@ func (s *Server) adminDeleteArea(w http.ResponseWriter, r *http.Request, c admin
 		areaErr(w, err)
 		return
 	}
+	CancelAreaSignIns(id)
 	if err := access.RemoveArea(id); err != nil {
 		// the area is gone, so its key reaches nothing (admin): only
 		// left in the list until removed by hand
@@ -818,15 +842,33 @@ var lastAdminAllow struct {
 }
 
 // adminAllowed: r came from this computer, or an address on the admin
-// allow list, judged by the connection's own address: a forwarding
-// header is never taken for it.
+// allow list, judged by the connection's own address. One that reaches
+// loopback through a proxy or tunnel here (a forwarding header, or magpie
+// web's page port) is someone else's, from wherever that reaches: it is
+// judged by the address the proxy names only when MAGPIE_TRUST_PROXY says
+// the proxy here sets it, and refused otherwise. A forwarding header from
+// another computer is never taken for its address.
 func adminAllowed(r *http.Request) (string, bool) {
 	a, ok := peerAddr(r)
 	if !ok {
 		return r.RemoteAddr, false
 	}
 	if a.IsLoopback() || ownAddr(a) {
-		return a.String(), true
+		forwarded := viaPagePort(r) || slices.ContainsFunc(forwardHeaders, func(h string) bool { return r.Header.Get(h) != "" })
+		if !forwarded {
+			return a.String(), true
+		}
+		if !trustProxy() {
+			return a.String() + " (through a proxy here)", false
+		}
+		f, ok := forwardedAddr(r)
+		if !ok {
+			return a.String() + " (through a proxy here)", false
+		}
+		a = f
+		if a.IsLoopback() {
+			return a.String(), true
+		}
 	}
 	list, _ := AdminAllowIPs()
 	for _, e := range list {
@@ -835,6 +877,24 @@ func adminAllowed(r *http.Request) (string, bool) {
 		}
 	}
 	return a.String(), false
+}
+
+// forwardedAddr is the client's address a trusted proxy here names: the
+// last hop of X-Forwarded-For, the one it added, else X-Real-IP or
+// Cf-Connecting-IP.
+func forwardedAddr(r *http.Request) (netip.Addr, bool) {
+	v := ""
+	if f := r.Header.Get("X-Forwarded-For"); f != "" {
+		parts := strings.Split(f, ",")
+		v = parts[len(parts)-1]
+	} else if v = r.Header.Get("X-Real-IP"); v == "" {
+		v = r.Header.Get("Cf-Connecting-IP")
+	}
+	a, err := netip.ParseAddr(strings.TrimSpace(v))
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return a.Unmap(), true
 }
 
 // AreaCatalog is what an area may be given: the providers that take API

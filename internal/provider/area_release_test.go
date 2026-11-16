@@ -54,7 +54,7 @@ func TestAreaLetsGoOfAForgottenAccount(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	for _, u := range []string{"owner@example.com", "area@example.com"} {
-		if _, err := addLoginOf(codexTestLogin(t, u), u == "area@example.com"); err != nil {
+		if _, _, err := addLoginOf(codexTestLogin(t, u), u == "area@example.com"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -68,5 +68,27 @@ func TestAreaLetsGoOfAForgottenAccount(t *testing.T) {
 	}
 	if owner, _, _ := area.Owner(ref); owner != "" {
 		t.Fatal("the forgotten account is still", owner+"'s")
+	}
+}
+
+// A key provider deleted takes its keys from their areas: added again
+// later, a key of the same value is no area's.
+func TestAreaLetsGoOfADeletedProvider(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := Save(Provider{ID: "relay", Name: "Relay", Key: "sk-first-000000001", Chat: "http://127.0.0.1:9/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddKey("relay", "", "sk-area-0000000001", ""); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := area.Create("学习", nil, nil)
+	ref := "relay/" + KeyID("sk-area-0000000001")
+	area.Claim(a.ID, ref)
+	if err := Delete("relay"); err != nil {
+		t.Fatal(err)
+	}
+	if owner, _, _ := area.Owner(ref); owner != "" {
+		t.Fatal("a deleted provider's key still", owner+"'s")
 	}
 }

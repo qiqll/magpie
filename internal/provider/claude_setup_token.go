@@ -54,11 +54,30 @@ func claudeTokenVersion(token string) string {
 }
 
 // claudeTokenName is the name a setup-token account gets: Claude tells no
-// email for it, so a short hash of the token tells two apart without
-// showing any of it.
-func claudeTokenName(token string) string {
+// email for it, so a hash of the token tells two apart without showing
+// any of it: 64 bits of it, as two tokens with one name would be one
+// account, the second's token written over the first's (an area's admin
+// could make one to match another's in a second with 24). Accounts named
+// before keep their names.
+func claudeTokenName(token string) string { return claudeTokenNameFor(token) }
+
+// claudeTokenNameFor names a token; a variable so a test can make two collide.
+var claudeTokenNameFor = func(token string) string {
 	sum := sha256.Sum256([]byte(token))
-	return "Claude setup-token " + hex.EncodeToString(sum[:])[:6]
+	return "Claude setup-token " + hex.EncodeToString(sum[:])[:16]
+}
+
+// ErrClaudeTokenName: another token's account has the name this one gets.
+var ErrClaudeTokenName = errors.New("another setup-token's account has this token's name: it isn't added, so that account keeps its own token")
+
+// ClaudeTokenUser is the account a setup-token is added as, or why it
+// isn't a setup-token.
+func ClaudeTokenUser(token string) (string, error) {
+	token, err := checkClaudeSetupToken(token)
+	if err != nil {
+		return "", err
+	}
+	return claudeTokenName(token), nil
 }
 
 // errClaudeSetupToken is a setup-token account's allowance: unknown, never
@@ -110,10 +129,18 @@ func AddClaudeSetupTokenThrough(token string, proxy *string) (user string, added
 		return "", false, err
 	}
 	loginsMu.Lock()
+	name := claudeTokenName(token)
 	for _, l := range readLogins() {
 		if l.Agent == "claude" && claudeSetupToken(l.Auth) == token {
 			loginsMu.Unlock()
 			return l.User, false, nil
+		}
+	}
+	for _, l := range readLogins() {
+		// one name, another token: added, it would write over that one's
+		if l.Agent == "claude" && strings.EqualFold(l.User, name) {
+			loginsMu.Unlock()
+			return "", false, ErrClaudeTokenName
 		}
 	}
 	loginsMu.Unlock()
@@ -126,7 +153,7 @@ func AddClaudeSetupTokenThrough(token string, proxy *string) (user string, added
 	if err != nil {
 		return "", false, err
 	}
-	l := savedLogin{Agent: "claude", User: claudeTokenName(token), Auth: auth}
+	l := savedLogin{Agent: "claude", User: name, Auth: auth}
 	if _, err := addLogin(l); err != nil {
 		return "", false, err
 	}
