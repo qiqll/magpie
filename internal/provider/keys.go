@@ -13,6 +13,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/yetone/magpie/internal/area"
+	"log"
 	"slices"
 	"strings"
 	"sync"
@@ -586,12 +588,13 @@ func SetKeyOn(id, keyRef string, on bool) error {
 }
 
 // RemoveKey forgets a key. The last key in use stays: turn another on first.
-func RemoveKey(id, keyRef string) error {
+func RemoveKey(id, keyRef string) (err error) {
 	p, err := Find(id)
 	if err != nil {
 		return err
 	}
 	// taken from the keys as they are stored then (T-094)
+	defer releaseArea(&err, p.ID, keyRef)
 	return editFound(p, func(q *Provider) error {
 		i, ok := findKey(q, keyRef)
 		if !ok {
@@ -618,6 +621,7 @@ func RemoveKeys(id string, refs []string) (removed int, err error) {
 	gone := map[string]bool{}
 	for _, r := range refs {
 		gone[r] = true
+		defer releaseArea(&err, p.ID, r)
 	}
 	// taken from the keys as they are stored then (T-094)
 	err = editFound(p, func(q *Provider) error {
@@ -719,6 +723,10 @@ func ReplaceKey(id, keyRef, key string) (was, now string, err error) {
 	})
 	if err != nil {
 		return "", "", err
+	}
+	// the area that owned the key owns its new value
+	if err := area.Rename(p.ID+"/"+keyRef, p.ID+"/"+now); err != nil {
+		log.Printf("areas: %s's key replaced, its area not told: %v", p.Name, err)
 	}
 	return keyRef, now, nil
 }

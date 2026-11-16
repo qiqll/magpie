@@ -1736,10 +1736,12 @@ func ForgetLogin(agent, user string) error {
 	if settings.AccountDiscoveryOff() {
 		return errAccountDiscoveryOff
 	}
+	ref := loginProvider(Login{Agent: agent}) + "/" + LoginID(agent, user)
 	err := forgetLoginOf(agent, user)
 	if err == nil {
 		// removed by the user: signed in to again, it is a new account
 		forgetAdded(agent, user)
+		releaseArea(&err, "", ref)
 	}
 	return err
 }
