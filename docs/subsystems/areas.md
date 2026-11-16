@@ -59,7 +59,17 @@ agent's (`codex`, `claude`, `copilot`, `gemini`, `antigravity`).
 - On disk an admin key is also `ReadOnly`, held to the account `-/-` and to
   no MCP server (`adminHeld`). A magpie from before admin keys reads it as
   any other key: the stats routes alone, of which a key held to accounts it
-  has none of reads nothing.
+  has none of reads nothing but its own name and limits (`/v1/magpie/limit`,
+  `/v1/magpie/me`) and the gateway's `/` (its routes and how many models it
+  has); quotas, usage, route events, statusline, every model route and MCP
+  are refused (tried on 373eaeeb8, from this computer and the LAN, T-182).
+- Such a magpie writing `caller-keys.json` (any key added, renamed or
+  rotated) drops `Admin` and `Area`: each admin key is then an ordinary
+  read-only key held to `-/-`, here too. Its console is refused every admin
+  route (`403 gateway_key_read_only`) and reads nothing else; the area has
+  no admin key until the owner rotates it (Gateway → Areas, which makes a
+  new one), and the console's key is made again. The old ones stay in
+  Gateway keys, where the owner removes them.
 - `access.Update` does only `rename`, `rotate` (with no value of the user's
   own), `on`/`off`, `remove`, `move` and `copy` to an admin key.
 - `identityOf` gives an admin key's caller `Admin`, `Area`, `ReadOnly`, the
