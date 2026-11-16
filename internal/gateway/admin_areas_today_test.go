@@ -24,7 +24,6 @@ func writeAreas(t testing.TB, areas []area.Area) {
 	if err := os.WriteFile(area.Path(), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(10 * time.Millisecond) // a new mtime for the read cache
 }
 
 // The areas list's one visit of the ledger gives each area what its own
@@ -73,7 +72,11 @@ func TestAdminAreasTodayIsEachAreasUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, loc := range []*time.Location{time.Local, time.UTC, tokyo} {
+	// noon is a zone where now is midday, so every call above is today
+	// there whatever the clock says
+	sod := now.UTC().Sub(now.UTC().Truncate(24 * time.Hour))
+	noon := time.FixedZone("noon", int((12*time.Hour - sod).Seconds()))
+	for _, loc := range []*time.Location{time.Local, time.UTC, tokyo, noon} {
 		got := areasToday(listed, accs, loc, now)
 		if len(got) != len(listed) {
 			t.Fatalf("%s: %d areas, want %d", loc, len(got), len(listed))
@@ -85,7 +88,7 @@ func TestAdminAreasTodayIsEachAreasUsage(t *testing.T) {
 		}
 	}
 	// and the two agree on something: each is counted where it should be
-	got := areasToday(listed, accs, time.UTC, now)
+	got := areasToday(listed, accs, noon, now)
 	if got["ar_a"].Requests == 0 || got["ar_b"].Failed == 0 || got["ar_c"].Requests == 0 || got["ar_g"].Input == 0 {
 		t.Fatalf("nothing counted: %+v", got)
 	}
@@ -122,7 +125,7 @@ func BenchmarkAreasToday(b *testing.B) {
 		start = mid
 	}
 	for i := range 10000 {
-		usage.Append(usage.Record{Time: start.Add(time.Duration(i) * now.Sub(start) / 10000), Provider: "sub", ProviderAccount: fmt.Sprintf("u%02d-%d@x", i%60, i%4), Model: "m1", Status: 200, Input: 10, Output: 5})
+		usage.Append(usage.Record{Time: start.Add(time.Duration(i) * now.Sub(start) / 10000), Provider: "sub", ProviderAccount: fmt.Sprintf("u%02d-%d@x", i%60, (i/60)%4), Model: "m1", Status: 200, Input: 10, Output: 5})
 	}
 	listed, _ := area.List()
 	accs := make([][]adminAccount, len(listed))
