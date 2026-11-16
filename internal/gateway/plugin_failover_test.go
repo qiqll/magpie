@@ -34,10 +34,11 @@ func TestPluginFailover(t *testing.T) {
 	allowances = provider.Allowances
 	t.Cleanup(func() { allowances = old })
 	// accounts signed in in magpie are new to the growth policy
-	// (1354b6dd6), and Standard's day 0 holds full@fake at 50% of its
-	// spent five hours, as a cap of the user's: never tried, where this
-	// test is about one spent weighed last. The policy's hold is
-	// growth_*_test's
+	// (1354b6dd6): Standard's day 0 caps full@fake's five hours at 50%,
+	// which it is over, so capHeld bars it as a cap of the user's would
+	// and it is never tried, where this test is about a spent account
+	// weighed last. The policy's hold is growth_test's and
+	// growth_*_test's.
 	if err := settings.EditGrowth(func([]settings.GrowthPolicy, string) ([]settings.GrowthPolicy, string, error) {
 		return nil, settings.GrowthNone, nil
 	}); err != nil {
