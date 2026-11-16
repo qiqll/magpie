@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -182,6 +183,11 @@ type signInFlow struct {
 	// Code's `claude auth login` ended and what it printed, its lines that
 	// may hold a code left out (claudeSaidSafe)
 	said string
+	// area and onDone are SignInOptions' Area and Done; over is set once
+	// the sign-in ended, read under signIns' lock (reserveSignIn)
+	area   bool
+	onDone func(SignInState) SignInState
+	over   atomic.Bool
 }
 
 // SignInOptions are a sign-in's choices beyond its subscription.
@@ -194,6 +200,15 @@ type SignInOptions struct {
 	Proxy *string
 	// User is the account signed in to again, for the proxy it goes through
 	User string
+	// Area is a sign-in an area's admin started (signin_area.go): it
+	// starts only while no other sign-in to its agent is under way, no
+	// later one replaces it, the agent itself is never signed in to its
+	// account, and Done is told how it ended before anyone else.
+	Area bool
+	// Done, when set, sees a sign-in that is done before it reads as
+	// such, and may say it ended otherwise (its account claimed by
+	// another area: "conflict").
+	Done func(SignInState) SignInState
 }
 
 // via is ctx for the sign-in's requests: through its proxy, so the vendor
@@ -365,7 +380,10 @@ func (e *SignInProxyError) Unwrap() error { return e.Err }
 var signIns = struct {
 	sync.Mutex
 	m map[string]*signInFlow
-}{m: map[string]*signInFlow{}}
+	// pending are area sign-ins started and not yet listed
+	// (reserveSignIn), by agent
+	pending map[string]*signInFlow
+}{m: map[string]*signInFlow{}, pending: map[string]*signInFlow{}}
 
 func randomToken(n int) string {
 	b := make([]byte, n)
@@ -395,6 +413,9 @@ func StartSignInAt(agent, site string) (SignInState, error) {
 func StartSignInWith(agent string, o SignInOptions) (SignInState, error) {
 	s := &signInFlow{verifier: randomToken(48), state: randomToken(24), done: make(chan struct{}), site: o.Site}
 	s.st = SignInState{ID: randomToken(9), Agent: agent, State: "waiting"}
+	if err := reserveSignIn(s, o); err != nil {
+		return SignInState{}, err
+	}
 	logSignIn(SignInState{ID: s.st.ID, Agent: agent, User: strings.TrimSpace(o.User)}, "started", 0, "")
 	// one that couldn't start ends here, logged as failed by finish
 	failed := func(err error) (SignInState, error) {
@@ -453,8 +474,12 @@ func StartSignInWith(agent string, o SignInOptions) (SignInState, error) {
 func replaceSignIns(s *signInFlow) {
 	var old []*signInFlow
 	signIns.Lock()
+	if signIns.pending[s.st.Agent] == s {
+		delete(signIns.pending, s.st.Agent)
+	}
 	for id, o := range signIns.m {
-		if o.st.Agent == s.st.Agent {
+		// an area's is never replaced: no other starts beside it
+		if o.st.Agent == s.st.Agent && !o.area {
 			old = append(old, o)
 			delete(signIns.m, id)
 		}
@@ -871,6 +896,7 @@ func (s *signInFlow) finish(out SignInState) bool {
 		return false
 	}
 	s.finished = true
+	s.over.Store(true)
 	back := false
 	if out.State == "done" {
 		// signed in to an account listed already, or, started for one, to
@@ -880,10 +906,13 @@ func (s *signInFlow) finish(out SignInState) bool {
 			out.For = s.user
 		}
 		back = slices.Contains(s.lapsed, accountKey(out.User))
-		agent, proxy, chosen := s.st.Agent, s.proxy, s.chosen
+		agent, proxy, chosen, onDone := s.st.Agent, s.proxy, s.chosen, s.onDone
 		s.mu.Unlock()
 		// signing in again brings back an account removed from magpie
 		_ = ShowAccount(agent)
+		if onDone != nil {
+			out = onDone(out)
+		}
 		if !out.Again {
 			noteSignedIn(agent, out.User)
 		}
@@ -940,6 +969,7 @@ func (s *signInFlow) finish(out SignInState) bool {
 	case "canceled":
 		logSignIn(SignInState{ID: out.ID, Agent: out.Agent, User: user}, "canceled", 0, "")
 	}
+	unreserveSignIn(s)
 	close(s.done)
 	if stop != nil {
 		stop()
@@ -1005,7 +1035,7 @@ func (s *signInFlow) callback(w http.ResponseWriter, r *http.Request) {
 	l, err := s.exchange(ctx, q.Get("code"))
 	if err == nil {
 		var using bool
-		if err = keepLogin(ctx, func() (err error) { using, err = addLogin(l); return err }); err == nil {
+		if err = keepLogin(ctx, func() (err error) { using, err = addLoginOf(l, areaSignIn(ctx)); return err }); err == nil {
 			s.finish(SignInState{State: "done", User: l.User, Plan: l.Plan, Using: using})
 			signInPage(w, true, "You're signed in", fmt.Sprintf("%s is added to magpie. You can close this tab.", l.User))
 			return
@@ -1174,7 +1204,11 @@ func codexLogin(idToken, accessToken, refreshToken, accountID string) (savedLogi
 // the old, so one refresh token stays in one place. Its kept usage
 // reading goes (StaleAllowance): it was read under the old sign-in, and
 // for a minute it would answer for the new one, a refusal and all.
-func addLogin(l savedLogin) (using bool, err error) {
+func addLogin(l savedLogin) (using bool, err error) { return addLoginOf(l, false) }
+
+// addLoginOf is addLogin, for an area's sign-in (magpieOnly) the account
+// magpie's alone: the agent is signed in to it only when it was already.
+func addLoginOf(l savedLogin, magpieOnly bool) (using bool, err error) {
 	defer func() { // under the name it is kept by (codexName), once loginsMu is let go
 		if err == nil {
 			StaleAllowance(l.Agent, l.User)
@@ -1197,6 +1231,9 @@ func addLogin(l savedLogin) (using bool, err error) {
 	ls := readLogins()
 	l.User = codexName(ls, l)
 	using = !signedIn || sameLogin(live, l)
+	if magpieOnly {
+		using = signedIn && sameLogin(live, l)
+	}
 	if l.Agent == "claude" && claudeSetupToken(l.Auth) != "" {
 		// Claude Code itself can't be signed in to a setup-token: the
 		// account is magpie's alone, its own sign-in left as it is
