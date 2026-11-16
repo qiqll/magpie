@@ -12,6 +12,14 @@ where a request goes**: routing reads no area, and an area's accounts serve
 the owner's traffic as any other account does. Traffic stays the owner's
 to route.
 
+**What that means for trust.** An account an area adds serves the owner's
+requests and every gateway key's, so whoever holds that vendor account sees
+them where its vendor shows them: OpenAI's request logs (Responses store
+them by default), a relay's own logs. An area's admin can also remove its
+account, or add one that fails, and the requests it served go elsewhere.
+Give an area to someone you would trust with the traffic its accounts can
+take, or keep sensitive work off providers an area can add to.
+
 ## Source of truth
 
 | What | Where |
@@ -68,8 +76,10 @@ agent's (`codex`, `claude`, `copilot`, `gemini`, `antigravity`).
    requests through with no key, or a wrong one, as the owner's):
    - the connection's address (never a forwarding header) is this
      computer's, or on the admin allow list: else `403
-     admin_ip_not_allowed`. An empty list is this computer alone. A proxy
-     on this computer reaches magpie from loopback: limit it at the proxy.
+     admin_ip_not_allowed`. An empty list is this computer alone. A request
+     that reaches loopback through a proxy or tunnel here (a forwarding
+     header, magpie web's page port) is refused, or judged by the address
+     the proxy names when `MAGPIE_TRUST_PROXY=1`.
    - an enabled admin key (`access.Current`): else `401
      admin_key_required`, from loopback too;
    - the route's role: else `403 admin_console_only` / `admin_area_only`;
