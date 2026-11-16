@@ -6841,7 +6841,7 @@ function routingPage(part) {
       ? t("One slow to start isn't asked again: a group's member goes on to the next as above, and a provider an agent names itself is waited for, however long it takes.")
       : def.firstToken > 0
       ? t("One that hasn't begun answering after {n} is asked once more on the same account, before any of it reaches the agent — a group's member, and a provider an agent names itself too. Slow again, a group goes on to the next member, and the last one left is waited for. The vendor may bill the input of the try let go.", { n: took(def.firstToken * 1000) })
-      : t("Slow to start waits for every member, so nobody is asked again: pick a time for it above."), AGAIN_OPTS, def.slowAgain, "slowAgain");
+      : t("Slow to start waits for every member, so only a group with a time of its own asks again; providers named alone and the other groups wait. Pick a time above to ask them again too."), AGAIN_OPTS, def.slowAgain, "slowAgain");
   }
   async function setDefaults(d) {
     try {

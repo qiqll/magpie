@@ -4130,7 +4130,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// slow to start, the next member is asked (Group.FirstToken),
 			// or the same one again (slowSame)
 			hw.firstWait = time.Duration(firstToken) * time.Second
-			if left := groupBudget - time.Since(walkBegan); left < hw.firstWait {
+			// a group's walk has a budget; a provider named alone is
+			// timed by its first-token time only
+			if left := groupBudget - time.Since(walkBegan); isGroup && left < hw.firstWait {
 				// the members before it used the walk's time: it gets
 				// what is left, so the walk ends before the client's
 				hw.firstWait, hw.budgeted = max(left, time.Millisecond), true
@@ -4781,18 +4783,21 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// account (restSlow)
 			call.Status, call.Error = http.StatusGatewayTimeout, fmt.Sprintf("%s: no first token in %ds", c.p.Name, firstToken)
 			try.Status, try.Error, try.Fail = call.Status, call.Error, failSlow
+			spent := hw.budgeted || isGroup && time.Since(walkBegan) >= groupBudget
+			// asked once more, the same account, before the next (slowSame)
+			try.Same = slowSame && !spent
 			if hw.budgeted {
 				// cut short by the walk's budget, not slow of its own
 				// accord: nobody rests for it
 				call.Error = fmt.Sprintf("%s: no first token within the group's %ds budget", c.p.Name, int(groupBudget.Seconds()))
 				try.Error = call.Error
+			} else if try.Same {
+				// asked again at once: only the retry's slow start counts
+				// towards a rest, so one request counts once, as before
 			} else if rest, ok := restSlow(c, time.Now()); ok {
 				try.Rest = &rest
 			}
 			call.TTFT, call.FirstText, call.Flow, call.FirstReasoning = 0, 0, 0, 0
-			spent := hw.budgeted || time.Since(walkBegan) >= groupBudget
-			// asked once more, the same account, before the next (slowSame)
-			try.Same = slowSame && !spent
 			watched.attempt(call, try, c.p.ID, sent, hw, capture)
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 			if spent {

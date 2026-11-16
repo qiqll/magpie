@@ -563,7 +563,8 @@ func groupRoutes(mux *http.ServeMux) {
 			Replace bool `json:"replace"`
 			// defaults: a slow one asked once more of the same account
 			// (settings.SlowAgain)
-			SlowAgain bool `json:"slowAgain"`
+			// absent from an older page's body: kept as saved
+			SlowAgain *bool `json:"slowAgain"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			fail(rw, err)
@@ -632,7 +633,11 @@ func groupRoutes(mux *http.ServeMux) {
 		case "defaults":
 			// what every group follows when it sets no value of its own
 			// (jiezhengj on Discord: set once, not in each group)
-			err = settings.SetGroupDefaults(in.Sink, in.FirstToken, in.Patience, body.SlowAgain)
+			again := settings.Load().SlowAgain
+			if body.SlowAgain != nil {
+				again = *body.SlowAgain
+			}
+			err = settings.SetGroupDefaults(in.Sink, in.FirstToken, in.Patience, again)
 		case "pick":
 			// a Manual group's member every request goes to, and nothing
 			// else of it (#2489: the tray panel switches it)

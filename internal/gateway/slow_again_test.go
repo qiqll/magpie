@@ -120,8 +120,9 @@ func TestSlowAgainWaitsOutTheSecondTry(t *testing.T) {
 }
 
 // In a group, a member slow to start is asked once more of the same
-// account before the next member; slow again, the next is asked, and the
-// slow one rests as two slow starts in a row do.
+// account before the next member; slow again, the next is asked. One
+// request counts one slow start towards a rest, as before: the model
+// rests on its account only when a second request is slow too.
 func TestSlowAgainInAGroup(t *testing.T) {
 	fresh(t)
 	slowAgainOn(t, 1, true)
@@ -156,7 +157,21 @@ func TestSlowAgainInAGroup(t *testing.T) {
 		t.Fatalf("again slow: %d %s (a %d, b %d)", code, body, a.asked(), b.n)
 	}
 	r := s.trace.routes[len(s.trace.routes)-1]
-	if len(r.Tries) != 3 || !r.Tries[0].Same || r.Tries[0].Rest != nil || r.Tries[1].Same || r.Tries[1].Fail != failSlow || r.Tries[1].Rest == nil {
+	if len(r.Tries) != 3 || !r.Tries[0].Same || r.Tries[0].Rest != nil || r.Tries[1].Same || r.Tries[1].Fail != failSlow || r.Tries[1].Rest != nil {
 		t.Fatalf("tries: %+v", r.Tries)
+	}
+
+	// a second request slow on it again: now its model rests
+	a.mu.Lock()
+	a.slow = 4
+	a.mu.Unlock()
+	b.replies = append(b.replies, reply{200, "text/event-stream", chatStreamOK})
+	code, body = postAs(t, s, "", `{"model":"group/g",`+streamHi)
+	if code != 200 || !strings.Contains(body, "from b") || a.asked() != 4 {
+		t.Fatalf("second: %d %s (a %d)", code, body, a.asked())
+	}
+	r = s.trace.routes[len(s.trace.routes)-1]
+	if len(r.Tries) != 3 || r.Tries[0].Rest != nil || r.Tries[1].Rest == nil {
+		t.Fatalf("second tries: %+v", r.Tries)
 	}
 }
