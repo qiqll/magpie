@@ -336,6 +336,8 @@ var notYet = map[string]string{
 	"POST /api/gateway/restart":                  A,  // gateway_takeover.go
 	"GET /api/gateway/users":                     A,  // gateway_users.go
 	"POST /api/gateway/users/unbind":             A,  // gateway_users.go
+	"GET /api/areas":                             A,  // areas.go: the owner's Areas on the Gateway page
+	"POST /api/areas/{action}":                   A,  // areas.go: areas, their admin keys, the console key and allow list
 	"POST /api/gateway/take-over":                A,  // gateway_takeover.go
 	"GET /api/importapps":                        P,  // importapps.go
 	"GET /api/importapps/discovery":              P,  // importapps.go
