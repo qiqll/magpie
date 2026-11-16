@@ -113,6 +113,14 @@ and reply bodies are in magpie-console's `docs/magpie-api.md`.
 - Adding a key claims it first and adds it after (a failed add releases
   it), so it is the area's from the moment it is in magpie. A key magpie
   has already is `409` and names no owner.
+- That `409` would let an area admin test whether some key or account is in
+  magpie, so each area's `409`s on `accounts/key` and
+  `signin/claude-token` are counted (`conflictProbes`, admin_probe.go):
+  after 20 in 10 minutes both routes answer that area `429
+  too_many_conflicts` with a `Retry-After`, whatever it sends, until the
+  oldest leaves the window. A held request is not run. The 20th is logged
+  with the area's id and the count, never the key. Other areas are not
+  held. The count is in memory: a restart clears it.
 - Removing goes through `gateway.Reseat` (`agent.Reseat` sets it), as the
   window's removal does, then releases the account. An account the owner
   already removed is only released.

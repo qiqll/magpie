@@ -93,14 +93,14 @@ func (s *Server) adminRoutesOn(mux *routeMux) {
 	mux.HandleFunc("GET "+AdminPath+"/me", s.admin("", s.adminMe))
 	mux.HandleFunc("GET "+AdminPath+"/options", s.admin(access.AdminArea, s.adminOptions))
 	mux.HandleFunc("GET "+AdminPath+"/accounts", s.admin(access.AdminArea, s.adminAccounts))
-	mux.HandleFunc("POST "+AdminPath+"/accounts/key", s.admin(access.AdminArea, s.adminAddKey))
+	mux.HandleFunc("POST "+AdminPath+"/accounts/key", s.admin(access.AdminArea, s.probeHeld(s.adminAddKey)))
 	mux.HandleFunc("POST "+AdminPath+"/accounts/remove", s.admin(access.AdminArea, s.adminRemove))
 	mux.HandleFunc("GET "+AdminPath+"/usage", s.admin(access.AdminArea, s.adminUsage))
 	mux.HandleFunc("POST "+AdminPath+"/signin", s.admin(access.AdminArea, s.adminSignIn))
 	mux.HandleFunc("GET "+AdminPath+"/signin/{id}", s.admin(access.AdminArea, s.adminSignInState))
 	mux.HandleFunc("POST "+AdminPath+"/signin/{id}/callback", s.admin(access.AdminArea, s.adminSignInCallback))
 	mux.HandleFunc("POST "+AdminPath+"/signin/{id}/cancel", s.admin(access.AdminArea, s.adminSignInCancel))
-	mux.HandleFunc("POST "+AdminPath+"/signin/claude-token", s.admin(access.AdminArea, s.adminClaudeToken))
+	mux.HandleFunc("POST "+AdminPath+"/signin/claude-token", s.admin(access.AdminArea, s.probeHeld(s.adminClaudeToken)))
 
 	mux.HandleFunc("GET "+AdminPath+"/catalog", s.admin(access.AdminConsole, s.adminCatalog))
 	mux.HandleFunc("GET "+AdminPath+"/areas", s.admin(access.AdminConsole, s.adminAreas))
@@ -179,6 +179,8 @@ func adminError(w http.ResponseWriter, status int, code, msg string) {
 		typ = "not_found_error"
 	case http.StatusServiceUnavailable:
 		typ = "api_error"
+	case http.StatusTooManyRequests:
+		typ = "rate_limit_error"
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, status, map[string]any{"error": map[string]any{"message": msg, "type": typ, "code": code}})
