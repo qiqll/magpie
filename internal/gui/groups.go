@@ -65,7 +65,7 @@ type groupsJSON struct {
 	// none
 	GatewayKeys []groupKeyJSON `json:"gatewayKeys"`
 	// Defaults: what every group follows when it sets no value of its own
-	// (settings.GroupSink, GroupFirstToken, GroupPatience)
+	// (settings.GroupSink, GroupFirstToken, GroupPatience, SlowAgain)
 	Defaults groupDefaultsJSON `json:"defaults"`
 }
 
@@ -97,6 +97,7 @@ type groupDefaultsJSON struct {
 	Sink       bool `json:"sink"`
 	FirstToken int  `json:"firstToken"`
 	Patience   int  `json:"patience"`
+	SlowAgain  bool `json:"slowAgain"`
 }
 
 type skippableJSON struct {
@@ -346,7 +347,7 @@ func groupsState() groupsJSON {
 	out := groupsJSON{Groups: []groupJSON{}, Models: []modelRef{}, Pools: []poolJSON{}, Deciders: []modelRef{}, Drawers: []modelRef{}, Found: provider.AutoGroupsOn(), Templates: provider.Templates(),
 		Clock: clockJSON{Zone: provider.LocalZone(), Offset: offset}}
 	def := settings.Load()
-	out.Defaults = groupDefaultsJSON{Sink: def.GroupSink, FirstToken: def.GroupFirstToken, Patience: def.GroupPatience}
+	out.Defaults = groupDefaultsJSON{Sink: def.GroupSink, FirstToken: def.GroupFirstToken, Patience: def.GroupPatience, SlowAgain: def.SlowAgain}
 	for i := range out.Templates {
 		if out.Templates[i].Group.Members == nil {
 			out.Templates[i].Group.Members = []string{} // one that can't be made has none
@@ -560,6 +561,9 @@ func groupRoutes(mux *http.ServeMux) {
 			// Replace: the text's id, when it is a group of the user's,
 			// replaces that group (provider.ImportGroupOver)
 			Replace bool `json:"replace"`
+			// defaults: a slow one asked once more of the same account
+			// (settings.SlowAgain)
+			SlowAgain bool `json:"slowAgain"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			fail(rw, err)
@@ -628,7 +632,7 @@ func groupRoutes(mux *http.ServeMux) {
 		case "defaults":
 			// what every group follows when it sets no value of its own
 			// (jiezhengj on Discord: set once, not in each group)
-			err = settings.SetGroupDefaults(in.Sink, in.FirstToken, in.Patience)
+			err = settings.SetGroupDefaults(in.Sink, in.FirstToken, in.Patience, body.SlowAgain)
 		case "pick":
 			// a Manual group's member every request goes to, and nothing
 			// else of it (#2489: the tray panel switches it)

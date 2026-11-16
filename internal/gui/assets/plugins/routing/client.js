@@ -1563,6 +1563,9 @@ function routingPage(part) {
       return r.tries[i + 1]
         ? t("{who} answered {status}: its plan doesn't take the reasoning effort asked for, so another account goes on with it before any of the reply reaches {agent}. {who} serves other efforts, so it doesn't rest.", { who: name, status: tr.status, agent })
         : t("{who} answered {status}: its plan doesn't take the reasoning effort asked for, and no account left that does could answer, so {agent} gets an error saying so.", { who: name, status: tr.status, agent });
+    // asked once more of the same account (settings' slowAgain)
+    if (tr.fail === "slow" && tr.same)
+      return t("{who} hadn't begun answering after {ms}, so it is asked once more on the same account, before any of it reaches {agent} (Slow to start: ask again).", { who: name, ms: took(tr.ms), agent });
     if (tr.fail === "slow")
       return !next && r.done
         ? t("{who} hadn't begun answering after {ms}, and nobody is left to try, so {agent} gets the error.", { who: name, ms: took(tr.ms), agent })
@@ -5850,8 +5853,11 @@ function routingPage(part) {
   const gNames = el("div", "rt-gnames");
   // what every group does that sets none of its own when one is rate
   // limited, slow to start, or every member is busy (jiezhengj on Discord:
-  // set once rather than in each group); a group's editor sets its own
-  const gDefs = [el("div", "rt-gdef rt-gdef-sink"), el("div", "rt-gdef rt-gdef-first"), el("div", "rt-gdef rt-gdef-patience")];
+  // set once rather than in each group); a group's editor sets its own.
+  // The last, whether one slow to start is asked once more of the same
+  // account, is for every group and a provider named alone (settings'
+  // slowAgain)
+  const gDefs = [el("div", "rt-gdef rt-gdef-sink"), el("div", "rt-gdef rt-gdef-first"), el("div", "rt-gdef rt-gdef-patience"), el("div", "rt-gdef rt-gdef-again")];
   // the groups go with the routing groups built-in plugin; the pools stay
   for (const n of [gHead, gFound, gNames, ...gDefs, gList]) n.dataset.feature = "groups";
   // and off (the Essentials preset leaves it off), where they were
@@ -5930,6 +5936,9 @@ function routingPage(part) {
   // the default for every group has it (settings' groupPatience: 0 is the
   // 60s default, -1 off)
   const PATIENCE_OPTS = [[-1, "Off"], [0, "1 min"], [120, "2 min"], [240, "4 min"]];
+  // whether one slow to start is asked once more of the same account
+  // before the next (settings' slowAgain)
+  const AGAIN_OPTS = [[false, "Off"], [true, "Same account once"]];
   // a group's own (provider.Group): 0 follows the default for every group,
   // so Wait is -1 (FirstTokenWait), 1 min a Patience of 60, and Keeps its
   // place NoSink (jiezhengj on Discord: set once, not in each group)
@@ -5941,7 +5950,7 @@ function routingPage(part) {
   const groupDefaults = () => {
     const d = groups?.defaults || {};
     return { sink: d.sink === true, firstToken: Number.isInteger(d.firstToken) && d.firstToken > 0 ? d.firstToken : 0,
-      patience: Number.isInteger(d.patience) && d.patience >= -1 ? d.patience : 0 };
+      patience: Number.isInteger(d.patience) && d.patience >= -1 ? d.patience : 0, slowAgain: d.slowAgain === true };
   };
   const patienceWord = (n) => {
     if (n === 60) n = 0;
@@ -6828,10 +6837,15 @@ function routingPage(part) {
       ? t("When every member has failed, the agent gets the last one's error at once.")
       : t("When every member has failed with an error that may pass — overloaded, unavailable, rate limited for a moment — and nothing of the reply has reached the agent, each is asked again after a pause, longer each time and never shorter than the vendor asks, for up to {n} more. A streaming agent is kept waiting meanwhile.", { n: patienceWord(def.patience) }),
       PATIENCE_OPTS, def.patience === 60 ? 0 : def.patience, "patience");
+    row(gDefs[3], "Slow to start: ask again", !def.slowAgain
+      ? t("One slow to start isn't asked again: a group's member goes on to the next as above, and a provider an agent names itself is waited for, however long it takes.")
+      : def.firstToken > 0
+      ? t("One that hasn't begun answering after {n} is asked once more on the same account, before any of it reaches the agent — a group's member, and a provider an agent names itself too. Slow again, a group goes on to the next member, and the last one left is waited for. The vendor may bill the input of the try let go.", { n: took(def.firstToken * 1000) })
+      : t("Slow to start waits for every member, so nobody is asked again: pick a time for it above."), AGAIN_OPTS, def.slowAgain, "slowAgain");
   }
   async function setDefaults(d) {
     try {
-      const next = groupsFrom(await api("groups/defaults", { sink: d.sink === true || d.sink === "sink", firstToken: d.firstToken, patience: d.patience }));
+      const next = groupsFrom(await api("groups/defaults", { sink: d.sink === true || d.sink === "sink", firstToken: d.firstToken, patience: d.patience, slowAgain: d.slowAgain === true }));
       groups.defaults = next.defaults;
       drawDefaults();
       // an open editor's Default rows say the value they follow

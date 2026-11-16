@@ -547,6 +547,13 @@ type Settings struct {
 	GroupSink       bool `json:"groupSink,omitempty"`
 	GroupFirstToken int  `json:"groupFirstToken,omitempty"`
 	GroupPatience   int  `json:"groupPatience,omitempty"`
+	// SlowAgain asks a member, or a provider an agent names alone, once
+	// more of the same account when it hasn't begun answering in the
+	// seconds a member is given (a group's FirstTokenOr; GroupFirstToken
+	// for a provider named alone), before the next is asked or, the last
+	// one left, before it is waited for to the end. Off, as before. The
+	// try let go may be billed its input: the user's to choose.
+	SlowAgain bool `json:"slowAgain,omitempty"`
 	// BusyLoad puts a model whose plugin reports it busier than this
 	// percent behind the others it could go to (plugin.ModelLoad,
 	// axelburks on Discord): from 1 to BusyLoadMost-1, past 100 for a
@@ -2134,17 +2141,17 @@ func SetProxies(ps []SavedProxy) error {
 }
 
 // SetGroupDefaults sets what every routing group follows when it sets no
-// value of its own (GroupSink, GroupFirstToken, GroupPatience), from what
+// value of its own (GroupSink, GroupFirstToken, GroupPatience, SlowAgain), from what
 // the file holds now, so a save elsewhere from an older snapshot isn't
 // undone. A settings file that can't be read is left as it is, with the
 // error.
-func SetGroupDefaults(sink bool, firstToken, patience int) error {
+func SetGroupDefaults(sink bool, firstToken, patience int, slowAgain bool) error {
 	defer lockFile()()
 	s, err := loadChecked()
 	if err != nil {
 		return err
 	}
-	s.GroupSink, s.GroupFirstToken, s.GroupPatience = sink, firstToken, patience
+	s.GroupSink, s.GroupFirstToken, s.GroupPatience, s.SlowAgain = sink, firstToken, patience, slowAgain
 	return save(s, false)
 }
 

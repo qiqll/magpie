@@ -3,7 +3,7 @@
 // every member is busy is set once, in the Settings card under the groups
 // (jiezhengj on Discord: each group had to be set on its own). Each row
 // picks its value in the app's segments and posts groups/defaults with all
-// three at once; a group's editor opens on Default for those it sets none
+// of them at once (and whether one slow to start is asked again, slowAgain); a group's editor opens on Default for those it sets none
 // of, its hint saying the value it follows, and the group's own pick still
 // wins. In five languages, Chromium and WebKit, at 1100 and 420, with no
 // native select and nothing past the window's side.
@@ -48,7 +48,7 @@ function serve(lang, posts, st) {
     if (url.pathname.startsWith("/api/groups/")) {
       const body = JSON.parse(r.request().postData() || "{}");
       posts.push({ path: url.pathname, body });
-      if (url.pathname === "/api/groups/defaults") st.defaults = { sink: !!body.sink, firstToken: body.firstToken || 0, patience: body.patience || 0 };
+      if (url.pathname === "/api/groups/defaults") st.defaults = { sink: !!body.sink, firstToken: body.firstToken || 0, patience: body.patience || 0, slowAgain: !!body.slowAgain };
       if (url.pathname === "/api/groups/save") st.group = { sink: !!body.sink, noSink: !!body.noSink, firstToken: body.firstToken || 0, patience: body.patience || 0 };
       return json(groups());
     }
@@ -107,20 +107,26 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       // the Settings card under the list: each row says what it is and
       // starts at magpie's own
       const set = page.locator(".rt-gset");
-      const sink = set.locator(".rt-gdef-sink"), first = set.locator(".rt-gdef-first"), pat = set.locator(".rt-gdef-patience");
-      await reach(pat);
+      const sink = set.locator(".rt-gdef-sink"), first = set.locator(".rt-gdef-first"), pat = set.locator(".rt-gdef-patience"), again = set.locator(".rt-gdef-again");
+      await reach(again);
       assert.equal((await sink.locator("b").textContent()).trim(), await tr("Rate limited"));
       assert.equal((await first.locator("b").textContent()).trim(), await tr("Slow to start"));
       assert.equal((await pat.locator("b").textContent()).trim(), await tr("Every member busy"));
       assert.equal(await on(sink), await tr("Keeps its place"));
       assert.equal(await on(first), await tr("Wait"));
       assert.equal(await on(pat), await tr("1 min"));
+      assert.equal((await again.locator("b").textContent()).trim(), await tr("Slow to start: ask again"));
+      assert.equal(await on(again), await tr("Off"));
       assert.equal(await page.locator("select").count(), 0, "no native select");
 
       // each pick posts all three, the others as they are
-      assert.deepEqual(await pick(sink, await tr("Goes to the back")), { sink: true, firstToken: 0, patience: 0 });
-      assert.deepEqual(await pick(first, await tr("1 min")), { sink: true, firstToken: 60, patience: 0 });
-      assert.deepEqual(await pick(pat, await tr("Off")), { sink: true, firstToken: 60, patience: -1 });
+      assert.deepEqual(await pick(sink, await tr("Goes to the back")), { sink: true, firstToken: 0, patience: 0, slowAgain: false });
+      // asked again with no first-token time: the hint says to pick one
+      assert.deepEqual(await pick(again, await tr("Same account once")), { sink: true, firstToken: 0, patience: 0, slowAgain: true });
+      assert.equal((await again.locator("small").textContent()).trim(), await tr("Slow to start waits for every member, so nobody is asked again: pick a time for it above."));
+      assert.deepEqual(await pick(first, await tr("1 min")), { sink: true, firstToken: 60, patience: 0, slowAgain: true });
+      assert.deepEqual(await pick(pat, await tr("Off")), { sink: true, firstToken: 60, patience: -1, slowAgain: true });
+      assert((await again.locator("small").textContent()).includes(await tr("{n} s", { n: 60 })), "the again hint says the time");
       assert((await first.locator("small").textContent()).includes(await tr("{n} s", { n: 60 })), "the hint says what the value does");
       assert((await pat.locator("small").textContent()).includes(await tr("When every member has failed, the agent gets the last one's error at once.")));
       const fits = () => page.evaluate(() => {
@@ -174,6 +180,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const missing = await page.evaluate(() => [
         "As set for every group under the list: {v}.", "Default", "Rate limited", "Slow to start", "Every member busy",
         "Keeps its place", "Goes to the back", "Wait", "Off", "30 s", "1 min", "2 min", "4 min",
+        "Slow to start: ask again", "Same account once", "Slow to start waits for every member, so nobody is asked again: pick a time for it above.",
+        "One slow to start isn't asked again: a group's member goes on to the next as above, and a provider an agent names itself is waited for, however long it takes.",
+        "One that hasn't begun answering after {n} is asked once more on the same account, before any of it reaches the agent — a group's member, and a provider an agent names itself too. Slow again, a group goes on to the next member, and the last one left is waited for. The vendor may bill the input of the try let go.",
       ].flatMap((k) => ["zh", "zh-TW", "ja", "de"].filter((l) => !I18N[l][k]).map((l) => l + ": " + k)));
       assert.deepEqual(missing, [], "every string has its zh, zh-TW, ja and de");
       assert.deepEqual(errors, []);

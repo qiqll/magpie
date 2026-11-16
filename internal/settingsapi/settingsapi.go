@@ -48,7 +48,7 @@ var Keys = []string{
 	"replyModel", "noLoopGuard", "claudeLeanPrompt", "claudePrintMode", "refusalRetries", "retryAfterCap",
 	"vision", "visionEffort", "imageGen", "videoGen", "imageTimeout", "classifyTimeout",
 	// what every routing group does that says nothing of its own
-	"groupSink", "groupFirstToken", "groupPatience",
+	"groupSink", "groupFirstToken", "groupPatience", "slowAgain",
 	"searcher", "searcherThen", "searcherEffort", "searchFirst",
 	// updates
 	"noUpdatePill", "noAutoUpdate", "updateEvery", "noAutoDownload", "autoRestart", "updateChannel",
@@ -227,6 +227,9 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	}
 	if _, sent := fields["groupPatience"]; !sent {
 		in.GroupPatience = cur.GroupPatience
+	}
+	if _, sent := fields["slowAgain"]; !sent {
+		in.SlowAgain = cur.SlowAgain
 	}
 	// nor whether animations are stilled (#3813)
 	if _, sent := fields["reduceMotion"]; !sent {

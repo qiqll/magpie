@@ -9,7 +9,8 @@
 // (a key, #1772), or was slow to begin, says nobody is left, not that the
 // request goes on; the last one out of its allowance after another failed
 // says the agent got the earlier error (Try.Earlier). A member slow to
-// begin again and again (小八 on Discord) says its model rests there.
+// begin again and again (小八 on Discord) says its model rests there, and
+// one asked once more of the same account (slowAgain) says so.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -68,6 +69,15 @@ const routes = [{
     { id: agB.id, model: agB.model, start: at(4), done: true, status: 200, ms: 4000 },
   ],
   done: true, status: 200, ms: 34000,
+}, {
+  // slow to begin, asked once more of the same one (settings' slowAgain),
+  // which answered
+  id: 99, seq: 99, time: at(5), agent: "claude", model: "slowpoke/claude-sonnet-4-6", provider: "slowpoke", order: [slow],
+  tries: [
+    { id: slow.id, model: slow.model, start: at(5), done: true, status: 504, ms: 30000, fail: "slow", same: true, error: "Slowpoke: no first token in 30s" },
+    { id: slow.id, model: slow.model, start: at(5), done: true, status: 200, ms: 4000 },
+  ],
+  done: true, status: 200, ms: 34000,
 }];
 
 function serve(lang) {
@@ -102,19 +112,19 @@ function serve(lang) {
 const want = {
   en: { went: "and the request goes on to b@example.com before any of the reply reaches Claude Code", gets: ["wouldn't fix", "so Claude Code gets"], passed: "passed to", row: "went on to the next",
     left: "nobody is left to try, so Claude Code gets the error", on: "goes on to", earlier: "Claude Code gets the error an earlier try gave",
-    rests: "It rests 1 min for claude-sonnet-4-6 alone", calm: "so it doesn't rest" },
+    rests: "It rests 1 min for claude-sonnet-4-6 alone", calm: "so it doesn't rest", same: "asked once more on the same account" },
   zh: { went: "请求在回复到达 Claude Code 前转给 b@example.com", gets: ["换账号也无法解决", "Claude Code 收到此错误"], passed: "已交给", row: "已转给下一个",
     left: "且无其他可试，Claude Code 收到此错误", on: "转给", earlier: "Claude Code 收到的是此前某次尝试的错误",
-    rests: "连续 2 次", calm: "不休息" },
+    rests: "连续 2 次", calm: "不休息", same: "在同一账号上再问一次" },
   "zh-TW": { went: "請求在回覆到達 Claude Code 前轉給 b@example.com", gets: ["換帳號也無法解決", "Claude Code 收到此錯誤"], passed: "已交給", row: "已轉給下一個",
     left: "且無其他可試，Claude Code 收到此錯誤", on: "轉給", earlier: "Claude Code 收到的是先前某次嘗試的錯誤",
-    rests: "連續 2 次", calm: "不休息" },
+    rests: "連續 2 次", calm: "不休息", same: "在同一帳號上再問一次" },
   ja: { went: "リクエストは b@example.com に回ります", gets: ["別のアカウントでも解決しない", "Claude Code に届きます"], passed: "渡しました", row: "次に回しました",
     left: "他に試せる相手がいないため、Claude Code にエラーが届きます", on: "に回ります", earlier: "それより前の試行のエラー",
-    rests: "2 回続いた", calm: "休止しません" },
+    rests: "2 回続いた", calm: "休止しません", same: "同じアカウントでもう一度問い合わせます" },
   de: { went: "die Anfrage geht an b@example.com, bevor etwas von der Antwort Claude Code erreicht", gets: ["nicht beheben würde", "daher erhält Claude Code ihn"], passed: "übergeben", row: "an den nächsten weitergegeben",
     left: "es bleibt niemand zum Versuchen, daher erhält Claude Code den Fehler", on: "geht an", earlier: "Claude Code erhält den Fehler eines früheren Versuchs",
-    rests: "2-mal hintereinander", calm: "daher pausiert es nicht" },
+    rests: "2-mal hintereinander", calm: "daher pausiert es nicht", same: "einmal mehr auf demselben Konto gefragt" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -182,6 +192,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const sr = steps.find((s) => s.includes("a@example.com (") && s.includes("30"));
         assert(sr, JSON.stringify(steps));
         assert(sr.includes(w.rests) && sr.includes("claude-sonnet-4-6") && !sr.includes(w.calm), sr);
+
+        // slow to begin, asked once more of the same one: not "nobody is left"
+        steps = await stepsOf(5);
+        const sa = steps.find((s) => s.includes("Slowpoke (") && s.includes("30"));
+        assert(sa, JSON.stringify(steps));
+        assert(sa.includes(w.same) && !sa.includes(w.left), sa);
 
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "the page scrolls sideways");
         assert.deepEqual(errors, []);

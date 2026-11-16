@@ -3890,6 +3890,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	}()
 	nearBehind := map[string]bool{} // accounts near their cap moved behind the rest once
 	var nearInKey time.Duration     // the key's slot waited for before an account's turn near its cap
+	// the candidates (restID) already asked once more for being slow to
+	// start (settings' SlowAgain): once a request, each
+	slowAsked := map[string]bool{}
 	for i := 0; i < len(cands); i++ {
 		// a group's member is narrowed to its user's own as the tries
 		// reach its provider, another user's left out (groupTurn). Run
@@ -4044,7 +4047,27 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// asked again, of it or of the next candidate. Only a stream the
 		// agent has the headers of already is held, to be told in it
 		pass := c.p.PassesErrors()
-		hw := newHoldWriter(w, kept.sent || !pass && (!last || again < max(lastRetries, rateRetries) || other != nil || autoPicks(c) && repicked < 2 ||
+		// a member of a group in the group is timed by the innermost
+		// group that sets a FirstToken (#2246), else by the group asked
+		// for, which follows the default for every group when it sets none
+		firstToken := c.firstToken
+		if firstToken == 0 && isGroup {
+			firstToken = g.FirstTokenOr()
+		}
+		// slow to start, the same one is asked once more before the next
+		// is, or before the last one left is waited for to the end
+		// (settings' SlowAgain): held for it, as one before the last is.
+		// A provider named alone is timed by the default for every group
+		slowSame := false
+		if streams && !pass && !slowAsked[c.restID()] {
+			if set := settings.Load(); set.SlowAgain {
+				if firstToken == 0 && !isGroup {
+					firstToken = set.GroupFirstToken
+				}
+				slowSame = firstToken > 0
+			}
+		}
+		hw := newHoldWriter(w, kept.sent || !pass && (!last || slowSame || again < max(lastRetries, rateRetries) || other != nil || autoPicks(c) && repicked < 2 ||
 			patience > 0 && rounds < replanRounds && (waitFrom.IsZero() || time.Since(waitFrom) < patience) || wantWhole))
 		// a compaction's summary is held to its end, for a cut or an
 		// error halfway to go to the next candidate (#2274)
@@ -4103,15 +4126,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			hw.loop = &loopGuard{}
 			hw.reloop = reloops < loopReasks && !pass
 		}
-		// a member of a group in the group is timed by the innermost
-		// group that sets a FirstToken (#2246), else by the group asked
-		// for, which follows the default for every group when it sets none
-		firstToken := c.firstToken
-		if firstToken == 0 && isGroup {
-			firstToken = g.FirstTokenOr()
-		}
-		if isGroup && firstToken > 0 && !last && streams && !pass {
-			// slow to start, the next member is asked (Group.FirstToken)
+		if firstToken > 0 && streams && !pass && (isGroup && !last || slowSame) {
+			// slow to start, the next member is asked (Group.FirstToken),
+			// or the same one again (slowSame)
 			hw.firstWait = time.Duration(firstToken) * time.Second
 			if left := groupBudget - time.Since(walkBegan); left < hw.firstWait {
 				// the members before it used the walk's time: it gets
@@ -4773,9 +4790,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				try.Rest = &rest
 			}
 			call.TTFT, call.FirstText, call.Flow, call.FirstReasoning = 0, 0, 0, 0
+			spent := hw.budgeted || time.Since(walkBegan) >= groupBudget
+			// asked once more, the same account, before the next (slowSame)
+			try.Same = slowSame && !spent
 			watched.attempt(call, try, c.p.ID, sent, hw, capture)
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
-			if hw.budgeted || time.Since(walkBegan) >= groupBudget {
+			if spent {
 				// the group's time is spent: no further member is asked
 				// to start after the client has given up, and the error
 				// names the budget (#5113)
@@ -4784,10 +4804,19 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				failTo(w, kept, from, call.Status, msg)
 				break
 			}
+			skipped = append(skipped, c.label()+": "+call.Error)
+			if try.Same {
+				// asked again at once, as the user chose (settings'
+				// SlowAgain): its rest, if this was its second slow start
+				// in a row, keeps it last for later requests. Not an
+				// earlier failure to tell in place of its own next one
+				slowAsked[c.restID()] = true
+				i--
+				continue
+			}
 			if other == nil {
 				other = &Try{Status: call.Status, Error: call.Error, errType: call.Usage.ErrType}
 			}
-			skipped = append(skipped, c.label()+": "+call.Error)
 			continue
 		}
 		if hw.relooped {
