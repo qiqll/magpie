@@ -1,0 +1,357 @@
+// Package area keeps the areas the owner hands out (docs/subsystems/areas.md):
+// a note such as 学习 or 工作, the provider accounts it owns, and what its
+// admin may add. An area decides who may manage an account and see what it
+// spent, never where a request goes: routing reads no area.
+//
+// It is a leaf: access and provider both read it, so it imports neither.
+package area
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/edit"
+	"github.com/yetone/magpie/internal/filelock"
+)
+
+// Area is one area as areas.json holds it.
+type Area struct {
+	ID      string    `json:"id"`
+	Note    string    `json:"note"`
+	Off     bool      `json:"off,omitempty"`
+	Created time.Time `json:"created"`
+	// Providers are the providers whose API keys the area's admin may
+	// add; SignIns the subscriptions it may sign in to. Both are the
+	// owner's to set.
+	Providers []string `json:"providers,omitempty"`
+	SignIns   []string `json:"signIns,omitempty"`
+	// Accounts are the accounts it owns, as access.Key.Accounts writes
+	// them: "<provider>/<login id>" or "<provider>/<key fingerprint>".
+	Accounts []Account `json:"accounts,omitempty"`
+}
+
+// Account is an account an area owns, and since when: what it spent
+// counts from then.
+type Account struct {
+	Ref   string    `json:"ref"`
+	Added time.Time `json:"added"`
+}
+
+// Has says whether the area owns ref.
+func (a Area) Has(ref string) bool {
+	return slices.ContainsFunc(a.Accounts, func(c Account) bool { return c.Ref == ref })
+}
+
+type file struct {
+	Version int    `json:"version"`
+	Areas   []Area `json:"areas"`
+}
+
+var (
+	ErrNotFound   = errors.New("no such area")
+	ErrNotEmpty   = errors.New("the area still owns accounts: delete them, or take them back, first")
+	ErrTaken      = errors.New("the account is already in magpie")
+	ErrNoteInUse  = errors.New("another area has this note")
+	ErrUnreadable = errors.New("areas.json can't be read")
+)
+
+// Path is areas.json, beside settings.json.
+func Path() string { return filepath.Join(appdir.Config(), "areas.json") }
+
+var mu = filelock.Mutex{Path: func() string { return Path() + ".lock" }}
+
+// last is the last good read, by the file's size and time: a read that
+// fails keeps it (unknown is never taken for "no areas"), and a reader
+// on every request doesn't parse the file each time.
+var last struct {
+	sync.Mutex
+	size, mod int64
+	read      bool
+	areas     []Area
+}
+
+// List is every area. A file that can't be read or parsed gives the last
+// good read, and ErrUnreadable with none since magpie started.
+func List() ([]Area, error) {
+	fi, err := os.Stat(Path())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	last.Lock()
+	defer last.Unlock()
+	if err == nil && last.read && last.size == fi.Size() && last.mod == fi.ModTime().UnixNano() {
+		return clone(last.areas), nil
+	}
+	areas, rerr := load()
+	if rerr != nil || err != nil {
+		if last.read {
+			return clone(last.areas), nil
+		}
+		return nil, ErrUnreadable
+	}
+	last.size, last.mod, last.read, last.areas = fi.Size(), fi.ModTime().UnixNano(), true, areas
+	return clone(areas), nil
+}
+
+// Get is the area id names.
+func Get(id string) (Area, error) {
+	areas, err := List()
+	if err != nil {
+		return Area{}, err
+	}
+	for _, a := range areas {
+		if a.ID == id {
+			return a, nil
+		}
+	}
+	return Area{}, ErrNotFound
+}
+
+// Owner is the id of the area that owns ref, "" for none. A ref two areas
+// claim (areas.json written by hand) is owned by neither, and contested
+// says so: no admin manages it until the owner settles it.
+func Owner(ref string) (id string, contested bool, err error) {
+	areas, err := List()
+	if err != nil {
+		return "", false, err
+	}
+	for _, a := range areas {
+		if a.Has(ref) {
+			if id != "" {
+				return "", true, nil
+			}
+			id = a.ID
+		}
+	}
+	return id, false, nil
+}
+
+// Spec is what the owner sets when making or changing an area.
+type Spec struct {
+	Note      *string
+	Off       *bool
+	Providers *[]string
+	SignIns   *[]string
+}
+
+// Create makes an area.
+func Create(note string, providers, signIns []string) (Area, error) {
+	note, err := checkNote(note)
+	if err != nil {
+		return Area{}, err
+	}
+	var made Area
+	err = change(func(f *file) error {
+		if noteInUse(f.Areas, note, "") {
+			return ErrNoteInUse
+		}
+		made = Area{ID: newID(), Note: note, Created: time.Now().UTC(), Providers: tidy(providers), SignIns: tidy(signIns)}
+		f.Areas = append(f.Areas, made)
+		return nil
+	})
+	return made, err
+}
+
+// Update changes what s sets of the area id.
+func Update(id string, s Spec) (Area, error) {
+	var note string
+	if s.Note != nil {
+		n, err := checkNote(*s.Note)
+		if err != nil {
+			return Area{}, err
+		}
+		note = n
+	}
+	var got Area
+	err := change(func(f *file) error {
+		i := index(f.Areas, id)
+		if i < 0 {
+			return ErrNotFound
+		}
+		a := &f.Areas[i]
+		if s.Note != nil {
+			if noteInUse(f.Areas, note, id) {
+				return ErrNoteInUse
+			}
+			a.Note = note
+		}
+		if s.Off != nil {
+			a.Off = *s.Off
+		}
+		if s.Providers != nil {
+			a.Providers = tidy(*s.Providers)
+		}
+		if s.SignIns != nil {
+			a.SignIns = tidy(*s.SignIns)
+		}
+		got = *a
+		return nil
+	})
+	return got, err
+}
+
+// Delete removes an area that owns no account.
+func Delete(id string) error {
+	return change(func(f *file) error {
+		i := index(f.Areas, id)
+		if i < 0 {
+			return ErrNotFound
+		}
+		if len(f.Areas[i].Accounts) > 0 {
+			return ErrNotEmpty
+		}
+		f.Areas = slices.Delete(f.Areas, i, i+1)
+		return nil
+	})
+}
+
+// Claim gives ref to the area id. An account any area owns already is
+// ErrTaken, whichever area: who owns it is not said.
+func Claim(id, ref string) error {
+	return change(func(f *file) error {
+		i := index(f.Areas, id)
+		if i < 0 {
+			return ErrNotFound
+		}
+		for _, a := range f.Areas {
+			if a.Has(ref) {
+				return ErrTaken
+			}
+		}
+		f.Areas[i].Accounts = append(f.Areas[i].Accounts, Account{Ref: ref, Added: time.Now().UTC()})
+		return nil
+	})
+}
+
+// Release takes ref from whichever area owns it; one no area owns is no
+// error, so the owner's removal of any account may call it.
+func Release(ref string) error {
+	return change(func(f *file) error {
+		for i := range f.Areas {
+			f.Areas[i].Accounts = slices.DeleteFunc(f.Areas[i].Accounts, func(c Account) bool { return c.Ref == ref })
+		}
+		return nil
+	})
+}
+
+// Rename moves ownership of from to to (a key's value replaced in place
+// gets a new fingerprint), in whichever area owns it.
+func Rename(from, to string) error {
+	if from == to {
+		return nil
+	}
+	return change(func(f *file) error {
+		for i := range f.Areas {
+			for j := range f.Areas[i].Accounts {
+				if f.Areas[i].Accounts[j].Ref == from {
+					f.Areas[i].Accounts[j].Ref = to
+				}
+			}
+		}
+		return nil
+	})
+}
+
+// change reads areas.json afresh under the lock, applies fn and writes it
+// whole, through a temp file renamed over it. A file that can't be read is
+// never written over: what it held would be lost.
+func change(fn func(*file) error) error {
+	mu.Lock()
+	defer mu.Unlock()
+	areas, err := load()
+	if err != nil {
+		return err
+	}
+	f := file{Version: 1, Areas: areas}
+	if err := fn(&f); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(Path()), 0o755); err != nil {
+		return err
+	}
+	if err := edit.WriteAtomic(Path(), append(b, '\n')); err != nil {
+		return err
+	}
+	last.Lock()
+	last.read = false // read afresh next time
+	last.Unlock()
+	return nil
+}
+
+func load() ([]Area, error) {
+	b, err := os.ReadFile(Path())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnreadable, err)
+	}
+	var f file
+	if err := json.Unmarshal(b, &f); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnreadable, err)
+	}
+	return f.Areas, nil
+}
+
+// checkNote is note trimmed, or why it can't be one: 1 to 40 characters,
+// none of them a control character.
+func checkNote(note string) (string, error) {
+	note = strings.TrimSpace(note)
+	if n := utf8.RuneCountInString(note); n < 1 || n > 40 {
+		return "", errors.New("an area's note is 1 to 40 characters")
+	}
+	if strings.ContainsFunc(note, unicode.IsControl) {
+		return "", errors.New("an area's note can't hold control characters")
+	}
+	return note, nil
+}
+
+func noteInUse(areas []Area, note, except string) bool {
+	return slices.ContainsFunc(areas, func(a Area) bool { return a.ID != except && strings.EqualFold(a.Note, note) })
+}
+
+func index(areas []Area, id string) int {
+	return slices.IndexFunc(areas, func(a Area) bool { return a.ID == id })
+}
+
+func tidy(ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func newID() string {
+	b := make([]byte, 6)
+	rand.Read(b)
+	return "ar_" + hex.EncodeToString(b)
+}
+
+func clone(areas []Area) []Area {
+	out := slices.Clone(areas)
+	for i := range out {
+		out[i].Providers = slices.Clone(out[i].Providers)
+		out[i].SignIns = slices.Clone(out[i].SignIns)
+		out[i].Accounts = slices.Clone(out[i].Accounts)
+	}
+	return out
+}
