@@ -215,6 +215,13 @@ type Settings struct {
 	// its place (gateway.AllowIPs). This computer's own (KeepOwn), as LAN
 	// is: the addresses are of the network this computer is on.
 	AllowIPs []string `json:"allowIPs,omitempty"`
+	// AdminAllowIPs are the addresses (IPs and CIDR ranges) other
+	// computers may reach the admin routes (/v1/magpie/admin/*, area
+	// admins and the console) from, on top of AllowIPs. None: this
+	// computer alone. MAGPIE_ADMIN_ALLOW_IPS, where set, is used in its
+	// place (gateway.AdminAllowIPs). This computer's own (KeepOwn), as
+	// AllowIPs is.
+	AdminAllowIPs []string `json:"adminAllowIPs,omitempty"`
 	// FetchPrivate are the private hosts and ranges (a name, name:port, an
 	// IP or a CIDR range) magpie may download a URL from that it didn't
 	// choose itself: an image or video a request names or a vendor answers
@@ -1524,7 +1531,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.NoWSLAgents = cur.NoWSLAgents
 	s.QuotaReads = cur.QuotaReads
 	s.NoAccountDiscovery = cur.NoAccountDiscovery
-	s.LAN, s.AllowIPs = cur.LAN, cur.AllowIPs
+	s.LAN, s.AllowIPs, s.AdminAllowIPs = cur.LAN, cur.AllowIPs, cur.AdminAllowIPs
 	s.RouterNote, s.RouterAllTools = cur.RouterNote, cur.RouterAllTools
 	s.FetchPrivate = cur.FetchPrivate
 	s.SessionTerminal = cur.SessionTerminal

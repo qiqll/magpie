@@ -157,7 +157,7 @@ func IssueKey(in Issue) (Issued, error) {
 	}
 	k := Key{ID: id, Name: name, Secret: Prefix + token, Limit: lim, Models: models, Accounts: accounts,
 		ReadOnly: readOnly, Expires: expires, Issuer: in.Issuer}
-	keys = append(keys, k)
+	keys = slices.Insert(keys, firstAdmin(keys), k)
 	if err := save(keys); err != nil {
 		return Issued{}, err
 	}
@@ -344,6 +344,11 @@ func Identities() ([]Identity, error) {
 
 // identityOf is who k is, folded into its issuer when it has one.
 func identityOf(k Key, keys []Key, now time.Time) (Identity, error) {
+	if k.Admin != "" {
+		// what it is held to on disk (adminKey) and nothing else: no
+		// issuer, limit or model of its own
+		return Identity{KeyID: k.ID, KeyName: k.Name, Admin: k.Admin, Area: k.Area, ReadOnly: true, Models: HeldModels(nil, k.Accounts), Accounts: k.Accounts, MCP: k.MCP}, nil
+	}
 	who := Identity{KeyID: k.ID, KeyName: k.Name, Limit: k.Limit, More: k.More, Models: HeldModels(k.Models, k.Accounts), AccountModels: len(k.Models) == 0 && picksAccounts(k.Accounts), Accounts: k.Accounts, MCP: k.MCP, Quotas: k.Quotas, ReadOnly: k.ReadOnly, Browser: k.Browser, Expires: k.Expires, Issues: k.Issues && k.Issuer == "" && !k.Browser, MaxConcurrency: k.MaxConcurrency}
 	// the default key as Default tells it: marked LAN, or the id the
 	// settings name (settings read only for an unmarked key)

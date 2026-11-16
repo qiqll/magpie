@@ -1086,6 +1086,8 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("POST "+provider.RemoteProvePath, s.prove)
 	mux.HandleFunc("GET "+KeyPagePath, s.keyPage)
 	mux.HandleFunc("GET "+keyPageData, s.keyInfo)
+	// area admins' and the console's (admin.go)
+	s.adminRoutesOn(mux)
 	// the Claude Code processes the Claude subscription runs, for magpie
 	// claude-code runs (loopback only)
 	mux.HandleFunc("GET "+ClaudeRunsPath, s.claudeRuns)

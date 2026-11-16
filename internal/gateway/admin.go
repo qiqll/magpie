@@ -1,0 +1,824 @@
+package gateway
+
+import (
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"os"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/yetone/magpie/internal/access"
+	"github.com/yetone/magpie/internal/area"
+	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/usage"
+)
+
+// The admin routes (docs/subsystems/areas.md): an area's admin key lists,
+// adds and removes the accounts its area owns and reads what they spent;
+// the console's key reads every area and makes, changes and deletes
+// them. Neither reaches anything else (readOnlyGuard refuses an admin key
+// every other route), and neither routes a request: traffic is the
+// owner's, and an area's accounts serve it as any other.
+//
+// Each handler judges the caller again (admin), never by where it came
+// from: lanGuard lets a request from this computer through with no key,
+// or a wrong one, as the owner's, and a console beside magpie is one.
+
+// AdminPath is where the admin routes are.
+const AdminPath = "/v1/magpie/admin"
+
+// The error codes the admin routes answer with.
+const (
+	AdminKeyCode       = "gateway_key_admin_only"
+	adminKeyRequired   = "admin_key_required"
+	adminIPNotAllowed  = "admin_ip_not_allowed"
+	adminConsoleOnly   = "admin_console_only"
+	adminAreaOnly      = "admin_area_only"
+	adminAreasUnread   = "areas_unreadable"
+	adminNotFound      = "not_found"
+	adminConflict      = "conflict"
+	adminBadRequest    = "bad_request"
+	AdminAllowIPsEnv   = "MAGPIE_ADMIN_ALLOW_IPS"
+	adminBodyMost      = 64 << 10
+	adminAccountsLimit = 500
+)
+
+// adminRoutes are the routes of each admin role, by the pattern the
+// request is routed to: an admin key is refused every other
+// (readOnlyGuard), and a route of the other role by its handler.
+var adminRoutes = map[string]map[string]bool{
+	access.AdminArea: {
+		"GET " + AdminPath + "/me":                    true,
+		"GET " + AdminPath + "/options":               true,
+		"GET " + AdminPath + "/accounts":              true,
+		"POST " + AdminPath + "/accounts/key":         true,
+		"POST " + AdminPath + "/accounts/remove":      true,
+		"GET " + AdminPath + "/usage":                 true,
+		"POST " + AdminPath + "/signin":               true,
+		"GET " + AdminPath + "/signin/{id}":           true,
+		"POST " + AdminPath + "/signin/{id}/callback": true,
+		"POST " + AdminPath + "/signin/{id}/cancel":   true,
+		"POST " + AdminPath + "/signin/claude-token":  true,
+	},
+	access.AdminConsole: {
+		"GET " + AdminPath + "/me":                     true,
+		"GET " + AdminPath + "/catalog":                true,
+		"GET " + AdminPath + "/areas":                  true,
+		"POST " + AdminPath + "/areas":                 true,
+		"GET " + AdminPath + "/areas/{id}":             true,
+		"GET " + AdminPath + "/areas/{id}/accounts":    true,
+		"GET " + AdminPath + "/areas/{id}/usage":       true,
+		"POST " + AdminPath + "/areas/{id}/update":     true,
+		"POST " + AdminPath + "/areas/{id}/rotate-key": true,
+		"POST " + AdminPath + "/areas/{id}/delete":     true,
+	},
+}
+
+// adminRoute: pattern is one of role's routes.
+func adminRoute(role, pattern string) bool { return adminRoutes[role][pattern] }
+
+// refuseAdminKey answers an admin key a route that isn't an admin one.
+func refuseAdminKey(w http.ResponseWriter, r *http.Request, who access.Identity) {
+	log.Printf("refused %s %s: gateway key %q is an admin key", r.Method, r.URL.Path, who.KeyName)
+	adminError(w, http.StatusForbidden, AdminKeyCode, "this is a magpie admin key: it reaches "+AdminPath+"/* alone, no model, MCP server, stats or other route")
+}
+
+func (s *Server) adminRoutesOn(mux *routeMux) {
+	mux.HandleFunc("GET "+AdminPath+"/me", s.admin("", s.adminMe))
+	mux.HandleFunc("GET "+AdminPath+"/options", s.admin(access.AdminArea, s.adminOptions))
+	mux.HandleFunc("GET "+AdminPath+"/accounts", s.admin(access.AdminArea, s.adminAccounts))
+	mux.HandleFunc("POST "+AdminPath+"/accounts/key", s.admin(access.AdminArea, s.adminAddKey))
+	mux.HandleFunc("POST "+AdminPath+"/accounts/remove", s.admin(access.AdminArea, s.adminRemove))
+	mux.HandleFunc("GET "+AdminPath+"/usage", s.admin(access.AdminArea, s.adminUsage))
+	mux.HandleFunc("POST "+AdminPath+"/signin", s.admin(access.AdminArea, s.adminSignIn))
+	mux.HandleFunc("GET "+AdminPath+"/signin/{id}", s.admin(access.AdminArea, s.adminSignInState))
+	mux.HandleFunc("POST "+AdminPath+"/signin/{id}/callback", s.admin(access.AdminArea, s.adminSignInCallback))
+	mux.HandleFunc("POST "+AdminPath+"/signin/{id}/cancel", s.admin(access.AdminArea, s.adminSignInCancel))
+	mux.HandleFunc("POST "+AdminPath+"/signin/claude-token", s.admin(access.AdminArea, s.adminClaudeToken))
+
+	mux.HandleFunc("GET "+AdminPath+"/catalog", s.admin(access.AdminConsole, s.adminCatalog))
+	mux.HandleFunc("GET "+AdminPath+"/areas", s.admin(access.AdminConsole, s.adminAreas))
+	mux.HandleFunc("POST "+AdminPath+"/areas", s.admin(access.AdminConsole, s.adminCreateArea))
+	mux.HandleFunc("GET "+AdminPath+"/areas/{id}", s.admin(access.AdminConsole, s.adminArea))
+	mux.HandleFunc("GET "+AdminPath+"/areas/{id}/accounts", s.admin(access.AdminConsole, s.adminAreaAccounts))
+	mux.HandleFunc("GET "+AdminPath+"/areas/{id}/usage", s.admin(access.AdminConsole, s.adminAreaUsage))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/update", s.admin(access.AdminConsole, s.adminUpdateArea))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/rotate-key", s.admin(access.AdminConsole, s.adminRotateArea))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/delete", s.admin(access.AdminConsole, s.adminDeleteArea))
+}
+
+// adminCall is a judged admin request: its key, and an area admin's area.
+type adminCall struct {
+	who  access.Identity
+	area area.Area
+}
+
+// admin judges an admin route's caller before h runs: from an address
+// the admin allow list lets in, with an enabled admin key of role (""
+// for either), and an area admin's area there and on.
+func (s *Server) admin(role string, h func(http.ResponseWriter, *http.Request, adminCall)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if addr, ok := adminAllowed(r); !ok {
+			log.Printf("refused %s %s from %s: not on the admin allow list", r.Method, r.URL.Path, addr)
+			adminError(w, http.StatusForbidden, adminIPNotAllowed, addr+" is not on magpie's admin allow list (Settings, or "+AdminAllowIPsEnv+"): the admin routes answer this computer and the addresses listed there alone")
+			return
+		}
+		if r.URL.Query().Has("key") {
+			adminError(w, http.StatusBadRequest, adminBadRequest, "send the admin key as Authorization: Bearer <key>, never in the address")
+			return
+		}
+		who := access.Caller(r.Context())
+		if who.Admin == "" || !access.Current(who) {
+			adminError(w, http.StatusUnauthorized, adminKeyRequired, "send an enabled magpie admin key as Authorization: Bearer <key>")
+			return
+		}
+		if role != "" && who.Admin != role {
+			if role == access.AdminConsole {
+				adminError(w, http.StatusForbidden, adminConsoleOnly, "this route is the console's: an area admin's key reaches its own area's routes alone")
+			} else {
+				adminError(w, http.StatusForbidden, adminAreaOnly, "this route is an area admin's: the console's key reads areas and manages them, and adds or removes no account")
+			}
+			return
+		}
+		c := adminCall{who: who}
+		if who.Admin == access.AdminArea {
+			a, err := area.Get(who.Area)
+			switch {
+			case errors.Is(err, area.ErrNotFound):
+				adminError(w, http.StatusUnauthorized, adminKeyRequired, "this admin key's area was deleted")
+				return
+			case err != nil:
+				adminError(w, http.StatusServiceUnavailable, adminAreasUnread, "magpie can't read its areas.json now: "+err.Error())
+				return
+			case a.Off:
+				adminError(w, http.StatusUnauthorized, adminKeyRequired, "this admin key's area is turned off")
+				return
+			}
+			c.area = a
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, adminBodyMost)
+		h(w, r, c)
+	}
+}
+
+func adminError(w http.ResponseWriter, status int, code, msg string) {
+	typ := "invalid_request_error"
+	switch status {
+	case http.StatusUnauthorized:
+		typ = "authentication_error"
+	case http.StatusForbidden:
+		typ = "permission_error"
+	case http.StatusNotFound:
+		typ = "not_found_error"
+	case http.StatusServiceUnavailable:
+		typ = "api_error"
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, status, map[string]any{"error": map[string]any{"message": msg, "type": typ, "code": code}})
+}
+
+func adminNotFoundErr(w http.ResponseWriter) {
+	adminError(w, http.StatusNotFound, adminNotFound, "no such account, area or sign-in")
+}
+
+// decodeAdmin reads r's JSON body into v, answering 400 when it can't.
+func decodeAdmin(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		adminError(w, http.StatusBadRequest, adminBadRequest, "the body isn't the JSON this route takes: "+err.Error())
+		return false
+	}
+	return true
+}
+
+func (s *Server) adminMe(w http.ResponseWriter, r *http.Request, c adminCall) {
+	out := map[string]any{"role": c.who.Admin, "keyName": c.who.KeyName, "version": Version}
+	if c.who.Admin == access.AdminArea {
+		out["area"] = map[string]string{"id": c.area.ID, "note": c.area.Note}
+		out["accounts"] = len(c.area.Accounts)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// adminProvider is a provider an area's admin may add keys of.
+type adminProvider struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// keyProviders are the providers that take API keys, by id: those with
+// no signed-in account.
+func keyProviders() []adminProvider {
+	out := []adminProvider{}
+	for _, p := range provider.All() {
+		if p.Account == nil && !p.IsPlugin() {
+			out = append(out, adminProvider{ID: p.ID, Name: p.Name})
+		}
+	}
+	return out
+}
+
+func (s *Server) adminOptions(w http.ResponseWriter, r *http.Request, c adminCall) {
+	providers := []adminProvider{}
+	for _, p := range keyProviders() {
+		if slices.Contains(c.area.Providers, p.ID) {
+			providers = append(providers, p)
+		}
+	}
+	signIns := []adminSignInWay{}
+	for _, si := range signInWays() {
+		if slices.Contains(c.area.SignIns, si.Agent) {
+			signIns = append(signIns, si)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"providers": providers, "signIns": signIns})
+}
+
+func (s *Server) adminCatalog(w http.ResponseWriter, r *http.Request, c adminCall) {
+	writeJSON(w, http.StatusOK, map[string]any{"providers": keyProviders(), "signIns": signInWays()})
+}
+
+// adminAccount is an account as the admin routes tell it: never a key's
+// value, nor a token.
+type adminAccount struct {
+	ID           string    `json:"id"`
+	Provider     string    `json:"provider"`
+	ProviderName string    `json:"providerName"`
+	Kind         string    `json:"kind"` // "key" | "account"
+	Name         string    `json:"name"`
+	Masked       string    `json:"masked,omitempty"`
+	Plan         string    `json:"plan,omitempty"`
+	On           bool      `json:"on"`
+	SignedOut    bool      `json:"signedOut,omitempty"`
+	Gone         bool      `json:"gone,omitempty"` // removed from magpie by its owner
+	Added        time.Time `json:"added"`
+}
+
+// areaAccounts are a's accounts as they stand in magpie now.
+func areaAccounts(a area.Area) []adminAccount {
+	out := []adminAccount{}
+	for _, owned := range a.Accounts {
+		pid, ref, _ := strings.Cut(owned.Ref, "/")
+		acc := adminAccount{ID: owned.Ref, Provider: pid, Name: ref, Added: owned.Added, Gone: true}
+		if p, err := provider.Find(pid); err == nil {
+			acc.ProviderName = p.Name
+			describe(&acc, *p, ref)
+		}
+		out = append(out, acc)
+	}
+	return out
+}
+
+// describe fills acc from p's account or key ref, and clears Gone when p
+// still has it.
+func describe(acc *adminAccount, p provider.Provider, ref string) {
+	if p.Account == nil {
+		for _, k := range p.KeyList() {
+			if k.ID == ref {
+				acc.Kind, acc.Name, acc.Masked, acc.On, acc.Gone = "key", k.Name, k.Masked, k.On, false
+				if acc.Name == "" {
+					acc.Name = k.Masked
+				}
+			}
+		}
+		if acc.Gone {
+			acc.Kind = "key"
+		}
+		return
+	}
+	acc.Kind = "account"
+	agentID := loginAgent(p)
+	for _, r := range p.AccountIDs() {
+		if r.ID != ref {
+			continue
+		}
+		acc.Name, acc.Plan, acc.Gone = r.User, r.Plan, false
+		for _, l := range provider.Logins(agentID) {
+			if strings.EqualFold(l.User, r.User) {
+				acc.On = (l.On || l.Active) && !l.Banned && !l.Disabled
+				acc.SignedOut = l.Lapsed != ""
+			}
+		}
+	}
+}
+
+// loginAgent is the agent p's accounts are saved under.
+func loginAgent(p provider.Provider) string {
+	if p.IsPlugin() {
+		return p.ID
+	}
+	return p.Account.Agent
+}
+
+func (s *Server) adminAccounts(w http.ResponseWriter, r *http.Request, c adminCall) {
+	writeJSON(w, http.StatusOK, areaAccounts(c.area))
+}
+
+func (s *Server) adminAddKey(w http.ResponseWriter, r *http.Request, c adminCall) {
+	var in struct{ Provider, Name, Key string }
+	if !decodeAdmin(w, r, &in) {
+		return
+	}
+	in.Key, in.Name = strings.TrimSpace(in.Key), strings.TrimSpace(in.Name)
+	if !slices.Contains(c.area.Providers, in.Provider) {
+		adminNotFoundErr(w)
+		return
+	}
+	p, err := provider.Find(in.Provider)
+	if err != nil || p.Account != nil || p.IsPlugin() {
+		adminNotFoundErr(w)
+		return
+	}
+	if in.Key == "" || len(in.Key) > 4096 {
+		adminError(w, http.StatusBadRequest, adminBadRequest, "send the API key, up to 4096 characters")
+		return
+	}
+	if len(c.area.Accounts) >= adminAccountsLimit {
+		adminError(w, http.StatusConflict, adminConflict, "an area has at most 500 accounts")
+		return
+	}
+	fp := provider.KeyID(in.Key)
+	ref := p.ID + "/" + fp
+	if slices.ContainsFunc(p.KeyList(), func(k provider.KeyInfo) bool { return k.ID == fp }) {
+		adminError(w, http.StatusConflict, adminConflict, "this key is in magpie already")
+		return
+	}
+	// owned first, so the key is the area's from the moment it is there
+	if err := area.Claim(c.area.ID, ref); err != nil {
+		adminClaimErr(w, err)
+		return
+	}
+	if err := provider.AddKey(p.ID, in.Name, in.Key, ""); err != nil {
+		area.Release(ref)
+		adminError(w, http.StatusBadRequest, adminBadRequest, err.Error())
+		return
+	}
+	log.Printf("admin: area %s (%s) added a key of %s", c.area.ID, c.area.Note, p.ID)
+	a, _ := area.Get(c.area.ID)
+	for _, acc := range areaAccounts(a) {
+		if acc.ID == ref {
+			writeJSON(w, http.StatusCreated, acc)
+			return
+		}
+	}
+	writeJSON(w, http.StatusCreated, adminAccount{ID: ref, Provider: p.ID, ProviderName: p.Name, Kind: "key"})
+}
+
+func adminClaimErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, area.ErrTaken):
+		adminError(w, http.StatusConflict, adminConflict, "this account is in magpie already")
+	case errors.Is(err, area.ErrNotFound):
+		adminError(w, http.StatusUnauthorized, adminKeyRequired, "this admin key's area was deleted")
+	default:
+		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
+	}
+}
+
+// Reseat runs a change that can take a provider's last account or key
+// away, moving the agents on its models to others (agent.Reseat, which
+// sets it: the agent package imports this one).
+var Reseat = func(change func() error) error { return change() }
+
+func (s *Server) adminRemove(w http.ResponseWriter, r *http.Request, c adminCall) {
+	var in struct{ ID string }
+	if !decodeAdmin(w, r, &in) {
+		return
+	}
+	if !c.area.Has(in.ID) {
+		adminNotFoundErr(w)
+		return
+	}
+	pid, ref, _ := strings.Cut(in.ID, "/")
+	if p, err := provider.Find(pid); err == nil {
+		acc := adminAccount{Gone: true}
+		describe(&acc, *p, ref)
+		if !acc.Gone {
+			var change func() error
+			if p.Account == nil {
+				change = func() error { return provider.RemoveKey(p.ID, ref) }
+			} else {
+				agentID, user := loginAgent(*p), acc.Name
+				change = func() error { return provider.ForgetLogin(agentID, user) }
+			}
+			if err := Reseat(change); err != nil {
+				adminError(w, http.StatusConflict, adminConflict, err.Error())
+				return
+			}
+		}
+	}
+	if err := area.Release(in.ID); err != nil {
+		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
+		return
+	}
+	log.Printf("admin: area %s (%s) removed %s", c.area.ID, c.area.Note, pid)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, c adminCall) {
+	p, loc, ok := usageArgs(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, areaUsage(c.area, p, loc, time.Now()))
+}
+
+// usageArgs reads ?period= (today, 7d or 30d) and ?tz=.
+func usageArgs(w http.ResponseWriter, r *http.Request) (usage.Period, *time.Location, bool) {
+	q := r.URL.Query()
+	var p usage.Period
+	switch q.Get("period") {
+	case "", "today":
+		p = usage.Today
+	case "7d":
+		p = usage.Week
+	case "30d":
+		p = usage.Month
+	default:
+		adminError(w, http.StatusBadRequest, adminBadRequest, "period is today, 7d or 30d")
+		return "", nil, false
+	}
+	loc := time.Local
+	if tz := q.Get("tz"); tz != "" {
+		l, err := time.LoadLocation(tz)
+		if err != nil {
+			adminError(w, http.StatusBadRequest, adminBadRequest, "tz is an IANA time zone, such as Asia/Shanghai")
+			return "", nil, false
+		}
+		loc = l
+	}
+	return p, loc, true
+}
+
+// adminTotals are what some calls spent.
+type adminTotals struct {
+	Requests   int     `json:"requests"`
+	Failed     int     `json:"failed"`
+	Input      int     `json:"inputTokens"`
+	Output     int     `json:"outputTokens"`
+	CacheRead  int     `json:"cacheReadTokens"`
+	CacheWrite int     `json:"cacheWriteTokens"`
+	Cost       float64 `json:"cost"`
+	Unpriced   int     `json:"unpriced"`
+}
+
+func (t *adminTotals) add(r usage.Record, cost float64, priced bool) {
+	if r.Answered() {
+		t.Requests++
+	} else if r.Failed() {
+		t.Failed++
+	}
+	t.Input += r.Input
+	t.Output += r.Output
+	t.CacheRead += r.CacheRead
+	t.CacheWrite += r.CacheWrite
+	if priced {
+		t.Cost += cost
+	} else if r.Input+r.Output+r.CacheRead+r.CacheWrite > 0 {
+		t.Unpriced++
+	}
+}
+
+type adminShare struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	adminTotals
+}
+
+// AreaUsage is what an area's accounts spent over a period.
+type AreaUsage struct {
+	Period    string       `json:"period"`
+	Zone      string       `json:"zone"`
+	Since     time.Time    `json:"since"`
+	Totals    adminTotals  `json:"totals"`
+	ByModel   []adminShare `json:"byModel"`
+	ByAccount []adminShare `json:"byAccount"`
+	ByDay     []adminShare `json:"byDay"`
+}
+
+var periodNames = map[usage.Period]string{usage.Today: "today", usage.Week: "7d", usage.Month: "30d"}
+
+// areaUsage is what a's accounts answered over p, each from the time the
+// area got it: a key's calls by its fingerprint, an account's by the name
+// the ledger keeps (Record.Account) under its provider.
+func areaUsage(a area.Area, p usage.Period, loc *time.Location, now time.Time) AreaUsage {
+	now = now.In(loc)
+	since := p.Since(now)
+	out := AreaUsage{Period: periodNames[p], Zone: loc.String(), Since: since, ByModel: []adminShare{}, ByAccount: []adminShare{}, ByDay: []adminShare{}}
+	type match struct {
+		ref, name string
+		key       bool
+		added     time.Time
+	}
+	byProvider := map[string][]match{}
+	for _, acc := range areaAccounts(a) {
+		pid, ref, _ := strings.Cut(acc.ID, "/")
+		m := match{ref: acc.ID, key: acc.Kind == "key", added: acc.Added, name: acc.Name}
+		if m.key {
+			m.name = ref // the fingerprint the ledger keeps
+		}
+		byProvider[pid] = append(byProvider[pid], m)
+	}
+	if len(byProvider) == 0 {
+		return out // no account, nothing spent: never the whole ledger
+	}
+	names := map[string]string{}
+	for _, acc := range areaAccounts(a) {
+		names[acc.ID] = acc.Name
+	}
+	cost := usage.NewCoster()
+	models, accounts, days := map[string]*adminShare{}, map[string]*adminShare{}, map[string]*adminShare{}
+	share := func(m map[string]*adminShare, id string) *adminShare {
+		if m[id] == nil {
+			m[id] = &adminShare{ID: id}
+		}
+		return m[id]
+	}
+	usage.Visit(since, func(r usage.Record) {
+		if r.Time.Before(since) {
+			return
+		}
+		var owned string
+		for _, m := range byProvider[r.Provider] {
+			if r.Time.Before(m.added) {
+				continue
+			}
+			if m.key && r.ProviderKeyID != "" && r.ProviderKeyID == m.name ||
+				!m.key && m.name != "" && strings.EqualFold(r.Account(), m.name) {
+				owned = m.ref
+				break
+			}
+		}
+		if owned == "" {
+			return
+		}
+		c, priced := cost(r)
+		out.Totals.add(r, c, priced)
+		share(models, r.Model).add(r, c, priced)
+		share(accounts, owned).add(r, c, priced)
+		share(days, r.Time.In(loc).Format(time.DateOnly)).add(r, c, priced)
+	})
+	for _, s := range models {
+		out.ByModel = append(out.ByModel, *s)
+	}
+	for _, s := range accounts {
+		s.Name = names[s.ID]
+		out.ByAccount = append(out.ByAccount, *s)
+	}
+	for _, s := range days {
+		out.ByDay = append(out.ByDay, *s)
+	}
+	most := func(x, y adminShare) int {
+		if x.Cost != y.Cost {
+			if x.Cost > y.Cost {
+				return -1
+			}
+			return 1
+		}
+		return y.Requests - x.Requests
+	}
+	slices.SortFunc(out.ByModel, most)
+	slices.SortFunc(out.ByAccount, most)
+	slices.SortFunc(out.ByDay, func(x, y adminShare) int { return strings.Compare(x.ID, y.ID) })
+	return out
+}
+
+// adminArea is an area as the console reads it.
+type adminArea struct {
+	ID        string      `json:"id"`
+	Note      string      `json:"note"`
+	Off       bool        `json:"off"`
+	Created   time.Time   `json:"created"`
+	Providers []string    `json:"providers"`
+	SignIns   []string    `json:"signIns"`
+	Accounts  int         `json:"accounts"`
+	AdminKey  string      `json:"adminKeyName,omitempty"`
+	Today     adminTotals `json:"today"`
+}
+
+func areaOf(a area.Area, now time.Time) adminArea {
+	out := adminArea{ID: a.ID, Note: a.Note, Off: a.Off, Created: a.Created, Providers: a.Providers, SignIns: a.SignIns, Accounts: len(a.Accounts)}
+	if out.Providers == nil {
+		out.Providers = []string{}
+	}
+	if out.SignIns == nil {
+		out.SignIns = []string{}
+	}
+	if k, ok, _ := access.AreaKey(a.ID); ok {
+		out.AdminKey = k.Name
+	}
+	out.Today = areaUsage(a, usage.Today, time.Local, now).Totals
+	return out
+}
+
+// consoleArea is the area the path names, answering 404 or 503 when
+// there is none to be had.
+func consoleArea(w http.ResponseWriter, r *http.Request) (area.Area, bool) {
+	a, err := area.Get(r.PathValue("id"))
+	switch {
+	case errors.Is(err, area.ErrNotFound):
+		adminNotFoundErr(w)
+		return a, false
+	case err != nil:
+		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
+		return a, false
+	}
+	return a, true
+}
+
+func (s *Server) adminAreas(w http.ResponseWriter, r *http.Request, c adminCall) {
+	areas, err := area.List()
+	if err != nil {
+		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
+		return
+	}
+	out := []adminArea{}
+	now := time.Now()
+	for _, a := range areas {
+		out = append(out, areaOf(a, now))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) adminArea(w http.ResponseWriter, r *http.Request, c adminCall) {
+	if a, ok := consoleArea(w, r); ok {
+		writeJSON(w, http.StatusOK, areaOf(a, time.Now()))
+	}
+}
+
+func (s *Server) adminAreaAccounts(w http.ResponseWriter, r *http.Request, c adminCall) {
+	if a, ok := consoleArea(w, r); ok {
+		writeJSON(w, http.StatusOK, areaAccounts(a))
+	}
+}
+
+func (s *Server) adminAreaUsage(w http.ResponseWriter, r *http.Request, c adminCall) {
+	a, ok := consoleArea(w, r)
+	if !ok {
+		return
+	}
+	if p, loc, ok := usageArgs(w, r); ok {
+		writeJSON(w, http.StatusOK, areaUsage(a, p, loc, time.Now()))
+	}
+}
+
+// areaErr answers an area change that failed.
+func areaErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, area.ErrNotFound):
+		adminNotFoundErr(w)
+	case errors.Is(err, area.ErrNoteInUse), errors.Is(err, area.ErrNotEmpty):
+		adminError(w, http.StatusConflict, adminConflict, err.Error())
+	case errors.Is(err, area.ErrUnreadable):
+		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
+	default:
+		adminError(w, http.StatusBadRequest, adminBadRequest, err.Error())
+	}
+}
+
+// checkOffer refuses providers and sign-ins magpie doesn't offer an area.
+func checkOffer(providers, signIns *[]string) error {
+	if providers != nil {
+		for _, id := range *providers {
+			if !slices.ContainsFunc(keyProviders(), func(p adminProvider) bool { return p.ID == id }) {
+				return errors.New("no provider taking API keys has the id " + id)
+			}
+		}
+	}
+	if signIns != nil {
+		for _, id := range *signIns {
+			if !slices.ContainsFunc(signInWays(), func(s adminSignInWay) bool { return s.Agent == id }) {
+				return errors.New("no subscription an area can sign in to has the id " + id)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Server) adminCreateArea(w http.ResponseWriter, r *http.Request, c adminCall) {
+	var in struct {
+		Note               string
+		Providers, SignIns []string
+	}
+	if !decodeAdmin(w, r, &in) {
+		return
+	}
+	if err := checkOffer(&in.Providers, &in.SignIns); err != nil {
+		areaErr(w, err)
+		return
+	}
+	a, err := area.Create(in.Note, in.Providers, in.SignIns)
+	if err != nil {
+		areaErr(w, err)
+		return
+	}
+	_, secret, err := access.AddAdmin(access.AdminArea, a.ID, a.Note+" admin")
+	if err != nil {
+		area.Delete(a.ID) // no area without its admin key
+		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
+		return
+	}
+	log.Printf("admin: the console made area %s (%s)", a.ID, a.Note)
+	writeJSON(w, http.StatusCreated, map[string]any{"area": areaOf(a, time.Now()), "adminKey": secret})
+}
+
+func (s *Server) adminUpdateArea(w http.ResponseWriter, r *http.Request, c adminCall) {
+	var in struct {
+		Note               *string
+		Off                *bool
+		Providers, SignIns *[]string
+	}
+	if !decodeAdmin(w, r, &in) {
+		return
+	}
+	if err := checkOffer(in.Providers, in.SignIns); err != nil {
+		areaErr(w, err)
+		return
+	}
+	a, err := area.Update(r.PathValue("id"), area.Spec{Note: in.Note, Off: in.Off, Providers: in.Providers, SignIns: in.SignIns})
+	if err != nil {
+		areaErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, areaOf(a, time.Now()))
+}
+
+func (s *Server) adminRotateArea(w http.ResponseWriter, r *http.Request, c adminCall) {
+	a, ok := consoleArea(w, r)
+	if !ok {
+		return
+	}
+	var secret string
+	k, has, err := access.AreaKey(a.ID)
+	if err == nil && has {
+		secret, err = access.Update("rotate-key", access.Change{Key: k.ID})
+	} else if err == nil {
+		_, secret, err = access.AddAdmin(access.AdminArea, a.ID, a.Note+" admin")
+	}
+	if err != nil {
+		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"adminKey": secret})
+}
+
+func (s *Server) adminDeleteArea(w http.ResponseWriter, r *http.Request, c adminCall) {
+	id := r.PathValue("id")
+	if err := area.Delete(id); err != nil {
+		areaErr(w, err)
+		return
+	}
+	if err := access.RemoveArea(id); err != nil {
+		// the area is gone, so its key reaches nothing (admin): only
+		// left in the list until removed by hand
+		log.Printf("admin: area %s deleted, its admin key not: %v", id, err)
+	}
+	log.Printf("admin: the console deleted area %s", id)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminAllowIPs is the admin allow list in force, as written, and whether
+// MAGPIE_ADMIN_ALLOW_IPS set it. Empty: this computer alone.
+func AdminAllowIPs() (list []string, fromEnv bool) {
+	if v := strings.TrimSpace(os.Getenv(AdminAllowIPsEnv)); v != "" {
+		return settings.SplitAllowIPs(v), true
+	}
+	s, err := settings.SharedChecked()
+	lastAdminAllow.Lock()
+	defer lastAdminAllow.Unlock()
+	if err == nil {
+		lastAdminAllow.list = s.AdminAllowIPs
+	}
+	// unread: the list read last, none (this computer alone) before one
+	return slices.Clone(lastAdminAllow.list), false
+}
+
+var lastAdminAllow struct {
+	sync.Mutex
+	list []string
+}
+
+// adminAllowed: r came from this computer, or an address on the admin
+// allow list, judged by the connection's own address: a forwarding
+// header is never taken for it.
+func adminAllowed(r *http.Request) (string, bool) {
+	a, ok := peerAddr(r)
+	if !ok {
+		return r.RemoteAddr, false
+	}
+	if a.IsLoopback() || ownAddr(a) {
+		return a.String(), true
+	}
+	list, _ := AdminAllowIPs()
+	for _, e := range list {
+		if p, err := settings.ParseAllowIP(e); err == nil && p.Contains(a) {
+			return a.String(), true
+		}
+	}
+	return a.String(), false
+}

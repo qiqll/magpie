@@ -47,6 +47,15 @@ var readOnlyRoutes = map[string]bool{
 	"POST " + provider.RemoteProvePath: true,
 }
 
+// otherAdmin is the admin role that isn't role: a route of the other
+// role is let through to its handler, which says whose it is.
+func otherAdmin(role string) string {
+	if role == access.AdminArea {
+		return access.AdminConsole
+	}
+	return access.AdminArea
+}
+
 // ReadOnlyCode is the error code a read-only key is refused a route with.
 const ReadOnlyCode = provider.KeyReadOnlyCode
 
@@ -81,6 +90,15 @@ const browserKeyRoute = "GET " + BrowserExtensionPath
 func readOnlyGuard(mux *routeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		who := access.Caller(r.Context())
+		if who.Admin != "" {
+			// before ReadOnly, which an admin key is on disk too
+			if _, pattern := mux.Handler(r); !adminRoute(who.Admin, pattern) && !adminRoute(otherAdmin(who.Admin), pattern) {
+				refuseAdminKey(w, r, who)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
 		if who.Browser {
 			if _, pattern := mux.Handler(r); pattern != browserKeyRoute {
 				log.Printf("refused %s %s: gateway key %q is Magpie Browser's", r.Method, r.URL.Path, who.KeyName)

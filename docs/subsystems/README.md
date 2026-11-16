@@ -14,6 +14,7 @@ These pages describe current responsibilities, runtime paths, state, and contrac
 | Gateway Session Aggregation | [Gateway Session Aggregation](gateway-sessions.md) |
 | Connecting an agent's config to the gateway, drift, disconnect, WSL twins | [Agent wiring](agent-wiring.md) |
 | Providers, keys, subscription accounts, refresh and allowance | [Providers and accounts](providers-accounts.md) |
+| Areas: accounts an area admin manages, admin keys, the admin routes and area sign-ins | [Areas and admin keys](areas.md) |
 | Instructions, MCP servers, skills and RTK written into agents | [Library](library.md) |
 | One MCP server, magpie, given to every agent in place of the Library's servers | [MCP router](mcp-router.md) |
 | Memory shared by every agent: the memory MCP server, the digest in instructions, the Memory tab | [Memory](memory.md) |

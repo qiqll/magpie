@@ -198,6 +198,12 @@ type Key struct {
 	// queue and go out in order, as over a provider's MaxConcurrency.
 	// 0 for no limit.
 	MaxConcurrency int `json:"maxConcurrency,omitempty"`
+	// Admin makes the key an admin key (admin.go): AdminArea, an area's
+	// admin, or AdminConsole, the console's; "" for a gateway key. An
+	// admin key reaches the admin routes alone, never a model or MCP.
+	Admin string `json:"admin,omitempty"`
+	// Area is the area an AdminArea key manages (internal/area).
+	Area string `json:"area,omitempty"`
 }
 
 // MaxKeyConcurrency is the most MaxConcurrency a key may have, as a
@@ -227,6 +233,8 @@ type Identity struct {
 	// Browser: the key may connect the Magpie Browser extension and do
 	// nothing else (Key.Browser).
 	Browser bool
+	// Admin and Area: an admin key's role and area (Key.Admin, Key.Area).
+	Admin, Area string
 	// sum is the SHA-256 of the secret the request came with, so a
 	// connection kept open can tell the key was rotated since (Current).
 	sum [32]byte
@@ -555,11 +563,17 @@ func Update(action string, in Change) (string, error) {
 			}
 			secret = Prefix + token
 		}
-		keys = append(keys, Key{ID: id, Name: name, Secret: secret, ReadOnly: in.ReadOnly || in.Browser, Browser: in.Browser})
+		keys = slices.Insert(keys, firstAdmin(keys), Key{ID: id, Name: name, Secret: secret, ReadOnly: in.ReadOnly || in.Browser, Browser: in.Browser})
 	} else {
 		i := slices.IndexFunc(keys, func(k Key) bool { return k.ID == in.Key })
 		if i < 0 {
 			return "", errors.New("Key not found")
+		}
+		if keys[i].Admin != "" && !adminActions[action] {
+			return "", errors.New("This is an admin key: it reaches magpie's admin routes alone, so it can only be renamed, rotated, turned on or off, or removed")
+		}
+		if keys[i].Admin != "" && action == "rotate-key" && in.Secret != "" {
+			return "", errors.New("An admin key's value is one magpie makes: rotate it with no value of your own")
 		}
 		defaultKey := keys[i].LAN || keys[i].ID == settings.Load().LANKeyID
 		if defaultKey {
@@ -720,7 +734,7 @@ func Update(action string, in Change) (string, error) {
 			// the keys are listed in the order they are kept in, which the
 			// user sets by dragging one (alextjy on Discord); nothing else
 			// about the key changes
-			if in.Index == nil || *in.Index < 0 || *in.Index >= len(keys) {
+			if in.Index == nil || *in.Index < 0 || *in.Index >= firstAdmin(slices.Delete(slices.Clone(keys), i, i+1))+1 {
 				return "", errors.New("There is no such place in the list of keys")
 			}
 			k := keys[i]

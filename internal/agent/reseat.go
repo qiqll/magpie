@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"github.com/yetone/magpie/internal/gateway"
 	"regexp"
 	"slices"
 	"strings"
@@ -214,4 +215,10 @@ func modelKey(m string) string {
 	m = strings.ToLower(m[strings.LastIndex(m, "/")+1:])
 	m = strings.NewReplacer(".", "-", "_", "-").Replace(m)
 	return dated.ReplaceAllString(m, "")
+}
+
+// an area admin's removal of an account (gateway's admin routes) moves
+// the agents on its models as the window's does
+func init() {
+	gateway.Reseat = func(change func() error) error { _, err := Reseat(change); return err }
 }

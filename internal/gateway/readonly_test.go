@@ -55,6 +55,14 @@ var readOnlyRefused = []string{
 	BrowserMCPPath, MemoryMCPPath, "GET " + BrowserExtensionPath, "GET " + BrowserStatusPath, ToolsMCPPath, ToolsMCPOne + "{plugin}",
 	HubMCPPath + "{agent}", HubMCPAll, CodexPath + "/", "GET " + CodexCatalogPath,
 	"GET /v1beta/models", "POST /v1beta/models/{call...}", "/",
+	// an area admin's and the console's (admin.go), which only an admin key reaches
+	"GET " + AdminPath + "/me", "GET " + AdminPath + "/options", "GET " + AdminPath + "/accounts",
+	"POST " + AdminPath + "/accounts/key", "POST " + AdminPath + "/accounts/remove", "GET " + AdminPath + "/usage",
+	"POST " + AdminPath + "/signin", "GET " + AdminPath + "/signin/{id}", "POST " + AdminPath + "/signin/{id}/callback",
+	"POST " + AdminPath + "/signin/{id}/cancel", "POST " + AdminPath + "/signin/claude-token",
+	"GET " + AdminPath + "/catalog", "GET " + AdminPath + "/areas", "POST " + AdminPath + "/areas",
+	"GET " + AdminPath + "/areas/{id}", "GET " + AdminPath + "/areas/{id}/accounts", "GET " + AdminPath + "/areas/{id}/usage",
+	"POST " + AdminPath + "/areas/{id}/update", "POST " + AdminPath + "/areas/{id}/rotate-key", "POST " + AdminPath + "/areas/{id}/delete",
 }
 
 var wildcard = regexp.MustCompile(`\{[a-z]+(\.\.\.)?\}`)
