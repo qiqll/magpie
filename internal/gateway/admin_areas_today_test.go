@@ -145,3 +145,65 @@ func BenchmarkAreasToday(b *testing.B) {
 		}
 	})
 }
+
+// A key replaced in place (provider.ReplaceKey) is still one account of
+// its area: what it answered under its old value counts with what it
+// answers under the new, in the area's usage and in the areas list, as
+// one row of byAccount (T-186). The old value added again by another
+// area is that area's from then: neither area counts its calls twice.
+func TestAdminReplacedKeyKeepsItsUsage(t *testing.T) {
+	do, console, _ := adminWorld(t)
+	studyID, study := makeArea(t, do, console, "学习", "plan")
+	_, work := makeArea(t, do, console, "工作", "plan")
+	b, _ := json.Marshal(map[string]string{"provider": "plan", "name": "mine", "key": "sk-replace-old-0001"})
+	if c, body := do("POST", AdminPath+"/accounts/key", lanPeer, study, string(b)); c != 201 {
+		t.Fatal(c, body)
+	}
+	was := provider.KeyID("sk-replace-old-0001")
+	usage.Append(usage.Record{Time: time.Now(), Provider: "plan", ProviderKeyID: was, Model: "m1", Status: 200, Input: 10})
+	_, now, err := provider.ReplaceKey("plan", was, "sk-replace-new-0002")
+	if err != nil || now == was {
+		t.Fatal(now, err)
+	}
+	usage.Append(usage.Record{Time: time.Now(), Provider: "plan", ProviderKeyID: now, Model: "m1", Status: 200, Input: 100})
+
+	read := func() (AreaUsage, adminTotals) {
+		t.Helper()
+		c, body := do("GET", AdminPath+"/usage?period=today", lanPeer, study, "")
+		if c != 200 {
+			t.Fatal(c, body)
+		}
+		var u AreaUsage
+		json.Unmarshal([]byte(body), &u)
+		c, body = do("GET", AdminPath+"/areas", lanPeer, console, "")
+		if c != 200 {
+			t.Fatal(c, body)
+		}
+		var list []adminArea
+		json.Unmarshal([]byte(body), &list)
+		for _, a := range list {
+			if a.ID == studyID {
+				return u, a.Today
+			}
+		}
+		t.Fatal("study isn't listed:", body)
+		return u, adminTotals{}
+	}
+	u, today := read()
+	if u.Totals.Requests != 2 || u.Totals.Input != 110 || len(u.ByAccount) != 1 || u.ByAccount[0].ID != "plan/"+now || u.ByAccount[0].Requests != 2 {
+		t.Fatalf("usage after the key was replaced: %+v", u)
+	}
+	if today != u.Totals {
+		t.Fatalf("the areas list's today %+v, its usage %+v", today, u.Totals)
+	}
+
+	// the old value added again, by another area: its calls are that area's
+	b, _ = json.Marshal(map[string]string{"provider": "plan", "name": "again", "key": "sk-replace-old-0001"})
+	if c, body := do("POST", AdminPath+"/accounts/key", lanPeer, work, string(b)); c != 201 {
+		t.Fatal(c, body)
+	}
+	usage.Append(usage.Record{Time: time.Now(), Provider: "plan", ProviderKeyID: was, Model: "m1", Status: 200, Input: 1000})
+	if u, today := read(); u.Totals.Input >= 1000 || today.Input >= 1000 {
+		t.Fatalf("study counts the old value another area added again: %+v, today %+v", u.Totals, today)
+	}
+}

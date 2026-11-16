@@ -43,10 +43,12 @@ type Area struct {
 }
 
 // Account is an account an area owns, and since when: what it spent
-// counts from then.
+// counts from then. Previous are the refs it had before a key's value was
+// replaced in place (Rename), so what it spent under them stays its own.
 type Account struct {
-	Ref   string    `json:"ref"`
-	Added time.Time `json:"added"`
+	Ref      string    `json:"ref"`
+	Added    time.Time `json:"added"`
+	Previous []string  `json:"previous,omitempty"`
 }
 
 // Has says whether the area owns ref.
@@ -259,7 +261,8 @@ func ReleaseProvider(pid string) error {
 }
 
 // Rename moves ownership of from to to (a key's value replaced in place
-// gets a new fingerprint), in whichever area owns it.
+// gets a new fingerprint), in whichever area owns it. The account keeps
+// from in Previous: the calls made under it are still the area's.
 func Rename(from, to string) error {
 	if from == to {
 		return nil
@@ -267,8 +270,10 @@ func Rename(from, to string) error {
 	return change(func(f *file) error {
 		for i := range f.Areas {
 			for j := range f.Areas[i].Accounts {
-				if f.Areas[i].Accounts[j].Ref == from {
-					f.Areas[i].Accounts[j].Ref = to
+				if c := &f.Areas[i].Accounts[j]; c.Ref == from {
+					c.Ref = to
+					c.Previous = slices.DeleteFunc(c.Previous, func(r string) bool { return r == from || r == to })
+					c.Previous = append(c.Previous, from)
 				}
 			}
 		}
@@ -364,6 +369,9 @@ func clone(areas []Area) []Area {
 		out[i].Providers = slices.Clone(out[i].Providers)
 		out[i].SignIns = slices.Clone(out[i].SignIns)
 		out[i].Accounts = slices.Clone(out[i].Accounts)
+		for j := range out[i].Accounts {
+			out[i].Accounts[j].Previous = slices.Clone(out[i].Accounts[j].Previous)
+		}
 	}
 	return out
 }

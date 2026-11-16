@@ -261,6 +261,10 @@ type adminAccount struct {
 	// neither removes it nor is told what it spent until the owner settles it
 	Contested bool      `json:"contested,omitempty"`
 	Added     time.Time `json:"added"`
+	// previous are the fingerprints a key had before its value was
+	// replaced in place (area.Account.Previous): its calls under them are
+	// still the area's. Never told.
+	previous []string
 }
 
 // ownsRef: ref is a's, and no other area's too (contested: areas.json
@@ -279,9 +283,20 @@ func areaAccounts(a area.Area) []adminAccount {
 	for _, owned := range a.Accounts {
 		pid, ref, _ := strings.Cut(owned.Ref, "/")
 		acc := adminAccount{ID: owned.Ref, Provider: pid, Name: ref, Added: owned.Added, Gone: true, Contested: !ownsRef(a, owned.Ref)}
-		if p, err := provider.Find(pid); err == nil {
+		p, err := provider.Find(pid)
+		if err == nil {
 			acc.ProviderName = p.Name
 			describe(&acc, *p, ref)
+		}
+		// a value replaced and then added again (the owner's, another
+		// area's) is live under that fingerprint: its calls since can't be
+		// told apart, so none of them is this area's
+		for _, was := range owned.Previous {
+			wpid, fp, ok := strings.Cut(was, "/")
+			if !ok || wpid != pid || fp == "" || err == nil && slices.ContainsFunc(p.KeyList(), func(k provider.KeyInfo) bool { return k.ID == fp }) {
+				continue
+			}
+			acc.previous = append(acc.previous, fp)
 		}
 		out = append(out, acc)
 	}
@@ -530,17 +545,21 @@ type AreaUsage struct {
 var periodNames = map[usage.Period]string{usage.Today: "today", usage.Week: "7d", usage.Month: "30d"}
 
 // areaMatch is how the ledger names one of an area's accounts: a key by
-// its fingerprint, an account by Record.Account(), counted from added.
+// its fingerprint, or one it had before its value was replaced in place
+// (previous), an account by Record.Account(), counted from added.
 type areaMatch struct {
 	ref, name string
+	previous  []string
 	key       bool
 	added     time.Time
 }
 
 // names says whether r is m's call, whenever it was made.
 func (m areaMatch) names(r usage.Record) bool {
-	return m.key && r.ProviderKeyID != "" && r.ProviderKeyID == m.name ||
-		!m.key && m.name != "" && strings.EqualFold(r.Account(), m.name)
+	if m.key {
+		return r.ProviderKeyID != "" && (r.ProviderKeyID == m.name || slices.Contains(m.previous, r.ProviderKeyID))
+	}
+	return m.name != "" && strings.EqualFold(r.Account(), m.name)
 }
 
 // areaMatches are accs' uncontested accounts by provider.
@@ -553,7 +572,7 @@ func areaMatches(accs []adminAccount) map[string][]areaMatch {
 		pid, ref, _ := strings.Cut(acc.ID, "/")
 		m := areaMatch{ref: acc.ID, key: acc.Kind == "key", added: acc.Added, name: acc.Name}
 		if m.key {
-			m.name = ref // the fingerprint the ledger keeps
+			m.name, m.previous = ref, acc.previous // the fingerprints the ledger keeps
 		}
 		byProvider[pid] = append(byProvider[pid], m)
 	}

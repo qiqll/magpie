@@ -169,7 +169,13 @@ An area's account removed by anyone (the window, `magpie accounts`, its
 admin) is released at the removal's choke point once it went through:
 `provider.RemoveKey`, `RemoveKeys`, `ForgetLogin` (`releaseArea`). A key
 replaced in place (`ReplaceKey`) moves the area's ownership to its new
-fingerprint. One the area couldn't be told of lists as `gone`.
+fingerprint, and `area.Rename` keeps the old one in `Account.Previous`:
+usage and the areas list count the key's calls under each earlier
+fingerprint too (from `Added`, as one `byAccount` row under its ref now).
+An earlier fingerprint magpie has as a key again (the old value added back,
+by the owner or another area) is left out: its calls can't be told apart.
+An areas.json from before `previous` reads as it did. One the area couldn't
+be told of lists as `gone`.
 
 ## Verification
 

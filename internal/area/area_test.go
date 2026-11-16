@@ -3,8 +3,11 @@ package area
 import (
 	"errors"
 	"os"
+	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
+	"time"
 )
 
 func sandbox(t *testing.T) {
@@ -95,6 +98,38 @@ func TestClaimIsExclusive(t *testing.T) {
 	}
 	if id, _, _ := Owner("codex/l9"); id != a.ID {
 		t.Fatal("renamed ref lost its area:", id)
+	}
+}
+
+// A key replaced in place keeps the refs it had (T-186), so what it spent
+// under them stays its area's; an areas.json from before Previous reads
+// as it did.
+func TestRenameKeepsPrevious(t *testing.T) {
+	sandbox(t)
+	old := `{"version":1,"areas":[{"id":"ar_old","note":"旧","created":"2026-11-01T00:00:00Z","accounts":[{"ref":"plan/k1","added":"2026-11-01T00:00:00Z"}]}]}`
+	if err := os.MkdirAll(filepath.Dir(Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := Get("ar_old")
+	if err != nil || len(a.Accounts) != 1 || a.Accounts[0].Ref != "plan/k1" || a.Accounts[0].Previous != nil {
+		t.Fatal("an old areas.json:", a, err)
+	}
+	for _, step := range [][2]string{{"plan/k1", "plan/k2"}, {"plan/k2", "plan/k3"}, {"plan/k3", "plan/k1"}} {
+		if err := Rename(step[0], step[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, _ = Get("ar_old")
+	if c := a.Accounts[0]; c.Ref != "plan/k1" || !slices.Equal(c.Previous, []string{"plan/k2", "plan/k3"}) || !c.Added.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("after three replacements: %+v", c)
+	}
+	// a list's copy is its own
+	a.Accounts[0].Previous[0] = "x"
+	if b, _ := Get("ar_old"); b.Accounts[0].Previous[0] != "plan/k2" {
+		t.Fatal("List shares Previous with its cache")
 	}
 }
 
