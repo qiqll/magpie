@@ -66,12 +66,26 @@ func TestAreaSignInsNeverRunOver(t *testing.T) {
 	if SignInBusy(agent) {
 		t.Fatal("busy with none under way")
 	}
-	// an ended area's isn't kept once another of its agent starts
-	signIns.Lock()
-	_, kept := signIns.m[area.st.ID]
-	signIns.Unlock()
-	if kept {
-		t.Fatal("an ended area's sign-in kept")
+	// an area's that ended is read by its console after another of its
+	// agent starts (one waiting for it to end), until it is old
+	if st, ok := SignInStatus(area.st.ID); !ok || st.State != "canceled" {
+		t.Fatal("an area's replaced by the owner's, read after:", st.State, ok)
+	}
+	if err := reserveSignIn(area2, SignInOptions{Area: true}); err != nil {
+		t.Fatal(err)
+	}
+	replaceSignIns(area2)
+	if st, ok := SignInStatus(area.st.ID); !ok || st.State != "canceled" {
+		t.Fatal("an ended area's sign-in gone once the next started:", st.State, ok)
+	}
+	area2.finish(SignInState{State: "canceled"})
+	area.ended.Store(time.Now().Add(-areaSignInKept - time.Minute).UnixNano())
+	replaceSignIns(owner2)
+	if _, ok := SignInStatus(area.st.ID); ok {
+		t.Fatal("an area's sign-in kept long after it ended")
+	}
+	if st, ok := SignInStatus(area2.st.ID); !ok || st.State != "canceled" {
+		t.Fatal("a recent area's sign-in gone:", st.State, ok)
 	}
 }
 

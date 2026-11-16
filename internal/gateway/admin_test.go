@@ -286,6 +286,13 @@ func TestAdminWhoAndWhence(t *testing.T) {
 	if c, b := do("GET", AdminPath+"/me", loopback, study, "", "X-Forwarded-For", "203.0.113.9, 192.168.1.20"); c != 200 {
 		t.Fatal("a trusted proxy's client on the list:", c, b)
 	}
+	// magpie web's page port: a raw forward to it brings whatever header
+	// its client wrote, so a trusted proxy's word doesn't reach it
+	for _, xff := range []string{"127.0.0.1", "192.168.1.20"} {
+		if c, b := do("GET", AdminPath+"/me", loopback, study, "", PagePortHeader, "1", "X-Forwarded-For", xff); c != http.StatusForbidden || !strings.Contains(b, adminIPNotAllowed) {
+			t.Fatal("through the page port, trusting a proxy,", xff, c, b)
+		}
+	}
 	t.Setenv("MAGPIE_TRUST_PROXY", "")
 	c, b := do("GET", AdminPath+"/me", loopback, study, "")
 	if c != 200 || !strings.Contains(b, `"role":"area"`) || !strings.Contains(b, "娱乐") {

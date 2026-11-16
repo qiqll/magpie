@@ -78,8 +78,11 @@ agent's (`codex`, `claude`, `copilot`, `gemini`, `antigravity`).
      computer's, or on the admin allow list: else `403
      admin_ip_not_allowed`. An empty list is this computer alone. A request
      that reaches loopback through a proxy or tunnel here (a forwarding
-     header, magpie web's page port) is refused, or judged by the address
-     the proxy names when `MAGPIE_TRUST_PROXY=1`.
+     header) is refused, or judged by the address the proxy names when
+     `MAGPIE_TRUST_PROXY=1`. One through magpie web's page port is refused
+     either way: a raw forward to it brings whatever header its client
+     wrote. A raw TCP forward to the gateway's own port adds no header and
+     still reads as this computer; the admin key is then all that guards.
    - an enabled admin key (`access.Current`): else `401
      admin_key_required`, from loopback too;
    - the route's role: else `403 admin_console_only` / `admin_area_only`;
@@ -131,7 +134,9 @@ area yet, nor are Sign in with ChatGPT and file imports.
   owner's or another area's) stays whose it was and reads `conflict`;
   its tokens were renewed by the sign-in, which hands no account across.
 - Each sign-in is read, pasted into and cancelled by the area that started
-  it alone (`areaSignIns`).
+  it alone (`areaSignIns`). One that ended, or that the owner's replaced
+  (canceled), is still read for 10 minutes (`areaSignInKept`), so its
+  console learns how it ended when another started as it ended.
 
 ## The owner's window
 

@@ -894,8 +894,8 @@ func migrateLegacyLANKey() error {
 		return subtle.ConstantTimeCompare([]byte(k.Secret), []byte(s.LANKey)) == 1
 	})
 	if i < 0 {
-		keys = slices.Insert(keys, firstAdmin(keys), legacyLANKey(s.LANKey))
-		i = len(keys) - 1
+		i = firstAdmin(keys) // before the admin keys, which are kept last
+		keys = slices.Insert(keys, i, legacyLANKey(s.LANKey))
 	}
 	keys[i].LAN = true
 	if err := save(keys); err != nil {
@@ -951,8 +951,8 @@ func configureLAN(on, rotate bool) error {
 				if err != nil {
 					return err
 				}
-				keys = slices.Insert(keys, firstAdmin(keys), Key{ID: id, Name: "Magpie", LAN: true})
-				i = len(keys) - 1
+				i = firstAdmin(keys) // before the admin keys, which are kept last
+				keys = slices.Insert(keys, i, Key{ID: id, Name: "Magpie", LAN: true})
 			}
 			keys[i].Secret = Prefix + token
 			if err := save(keys); err != nil {

@@ -184,10 +184,12 @@ type signInFlow struct {
 	// may hold a code left out (claudeSaidSafe)
 	said string
 	// area and onDone are SignInOptions' Area and Done; over is set once
-	// the sign-in ended, read under signIns' lock (reserveSignIn)
+	// the sign-in ended, read under signIns' lock (reserveSignIn), and
+	// ended is when (UnixNano), which keeps an area's for its console
 	area   bool
 	onDone func(SignInState) SignInState
 	over   atomic.Bool
+	ended  atomic.Int64
 }
 
 // SignInOptions are a sign-in's choices beyond its subscription.
@@ -468,6 +470,13 @@ func StartSignInWith(agent string, o SignInOptions) (SignInState, error) {
 	return s.status(), nil
 }
 
+// areaSignInKept is how long an area's sign-in that ended is still read
+// (SignInStatus) after another to its agent started: its console polls,
+// and one that started as it ended (an area waiting for ErrSignInBusy to
+// clear) would otherwise leave it reading "not found" for an account its
+// area got.
+const areaSignInKept = 10 * time.Minute
+
 // replaceSignIns lists s, the one sign-in of its agent at a time: a newer
 // one replaces the older, which is canceled once signIns is let go, as
 // finish logs and the log's writer can block.
@@ -484,12 +493,18 @@ func replaceSignIns(s *signInFlow) {
 		}
 		switch {
 		case o.over.Load() && o.area:
-			// an area's that ended: not kept till magpie quits
-			delete(signIns.m, id)
+			// an area's that ended is kept a while, for its console to
+			// read how it ended, and not till magpie quits
+			if time.Since(time.Unix(0, o.ended.Load())) > areaSignInKept {
+				delete(signIns.m, id)
+			}
 		case !s.area:
-			// the owner's replaces every other, an area's included
+			// the owner's replaces every other, an area's included; an
+			// area's stays listed, canceled, for its console to read
 			old = append(old, o)
-			delete(signIns.m, id)
+			if !o.area {
+				delete(signIns.m, id)
+			}
 		}
 	}
 	signIns.m[s.st.ID] = s
@@ -907,6 +922,7 @@ func (s *signInFlow) finish(out SignInState) bool {
 		return false
 	}
 	s.finished = true
+	s.ended.Store(time.Now().UnixNano())
 	s.over.Store(true)
 	back := false
 	if out.State == "done" {

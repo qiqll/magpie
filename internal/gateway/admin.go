@@ -843,10 +843,13 @@ var lastAdminAllow struct {
 
 // adminAllowed: r came from this computer, or an address on the admin
 // allow list, judged by the connection's own address. One that reaches
-// loopback through a proxy or tunnel here (a forwarding header, or magpie
-// web's page port) is someone else's, from wherever that reaches: it is
-// judged by the address the proxy names only when MAGPIE_TRUST_PROXY says
-// the proxy here sets it, and refused otherwise. A forwarding header from
+// loopback through a proxy or tunnel here (a forwarding header) is
+// someone else's, from wherever that reaches: it is judged by the address
+// the proxy names only when MAGPIE_TRUST_PROXY says the proxy here sets
+// it, and refused otherwise. One through magpie web's page port is
+// refused, trusted proxy or not: a raw forward to that port arrives from
+// loopback carrying whatever forwarding header its client wrote, so no
+// address it names is vouched for (oneport.go). A forwarding header from
 // another computer is never taken for its address.
 func adminAllowed(r *http.Request) (string, bool) {
 	a, ok := peerAddr(r)
@@ -854,7 +857,10 @@ func adminAllowed(r *http.Request) (string, bool) {
 		return r.RemoteAddr, false
 	}
 	if a.IsLoopback() || ownAddr(a) {
-		forwarded := viaPagePort(r) || slices.ContainsFunc(forwardHeaders, func(h string) bool { return r.Header.Get(h) != "" })
+		if viaPagePort(r) {
+			return a.String() + " (through magpie web's page port)", false
+		}
+		forwarded := slices.ContainsFunc(forwardHeaders, func(h string) bool { return r.Header.Get(h) != "" })
 		if !forwarded {
 			return a.String(), true
 		}

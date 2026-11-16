@@ -1,7 +1,10 @@
 package access
 
 import (
+	"slices"
 	"testing"
+
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // Admin keys are kept last: a key added, issued or moved goes before
@@ -65,3 +68,47 @@ func mustCopy(t *testing.T, id string) string {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// Sharing's default key, made or migrated, goes before the admin keys,
+// and is the key sharing names: never an admin key given a new value
+// (its admin locked out) or handed out as sharing's.
+func TestSharingKeyNeverAnAdminKey(t *testing.T) {
+	check := func(t *testing.T, admin Key, secret string) {
+		t.Helper()
+		keys, _ := List()
+		last := keys[len(keys)-1]
+		if last.ID != admin.ID || last.LAN || mustCopy(t, admin.ID) != secret {
+			t.Fatalf("the admin key changed: %+v", last)
+		}
+		s := settings.Load()
+		i := slices.IndexFunc(keys, func(k Key) bool { return k.ID == s.LANKeyID })
+		if i < 0 || keys[i].Admin != "" || !keys[i].LAN || i != len(keys)-2 || mustCopy(t, keys[i].ID) == "" {
+			t.Fatalf("sharing's key is %d of %s", i, names(keys))
+		}
+	}
+	t.Run("made", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		admin, secret, err := AddAdmin(AdminArea, "ar_1", "Area admin")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ConfigureLAN(true, false); err != nil {
+			t.Fatal(err)
+		}
+		check(t, admin, secret)
+	})
+	t.Run("migrated", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		admin, secret, err := AddAdmin(AdminConsole, "", "Console")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := settings.Save(settings.Settings{LAN: true, LANKey: "sk-magpie-fixture-legacy"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := MigrateLegacyLANKey(); err != nil {
+			t.Fatal(err)
+		}
+		check(t, admin, secret)
+	})
+}
