@@ -168,7 +168,8 @@ repository can keep the token. The branch is part of the sync state key.
 this computer on a schedule (jwaitq on Discord). `RunAuto` runs while the
 gateway serves (`gateway.WhileServing`, wired in `internal/cli/main.go`) and
 calls `AutoTick` every few minutes; tests call `AutoTick` with their own
-clock.
+clock. A tick ends with the gateway's context (T-206): cut, it leaves no
+temporary file and notes nothing, so the next tick makes the backup.
 
 - **Config:** `autobackup.json` beside the settings holds only what the user
   set (`Off`, `Hours`, `Keep`, `Dir`). Missing means on, every 24 hours,

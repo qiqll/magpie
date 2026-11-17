@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -115,7 +116,7 @@ func TestAutoBackupSignInsSealedAndDeduped(t *testing.T) {
 	if raw, _ := json.Marshal(AutoStatus()); strings.Contains(string(raw), "pass phrase") {
 		t.Fatal("the passphrase is sent to the page")
 	}
-	b, err := AutoTick(t0, "test")
+	b, err := AutoTick(context.Background(), t0, "test")
 	if err != nil || b == nil || !b.SignIns {
 		t.Fatal(b, err)
 	}
@@ -129,7 +130,7 @@ func TestAutoBackupSignInsSealedAndDeduped(t *testing.T) {
 		}
 	}
 	// a day on, the same: none made. A sign-in renewed: one made
-	if b, err := AutoTick(t0.Add(24*time.Hour), "test"); err != nil || b != nil {
+	if b, err := AutoTick(context.Background(), t0.Add(24*time.Hour), "test"); err != nil || b != nil {
 		t.Fatal("a backup made with nothing changed", b, err)
 	}
 	if err := plugin.EditAuth(func(m map[string]json.RawMessage) (bool, error) {
@@ -138,7 +139,7 @@ func TestAutoBackupSignInsSealedAndDeduped(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	b2, err := AutoTick(t0.Add(48*time.Hour), "test")
+	b2, err := AutoTick(context.Background(), t0.Add(48*time.Hour), "test")
 	if err != nil || b2 == nil {
 		t.Fatal("a renewed sign-in made no backup", b2, err)
 	}

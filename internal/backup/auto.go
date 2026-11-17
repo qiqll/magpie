@@ -258,8 +258,9 @@ func bundleBytes(b Bundle) ([]byte, string, error) {
 
 // writeAuto writes b into dir as a backup made at now for reason, through
 // a temporary file renamed into place, so a backup cut short (the machine
-// going off mid-write) is never at a backup's name.
-func writeAuto(dir, reason string, b Bundle, si autoSealed, now time.Time) (AutoBackup, error) {
+// going off mid-write, or ctx ending: the gateway stopping) is never at a
+// backup's name, and its temporary file is removed.
+func writeAuto(ctx context.Context, dir, reason string, b Bundle, si autoSealed, now time.Time) (AutoBackup, error) {
 	raw, sum, err := bundleBytes(b)
 	if err != nil {
 		return AutoBackup{}, err
@@ -283,8 +284,17 @@ func writeAuto(dir, reason string, b Bundle, si autoSealed, now time.Time) (Auto
 		os.Remove(tmp.Name())
 		return AutoBackup{}, err
 	}
-	if _, err := tmp.Write(data); err != nil {
-		return gone(err)
+	// written a part at a time, so a stop waits for one part, not the
+	// whole of a large library
+	for rest := data; len(rest) > 0; {
+		if err := ctx.Err(); err != nil {
+			return gone(err)
+		}
+		n := min(len(rest), autoPart)
+		if _, err := tmp.Write(rest[:n]); err != nil {
+			return gone(err)
+		}
+		rest = rest[n:]
 	}
 	if err := tmp.Sync(); err != nil {
 		return gone(err)
@@ -293,6 +303,10 @@ func writeAuto(dir, reason string, b Bundle, si autoSealed, now time.Time) (Auto
 		return gone(err)
 	}
 	os.Chmod(tmp.Name(), 0o600)
+	if err := ctx.Err(); err != nil {
+		os.Remove(tmp.Name())
+		return AutoBackup{}, err
+	}
 	stamp := now.UTC().Format("20060102-150405")
 	name := "magpie-" + stamp + "-" + reason + ".json"
 	for i := 2; ; i++ { // never over another
@@ -400,7 +414,8 @@ func pruneAuto(dir, reason string, keep int, now time.Time) {
 // autoCollect is the setup as an export without keys holds it, and the
 // proxy and saved proxies (T-110) taken out too: they may name a password, the file isn't sealed, and
 // a restore keeps this computer's own proxy (KeepOwn) anyway.
-func autoCollect(app string) (Bundle, error) {
+// A var so a test can end a tick's ctx while it collects.
+var autoCollect = func(app string) (Bundle, error) {
 	b, err := Collect(false, app)
 	if err == nil && b.Settings != nil {
 		s := *b.Settings
@@ -410,13 +425,22 @@ func autoCollect(app string) (Bundle, error) {
 	return b, err
 }
 
+// autoPart is how much of a backup is written between looks at its ctx.
+const autoPart = 1 << 20
+
 // AutoTick makes a backup if one is due at now: on, the interval gone by
 // since the last one (or the clock gone back before it), and the setup
 // changed since the newest scheduled backup. It says the backup made, or
 // nothing. A setup that can't be read whole makes none (Collect's error).
-func AutoTick(now time.Time, app string) (*AutoBackup, error) {
+// It ends when ctx does (the gateway stopping, which waits for RunAuto;
+// T-206), between its steps and between the parts of its write, with its
+// error, no backup made and none noted: the next tick makes it.
+func AutoTick(ctx context.Context, now time.Time, app string) (*AutoBackup, error) {
 	autoMu.Lock()
 	defer autoMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	c, err := LoadAuto()
 	if err != nil {
 		return nil, err
@@ -444,15 +468,21 @@ func AutoTick(now time.Time, app string) (*AutoBackup, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	si, err := autoSignIns(c)
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if _, sum, err := bundleBytes(b); err == nil && newest != nil && newest.sum == sum && newest.siSum == si.sum {
 		autoChecked = now // nothing changed: none made, looked at again in an interval
 		return nil, nil
 	}
-	made, err := writeAuto(dir, ReasonAuto, b, si, now)
+	made, err := writeAuto(ctx, dir, ReasonAuto, b, si, now)
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +508,7 @@ func AutoNow(app string) (AutoBackup, error) {
 		return AutoBackup{}, err
 	}
 	now := time.Now()
-	made, err := writeAuto(c.dir(), ReasonAuto, b, si, now)
+	made, err := writeAuto(context.Background(), c.dir(), ReasonAuto, b, si, now)
 	if err != nil {
 		return made, err
 	}
@@ -529,7 +559,7 @@ func AutoRestore(name, app string) (Result, AutoBackup, error) {
 	if err != nil {
 		return Result{}, AutoBackup{}, fmt.Errorf("couldn't back up the setup here first, so nothing was put back: %w", err)
 	}
-	before, err := writeAuto(dir, ReasonRestore, cur, si, now)
+	before, err := writeAuto(context.Background(), dir, ReasonRestore, cur, si, now)
 	if err != nil {
 		return Result{}, AutoBackup{}, fmt.Errorf("couldn't back up the setup here first, so nothing was put back: %w", err)
 	}
@@ -613,7 +643,10 @@ func RunAuto(ctx context.Context) {
 		case <-t.C:
 		}
 		t.Reset(autoPoll)
-		_, err := AutoTick(time.Now(), "magpie")
+		_, err := AutoTick(ctx, time.Now(), "magpie")
+		if ctx.Err() != nil {
+			return // cut by the gateway's end: no failure to show
+		}
 		autoMu.Lock()
 		if msg := fmt.Sprint(err); err != nil && msg != autoErr {
 			log.Printf("backing up by itself: %s", msg)

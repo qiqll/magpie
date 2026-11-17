@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -39,7 +40,7 @@ func (f *fakeWSLScience) run(name string, _ time.Duration, script string, args .
 	if args[0] != "" {
 		env = []string{scienceVar + "=" + args[0]}
 	}
-	return f.fakeScience.run(env, "claude-science", args[1:]...)
+	return f.fakeScience.run(context.Background(), env, "claude-science", args[1:]...)
 }
 
 func scienceDistro(t *testing.T) distro {
@@ -134,7 +135,7 @@ func TestClaudeScienceInWSLUnderNAT(t *testing.T) {
 	f.running, f.calls, f.relay = false, nil, nil
 	f.lock()
 	h := scienceInWSL(d)
-	h.keepOnce()
+	h.keepOnce(context.Background())
 	if got, _ := f.base(); !f.running || got != want || len(f.relay) != 1 {
 		t.Errorf("keeper: running %v on %q, relay %q, ran %q", f.running, got, f.relay, f.calls)
 	}
@@ -142,7 +143,7 @@ func TestClaudeScienceInWSLUnderNAT(t *testing.T) {
 	// asks status
 	f.calls, f.relay = nil, nil
 	h.keep.asked = time.Time{}
-	h.keepOnce()
+	h.keepOnce(context.Background())
 	if !slices.Equal(f.calls, []string{"status"}) || len(f.relay) != 1 {
 		t.Errorf("keeper on its own daemon ran %q, relay %q", f.calls, f.relay)
 	}

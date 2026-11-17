@@ -107,9 +107,11 @@ func findScience(home string) string {
 // scienceRun runs the daemon's program bin with args, its environment env
 // (nil: magpie's own), and is what it printed. A var so tests never start
 // the real one. serve --detached returns once its daemon is up; the
-// daemon keeps none of the pipes, which go to no file at all.
-var scienceRun = func(env []string, bin string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+// daemon keeps none of the pipes, which go to no file at all. It ends
+// when ctx does: the keeper's ends with the gateway, which waits for it
+// (T-206).
+var scienceRun = func(ctx context.Context, env []string, bin string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	cmd := proc.CommandContext(ctx, bin, args...)
 	cmd.Env = env
@@ -160,8 +162,8 @@ type scienceHost struct {
 	id  string        // the agent's id
 	bin func() string // its program, "" when it isn't installed
 	// run runs the program bin with args, a serve with the variable set to
-	// gw ("": without it), and is what it printed
-	run func(bin, gw string, args ...string) ([]byte, error)
+	// gw ("": without it), and is what it printed; it ends when ctx does
+	run func(ctx context.Context, bin, gw string, args ...string) ([]byte, error)
 	// dir is the daemon's data folder as magpie opens it
 	dir func() string
 	// stat is the program's file, for its version (asked again only when
@@ -185,12 +187,12 @@ func scienceHere() *scienceHost {
 	return &scienceHost{
 		id:  ScienceID,
 		bin: func() string { return scienceBin() },
-		run: func(bin, gw string, args ...string) ([]byte, error) {
+		run: func(ctx context.Context, bin, gw string, args ...string) ([]byte, error) {
 			var env []string
 			if len(args) > 0 && args[0] == "serve" {
 				env = scienceEnv(gw)
 			}
-			return scienceRun(env, bin, args...)
+			return scienceRun(ctx, env, bin, args...)
 		},
 		dir:  func() string { return scienceDir() },
 		stat: os.Stat,
@@ -216,9 +218,9 @@ func (h *scienceHost) lock() (scienceStatus, bool) {
 	return st, true
 }
 
-func (h *scienceHost) state(bin string) (scienceStatus, error) {
+func (h *scienceHost) state(ctx context.Context, bin string) (scienceStatus, error) {
 	var st scienceStatus
-	out, err := h.run(bin, "", "status")
+	out, err := h.run(ctx, bin, "", "status")
 	if err != nil {
 		return st, fmt.Errorf("claude-science status: %w", err)
 	}
@@ -284,25 +286,25 @@ var scienceMu sync.Mutex
 // restart stops the daemon when it runs and starts it on gw ("": without
 // the variable), on the port it was on; only stops it for !start. It is
 // the daemon now running.
-func (h *scienceHost) restart(bin, gw string, start bool) (scienceStatus, error) {
-	was, err := h.state(bin)
+func (h *scienceHost) restart(ctx context.Context, bin, gw string, start bool) (scienceStatus, error) {
+	was, err := h.state(ctx, bin)
 	if err != nil {
 		return was, err
 	}
 	if was.Running {
-		if out, err := h.run(bin, "", "stop"); err != nil {
+		if out, err := h.run(ctx, bin, "", "stop"); err != nil {
 			return was, fmt.Errorf("claude-science stop: %w %s", err, strings.TrimSpace(string(out)))
 		}
 	}
 	if !start {
 		return scienceStatus{}, nil
 	}
-	return h.serve(bin, gw, was.Port)
+	return h.serve(ctx, bin, gw, was.Port)
 }
 
 // serve starts the daemon on gw ("": without the variable), on port when
 // it isn't 0, and waits till status says it runs.
-func (h *scienceHost) serve(bin, gw string, port int) (scienceStatus, error) {
+func (h *scienceHost) serve(ctx context.Context, bin, gw string, port int) (scienceStatus, error) {
 	if gw != "" && h.ready != nil {
 		if err := h.ready(); err != nil {
 			return scienceStatus{}, err
@@ -312,19 +314,23 @@ func (h *scienceHost) serve(bin, gw string, port int) (scienceStatus, error) {
 	if port > 0 {
 		args = append(args, "--port", strconv.Itoa(port))
 	}
-	if out, err := h.run(bin, gw, args...); err != nil {
+	if out, err := h.run(ctx, bin, gw, args...); err != nil {
 		return scienceStatus{}, fmt.Errorf("claude-science serve: %w %s", err, strings.TrimSpace(string(out)))
 	}
 	var st scienceStatus
 	for deadline := time.Now().Add(scienceWait); ; {
 		var err error
-		if st, err = h.state(bin); err == nil && st.Running {
+		if st, err = h.state(ctx, bin); err == nil && st.Running {
 			return st, nil
 		}
 		if time.Now().After(deadline) {
 			return st, errors.New("claude-science serve: its daemon isn't running (see claude-science logs)")
 		}
-		time.Sleep(scienceWait / 60)
+		select {
+		case <-ctx.Done():
+			return st, ctx.Err()
+		case <-time.After(scienceWait / 60):
+		}
 	}
 }
 
@@ -336,17 +342,18 @@ func scienceOn(on bool) error { return scienceHere().on(on) }
 // on restarts the daemon on the gateway, and notes it; off restarts it
 // without the variable, when it ran, and drops the note.
 func (h *scienceHost) on(on bool) error {
+	ctx := context.Background() // the user's own Connect or Disconnect: never cut
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	bin := h.bin()
 	if !on {
 		if wired := h.wired(); wired && bin != "" {
-			st, err := h.state(bin)
+			st, err := h.state(ctx, bin)
 			if err != nil {
 				return err
 			}
 			if st.Running {
-				if _, err := h.restart(bin, "", true); err != nil {
+				if _, err := h.restart(ctx, bin, "", true); err != nil {
 					return err
 				}
 			}
@@ -369,14 +376,14 @@ func (h *scienceHost) on(on bool) error {
 	// the daemon magpie started, on this gateway, is left running: Connect
 	// sets the field it connected by again (Pick)
 	if m, wired := h.readMark(); wired && m.URL == gw {
-		if st, err := h.state(bin); err == nil && st.Running && st.PID == m.PID {
+		if st, err := h.state(ctx, bin); err == nil && st.Running && st.PID == m.PID {
 			if h.ready != nil {
 				return h.ready()
 			}
 			return nil
 		}
 	}
-	st, err := h.restart(bin, gw, true)
+	st, err := h.restart(ctx, bin, gw, true)
 	if err != nil {
 		return err
 	}
@@ -426,7 +433,7 @@ func scienceShown(gw string) string {
 // each running WSL distro's Claude Science magpie connected
 // (wslScienceHosts), and never starts a stopped distro.
 func KeepClaudeScience(ctx context.Context) {
-	keepScienceOnce()
+	keepScienceOnce(ctx)
 	tick := time.NewTicker(scienceTick)
 	defer tick.Stop()
 	for {
@@ -434,7 +441,7 @@ func KeepClaudeScience(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			keepScienceOnce()
+			keepScienceOnce(ctx)
 		}
 	}
 }
@@ -465,7 +472,7 @@ const scienceRetakes = 3
 
 // version is the version of the program at bin, "" unknown, asked again
 // only when the file changed (the app updated).
-func (h *scienceHost) version(bin string) string {
+func (h *scienceHost) version(ctx context.Context, bin string) string {
 	fi, err := h.stat(bin)
 	if err != nil {
 		return ""
@@ -474,7 +481,7 @@ func (h *scienceHost) version(bin string) string {
 	if k.bin == bin && k.binSize == fi.Size() && k.binTime.Equal(fi.ModTime()) {
 		return k.version
 	}
-	out, err := h.run(bin, "", "--version")
+	out, err := h.run(ctx, bin, "", "--version")
 	if err != nil {
 		return ""
 	}
@@ -515,28 +522,33 @@ func olderVersion(a, b string) bool {
 // didn't start, one started for the gateway's old address, or its own
 // older than the program installed (the app updated, and would offer to
 // run its own instead); "" when it is.
-func (h *scienceHost) stale(bin string, st scienceStatus, m scienceMark, gw string) string {
+func (h *scienceHost) stale(ctx context.Context, bin string, st scienceStatus, m scienceMark, gw string) string {
 	switch {
 	case st.PID != m.PID:
 		return fmt.Sprintf("pid %d isn't the one magpie started", st.PID)
 	case m.URL != gw:
 		return "it was started for the gateway at " + scienceShown(m.URL)
 	}
-	if v := h.version(bin); v != "" && olderVersion(st.Version, v) {
+	if v := h.version(ctx, bin); v != "" && olderVersion(st.Version, v) {
 		return fmt.Sprintf("it runs %s and %s is installed", st.Version, v)
 	}
 	return ""
 }
 
-func keepScienceOnce() {
-	scienceHere().keepOnce()
+// keepScienceOnce looks once, until ctx ends: a look cut by it is made
+// again on the gateway's next start.
+func keepScienceOnce(ctx context.Context) {
+	scienceHere().keepOnce(ctx)
+	if ctx.Err() != nil {
+		return
+	}
 	for _, h := range wslScienceHosts() {
-		h.keepOnce()
+		h.keepOnce(ctx)
 	}
 }
 
-func (h *scienceHost) keepOnce() {
-	if !h.wired() {
+func (h *scienceHost) keepOnce(ctx context.Context) {
+	if ctx.Err() != nil || !h.wired() {
 		return
 	}
 	h.mu.Lock()
@@ -550,7 +562,7 @@ func (h *scienceHost) keepOnce() {
 	if lock.PID == k.lockPID && time.Since(k.asked) < time.Minute {
 		return
 	}
-	st, err := h.state(bin)
+	st, err := h.state(ctx, bin)
 	k.asked, k.lockPID = time.Now(), lock.PID
 	if err != nil {
 		return
@@ -562,7 +574,7 @@ func (h *scienceHost) keepOnce() {
 	m, _ := h.readMark()
 	port := m.Port
 	if st.Running {
-		why := h.stale(bin, st, m, gw)
+		why := h.stale(ctx, bin, st, m, gw)
 		// a session running in it would be cut off; a service would start
 		// it again without the variable
 		if why == "" || !st.idle() || st.kept() {
@@ -578,18 +590,20 @@ func (h *scienceHost) keepOnce() {
 		}
 		cut := time.Now().Add(-time.Hour)
 		k.retook = slices.DeleteFunc(k.retook, func(t time.Time) bool { return t.Before(cut) })
-		if len(k.retook) >= scienceRetakes {
+		// a daemon not stopped is better than one stopped and not
+		// started again: the gateway ending doesn't begin a restart
+		if len(k.retook) >= scienceRetakes || ctx.Err() != nil {
 			return
 		}
 		k.retook = append(k.retook, time.Now())
 		log.Printf("%s (%s): starting its daemon on magpie's gateway again: %s", scienceName, h.id, why)
-		if out, err := h.run(bin, "", "stop"); err != nil {
+		if out, err := h.run(ctx, bin, "", "stop"); err != nil {
 			log.Printf("%s (%s): claude-science stop: %v %s", scienceName, h.id, err, strings.TrimSpace(string(out)))
 			return
 		}
 		port = st.Port
 	}
-	st, err = h.serve(bin, gw, port)
+	st, err = h.serve(ctx, bin, gw, port)
 	if err != nil {
 		log.Printf("%s (%s): starting its daemon on magpie's gateway: %v", scienceName, h.id, err)
 		return

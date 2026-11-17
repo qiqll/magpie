@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,7 @@ func TestAutoBackupLeavesOutSavedProxies(t *testing.T) {
 	if err := settings.SetProxies([]settings.SavedProxy{{Name: "Home", URL: "http://user:saved-SYNTHETIC-pass@10.0.0.9:3128"}}); err != nil {
 		t.Fatal(err)
 	}
-	b, err := AutoTick(t0, "test")
+	b, err := AutoTick(context.Background(), t0, "test")
 	if err != nil || b == nil {
 		t.Fatal(b, err)
 	}

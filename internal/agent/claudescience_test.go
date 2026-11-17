@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -27,7 +28,7 @@ type fakeScience struct {
 	version, installed string
 }
 
-func (f *fakeScience) run(env []string, _ string, args ...string) ([]byte, error) {
+func (f *fakeScience) run(_ context.Context, env []string, _ string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, strings.Join(args, " "))
 	switch args[0] {
 	case "status":
@@ -130,14 +131,14 @@ func TestClaudeScienceRestartsItsDaemon(t *testing.T) {
 		t.Errorf("a daemon magpie didn't start: check %q", d)
 	}
 	f.calls = nil
-	keepScienceOnce()
+	keepScienceOnce(context.Background())
 	if !slices.Equal(f.calls, []string{"status"}) || f.pid != 77 {
 		t.Errorf("the keeper touched a daemon running: %q", f.calls)
 	}
 	// none running (the computer restarted): started on the gateway
 	f.running, f.calls = false, nil
 	f.lock()
-	keepScienceOnce()
+	keepScienceOnce(context.Background())
 	if got, _ := f.base(); !f.running || got != gateway.URL() || a.Check() != "" {
 		t.Errorf("not started again on the gateway: %q, %q", f.calls, got)
 	}
@@ -163,7 +164,7 @@ func TestClaudeScienceRestartsItsDaemon(t *testing.T) {
 	// and the keeper starts nothing now
 	f.running, f.calls = false, nil
 	f.lock()
-	keepScienceOnce()
+	keepScienceOnce(context.Background())
 	if f.running || len(f.calls) != 0 {
 		t.Errorf("started while disconnected: %q", f.calls)
 	}
@@ -240,7 +241,7 @@ func TestClaudeScienceTakesBackFromItsApp(t *testing.T) {
 		t.Helper()
 		f.calls = nil
 		scienceKeep.asked = time.Time{} // a minute went by
-		keepScienceOnce()
+		keepScienceOnce(context.Background())
 	}
 	keep()
 	if f.pid != ours || slices.Contains(f.calls, "stop") {
@@ -277,7 +278,7 @@ func TestClaudeScienceTakesBackFromItsApp(t *testing.T) {
 	scienceKeep.asked = time.Now()
 	scienceKeep.lockPID = ours
 	f.calls = nil
-	keepScienceOnce()
+	keepScienceOnce(context.Background())
 	if got, _ := f.base(); f.pid == 900 || got != gateway.URL() || f.port != 18481 {
 		t.Errorf("not put back on the gateway on its port: %q, pid %d, base %q, port %d", f.calls, f.pid, got, f.port)
 	}
@@ -286,7 +287,7 @@ func TestClaudeScienceTakesBackFromItsApp(t *testing.T) {
 	}
 	// and the lock unchanged within the minute: status isn't asked
 	f.calls = nil
-	keepScienceOnce()
+	keepScienceOnce(context.Background())
 	if len(f.calls) != 0 {
 		t.Errorf("asked again with the lock unchanged: %q", f.calls)
 	}

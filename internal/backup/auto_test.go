@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,7 +57,7 @@ func TestAutoBackupOnSchedule(t *testing.T) {
 	autoHome(t)
 	tick := func(at time.Time, want bool) {
 		t.Helper()
-		b, err := AutoTick(at, "test")
+		b, err := AutoTick(context.Background(), at, "test")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +90,7 @@ func TestAutoBackupOnSchedule(t *testing.T) {
 // a fresh start: no backup at every launch.
 func TestAutoBackupAfterRestartWaits(t *testing.T) {
 	autoHome(t)
-	if _, err := AutoTick(t0, "test"); err != nil {
+	if _, err := AutoTick(context.Background(), t0, "test"); err != nil {
 		t.Fatal(err)
 	}
 	setTheme(t, "light")
@@ -97,7 +98,7 @@ func TestAutoBackupAfterRestartWaits(t *testing.T) {
 	autoChecked = time.Time{}
 	clear(autoSeen)
 	autoMu.Unlock()
-	if b, err := AutoTick(t0.Add(2*time.Hour), "test"); err != nil || b != nil {
+	if b, err := AutoTick(context.Background(), t0.Add(2*time.Hour), "test"); err != nil || b != nil {
 		t.Fatalf("made %+v, %v two hours after the last", b, err)
 	}
 }
@@ -109,7 +110,7 @@ func TestAutoBackupOffOrUnreadable(t *testing.T) {
 	if err := SaveAuto(AutoConfig{Off: true}); err != nil {
 		t.Fatal(err)
 	}
-	if b, err := AutoTick(t0, "test"); err != nil || b != nil {
+	if b, err := AutoTick(context.Background(), t0, "test"); err != nil || b != nil {
 		t.Fatalf("off made %+v, %v", b, err)
 	}
 	if v := AutoStatus(); v.On || v.Hours != DefaultHours || v.Keep != DefaultKeep {
@@ -118,7 +119,7 @@ func TestAutoBackupOffOrUnreadable(t *testing.T) {
 	if err := os.WriteFile(autoPath(), []byte(`{"off":tr`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if b, err := AutoTick(t0, "test"); err == nil || b != nil {
+	if b, err := AutoTick(context.Background(), t0, "test"); err == nil || b != nil {
 		t.Fatalf("unreadable setup made %+v, %v", b, err)
 	}
 	if v := AutoStatus(); v.On || v.Error == "" {
@@ -157,7 +158,7 @@ func TestAutoBackupPrunes(t *testing.T) {
 		if err := profile.Save("work", profile.Profile{Fields: map[string]string{"claude.model": fmt.Sprint("acme/m", i)}}); err != nil {
 			t.Fatal(err)
 		}
-		b, err := AutoTick(t0.Add(time.Duration(i)*time.Hour), "test")
+		b, err := AutoTick(context.Background(), t0.Add(time.Duration(i)*time.Hour), "test")
 		if err != nil || b == nil {
 			t.Fatalf("tick %d: %+v %v", i, b, err)
 		}
@@ -188,7 +189,7 @@ func TestAutoBackupHoldsNoSecrets(t *testing.T) {
 	if err := settings.Save(s); err != nil {
 		t.Fatal(err)
 	}
-	b, err := AutoTick(t0, "test")
+	b, err := AutoTick(context.Background(), t0, "test")
 	if err != nil || b == nil {
 		t.Fatal(b, err)
 	}
@@ -229,7 +230,7 @@ func TestAutoBackupHoldsNoSecrets(t *testing.T) {
 // what was here, so restoring that one undoes it.
 func TestAutoRestoreRoundTripAndUndo(t *testing.T) {
 	autoHome(t)
-	a, err := AutoTick(t0, "test")
+	a, err := AutoTick(context.Background(), t0, "test")
 	if err != nil || a == nil {
 		t.Fatal(a, err)
 	}
@@ -286,7 +287,7 @@ func TestAutoRestoreRoundTripAndUndo(t *testing.T) {
 // put back over it.
 func TestAutoRestoreNeedsTheBackupFirst(t *testing.T) {
 	autoHome(t)
-	a, err := AutoTick(t0, "test")
+	a, err := AutoTick(context.Background(), t0, "test")
 	if err != nil || a == nil {
 		t.Fatal(a, err)
 	}
@@ -319,7 +320,7 @@ func TestAutoRestoreNeedsTheBackupFirst(t *testing.T) {
 // backup's name.
 func TestAutoHalfWrittenNeverListed(t *testing.T) {
 	autoHome(t)
-	good, err := AutoTick(t0, "test")
+	good, err := AutoTick(context.Background(), t0, "test")
 	if err != nil || good == nil {
 		t.Fatal(good, err)
 	}

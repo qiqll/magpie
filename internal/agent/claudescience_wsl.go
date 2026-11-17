@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -99,7 +100,12 @@ func scienceInWSL(d distro) *scienceHost {
 			}
 			return ""
 		},
-		run: func(_, gw string, args ...string) ([]byte, error) {
+		run: func(ctx context.Context, _, gw string, args ...string) ([]byte, error) {
+			// wsl.exe takes no ctx (wslRun): one not begun once it ends
+			// isn't begun
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			out, err := scienceWSLRun(d.Name, 90*time.Second, scienceWSLScript, append([]string{gw}, args...)...)
 			if err != nil && len(out) > 0 {
 				err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
