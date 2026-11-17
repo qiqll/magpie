@@ -107,11 +107,13 @@ agent's (`codex`, `claude`, `copilot`, `gemini`, `antigravity`).
 
 `/v1/magpie/admin/*`. Area: `me`, `options`, `accounts`, `accounts/key`,
 `accounts/remove`, `usage`, `usage/requests`, `usage/stats`, `signin`, `signin/{id}`, `signin/{id}/callback`,
-`signin/{id}/cancel`, `signin/claude-token`. Console: `me`, `catalog`,
+`signin/{id}/cancel`, `signin/claude-token`, `ips`, `ips/update`,
+`ips/delete`, `ips/check`, `accounts/proxy`. Console: `me`, `catalog`,
 `areas`, `areas/{id}`, `areas/{id}/accounts`, `areas/{id}/usage`,
 `usage/requests`, `areas/{id}/usage/requests`, `usage/stats`,
 `areas/{id}/usage/stats`,
-`areas/{id}/update`, `areas/{id}/rotate-key`, `areas/{id}/delete`. Request
+`areas/{id}/update`, `areas/{id}/rotate-key`, `areas/{id}/delete`, `ips`,
+`areas/{id}/ips`. Request
 and reply bodies are in magpie-console's `docs/magpie-api.md`.
 
 - Adding a key claims it first and adds it after (a failed add releases
@@ -221,6 +223,70 @@ and reply bodies are in magpie-console's `docs/magpie-api.md`.
 
 ## Proxy IPs
 
+An area's admin keeps the proxy exit IPs its area owns and puts their
+proxies on its own accounts
+([`admin_ips.go`](../../internal/gateway/admin_ips.go),
+[`internal/renewal/area_ips.go`](../../internal/renewal/area_ips.go),
+[`internal/provider/area_proxy.go`](../../internal/provider/area_proxy.go)).
+
+- **Whose an IP is.** `renewal.IP.Area` ("" the owner's) and `AddedBy`
+  (`area` when the area's admin made it). An `ips.json` from before has
+  neither: every IP is the owner's, and no area sees it. The owner's whole
+  list (`SetIPs`, Models › Proxy IPs) takes both from the file by address,
+  never from the list sent. Only `GiveIP` / `TakeBackIP` (the window's
+  `POST /api/ips/area`) and an area's own writes change them. A magpie from
+  before T-198 writing `ips.json` drops both: every IP is the owner's
+  again, which is fail-closed. The proxies already on accounts stay in
+  `providers.json`, but are no longer held to public addresses.
+- **Two checks.** A handler finds the IP among the area's (`areaIP`, else
+  `404`). The area's writes (`AddAreaIP`, `ChangeAreaIP`, `RemoveAreaIP`)
+  read the file afresh under `ipsMu` and refuse an IP not the area's again
+  (`ErrIPNotFound`). Writes go through a temp file renamed over the old one.
+  An `ips.json` that can't be read is `503 ips_unreadable` and is never
+  written over. At most 50 IPs an area (`MaxAreaIPs`). An address magpie has
+  already is `409 conflict` with no owner named, counted with the add
+  routes' conflicts (`probeHeld`).
+- **Proxies are named** `px_` + 10 hex of SHA-256 (`renewal.ProxyID`), and
+  told with their login left out (`netproxy.Redact`).
+- **On an account** (`POST /accounts/proxy`, `provider.AttachAreaProxy`):
+  the IP and proxy are the area's, and the account is the area's alone
+  (`ownsRef`, and again `area.SetProxy` under the areas lock). The proxy's
+  address is written to the provider's `AccountProxies` (a key by its
+  fingerprint, an account by its login in lower case), which
+  `ProxyChoice` reads. `areas.json` keeps `{ip, id, key}` on the area's
+  account. Once the value there is no longer the area's proxy, the owner
+  set it: the account says `overridden`, a new attach is `409`, and
+  nothing of the area's takes the owner's value off.
+- **Taken off** when the area lets the account go (`area.Release`,
+  `ReleaseProvider`, so `releaseArea`'s removals and the owner's take-back
+  too, via `area.Released`), when the area detaches it, and by
+  `SweepAreaProxies` after the owner removes, takes back or changes the
+  IP, or the area removes a proxy. Each only while the value is still the
+  area's. `ReplaceKey` moves it to the new fingerprint (`area.Rename`).
+  An IP or proxy still on an area account can't be deleted by the area
+  (`409 in_use`, naming the accounts).
+- **Given by the owner** (`givenByOwner`): the area lists it and puts its
+  proxies on its accounts. It never checks, changes the proxies of, or
+  deletes it (`400`). Its proxy may be on the owner's network, which is
+  the owner's decision.
+- **Checks** (`POST /ips/check`): the area's own proxies alone, by id, to a
+  fixed trace page (`areaTraceURL`) through `netproxy.Dispatch` (so
+  `guardDial` holds). The answer is `ok`, the exit `ip`, `loc`, `ms`,
+  `matches` and an `error` category (`refused`, `timeout`, `tls`,
+  `proxy_auth`, `http_status`, `not_public`, `dns`), never the error's
+  text nor magpie's own exit. Each area gets 10 in 10 minutes, one at a
+  time (`proxyChecks`, in memory), else `429 too_many_checks` with
+  `Retry-After`; a held check connects nowhere.
+- The console reads `GET /ips` (every area's, `?area=` narrows, each IP
+  with its `area`; never the owner's) and `GET /areas/{id}/ips`, and
+  changes nothing.
+
+**What that means for trust** (beside the section above): the admin of an
+area's proxy sees the upstream connections of the area's accounts through
+it (SNI, timing, sizes; an `http://` base URL in full). That is the same
+level as the vendor of an area's account, and is limited to that area's
+accounts, which is why a released account loses it.
+
 **Public-only proxies** ([`internal/netproxy/publiconly.go`](../../internal/netproxy/publiconly.go)).
 A proxy an area added is connected to at a public address alone
 (`netguard.Public`), when it is saved (`CheckPublic`) and on every
@@ -306,7 +372,9 @@ be told of lists as `gone`.
 
 `go test -race ./internal/area`; `go test ./internal/gateway -run
 'TestAdmin|TestReadOnlyKeyEveryRoute|TestKeySlotEveryRoute'`; `go test
-./internal/provider -run 'TestAreaSignIn|TestAreaLetsGo'`; `go test ./internal/gui -run
+./internal/provider -run 'TestAreaSignIn|TestAreaLetsGo|TestAttachOnlyOwnIP|TestReleaseClearsAreaProxy|TestSweepAreaProxies'`;
+`go test ./internal/renewal ./internal/netproxy -run 'Area|Owner|OldIPs'`;
+`go test ./internal/gui -run TestIPAreaRoute`; `go test ./internal/gui -run
 TestAreasRoutes`. `TestAdminKeyEveryRoute` fails
 when a route is under `/v1/magpie/admin` and in no role's list, or when an
 admin key reaches any other route or an upstream.

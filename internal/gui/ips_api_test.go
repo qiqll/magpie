@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	areas "github.com/yetone/magpie/internal/area"
+	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/renewal"
 )
 
@@ -70,5 +72,68 @@ func TestIPsRoute(t *testing.T) {
 	}
 	if code, a := serve("GET", ""); code != 200 || len(a.IPs) != 2 {
 		t.Fatalf("after a refusal: %d %+v", code, a)
+	}
+}
+
+// The owner gives an IP to an area and takes it back (/api/ips/area,
+// T-198); the whole list sent from the page keeps whose each is, and an
+// area's proxy on an account comes off when the owner takes its IP back
+// or removes it.
+func TestIPAreaRoute(t *testing.T) {
+	sandboxHome(t)
+	h := Handler(nil, nil)
+	serve := func(path, body string) (int, string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", path, strings.NewReader(body)))
+		return rec.Code, rec.Body.String()
+	}
+	if err := provider.Save(provider.Provider{ID: "relay", Name: "Relay", Key: "sk-owner-00000001", Chat: "http://127.0.0.1:9/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	provider.AddKey("relay", "", "sk-area-0000000001", "")
+	a, _ := areas.Create("学习", nil, nil)
+	ref := "relay/" + provider.KeyID("sk-area-0000000001")
+	areas.Claim(a.ID, ref)
+	proxy := "http://192.168.1.2:7890"
+	if err := renewal.SetIPs([]renewal.IP{{IP: "198.51.100.1", Proxies: []string{proxy}}, {IP: "198.51.100.2"}}, "", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if c, body := serve("/api/ips/area", `{"ip":"198.51.100.1","area":"ar_nosuch"}`); c == 200 {
+		t.Fatalf("given to no area: %s", body)
+	}
+	c, body := serve("/api/ips/area", `{"ip":"198.51.100.1","area":"`+a.ID+`"}`)
+	if c != 200 || !strings.Contains(body, `"area":"`+a.ID+`"`) || !strings.Contains(body, `"note":"学习"`) {
+		t.Fatalf("given: %d %s", c, body)
+	}
+	// the page sends the whole list back without the field
+	_, rev, _ := renewal.IPs()
+	if c, body := serve("/api/ips", `{"rev":"`+rev+`","ips":[{"ip":"198.51.100.1","proxies":["`+proxy+`"]},{"ip":"198.51.100.2","area":"`+a.ID+`"}]}`); c != 200 {
+		t.Fatal(c, body)
+	}
+	ips, _, _ := renewal.IPs()
+	if ips[0].Area != a.ID || ips[1].Area != "" {
+		t.Fatalf("the whole list changed whose they are: %+v", ips)
+	}
+	if err := provider.AttachAreaProxy(a.ID, ref, "198.51.100.1", renewal.ProxyID(proxy)); err != nil {
+		t.Fatal(err)
+	}
+	if c, body := serve("/api/ips/area", `{"ip":"198.51.100.1","area":""}`); c != 200 {
+		t.Fatal(c, body)
+	}
+	if p, _ := provider.Find("relay"); len(p.AccountProxies) != 0 {
+		t.Fatalf("taken back, the area's account still goes through it: %v", p.AccountProxies)
+	}
+	// given again, put on, then the owner removes the IP
+	serve("/api/ips/area", `{"ip":"198.51.100.1","area":"`+a.ID+`"}`)
+	if err := provider.AttachAreaProxy(a.ID, ref, "198.51.100.1", renewal.ProxyID(proxy)); err != nil {
+		t.Fatal(err)
+	}
+	_, rev, _ = renewal.IPs()
+	if c, body := serve("/api/ips", `{"rev":"`+rev+`","ips":[{"ip":"198.51.100.2"}]}`); c != 200 {
+		t.Fatal(c, body)
+	}
+	if p, _ := provider.Find("relay"); len(p.AccountProxies) != 0 {
+		t.Fatalf("removed, the area's account still goes through it: %v", p.AccountProxies)
 	}
 }

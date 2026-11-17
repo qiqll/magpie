@@ -24,18 +24,32 @@ import (
 // not told (never due), and the proxies whose exit it was read as (T-170:
 // from a saved proxy or the accounts' own), by which the page tells the
 // accounts that go out through it.
+//
+// Area is the area that owns it (T-198), "" for the owner's: every record
+// from before areas, and one the owner made. AddedBy is "area" when the
+// area's admin made it, whose proxies are then connected to at public
+// addresses alone (netproxy.PublicOnly); "" when the owner made it and
+// may have given it. Neither changes through the owner's whole list
+// (SetIPs): GiveIP, TakeBackIP and the area's own writes set them.
 type IP struct {
 	IP      string    `json:"ip"`
 	Name    string    `json:"name,omitempty"`
 	Opened  time.Time `json:"opened,omitzero"`
 	Proxies []string  `json:"proxies,omitempty"`
+	Area    string    `json:"area,omitempty"`
+	AddedBy string    `json:"addedBy,omitempty"`
 }
+
+// AddedByArea is IP.AddedBy for an IP an area's admin made.
+const AddedByArea = "area"
 
 // MaxIPs is the most IPs kept, and MaxIPProxies the most proxies one IP
 // is told the exit of.
 const (
 	MaxIPs       = 500
 	MaxIPProxies = 20
+	// MaxAreaIPs is the most IPs one area owns.
+	MaxAreaIPs = 50
 )
 
 // ipsFile is ips.json beside settings.json: {"ips": [IP…]}. It is this
@@ -70,15 +84,25 @@ func readIPs() ([]IP, string, error) {
 		return nil, "", nil
 	}
 	if err != nil {
-		return nil, "", err
+		return nil, "", unreadable{err}
 	}
 	var f ipsFile
 	if err := json.Unmarshal(b, &f); err != nil {
-		return nil, "", fmt.Errorf("%s can't be read (%w): fix or remove it", p, err)
+		return nil, "", unreadable{fmt.Errorf("%s can't be read (%w): fix or remove it", p, err)}
 	}
 	sum := sha256.Sum256(b)
 	return f.IPs, hex.EncodeToString(sum[:8]), nil
 }
+
+// ErrIPsUnreadable is an ips.json there that can't be read or parsed:
+// unknown, never no IPs, and never written over.
+var ErrIPsUnreadable = errors.New("ips.json can't be read")
+
+// unreadable is a read's error as it was, that is also ErrIPsUnreadable.
+type unreadable struct{ err error }
+
+func (e unreadable) Error() string   { return e.err.Error() }
+func (e unreadable) Unwrap() []error { return []error{ErrIPsUnreadable, e.err} }
 
 // SetIPs keeps ips as the whole list, checked (CheckIPs), when the file is
 // still at rev, the revision the list was made from (IPs); else
@@ -97,12 +121,26 @@ func SetIPs(ips []IP, rev string, now time.Time) error {
 		return ErrIPsChanged
 	}
 	kept := map[string]time.Time{}
+	owned := map[string]IP{}
 	for _, x := range was {
 		kept[x.IP] = x.Opened
+		owned[x.IP] = x
 	}
 	if err := CheckIPs(ips, kept, now); err != nil {
 		return err
 	}
+	// whose each is comes from the file, by its address, never from the
+	// list sent: a page that leaves the fields out doesn't make an area's
+	// IP the owner's, nor one that names an area give it away
+	for i := range ips {
+		ips[i].Area, ips[i].AddedBy = owned[ips[i].IP].Area, owned[ips[i].IP].AddedBy
+	}
+	return writeIPs(ips)
+}
+
+// writeIPs writes ips as the whole file, through a temp file renamed over
+// it; called with ipsMu held.
+func writeIPs(ips []IP) error {
 	if ips == nil {
 		ips = []IP{}
 	}

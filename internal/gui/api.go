@@ -1755,6 +1755,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	// edits it
 	mux.HandleFunc("GET /api/ips", handleIPs)
 	mux.HandleFunc("POST /api/ips", handleIPs)
+	mux.HandleFunc("POST /api/ips/area", handleIPArea)
 	mux.HandleFunc("POST /api/settings/busy-load", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ At int }
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {

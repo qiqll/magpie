@@ -36,6 +36,8 @@ var keySlotFree = []string{
 	"POST " + AdminPath + "/signin/{id}/cancel", "POST " + AdminPath + "/signin/claude-token",
 	"POST " + AdminPath + "/areas", "POST " + AdminPath + "/areas/{id}/update",
 	"POST " + AdminPath + "/areas/{id}/rotate-key", "POST " + AdminPath + "/areas/{id}/delete",
+	"POST " + AdminPath + "/ips", "POST " + AdminPath + "/ips/update", "POST " + AdminPath + "/ips/delete",
+	"POST " + AdminPath + "/ips/check", "POST " + AdminPath + "/accounts/proxy",
 }
 
 // Every route is judged for a key's MaxConcurrency: held (keySlotRoutes)

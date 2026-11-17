@@ -67,6 +67,12 @@ var adminRoutes = map[string]map[string]bool{
 		"POST " + AdminPath + "/signin/{id}/callback": true,
 		"POST " + AdminPath + "/signin/{id}/cancel":   true,
 		"POST " + AdminPath + "/signin/claude-token":  true,
+		"GET " + AdminPath + "/ips":                   true,
+		"POST " + AdminPath + "/ips":                  true,
+		"POST " + AdminPath + "/ips/update":           true,
+		"POST " + AdminPath + "/ips/delete":           true,
+		"POST " + AdminPath + "/ips/check":            true,
+		"POST " + AdminPath + "/accounts/proxy":       true,
 	},
 	access.AdminConsole: {
 		"GET " + AdminPath + "/me":                        true,
@@ -83,6 +89,8 @@ var adminRoutes = map[string]map[string]bool{
 		"POST " + AdminPath + "/areas/{id}/update":        true,
 		"POST " + AdminPath + "/areas/{id}/rotate-key":    true,
 		"POST " + AdminPath + "/areas/{id}/delete":        true,
+		"GET " + AdminPath + "/ips":                       true,
+		"GET " + AdminPath + "/areas/{id}/ips":            true,
 	},
 }
 
@@ -109,6 +117,12 @@ func (s *Server) adminRoutesOn(mux *routeMux) {
 	mux.HandleFunc("POST "+AdminPath+"/signin/{id}/callback", s.admin(access.AdminArea, s.adminSignInCallback))
 	mux.HandleFunc("POST "+AdminPath+"/signin/{id}/cancel", s.admin(access.AdminArea, s.adminSignInCancel))
 	mux.HandleFunc("POST "+AdminPath+"/signin/claude-token", s.admin(access.AdminArea, s.probeHeld(s.adminClaudeToken)))
+	mux.HandleFunc("GET "+AdminPath+"/ips", s.admin("", s.adminIPs))
+	mux.HandleFunc("POST "+AdminPath+"/ips", s.admin(access.AdminArea, s.probeHeld(s.adminAddIP)))
+	mux.HandleFunc("POST "+AdminPath+"/ips/update", s.admin(access.AdminArea, s.adminUpdateIP))
+	mux.HandleFunc("POST "+AdminPath+"/ips/delete", s.admin(access.AdminArea, s.adminDeleteIP))
+	mux.HandleFunc("POST "+AdminPath+"/ips/check", s.admin(access.AdminArea, s.adminCheckProxy))
+	mux.HandleFunc("POST "+AdminPath+"/accounts/proxy", s.admin(access.AdminArea, s.adminAccountProxy))
 
 	mux.HandleFunc("GET "+AdminPath+"/catalog", s.admin(access.AdminConsole, s.adminCatalog))
 	mux.HandleFunc("GET "+AdminPath+"/areas", s.admin(access.AdminConsole, s.adminAreas))
@@ -121,6 +135,7 @@ func (s *Server) adminRoutesOn(mux *routeMux) {
 	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/update", s.admin(access.AdminConsole, s.adminUpdateArea))
 	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/rotate-key", s.admin(access.AdminConsole, s.adminRotateArea))
 	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/delete", s.admin(access.AdminConsole, s.adminDeleteArea))
+	mux.HandleFunc("GET "+AdminPath+"/areas/{id}/ips", s.admin(access.AdminConsole, s.adminIPs))
 }
 
 // adminCall is a judged admin request: its key, and an area admin's area.
@@ -273,6 +288,9 @@ type adminAccount struct {
 	// neither removes it nor is told what it spent until the owner settles it
 	Contested bool      `json:"contested,omitempty"`
 	Added     time.Time `json:"added"`
+	// Proxy is the area's proxy its admin put on it (T-198), none when
+	// it has none
+	Proxy *adminAccountProxy `json:"proxy,omitempty"`
 	// previous are the fingerprints a key had before its value was
 	// replaced in place (area.Account.Previous): its calls under them are
 	// still the area's. Never told.
@@ -295,6 +313,9 @@ func areaAccounts(a area.Area) []adminAccount {
 	for _, owned := range a.Accounts {
 		pid, ref, _ := strings.Cut(owned.Ref, "/")
 		acc := adminAccount{ID: owned.Ref, Provider: pid, Name: ref, Added: owned.Added, Gone: true, Contested: !ownsRef(a, owned.Ref)}
+		if rec := owned.Proxy; rec != nil {
+			acc.Proxy = &adminAccountProxy{IP: rec.IP, ID: rec.ID, Overridden: provider.AreaProxyOverridden(pid, *rec)}
+		}
 		p, err := provider.Find(pid)
 		if err == nil {
 			acc.ProviderName = p.Name

@@ -50,11 +50,31 @@ type Area struct {
 // Account is an account an area owns, and since when: what it spent
 // counts from then. Previous are the refs it had before a key's value was
 // replaced in place (Rename), so what it spent under them stays its own.
+//
+// Proxy is the area's proxy its admin put on it (T-198), nil for none.
 type Account struct {
-	Ref      string    `json:"ref"`
-	Added    time.Time `json:"added"`
-	Previous []string  `json:"previous,omitempty"`
+	Ref      string        `json:"ref"`
+	Added    time.Time     `json:"added"`
+	Previous []string      `json:"previous,omitempty"`
+	Proxy    *AccountProxy `json:"proxy,omitempty"`
 }
+
+// AccountProxy is a proxy of one of the area's IPs its admin put on an
+// account: the IP, the proxy's id (renewal.ProxyID) and the account's key
+// in its provider's AccountProxies (a key's fingerprint, an account's
+// login in lower case), where the proxy's address is written. The
+// address itself is not kept here. Never told as it is.
+type AccountProxy struct {
+	IP  string `json:"ip"`
+	ID  string `json:"id"`
+	Key string `json:"key"`
+}
+
+// Released is told each account an area let go of (Release,
+// ReleaseProvider) with the proxy its admin had put on it, once the
+// change is written and outside the lock. internal/provider takes the
+// proxy off the account, where it is still the area's.
+var Released func(Account)
 
 // Has says whether the area owns ref.
 func (a Area) Has(ref string) bool {
@@ -270,10 +290,62 @@ func Claim(id, ref string) error {
 // Release takes ref from whichever area owns it; one no area owns is no
 // error, so the owner's removal of any account may call it.
 func Release(ref string) error {
-	return change(func(f *file) error {
+	return releaseWhere(func(c Account) bool { return c.Ref == ref })
+}
+
+// releaseWhere takes every account gone says from the areas, then tells
+// Released of those with a proxy.
+func releaseWhere(gone func(Account) bool) error {
+	var let []Account
+	err := change(func(f *file) error {
+		let = nil
 		for i := range f.Areas {
-			f.Areas[i].Accounts = slices.DeleteFunc(f.Areas[i].Accounts, func(c Account) bool { return c.Ref == ref })
+			f.Areas[i].Accounts = slices.DeleteFunc(f.Areas[i].Accounts, func(c Account) bool {
+				if gone(c) {
+					if c.Proxy != nil {
+						let = append(let, c)
+					}
+					return true
+				}
+				return false
+			})
 		}
+		return nil
+	})
+	if err == nil && Released != nil {
+		for _, c := range let {
+			Released(c)
+		}
+	}
+	return err
+}
+
+// ErrNotOwned: the area doesn't own the account alone.
+var ErrNotOwned = errors.New("the area doesn't own this account")
+
+// SetProxy records p (nil: none) as the proxy the area id's admin put on
+// its account ref, which the area must own alone (no other area claims
+// it): else ErrNotOwned. The proxy itself is written to the account's
+// provider by internal/provider.
+func SetProxy(id, ref string, p *AccountProxy) error {
+	return change(func(f *file) error {
+		i := index(f.Areas, id)
+		if i < 0 {
+			return ErrNotFound
+		}
+		for _, a := range f.Areas {
+			if a.ID != id && a.Has(ref) {
+				return ErrNotOwned
+			}
+		}
+		j := slices.IndexFunc(f.Areas[i].Accounts, func(c Account) bool { return c.Ref == ref })
+		if j < 0 {
+			return ErrNotOwned
+		}
+		if p != nil {
+			p = &AccountProxy{IP: p.IP, ID: p.ID, Key: p.Key}
+		}
+		f.Areas[i].Accounts[j].Proxy = p
 		return nil
 	})
 }
@@ -282,12 +354,7 @@ func Release(ref string) error {
 // that own them: the provider was deleted, its keys with it. A provider
 // of the same id added later doesn't bring them back to an area.
 func ReleaseProvider(pid string) error {
-	return change(func(f *file) error {
-		for i := range f.Areas {
-			f.Areas[i].Accounts = slices.DeleteFunc(f.Areas[i].Accounts, func(c Account) bool { return strings.HasPrefix(c.Ref, pid+"/") })
-		}
-		return nil
-	})
+	return releaseWhere(func(c Account) bool { return strings.HasPrefix(c.Ref, pid+"/") })
 }
 
 // Rename moves ownership of from to to (a key's value replaced in place
@@ -302,6 +369,10 @@ func Rename(from, to string) error {
 			for j := range f.Areas[i].Accounts {
 				if c := &f.Areas[i].Accounts[j]; c.Ref == from {
 					c.Ref = to
+					// the proxy moved with the key (provider.ReplaceKey)
+					if _, fp, _ := strings.Cut(from, "/"); c.Proxy != nil && c.Proxy.Key == fp {
+						_, c.Proxy.Key, _ = strings.Cut(to, "/")
+					}
 					c.Previous = slices.DeleteFunc(c.Previous, func(r string) bool { return r == from || r == to })
 					c.Previous = append(c.Previous, from)
 				}
@@ -407,6 +478,10 @@ func clone(areas []Area) []Area {
 		out[i].Accounts = slices.Clone(out[i].Accounts)
 		for j := range out[i].Accounts {
 			out[i].Accounts[j].Previous = slices.Clone(out[i].Accounts[j].Previous)
+			if p := out[i].Accounts[j].Proxy; p != nil {
+				c := *p
+				out[i].Accounts[j].Proxy = &c
+			}
 		}
 	}
 	return out

@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
+	areas "github.com/yetone/magpie/internal/area"
+	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/renewal"
 )
 
@@ -33,7 +36,15 @@ func ipsState(now time.Time) (map[string]any, error) {
 	for _, x := range ips {
 		out = append(out, ipJSON{IP: x, Renewal: renewal.Of(x.Opened, now)})
 	}
-	return map[string]any{"ips": out, "rev": rev, "days": renewal.Days, "warnDays": renewal.WarnDays}, nil
+	// the areas an IP can be given to, by id and note (T-198); none
+	// listed when areas.json can't be read, so nothing is offered
+	given := []map[string]string{}
+	if all, err := areas.List(); err == nil {
+		for _, a := range all {
+			given = append(given, map[string]string{"id": a.ID, "note": a.Note})
+		}
+	}
+	return map[string]any{"ips": out, "rev": rev, "days": renewal.Days, "warnDays": renewal.WarnDays, "areas": given}, nil
 }
 
 func handleIPs(rw http.ResponseWriter, r *http.Request) {
@@ -57,6 +68,46 @@ func handleIPs(rw http.ResponseWriter, r *http.Request) {
 			fail(rw, err)
 			return
 		}
+		// an area's IP or proxy the owner removed comes off the area's
+		// accounts it was on (T-198)
+		if err := provider.SweepAreaProxies(); err != nil {
+			log.Printf("ips: the areas' proxies not swept: %v", err)
+		}
+	}
+	out, err := ipsState(time.Now())
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	writeJSON(rw, out)
+}
+
+// handleIPArea gives the owner's IP to an area, or takes it back
+// ({"ip", "area"}, "" for back; T-198, docs/subsystems/areas.md "Proxy
+// IPs"): the area's admin then sees it and may put its proxies on the
+// area's accounts, never check or change them. Taken back, it comes off
+// the area's accounts it was on. Answers what GET /api/ips would.
+func handleIPArea(rw http.ResponseWriter, r *http.Request) {
+	var in struct {
+		IP   string `json:"ip"`
+		Area string `json:"area"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&in); err != nil {
+		fail(rw, err)
+		return
+	}
+	var err error
+	if in.Area == "" {
+		err = renewal.TakeBackIP(in.IP)
+	} else if _, err = areas.Get(in.Area); err == nil {
+		err = renewal.GiveIP(in.IP, in.Area)
+	}
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	if err := provider.SweepAreaProxies(); err != nil {
+		log.Printf("ips: the areas' proxies not swept: %v", err)
 	}
 	out, err := ipsState(time.Now())
 	if err != nil {
