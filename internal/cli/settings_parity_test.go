@@ -238,6 +238,7 @@ var notYet = map[string]string{
 	"POST /api/growth/preview":                   W,  // api.go: Settings › Growth policy's chart (T-130)
 	"GET /api/ips":                               W,  // ips.go: Models › Proxy IPs' list (T-155)
 	"POST /api/ips":                              W,  // ips.go: Models › Proxy IPs' list kept whole (T-155)
+	"POST /api/ips/area":                         W,  // ips.go: an IP given to an area or taken back (T-198)
 	"GET /api/quit":                              W,  // api.go: the window's Quit question
 	"GET /api/state":                             W,  // api.go
 	"POST /api/agents/{action}/{id}":             A,  // api.go
