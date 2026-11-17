@@ -89,6 +89,9 @@ func (c *rowCache) put(key string, idx *rowIndex) {
 	if len(idx.rows) > rowCacheRowsMost {
 		return
 	}
+	// the bound counts rows: an appended slice can hold up to twice its
+	// length, so an index is kept at its length
+	idx.rows = slices.Clip(idx.rows)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := rowCacheNow()

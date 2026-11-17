@@ -177,6 +177,17 @@ func TestAdminRequestsIndexFollowsAccounts(t *testing.T) {
 
 // The cache keeps 8 entries and no more rows than its bound, the least
 // recently used going first.
+// A kept index holds no more than its rows: the bound counts rows, and an
+// appended slice's array can be twice as long.
+func TestRowCacheKeepsAnIndexAtItsLength(t *testing.T) {
+	c := &rowCache{}
+	rows := make([]indexedRow, 3, 64)
+	c.put("k", &rowIndex{rows: rows})
+	if got := cap(c.entries[0].idx.rows); got != 3 {
+		t.Fatal("kept with room for", got, "rows")
+	}
+}
+
 func TestRowCacheBounds(t *testing.T) {
 	freshRowCache(t)
 	c := &rowCache{}
