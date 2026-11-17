@@ -1,9 +1,24 @@
 package provider
 
 import (
+	"bufio"
+	"context"
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/netproxy"
 
 	"github.com/yetone/magpie/internal/area"
 	"github.com/yetone/magpie/internal/renewal"
@@ -155,7 +170,7 @@ func TestReleaseClearsAreaProxy(t *testing.T) {
 		t.Fatalf("after the replace: %+v", got.Accounts)
 	}
 	// the owner sets it: overridden, kept on release
-	if err := setOwnProxy("relay", now, ownerProxy, ""); err != nil {
+	if err := setOwnProxy("relay", now, ownerProxy, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = area.Get(a.ID)
@@ -194,5 +209,168 @@ func TestSweepAreaProxiesAfterOwnerRemoval(t *testing.T) {
 	}
 	if got, _ := area.Get(a.ID); got.Accounts[0].Proxy != nil {
 		t.Fatalf("the record stays: %+v", got.Accounts[0].Proxy)
+	}
+}
+
+// dialThrough sends one request through choice by netproxy's dispatcher,
+// as the gateway's upstreams do, and says what it returned.
+func dialThrough(t *testing.T, choice string) error {
+	t.Helper()
+	base := &http.Transport{Proxy: netproxy.Func, DisableKeepAlives: true}
+	defer base.CloseIdleConnections()
+	req, _ := http.NewRequestWithContext(netproxy.With(context.Background(), choice), http.MethodGet, "http://vendor.example/v1/models", nil)
+	res, err := (&http.Client{Transport: netproxy.Dispatch(base)}).Do(req)
+	if err == nil {
+		res.Body.Close()
+	}
+	return err
+}
+
+// countingListener is an HTTP proxy on loopback answering 200, counting
+// connections.
+func countingListener(t *testing.T) (port string, conns *atomic.Int32) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conns = &atomic.Int32{}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conns.Add(1)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer c.Close()
+				if _, err := http.ReadRequest(bufio.NewReader(c)); err == nil {
+					io.WriteString(c, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+				}
+			}()
+		}
+	}()
+	t.Cleanup(func() { ln.Close(); wg.Wait() })
+	_, port, _ = net.SplitHostPort(ln.Addr().String())
+	return port, conns
+}
+
+// rebindHome has every *.example name answer *answer.
+func rebindHome(t *testing.T, answer *atomic.Value) {
+	t.Helper()
+	was := netproxy.LookupIP
+	t.Cleanup(func() { netproxy.LookupIP = was })
+	netproxy.LookupIP = func(_ context.Context, host string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr(answer.Load().(string))}, nil
+	}
+}
+
+// The review's High (a): an IP removed while an attach is between its
+// check and its write. The removal waits for the attach (ipsMu), then
+// finds the proxy on the account and is refused: no URL is ever written
+// that ips.json no longer lists.
+func TestAttachAndRemoveDontPass(t *testing.T) {
+	a, _, keys, _ := areaProxyHome(t)
+	id := renewal.ProxyID(areaProxyA)
+	removed := make(chan error, 1)
+	t.Cleanup(func() { beforeAttachWrite, renewal.IPsWait = nil, nil })
+	beforeAttachWrite = func() {
+		beforeAttachWrite = nil
+		waiting := make(chan struct{})
+		renewal.IPsWait = func() { close(waiting) }
+		go func() { removed <- renewal.RemoveAreaIP(a.ID, "203.0.113.9", AreaIPInUse(a.ID, nil)) }()
+		select {
+		case <-waiting: // held by the attach: it goes on, then the removal
+		case err := <-removed: // ran through: put back for the check below
+			removed <- err
+		}
+	}
+	if err := AttachAreaProxy(a.ID, keys[0], "203.0.113.9", id); err != nil && !errors.Is(err, renewal.ErrIPNotFound) {
+		t.Fatal(err)
+	}
+	err := <-removed
+	ips, _, _ := renewal.IPs()
+	listed := slices.ContainsFunc(ips, func(x renewal.IP) bool { return x.IP == "203.0.113.9" })
+	if got := keyProxy(t, keys[0]); got != "" && !listed {
+		t.Fatalf("the IP was removed (%v) and the key goes through %q all the same", err, got)
+	}
+	var used *InUseError
+	if !errors.As(err, &used) || !listed {
+		t.Fatalf("the removal after the attach: %v (listed %v)", err, listed)
+	}
+}
+
+// The review's High (b) and Medium 1: a proxy on an area's account is
+// held to public addresses by areas.json's record even once ips.json no
+// longer lists it, or can't be read at all; the owner's own proxy on
+// loopback is not held for an unreadable ips.json.
+func TestAttachedProxyHeldWhateverIPsSays(t *testing.T) {
+	a, _, keys, _ := areaProxyHome(t)
+	port, conns := countingListener(t)
+	url := "http://p.example:" + port
+	answer := &atomic.Value{}
+	answer.Store("93.184.216.34")
+	rebindHome(t, answer)
+	if _, err := renewal.AddAreaIP(a.ID, renewal.IP{IP: "203.0.113.20", Proxies: []string{url}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := AttachAreaProxy(a.ID, keys[0], "203.0.113.20", renewal.ProxyID(url)); err != nil {
+		t.Fatal(err)
+	}
+	answer.Store("127.0.0.1")
+	// ips.json written by something that knows no areas: the IP gone, no
+	// sweep
+	ips, rev, _ := renewal.IPs()
+	if err := renewal.SetIPs(slices.DeleteFunc(ips, func(x renewal.IP) bool { return x.IP == "203.0.113.20" }), rev, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := dialThrough(t, url); !errors.Is(err, netproxy.ErrNotPublic) {
+		t.Fatalf("an orphaned area proxy rebound home: %v", err)
+	}
+	// and ips.json unreadable: still held; the owner's loopback proxy not
+	os.WriteFile(filepath.Join(appdir.Config(), "ips.json"), []byte(`{"ips":[`), 0o600)
+	if err := dialThrough(t, url); !errors.Is(err, netproxy.ErrNotPublic) {
+		t.Fatalf("with ips.json unreadable: %v", err)
+	}
+	if n := conns.Load(); n != 0 {
+		t.Fatalf("connections to the rebound proxy: %d", n)
+	}
+	if err := dialThrough(t, "http://127.0.0.1:"+port); err != nil {
+		t.Fatalf("the owner's loopback proxy with ips.json unreadable: %v", err)
+	}
+	if n := conns.Load(); n != 1 {
+		t.Fatalf("the owner's proxy got %d connections, want 1", n)
+	}
+}
+
+// The review's Medium 2: an owner's value written between the attach's
+// look and its write (in providers.json's lock) is not written over.
+func TestAttachLeavesAnOwnerWriteOfTheSameMoment(t *testing.T) {
+	a, _, keys, _ := areaProxyHome(t)
+	fp := strings.TrimPrefix(keys[0], "relay/")
+	t.Cleanup(func() { beforeOwnProxyWrite = nil })
+	beforeOwnProxyWrite = func() {
+		beforeOwnProxyWrite = nil
+		// the owner's Providers editor, at that moment
+		p, _ := Find("relay")
+		p.AccountProxies = map[string]string{fp: ownerProxy}
+		if err := Save(*p); err != nil {
+			t.Error(err)
+		}
+	}
+	err := AttachAreaProxy(a.ID, keys[0], "203.0.113.9", renewal.ProxyID(areaProxyA))
+	if !errors.Is(err, ErrOverridden) {
+		t.Fatalf("attach over the owner's value of the same moment: %v", err)
+	}
+	if got := keyProxy(t, keys[0]); got != ownerProxy {
+		t.Fatalf("the key goes through %q, want the owner's", got)
+	}
+	if rec := recordOf(a.ID, keys[0]); rec != nil {
+		t.Fatalf("a record kept for a refused attach: %+v", rec)
 	}
 }

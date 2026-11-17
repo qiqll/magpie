@@ -22,10 +22,10 @@ func TestOldIPsFileIsOwners(t *testing.T) {
 	if _, err := ChangeAreaIP("ar_a", "203.0.113.7", time.Now(), func(*IP) error { return nil }); !errors.Is(err, ErrIPNotFound) {
 		t.Fatalf("an area changed the owner's IP: %v", err)
 	}
-	if err := RemoveAreaIP("ar_a", "203.0.113.7"); !errors.Is(err, ErrIPNotFound) {
+	if err := RemoveAreaIP("ar_a", "203.0.113.7", nil); !errors.Is(err, ErrIPNotFound) {
 		t.Fatalf("an area removed the owner's IP: %v", err)
 	}
-	if err := RemoveAreaIP("", "203.0.113.7"); !errors.Is(err, ErrIPNotFound) {
+	if err := RemoveAreaIP("", "203.0.113.7", nil); !errors.Is(err, ErrIPNotFound) {
 		t.Fatalf("an area of no id removed the owner's IP: %v", err)
 	}
 	if AreaAddedProxy("socks5://u:p@127.0.0.1:1080") {
@@ -95,7 +95,7 @@ func TestAreaIPWritesCheckTheArea(t *testing.T) {
 		if _, err := ChangeAreaIP("ar_a", ip, now, func(x *IP) error { x.Name = "x"; return nil }); !errors.Is(err, ErrIPNotFound) {
 			t.Errorf("A changed %s: %v", ip, err)
 		}
-		if err := RemoveAreaIP("ar_a", ip); !errors.Is(err, ErrIPNotFound) {
+		if err := RemoveAreaIP("ar_a", ip, nil); !errors.Is(err, ErrIPNotFound) {
 			t.Errorf("A removed %s: %v", ip, err)
 		}
 	}
@@ -136,10 +136,66 @@ func TestAreaIPsUnreadable(t *testing.T) {
 	if b, _ := os.ReadFile(path); string(b) != `{"ips": [` {
 		t.Fatalf("written over: %s", b)
 	}
+	resetAreaAdded()
+	// never read well: the owner's own proxy on loopback is not held, and
+	// the failed read is not made again on every dial
+	reads := areaAddedReads.Load()
+	for range 5 {
+		if AreaAddedProxy("http://127.0.0.1:7890") {
+			t.Fatal("with ips.json never read, the owner's proxy is held")
+		}
+	}
+	if n := areaAddedReads.Load() - reads; n != 1 {
+		t.Fatalf("a failed read made %d times over 5 dials, want 1", n)
+	}
+}
+
+func resetAreaAdded() {
 	areaAdded.Lock()
-	areaAdded.read = false
+	areaAdded.read, areaAdded.proxies, areaAdded.failedAt = false, nil, time.Time{}
 	areaAdded.Unlock()
-	if !AreaAddedProxy("http://127.0.0.1:7890") {
-		t.Fatal("with ips.json unknown, a proxy is not held")
+}
+
+// AreaAddedProxy names an area's proxies by their text or as netproxy
+// writes them, sees a write at once (in the same tick too), and keeps its
+// last good read through a file that stops parsing.
+func TestAreaAddedProxy(t *testing.T) {
+	path := ipsHome(t)
+	resetAreaAdded()
+	now := time.Now()
+	if AreaAddedProxy("http://93.184.216.34:3128") {
+		t.Fatal("no file, held")
+	}
+	SetIPs([]IP{{IP: "198.51.100.1", Proxies: []string{"http://127.0.0.1:7890"}}}, "", now)
+	if _, err := AddAreaIP("ar_a", IP{IP: "203.0.113.9", Proxies: []string{"HTTP://u:p@93.184.216.34:3128"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{"HTTP://u:p@93.184.216.34:3128", " http://u:p@93.184.216.34:3128 "} {
+		if !AreaAddedProxy(raw) {
+			t.Errorf("%q not held", raw)
+		}
+	}
+	if AreaAddedProxy("http://127.0.0.1:7890") {
+		t.Fatal("the owner's proxy is held")
+	}
+	// written over by the owner in the same tick: seen at once
+	_, rev, _ := IPs()
+	fi, _ := os.Stat(path)
+	if err := SetIPs([]IP{{IP: "198.51.100.1"}}, rev, now); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(path, fi.ModTime(), fi.ModTime())
+	if AreaAddedProxy("http://u:p@93.184.216.34:3128") {
+		t.Fatal("removed, still held")
+	}
+	if _, err := AddAreaIP("ar_a", IP{IP: "203.0.113.9", Proxies: []string{"http://93.184.216.34:3128"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if !AreaAddedProxy("http://93.184.216.34:3128") {
+		t.Fatal("added again, not held")
+	}
+	os.WriteFile(path, []byte(`{"ips": [`), 0o600)
+	if !AreaAddedProxy("http://93.184.216.34:3128") {
+		t.Fatal("a file that stopped parsing lost the last good read")
 	}
 }

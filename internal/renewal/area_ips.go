@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yetone/magpie/internal/netproxy"
@@ -32,8 +33,6 @@ var (
 	// ErrIPGiven: the owner gives an IP that is an area's already.
 	ErrIPGiven = errors.New("this IP is an area's already: take it back first")
 )
-
-func init() { netproxy.PublicOnly = AreaAddedProxy }
 
 // ProxyID is how a proxy is named to an area: px_ and the first 10 hex
 // of its address's SHA-256, the same for the same address. The address
@@ -146,8 +145,52 @@ func ChangeAreaIP(areaID, ip string, now time.Time, fn func(*IP) error) (IP, err
 }
 
 // RemoveAreaIP removes the IP ip of the area areaID; ErrIPNotFound when
-// the area has no such IP.
-func RemoveAreaIP(areaID, ip string) error {
+// the area has no such IP. busy, when set, is asked under ipsMu whether
+// the IP may go (its proxy on an account, read afresh): an error from it
+// is returned and nothing is removed. An attach holds ipsMu while it
+// writes (WithAreaProxy), so the two can't pass each other.
+func RemoveAreaIP(areaID, ip string, busy func(IP) error) error {
+	lockIPs()
+	defer ipsMu.Unlock()
+	ips, _, err := readIPs()
+	if err != nil {
+		return err
+	}
+	i := areaIndex(ips, areaID, ip)
+	if i < 0 {
+		return ErrIPNotFound
+	}
+	if busy != nil {
+		if err := busy(ips[i]); err != nil {
+			return err
+		}
+	}
+	return writeIPs(slices.Delete(ips, i, i+1))
+}
+
+// IPsWait, when set (a test), is called by an area's removal that is
+// about to wait for ipsMu, so a test knows it is waiting, not done.
+var IPsWait func()
+
+func lockIPs() {
+	if !ipsMu.TryLock() {
+		if IPsWait != nil {
+			IPsWait()
+		}
+		ipsMu.Lock()
+	}
+}
+
+// WithAreaProxy runs fn with the area areaID's IP ip and the address of
+// its proxy proxyID, read afresh, while ipsMu is held, so no removal of
+// the IP or the proxy (the area's, or the owner's whole list) comes
+// between the check and what fn writes. ErrIPNotFound when the area has
+// no such IP or the IP no such proxy.
+//
+// Lock order: ipsMu, then areas.json's lock, then providers.json's. fn
+// takes the other two and does no network work; nothing that holds
+// either of them takes ipsMu.
+func WithAreaProxy(areaID, ip, proxyID string, fn func(x IP, url string) error) error {
 	ipsMu.Lock()
 	defer ipsMu.Unlock()
 	ips, _, err := readIPs()
@@ -158,7 +201,11 @@ func RemoveAreaIP(areaID, ip string) error {
 	if i < 0 {
 		return ErrIPNotFound
 	}
-	return writeIPs(slices.Delete(ips, i, i+1))
+	url, ok := ips[i].ProxyOf(proxyID)
+	if !ok {
+		return ErrIPNotFound
+	}
+	return fn(ips[i], url)
 }
 
 // areaIndex is where the area areaID's IP ip is in ips, -1 for none: an
@@ -227,32 +274,57 @@ func setArea(ip string, fn func(x *IP, ips []IP) error) error {
 	return writeIPs(ips)
 }
 
-// areaAdded is the proxies of the IPs an area made, as last read, by the
-// file's size and time: netproxy asks on every dial through a proxy.
+// areaAdded is the proxies of the IPs an area made, as last read well,
+// by the file's size, time and this magpie's own writes (writes): a
+// write within one tick of the clock is seen too. A read that failed is
+// not tried again for areaAddedRetry while the file stays as it was:
+// netproxy asks on every dial through a proxy.
 var areaAdded struct {
 	sync.Mutex
-	size, mod int64
-	read      bool
-	proxies   map[string]bool
+	size, mod, gen int64
+	read           bool
+	proxies        map[string]bool
+	failedAt       time.Time
+	failedSize     int64
+	failedMod      int64
+	failedGen      int64
 }
 
+// areaAddedRetry is how long a failed read of ips.json stands.
+var areaAddedRetry = 5 * time.Second
+
+// areaAddedReads counts AreaAddedProxy's reads of the file, for the test
+// that a failed one isn't made again on every dial.
+var areaAddedReads atomic.Int64
+
 // AreaAddedProxy says the proxy raw is one an area's admin added (an IP
-// AddedByArea lists it), which netproxy connects to at public addresses
-// alone (netproxy.PublicOnly). It is read without ipsMu (a write renames a
-// whole file over the old one). A file that can't be read keeps the last
-// good read; with none since magpie started every proxy is held to it,
-// since which are an area's is unknown.
+// AddedByArea lists it, by its text or as netproxy.Parse writes it),
+// which netproxy connects to at public addresses alone. It is read
+// without ipsMu (a write renames a whole file over the old one). A file
+// that can't be read keeps the last good read. With none since magpie
+// started it holds nothing: which proxies are an area's is unknown, and
+// the owner's own (a Clash on loopback) are never held for it; a proxy
+// already on an area's account is held by areas.json's record instead
+// (provider's areaAttachedProxy).
 func AreaAddedProxy(raw string) bool {
 	fi, err := os.Stat(ipsPath())
 	if errors.Is(err, os.ErrNotExist) {
 		return false
 	}
+	gen := writes.Load()
 	areaAdded.Lock()
 	defer areaAdded.Unlock()
-	if err != nil || !areaAdded.read || areaAdded.size != fi.Size() || areaAdded.mod != fi.ModTime().UnixNano() {
+	var size, mod int64
+	if err == nil {
+		size, mod = fi.Size(), fi.ModTime().UnixNano()
+	}
+	fresh := err == nil && areaAdded.read && areaAdded.size == size && areaAdded.mod == mod && areaAdded.gen == gen
+	failedStill := !areaAdded.failedAt.IsZero() && time.Since(areaAdded.failedAt) < areaAddedRetry &&
+		areaAdded.failedSize == size && areaAdded.failedMod == mod && areaAdded.failedGen == gen
+	if !fresh && !failedStill {
+		areaAddedReads.Add(1)
 		ips, _, rerr := readIPs()
-		switch {
-		case err == nil && rerr == nil:
+		if err == nil && rerr == nil {
 			set := map[string]bool{}
 			for _, x := range ips {
 				if x.AddedBy != AddedByArea {
@@ -265,10 +337,16 @@ func AreaAddedProxy(raw string) bool {
 					}
 				}
 			}
-			areaAdded.size, areaAdded.mod, areaAdded.read, areaAdded.proxies = fi.Size(), fi.ModTime().UnixNano(), true, set
-		case !areaAdded.read:
-			return true
+			areaAdded.size, areaAdded.mod, areaAdded.gen, areaAdded.read, areaAdded.proxies = size, mod, gen, true, set
+			areaAdded.failedAt = time.Time{}
+		} else {
+			areaAdded.failedAt, areaAdded.failedSize, areaAdded.failedMod, areaAdded.failedGen = time.Now(), size, mod, gen
 		}
 	}
-	return areaAdded.proxies[strings.TrimSpace(raw)]
+	raw = strings.TrimSpace(raw)
+	if areaAdded.proxies[raw] {
+		return true
+	}
+	u, err := netproxy.Parse(raw)
+	return err == nil && areaAdded.proxies[u.String()]
 }

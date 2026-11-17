@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/yetone/magpie/internal/area"
+	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/renewal"
 )
 
@@ -28,7 +29,40 @@ var ErrOverridden = errors.New("the owner set this account's proxy")
 // ErrNoAccount: the provider has no such account or key.
 var ErrNoAccount = errors.New("no such account")
 
-func init() { area.Released = releaseAreaProxy }
+func init() {
+	area.Released = releaseAreaProxy
+	netproxy.PublicOnly = func(raw string) bool { return renewal.AreaAddedProxy(raw) || areaAttachedProxy(raw) }
+}
+
+// beforeOwnProxyWrite runs as setOwnProxy is about to take providers.json's
+// lock, once the attach has made up its mind: a test writes the owner's
+// value at that moment.
+var beforeOwnProxyWrite func()
+
+// beforeAttachWrite runs in AttachAreaProxy after its checks, before it
+// writes: a test removes the IP there.
+var beforeAttachWrite func()
+
+// areaAttachedProxy says raw is the address of a proxy an area put on one
+// of its accounts, by areas.json's record (its ProxyID): held to public
+// addresses whatever ips.json says now, so one whose IP went away, or
+// an ips.json that can't be read, leaves it held. Any area's record
+// counts; an areas.json that can't be read holds nothing new.
+func areaAttachedProxy(raw string) bool {
+	areas, err := area.List()
+	if err != nil {
+		return false
+	}
+	id := renewal.ProxyID(raw)
+	for _, a := range areas {
+		for _, c := range a.Accounts {
+			if c.Proxy != nil && c.Proxy.ID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // areaAccountKey is the account ref of provider pid as AccountProxies
 // names it: a key's fingerprint, or an account's login in lower case.
@@ -94,40 +128,35 @@ func AttachAreaProxy(areaID, ref, ip, proxyID string) error {
 	if err != nil {
 		return err
 	}
-	ips, _, err := renewal.IPs()
-	if err != nil {
-		return err
-	}
-	i := slices.IndexFunc(ips, func(x renewal.IP) bool { return x.IP == ip && x.Area == areaID && areaID != "" })
-	if i < 0 {
-		return renewal.ErrIPNotFound
-	}
-	url, ok := ips[i].ProxyOf(proxyID)
-	if !ok {
-		return renewal.ErrIPNotFound
-	}
-	was := recordOf(areaID, ref)
-	if cur := ownProxyOf(pid, key); cur != "" {
-		if was == nil || was.Key != key || renewal.ProxyID(cur) != was.ID {
-			return ErrOverridden
+	// the IP and its proxy read, recorded and written under ipsMu: no
+	// removal of either comes between (renewal.WithAreaProxy)
+	return renewal.WithAreaProxy(areaID, ip, proxyID, func(x renewal.IP, url string) error {
+		if beforeAttachWrite != nil {
+			beforeAttachWrite()
 		}
-	} else if was != nil {
-		return ErrOverridden // the owner cleared it
-	}
-	rec := area.AccountProxy{IP: ips[i].IP, ID: proxyID, Key: key}
-	if err := area.SetProxy(areaID, ref, &rec); err != nil {
-		return err
-	}
-	if err := setOwnProxy(pid, key, url, ""); err != nil {
-		area.SetProxy(areaID, ref, was)
-		return err
-	}
-	if owner, contested, err := area.Owner(ref); err != nil || contested || owner != areaID {
-		clearAreaProxy(pid, rec)
-		return area.ErrNotOwned
-	}
-	log.Printf("areas: area %s put proxy %s of %s on %s", areaID, proxyID, ips[i].IP, pid)
-	return nil
+		was := recordOf(areaID, ref)
+		rec := area.AccountProxy{IP: x.IP, ID: proxyID, Key: key}
+		if err := area.SetProxy(areaID, ref, &rec); err != nil {
+			return err
+		}
+		// written only while the value there is none, with no record of
+		// the area's before, or still the area's own: else the owner's
+		if err := setOwnProxy(pid, key, url, func(cur string) error {
+			if cur == "" && was == nil || cur != "" && was != nil && was.Key == key && renewal.ProxyID(cur) == was.ID {
+				return nil
+			}
+			return ErrOverridden
+		}); err != nil {
+			area.SetProxy(areaID, ref, was)
+			return err
+		}
+		if owner, contested, err := area.Owner(ref); err != nil || contested || owner != areaID {
+			clearAreaProxy(pid, rec)
+			return area.ErrNotOwned
+		}
+		log.Printf("areas: area %s put proxy %s of %s on %s", areaID, proxyID, x.IP, pid)
+		return nil
+	})
 }
 
 // DetachAreaProxy takes the area's proxy off its account ref: off the
@@ -179,13 +208,26 @@ func clearAreaProxy(pid string, rec area.AccountProxy) error {
 	if cur := ownProxyOf(pid, rec.Key); cur == "" || renewal.ProxyID(cur) != rec.ID {
 		return nil
 	}
-	return setOwnProxy(pid, rec.Key, "", rec.ID)
+	return setOwnProxy(pid, rec.Key, "", func(cur string) error {
+		if cur == "" || renewal.ProxyID(cur) != rec.ID {
+			return errLeftAlone
+		}
+		return nil
+	})
 }
 
+// errLeftAlone: the value is no longer the area's, and is left as it is.
+var errLeftAlone = errors.New("left alone")
+
 // setOwnProxy writes url ("" for none) as the own proxy of the account
-// key of provider pid, in providers.json's lock. only, when set, clears
-// it only while it is still the proxy of that id.
-func setOwnProxy(pid, key, url, only string) error {
+// key of provider pid, in providers.json's lock, when allow (nil: always)
+// takes the value there now, read in the same lock: a value the owner
+// set a moment before is never written over. errLeftAlone from allow is
+// no error.
+func setOwnProxy(pid, key, url string, allow func(cur string) error) error {
+	if beforeOwnProxyWrite != nil {
+		beforeOwnProxyWrite()
+	}
 	if err := providersMu.Take(); err != nil {
 		return err
 	}
@@ -195,6 +237,17 @@ func setOwnProxy(pid, key, url, only string) error {
 		return err
 	}
 	i := slices.IndexFunc(f.Providers, func(p Provider) bool { return p.ID == pid })
+	cur := ""
+	if i >= 0 {
+		cur = f.Providers[i].AccountProxies[key]
+	}
+	if allow != nil {
+		if err := allow(cur); errors.Is(err, errLeftAlone) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+	}
 	if i < 0 {
 		if url == "" {
 			return nil
@@ -203,9 +256,6 @@ func setOwnProxy(pid, key, url, only string) error {
 		i = len(f.Providers) - 1
 	}
 	p := &f.Providers[i]
-	if only != "" && renewal.ProxyID(p.AccountProxies[key]) != only {
-		return nil
-	}
 	own := maps.Clone(p.AccountProxies)
 	if own == nil {
 		own = map[string]string{}
@@ -252,4 +302,35 @@ func SweepAreaProxies() error {
 		}
 	}
 	return nil
+}
+
+// InUseError is an IP or proxy of an area still on the area's accounts.
+type InUseError struct{ Accounts []string }
+
+func (e *InUseError) Error() string {
+	return "the area's accounts go through it: " + strings.Join(e.Accounts, ", ")
+}
+
+// AreaIPInUse is the check renewal.RemoveAreaIP and ChangeAreaIP make
+// under ipsMu before an area's IP (proxyIDs nil), or some of its proxies,
+// go: an InUseError naming the area's accounts through them, from
+// areas.json read then.
+func AreaIPInUse(areaID string, proxyIDs []string) func(renewal.IP) error {
+	return func(x renewal.IP) error {
+		a, err := area.Get(areaID)
+		if err != nil {
+			return err
+		}
+		var used []string
+		for _, c := range a.Accounts {
+			if c.Proxy != nil && c.Proxy.IP == x.IP && (proxyIDs == nil || slices.Contains(proxyIDs, c.Proxy.ID)) {
+				used = append(used, c.Ref)
+			}
+		}
+		if len(used) > 0 {
+			slices.Sort(used)
+			return &InUseError{Accounts: used}
+		}
+		return nil
+	}
 }

@@ -231,7 +231,7 @@ func TestAdminIPsOwnAreaOnly(t *testing.T) {
 		reachedStore.Add(1)
 		return renewal.IP{}, nil
 	}
-	areaIPRemove = func(string, string) error { reachedStore.Add(1); return nil }
+	areaIPRemove = func(string, string, func(renewal.IP) error) error { reachedStore.Add(1); return nil }
 	areaIPAttach = func(string, string, string, string) error { reachedStore.Add(1); return nil }
 	for _, ip := range []string{"203.0.113.8", "198.51.100.1"} {
 		for _, call := range []struct {
@@ -310,7 +310,7 @@ func TestAdminIPsStoreChecksTheArea(t *testing.T) {
 	if _, err := areaIPChange(w.aID, "203.0.113.8", time.Now(), func(x *renewal.IP) error { x.Name = "A's"; return nil }); !errors.Is(err, renewal.ErrIPNotFound) {
 		t.Fatalf("the store let A change B's IP: %v", err)
 	}
-	if err := areaIPRemove(w.aID, "198.51.100.1"); !errors.Is(err, renewal.ErrIPNotFound) {
+	if err := areaIPRemove(w.aID, "198.51.100.1", nil); !errors.Is(err, renewal.ErrIPNotFound) {
 		t.Fatalf("the store let A remove the owner's IP: %v", err)
 	}
 	if err := areaIPAttach(w.aID, w.aKey, "203.0.113.8", renewal.ProxyID("http://user:pw@"+proxyHost("203.0.113.8")+":"+w.proxy.port())); !errors.Is(err, renewal.ErrIPNotFound) {

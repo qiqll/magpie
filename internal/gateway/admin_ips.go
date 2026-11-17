@@ -157,7 +157,10 @@ func areaIP(w http.ResponseWriter, c adminCall, ip string) (renewal.IP, bool) {
 
 // ipWriteErr answers an area's IP write that failed.
 func ipWriteErr(w http.ResponseWriter, err error) {
+	var used *provider.InUseError
 	switch {
+	case errors.As(err, &used):
+		inUse(w, used.Accounts)
 	case errors.Is(err, renewal.ErrIPNotFound):
 		adminError(w, http.StatusNotFound, adminNotFound, "no such IP")
 	case errors.Is(err, renewal.ErrIPTaken):
@@ -297,6 +300,13 @@ func (s *Server) adminUpdateIP(w http.ResponseWriter, r *http.Request, c adminCa
 		}
 	}
 	got, err := areaIPChange(c.area.ID, x.IP, time.Now(), func(y *renewal.IP) error {
+		// read again under ipsMu: an attach that passed the check above
+		// holds it while it writes
+		if len(in.RemoveProxies) > 0 {
+			if err := provider.AreaIPInUse(c.area.ID, in.RemoveProxies)(*y); err != nil {
+				return err
+			}
+		}
 		if in.Name != nil {
 			y.Name = *in.Name
 		}
@@ -339,7 +349,7 @@ func (s *Server) adminDeleteIP(w http.ResponseWriter, r *http.Request, c adminCa
 		inUse(w, used)
 		return
 	}
-	if err := areaIPRemove(c.area.ID, x.IP); err != nil {
+	if err := areaIPRemove(c.area.ID, x.IP, provider.AreaIPInUse(c.area.ID, nil)); err != nil {
 		ipWriteErr(w, err)
 		return
 	}

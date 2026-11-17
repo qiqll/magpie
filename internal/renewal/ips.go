@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -60,6 +61,10 @@ type ipsFile struct {
 }
 
 var ipsMu sync.Mutex
+
+// writes counts this magpie's writes of ips.json, so a reader keyed on
+// the file's size and time sees one made within the same tick too.
+var writes atomic.Int64
 
 func ipsPath() string { return filepath.Join(appdir.Config(), "ips.json") }
 
@@ -141,6 +146,7 @@ func SetIPs(ips []IP, rev string, now time.Time) error {
 // writeIPs writes ips as the whole file, through a temp file renamed over
 // it; called with ipsMu held.
 func writeIPs(ips []IP) error {
+	defer writes.Add(1)
 	if ips == nil {
 		ips = []IP{}
 	}

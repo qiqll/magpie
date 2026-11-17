@@ -257,6 +257,17 @@ proxies on its own accounts
   account. Once the value there is no longer the area's proxy, the owner
   set it: the account says `overridden`, a new attach is `409`, and
   nothing of the area's takes the owner's value off.
+- **No race with a removal.** An attach checks the IP and proxy, records
+  them and writes the address while holding `ipsMu`
+  (`renewal.WithAreaProxy`). The area's removal of an IP or proxy asks
+  again, under `ipsMu`, whether an account goes through it
+  (`provider.AreaIPInUse`, `409 in_use`). Lock order: `ipsMu`, then
+  `areas.json`'s lock, then `providers.json`'s. Nothing that holds either
+  of the latter takes `ipsMu`, and no network work runs under any of
+  them. The account's own proxy is compared and set in `providers.json`'s
+  lock (`setOwnProxy`'s `allow`). It is written only while it is empty
+  with no record of the area's, or still the area's own value, so an
+  owner's value set at the same moment is kept (`409`).
 - **Taken off** when the area lets the account go (`area.Release`,
   `ReleaseProvider`, so `releaseArea`'s removals and the owner's take-back
   too, via `area.Released`), when the area detaches it, and by
@@ -299,7 +310,16 @@ A proxy an area added is connected to at a public address alone
 connection magpie makes to it, so a name pointed home after it was saved
 (DNS rebinding) reaches nothing:
 
-- `netproxy.PublicOnly` names such proxies; every transport `Dispatch`
+- `netproxy.PublicOnly` names such proxies (set by internal/provider): one
+  an area's IP lists (`renewal.AreaAddedProxy`, by its text or as
+  `netproxy.Parse` writes it), or one `areas.json` records on an area's
+  account (`areaAttachedProxy`, by its id), so an attachment whose IP is
+  gone, or an `ips.json` that can't be read, stays held. A read of
+  `ips.json` that fails keeps the last good one; with none since magpie
+  started only the recorded attachments are held, never the owner's own
+  proxies. A failed read is tried again after 5 seconds or once the file
+  changes, not on every dial. The cache is keyed on the file's size, its
+  time and this magpie's own writes; every transport `Dispatch`
   makes, and the gateway's image fetch through a provider's proxy, dial
   through `guardDial`, which, for a request whose proxy (`With`) is one,
   resolves the proxy's name, refuses it unless every answer is public
