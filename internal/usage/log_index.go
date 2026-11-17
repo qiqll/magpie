@@ -327,12 +327,22 @@ func (o routeRows) handedOn(c *rowChunk, r *Record) {
 // record's strings are the block's own, not the buffer's.
 func (s *logSnapshot) visit(since time.Time, fn func(Record)) { visitBlocks(s.blocks, since, fn) }
 
+func (s *logSnapshot) visitWhile(since time.Time, fn func(Record) bool) {
+	visitBlocksWhile(s.blocks, since, fn)
+}
+
 // blockReader reads blocks as visit reads the log's.
 func blockReader(blocks []*rowChunk, since time.Time) func(func(Record)) {
 	return func(fn func(Record)) { visitBlocks(blocks, since, fn) }
 }
 
 func visitBlocks(blocks []*rowChunk, since time.Time, fn func(Record)) {
+	visitBlocksWhile(blocks, since, func(r Record) bool { fn(r); return true })
+}
+
+// visitBlocksWhile is visitBlocks until fn returns false: no block after
+// is decoded.
+func visitBlocksWhile(blocks []*rowChunk, since time.Time, fn func(Record) bool) {
 	rows := chunkRows{}
 	defer rows.release()
 	for _, packed := range blocks {
@@ -342,8 +352,8 @@ func visitBlocks(blocks []*rowChunk, since time.Time, fn func(Record)) {
 		c := rows.of(packed)
 		for i := range c.Rows {
 			p := &c.Rows[i]
-			if !p.Time().Before(since) {
-				fn(c.row(i).Record)
+			if !p.Time().Before(since) && !fn(c.row(i).Record) {
+				return
 			}
 		}
 	}

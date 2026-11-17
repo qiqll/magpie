@@ -157,7 +157,7 @@ and reply bodies are in magpie-console's `docs/magpie-api.md`.
   which are in none. Every admin read of usage takes its areas from
   `adminScope`, so the stats routes (T-197) do too.
 - **Rows from the area's accounts alone** (`areaRows`): the same
-  matching as usage, from each account's `Added`, over `usage.Visit`
+  matching as usage, from each account's `Added`, over `usage.VisitWhile`
   (never `usageapi.LedgerPage`, which brings in agents' session files,
   other computers and whole-ledger lists). An area with no account
   visits nothing. An `account=` filter naming an account outside the
@@ -226,13 +226,19 @@ and reply bodies are in magpie-console's `docs/magpie-api.md`.
 - Bounds: the period reaches back 366 days and spans no more; hour
   buckets for 7 days at most, day buckets for 92; up to two `groupBy`
   dimensions; `top` 1 to 100 (default 20), the rest merged into
-  `other`; at most 5000 points after `top`, else `400` (found after the
-  tally, since the groups are known only then). Each area runs two
+  `other`; at most 5000 points after `top`, else `400`. The points
+  (`statsShown`: buckets × (min(groups, top) + 1 for `other`)) only grow
+  as groups are found, so the read stops at the group that puts them
+  over (`statsMost`, `usage.VisitWhile`): a refused query reads the log
+  up to that record, not the period (T-203). When `top` + `other` fit,
+  no count of groups is over and nothing stops. Each area runs two
   stats at once (`statsSlots`, in memory); a third is `429
   too_many_requests` with `Retry-After: 1` and reads nothing. The
   console has two of its own. Another area is never held.
-- Cost: one `usage.Visit` from the period's start, whatever the
-  groupings; a year of weeks reads a year of the log.
+- Cost: one `usage.VisitWhile` from the period's start, whatever the
+  groupings; a year of weeks reads a year of the log (1.43M records, 1.1M
+  of them in 92 days: an area's 92 days ~0.42 s, its 366 days of weeks
+  ~0.54 s, the console's ~1.05 s, on an M-series Mac).
 
 ## Proxy IPs
 

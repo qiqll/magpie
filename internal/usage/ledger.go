@@ -1386,6 +1386,10 @@ func ledgerSeriesAt(p Period, rows []Row, now time.Time) (bucket string, pts []S
 // does so itself).
 func Visit(since time.Time, fn func(Record)) { readLogSnapshot().visit(since, fn) }
 
+// VisitWhile is Visit until fn returns false: a reader that knows its
+// answer early (a stats query over its points bound) reads no further.
+func VisitWhile(since time.Time, fn func(Record) bool) { readLogSnapshot().visitWhile(since, fn) }
+
 // VisitSessions is Visit for the records whose Session or NativeSession
 // is one of sessions, read without making a Record of any other.
 func VisitSessions(since time.Time, sessions []string, fn func(Record)) {

@@ -171,15 +171,15 @@ func buildRowIndex(sc scopedAreas, q rowQuery) *rowIndex {
 	refs := map[string]int32{}
 	ords := map[[2]int64]int{}
 	cost := usage.NewCoster()
-	areaRows(sc.accs, q.since, q.until, func(i int, ref string, r usage.Record) {
+	areaRows(sc.accs, q.since, q.until, func(i int, ref string, r usage.Record) bool {
 		if r.Time.After(q.asOf) {
-			return // made after the first page was read
+			return true // made after the first page was read
 		}
 		k := rowKey{T: r.Time.UnixNano(), R: r.RouteID}
 		k.Ord = ords[[2]int64{k.T, k.R}]
 		ords[[2]int64{k.T, k.R}]++
 		if !q.keepsRow(sc, i, ref, r) {
-			return
+			return true
 		}
 		c, priced := cost(r)
 		idx.summary.add(r, c, priced)
@@ -191,6 +191,7 @@ func buildRowIndex(sc scopedAreas, q rowQuery) *rowIndex {
 			idx.refs = append(idx.refs, ref)
 		}
 		idx.rows = append(idx.rows, indexedRow{k, int32(i), n})
+		return true
 	})
 	slices.SortFunc(idx.rows, func(x, y indexedRow) int {
 		if x.key.before(y.key) {
@@ -233,9 +234,9 @@ func pageRecords(sc scopedAreas, q rowQuery, page []indexedRow) ([]usage.Record,
 	}
 	ords := map[[2]int64]int{}
 	found := 0
-	areaRows(sc.accs, since, q.until, func(_ int, _ string, r usage.Record) {
+	areaRows(sc.accs, since, q.until, func(_ int, _ string, r usage.Record) bool {
 		if r.Time.After(q.asOf) {
-			return
+			return true
 		}
 		k := rowKey{T: r.Time.UnixNano(), R: r.RouteID}
 		k.Ord = ords[[2]int64{k.T, k.R}]
@@ -245,6 +246,7 @@ func pageRecords(sc scopedAreas, q rowQuery, page []indexedRow) ([]usage.Record,
 			delete(at, k)
 			found++
 		}
+		return true
 	})
 	return out, found == len(page)
 }

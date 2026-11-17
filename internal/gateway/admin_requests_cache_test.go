@@ -20,7 +20,7 @@ func countVisits(t *testing.T, periodSince func(time.Time) bool) (whole func() i
 	var mu sync.Mutex
 	w, a := 0, 0
 	was := visitLedger
-	visitLedger = func(since time.Time, fn func(usage.Record)) {
+	visitLedger = func(since time.Time, fn func(usage.Record) bool) {
 		mu.Lock()
 		a++
 		if periodSince(since) {

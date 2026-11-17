@@ -154,10 +154,10 @@ func TestAdminStatsMatchesUsage(t *testing.T) {
 func statsAt(t *testing.T, recs []usage.Record, now time.Time, query string) adminStats {
 	t.Helper()
 	was := visitLedger
-	visitLedger = func(since time.Time, fn func(usage.Record)) {
+	visitLedger = func(since time.Time, fn func(usage.Record) bool) {
 		for _, r := range recs {
-			if !r.Time.Before(since) {
-				fn(r)
+			if !r.Time.Before(since) && !fn(r) {
+				return
 			}
 		}
 	}
@@ -324,7 +324,7 @@ func TestAdminStatsConcurrencyHeld(t *testing.T) {
 	visits := 0
 	in, release := make(chan struct{}, 8), make(chan struct{})
 	was := visitLedger
-	visitLedger = func(since time.Time, fn func(usage.Record)) {
+	visitLedger = func(since time.Time, fn func(usage.Record) bool) {
 		mu.Lock()
 		visits++
 		n := visits
@@ -407,5 +407,51 @@ func TestAdminStatsStatusPartition(t *testing.T) {
 	}
 	if s.Totals.Failed != 1 || s.Totals.Retried != 1 || s.Totals.Canceled != 1 {
 		t.Fatalf("totals: %+v", s.Totals)
+	}
+}
+
+// T-203: a query over 5000 points stops reading once its groups make it
+// so (groups are only ever added), and is the same 400; one under the
+// bound reads the period to its end.
+func TestAdminStatsRefusedStopsReading(t *testing.T) {
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	var recs []usage.Record
+	for i := range 1000 { // 1000 models over 1000 minutes, the oldest first
+		recs = append(recs, usage.Record{Time: now.Add(-time.Duration(1000-i) * time.Minute), Provider: "plan", ProviderKeyID: "fp_zone", Model: fmt.Sprintf("m%04d", i), Status: 200, Input: 1})
+	}
+	read := 0
+	was := visitLedger
+	visitLedger = func(since time.Time, fn func(usage.Record) bool) {
+		for _, r := range recs {
+			if r.Time.Before(since) {
+				continue
+			}
+			read++
+			if !fn(r) {
+				return
+			}
+		}
+	}
+	t.Cleanup(func() { visitLedger = was })
+	run := func(query string) (adminStats, bool) {
+		w := httptest.NewRecorder()
+		q, ok := readStatsQuery(w, httptest.NewRequest("GET", AdminPath+"/usage/stats?"+query, nil), false, map[string]bool{}, now)
+		if !ok {
+			t.Fatalf("%s: %d %s", query, w.Code, w.Body)
+		}
+		acc := adminAccount{ID: "plan/fp_zone", Kind: "key", Name: "k", Added: now.AddDate(-2, 0, 0)}
+		sc := scopedAreas{areas: []area.Area{{ID: "ar_zone"}}, accs: [][]adminAccount{{acc}}, salts: [][]byte{{1}}, names: map[string]string{acc.ID: acc.Name}}
+		return areaStats(sc, q, false)
+	}
+	// 7d to 12:00 is 157 hour buckets: 32 groups are 5024 points, 31 4867
+	if _, ok := run("tz=UTC&period=7d&granularity=hour&groupBy=model&top=100"); ok || read != 32 {
+		t.Fatalf("refused: ok %v after %d records, want the 32nd", ok, read)
+	}
+	read = 0
+	if s, ok := run("tz=UTC&period=7d&granularity=hour&groupBy=model&top=20"); !ok || read != 1000 || s.Other == nil || s.Other.Groups != 980 {
+		t.Fatalf("top 20: ok %v after %d records", ok, read)
+	}
+	if statsMost(statsQuery{top: 20, buckets: make([]time.Time, 168)}) != 0 || statsMost(statsQuery{top: 100, buckets: make([]time.Time, 157)}) != 32 {
+		t.Fatal("statsMost: top 20 of 168 buckets (3528 points) can't be over; top 100 of 157 is over at 32")
 	}
 }

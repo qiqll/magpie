@@ -74,9 +74,15 @@ func adminScope(w http.ResponseWriter, r *http.Request, c adminCall) ([]area.Are
 	return areas, true
 }
 
-// visitLedger is usage.Visit, a variable for the tests, which count
-// that an area with no account reads nothing.
-var visitLedger = usage.Visit
+// visitLedger is usage.VisitWhile, a variable for the tests, which count
+// that an area with no account reads nothing, and that a refused stats
+// query stops reading.
+var visitLedger = usage.VisitWhile
+
+// visitAll is visitLedger to the end.
+func visitAll(since time.Time, fn func(usage.Record)) {
+	visitLedger(since, func(r usage.Record) bool { fn(r); return true })
+}
 
 // areaRecord is whether r is a request the gateway here took on and
 // logged: not one it refused before reaching any account, nor one a
@@ -92,8 +98,8 @@ func areaRecord(r usage.Record) bool {
 // before), an account's by Record.Account() under its provider, each
 // from the time the area got it. A record is given once, to the first
 // account that names it. An area with no account visits nothing: never
-// the whole ledger.
-func areaRows(scope [][]adminAccount, since, until time.Time, fn func(area int, ref string, r usage.Record)) {
+// the whole ledger. fn returns false to read no further.
+func areaRows(scope [][]adminAccount, since, until time.Time, fn func(area int, ref string, r usage.Record) bool) {
 	type own struct {
 		area int
 		areaMatch
@@ -109,17 +115,17 @@ func areaRows(scope [][]adminAccount, since, until time.Time, fn func(area int, 
 	if len(byProvider) == 0 {
 		return
 	}
-	visitLedger(since, func(r usage.Record) {
+	visitLedger(since, func(r usage.Record) bool {
 		if r.Time.Before(since) || !until.IsZero() && !r.Time.Before(until) || !areaRecord(r) {
-			return
+			return true
 		}
 		for _, m := range byProvider[r.Provider] {
 			if r.Time.Before(m.added) || !m.names(r) {
 				continue
 			}
-			fn(m.area, m.ref, r)
-			return
+			return fn(m.area, m.ref, r)
 		}
+		return true
 	})
 }
 

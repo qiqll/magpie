@@ -694,7 +694,7 @@ func areasToday(areas []area.Area, accs [][]adminAccount, loc *time.Location, no
 	counted := make([]int, len(areas))
 	n := 0
 	cost := usage.NewCoster()
-	visitLedger(since, func(r usage.Record) {
+	visitAll(since, func(r usage.Record) {
 		if r.Time.Before(since) || !areaRecord(r) {
 			return
 		}

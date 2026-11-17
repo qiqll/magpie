@@ -334,7 +334,7 @@ func TestAdminRequestsEmptyAreaReadsNothing(t *testing.T) {
 	usage.Append(usage.Record{Time: w.now.Add(-time.Minute), Provider: "plan", ProviderKeyID: w.ownerFP, Model: "m1", Status: 200, Input: 5})
 	var visits int
 	was := visitLedger
-	visitLedger = func(since time.Time, fn func(usage.Record)) { visits++; was(since, fn) }
+	visitLedger = func(since time.Time, fn func(usage.Record) bool) { visits++; was(since, fn) }
 	t.Cleanup(func() { visitLedger = was })
 	p, _ := w.page(t, empty, AdminPath+"/usage/requests?period=7d")
 	if visits != 0 || p.Total != 0 || len(p.Rows) != 0 {

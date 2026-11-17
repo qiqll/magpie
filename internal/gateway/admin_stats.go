@@ -265,13 +265,17 @@ type statsTally struct {
 	series []statsMetrics
 	groups []map[string]*statsGroup
 	first  time.Time
+	// over: the first grouping reached the groups it was given at most,
+	// and the read stopped there
+	over bool
 }
 
 // tallyStats adds up the records of sc's areas that q keeps, split by
 // each of groupings (each up to two dimensions), from one visit of the
 // ledger (areaRows: none for areas with no account). console names a
-// caller key and an area; an area is told neither.
-func tallyStats(sc scopedAreas, q statsQuery, console bool, groupings [][]string) statsTally {
+// caller key and an area; an area is told neither. most > 0 stops the
+// read once the first grouping has that many groups (over).
+func tallyStats(sc scopedAreas, q statsQuery, console bool, groupings [][]string, most int) statsTally {
 	t := statsTally{series: make([]statsMetrics, len(q.buckets)), groups: make([]map[string]*statsGroup, len(groupings))}
 	for i := range t.groups {
 		t.groups[i] = map[string]*statsGroup{}
@@ -279,7 +283,7 @@ func tallyStats(sc scopedAreas, q statsQuery, console bool, groupings [][]string
 	faces := newRowFaces()
 	cost := usage.NewCoster()
 	var sb strings.Builder
-	areaRows(sc.accs, q.since, q.until, func(i int, ref string, r usage.Record) {
+	areaRows(sc.accs, q.since, q.until, func(i int, ref string, r usage.Record) bool {
 		val := func(d string) string {
 			switch d {
 			case "provider":
@@ -301,7 +305,7 @@ func tallyStats(sc scopedAreas, q statsQuery, console bool, groupings [][]string
 		}
 		for k, want := range q.filters {
 			if len(want) > 0 && !slices.Contains(want, val(k)) {
-				return
+				return true
 			}
 		}
 		c, priced := cost(r)
@@ -357,6 +361,11 @@ func tallyStats(sc scopedAreas, q statsQuery, console bool, groupings [][]string
 				g.points[b].add(r, c, priced)
 			}
 		}
+		if most > 0 && len(t.groups[0]) >= most {
+			t.over = true
+			return false
+		}
+		return true
 	})
 	return t
 }
@@ -423,14 +432,44 @@ func dense(points map[int]*statsMetrics, n int) []statsMetrics {
 	return out
 }
 
+// statsShown is the points a reply of g groups has under q: top of
+// them, other the rest, each with a point a bucket (one for none). It
+// only grows with g, and stops growing once g passes top.
+func statsShown(q statsQuery, g int) int {
+	shown := min(g, q.top)
+	if g > q.top {
+		shown++
+	}
+	return max(len(q.buckets), 1) * shown
+}
+
+// statsMost is the groups at which q is over statsPoints whatever is
+// read next, 0 when no count of groups is (top+1 rows fit). Groups are
+// only ever added, so once the read has that many the 400 is sure, and
+// it stops (T-203).
+func statsMost(q statsQuery) int {
+	for g := 1; g <= q.top+1; g++ {
+		if statsShown(q, g) > statsPoints {
+			return g
+		}
+	}
+	return 0
+}
+
 // areaStats is q over sc's areas, false when its points, top applied,
-// are more than statsPoints.
+// are more than statsPoints: found as soon as the groups read make them
+// so, the rest of the period unread.
 func areaStats(sc scopedAreas, q statsQuery, console bool) (adminStats, bool) {
 	var groupings [][]string
+	most := 0
 	if len(q.groupBy) > 0 {
 		groupings = [][]string{q.groupBy}
+		most = statsMost(q)
 	}
-	t := tallyStats(sc, q, console, groupings)
+	t := tallyStats(sc, q, console, groupings, most)
+	if t.over {
+		return adminStats{}, false
+	}
 	out := adminStats{Period: string(q.period), Zone: q.loc.String(), Since: q.since, Until: q.shownUntil, Granularity: q.gran,
 		GroupBy: q.groupBy, Buckets: q.buckets, Totals: t.totals, Groups: []statsGroupOut{}}
 	if q.gran != statsNone {
@@ -471,11 +510,7 @@ func areaStats(sc scopedAreas, q statsQuery, console bool) (adminStats, bool) {
 		}
 		out.Other = o
 	}
-	shown := len(kept)
-	if out.Other != nil {
-		shown++
-	}
-	if max(n, 1)*shown > statsPoints {
+	if statsShown(q, len(all)) > statsPoints {
 		return out, false
 	}
 	for _, g := range kept {
@@ -576,5 +611,5 @@ func usageStats(a area.Area, p usage.Period, loc *time.Location, now time.Time) 
 	q.start = usage.BucketStart("day", q.since)
 	q.buckets = usage.BucketStarts("day", q.start, now.Add(time.Nanosecond))
 	sc := scopedAreas{areas: []area.Area{a}, accs: [][]adminAccount{accs}, salts: [][]byte{nil}, names: names}
-	return q, tallyStats(sc, q, false, [][]string{{"model"}, {"account"}}), names
+	return q, tallyStats(sc, q, false, [][]string{{"model"}, {"account"}}, 0), names
 }

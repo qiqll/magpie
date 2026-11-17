@@ -124,3 +124,24 @@ func TestVisitSessionsSkipsBlocksOfOtherSessions(t *testing.T) {
 		t.Fatalf("a lookup of one block's conversation decoded %d blocks of 20 and read %d records, want 1 and 200", decoded, n)
 	}
 }
+
+// visitWhile is visit's records in visit's order, up to and with the
+// first fn says false to, and none after.
+func TestVisitWhileStops(t *testing.T) {
+	s := &logSnapshot{blocks: sessionChunks(t, 6, 300)}
+	since := s.blocks[1].Latest.Add(-50 * time.Second)
+	var all []Record
+	s.visit(since, func(r Record) { all = append(all, r) })
+	for _, n := range []int{1, 7, 300, len(all)} {
+		var got []Record
+		s.visitWhile(since, func(r Record) bool { got = append(got, r); return len(got) < n })
+		if len(got) != n {
+			t.Fatalf("stop at %d: %d records", n, len(got))
+		}
+		for i := range got {
+			if got[i].RequestID != all[i].RequestID || !got[i].Time.Equal(all[i].Time) {
+				t.Fatalf("stop at %d, record %d: %+v, want %+v", n, i, got[i], all[i])
+			}
+		}
+	}
+}
