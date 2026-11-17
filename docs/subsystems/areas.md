@@ -181,7 +181,20 @@ and reply bodies are in magpie-console's `docs/magpie-api.md`.
   order in the log; the cursor (base64url JSON, unsigned) holds `asOf`,
   the last row and a hash of the scope, period, zone and filters. A
   cursor for another query is `400`. It only narrows: the scope is read
-  from the key again on every page. Each page reads the log again.
+  from the key again on every page.
+- **Index cache** ([`admin_requests_cache.go`](../../internal/gateway/admin_requests_cache.go),
+  T-201): a query's first page reads the period once and keeps the rows
+  it matched, by key alone (~32 bytes a row), with `summary` and
+  `total`, for 60 s, 8 queries and 3M rows at most (least recently used
+  out first). A later page takes its rows there and reads the log from
+  its own oldest row on, for those rows' records: page 2 to 10 of a
+  92-day query cost ms, a page at the period's far end about a full
+  read. The key hashes every input of the match: the areas' ids and
+  salts, each account's ref, kind, name, `Added`, previous fingerprints
+  and contested flag, the period, zone, filters and `asOf`. So another
+  area never reads the entry, and a claim, release or rename makes
+  another key (the old entry ages out). A row gone from the log (the log
+  rewritten) reads the period again.
 - `period` is one `usage.Period.Known()` accepts except `all`, reaching
   back 92 days at most, today included; anything else is `400` (never
   30 days in its place). `limit` is 1 to 500 (default 100). `summary` and

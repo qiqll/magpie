@@ -433,16 +433,6 @@ type rowQuery struct {
 // rowFilters are the filters a query takes, each repeatable.
 var rowFilters = []string{"provider", "model", "account", "agent", "callerKey", "status"}
 
-// keeps is whether the filters keep a row of these values.
-func (q rowQuery) keeps(vals map[string]string) bool {
-	for k, want := range q.filters {
-		if len(want) > 0 && !slices.Contains(want, vals[k]) {
-			return false
-		}
-	}
-	return true
-}
-
 // readPeriodZone reads v's period (def when there is none) and tz: a
 // period usage.Period.Known() takes except all, never another in place
 // of one it doesn't, and an IANA zone (this computer's by default).
@@ -607,69 +597,45 @@ func (s *Server) adminUsageRequests(w http.ResponseWriter, r *http.Request, c ad
 	writeJSON(w, http.StatusOK, requestRows(sc, q, c.who.Admin == access.AdminConsole))
 }
 
-// requestRows is the page q asks of sc's areas.
+// requestRows is the page q asks of sc's areas: from the query's index
+// (rowIndexes) when a page of it was read in the last minute, else from
+// one read of the period, kept for the pages after it.
 func requestRows(sc scopedAreas, q rowQuery, console bool) requestsPage {
 	out := requestsPage{Period: string(q.period), Zone: q.loc.String(), Since: q.since, Until: q.asOf.In(q.loc), Rows: []adminRow{}}
 	if !q.until.IsZero() && q.until.Before(q.asOf) {
 		out.Until = q.until
 	}
-	type hit struct {
-		key  rowKey
-		area int
-		ref  string
-		r    usage.Record
-		cost float64
-		ok   bool
+	key := rowIndexKey(sc, q)
+	idx, fresh := rowIndexes.get(key), false
+	if idx == nil {
+		idx, fresh = buildRowIndex(sc, q), true
+		rowIndexes.put(key, idx)
 	}
-	var hits []hit
-	sortTrim := func() {
-		slices.SortFunc(hits, func(x, y hit) int {
-			if x.key.before(y.key) {
-				return -1
-			}
-			if y.key.before(x.key) {
-				return 1
-			}
-			return 0
-		})
-		if len(hits) > q.limit+1 {
-			hits = hits[:q.limit+1]
-		}
+	page, more := idx.pageOf(q)
+	recs, ok := pageRecords(sc, q, page)
+	if !ok && !fresh {
+		// a row the index has is gone from the ledger (rewritten since):
+		// read the period again
+		rowIndexes.drop(key)
+		idx = buildRowIndex(sc, q)
+		rowIndexes.put(key, idx)
+		page, more = idx.pageOf(q)
+		recs, _ = pageRecords(sc, q, page)
 	}
-	ords := map[[2]int64]int{}
-	cost := usage.NewCoster()
-	areaRows(sc.accs, q.since, q.until, func(i int, ref string, r usage.Record) {
-		if r.Time.After(q.asOf) {
-			return // made after the first page was read
-		}
-		k := rowKey{T: r.Time.UnixNano(), R: r.RouteID}
-		k.Ord = ords[[2]int64{k.T, k.R}]
-		ords[[2]int64{k.T, k.R}]++
-		if !q.keeps(map[string]string{
-			"provider": r.Provider, "model": r.Model, "account": ref, "agent": usage.ReportedAs(r.Agent),
-			"callerKey": areaCallerKey(sc.salts[i], r.CallerKeyID), "status": rowStatus(r),
-		}) {
-			return
-		}
-		c, priced := cost(r)
-		out.Summary.add(r, c, priced)
-		out.Total++
-		if q.after != nil && !q.after.before(k) {
-			return // on a page already given
-		}
-		hits = append(hits, hit{k, i, ref, r, c, priced})
-		if len(hits) >= 4*(q.limit+1) {
-			sortTrim()
-		}
-	})
-	sortTrim()
-	if len(hits) > q.limit {
-		hits = hits[:q.limit]
-		out.Next = rowCursor{AsOf: q.asOf.UnixNano(), After: hits[len(hits)-1].key, Query: q.hash}.String()
+	out.Summary, out.Total = idx.summary, idx.total
+	if more && len(page) > 0 {
+		out.Next = rowCursor{AsOf: q.asOf.UnixNano(), After: page[len(page)-1].key, Query: q.hash}.String()
 	}
 	faces := newRowFaces()
-	for _, h := range hits {
-		out.Rows = append(out.Rows, adminRowOf(h.r, sc.areas[h.area].ID, h.ref, sc.names[h.ref], sc.salts[h.area], console, h.cost, h.ok, faces))
+	cost := usage.NewCoster()
+	for i, row := range page {
+		r := recs[i]
+		if r.Time.IsZero() {
+			continue // gone from the ledger as it was read
+		}
+		c, priced := cost(r)
+		ref := idx.refs[row.ref]
+		out.Rows = append(out.Rows, adminRowOf(r, sc.areas[row.area].ID, ref, sc.names[ref], sc.salts[row.area], console, c, priced, faces))
 	}
 	return out
 }
