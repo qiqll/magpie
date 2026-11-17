@@ -219,6 +219,37 @@ and reply bodies are in magpie-console's `docs/magpie-api.md`.
 - Cost: one `usage.Visit` from the period's start, whatever the
   groupings; a year of weeks reads a year of the log.
 
+## Proxy IPs
+
+**Public-only proxies** ([`internal/netproxy/publiconly.go`](../../internal/netproxy/publiconly.go)).
+A proxy an area added is connected to at a public address alone
+(`netguard.Public`), when it is saved (`CheckPublic`) and on every
+connection magpie makes to it, so a name pointed home after it was saved
+(DNS rebinding) reaches nothing:
+
+- `netproxy.PublicOnly` names such proxies; every transport `Dispatch`
+  makes, and the gateway's image fetch through a provider's proxy, dial
+  through `guardDial`, which, for a request whose proxy (`With`) is one,
+  resolves the proxy's name, refuses it unless every answer is public
+  (`ErrNotPublic`, `ErrUnresolved`) and connects to the answers checked,
+  never to the name again. A loopback host the request goes to direct is
+  let through; any other address on such a request is judged as the
+  proxy's, whatever its spelling. `DialSOCKS` (the bridges) does the same.
+- A child process can't be guarded at its dial: Claude Code
+  (`EnvForBunWith`), any CLI given `EnvWith`, and the plugin host
+  (`PinChoice`) are given the address checked in the name's place (an
+  https:// proxy keeps its name for its certificate, and is checked each
+  time a child starts). One that isn't public fails `EnvForBunWith` at
+  once, and elsewhere is `http://proxy-not-public.invalid:9`, which
+  reaches nothing, never "" (the global proxy).
+- A name is refused before it is looked up when it is `localhost`, under
+  `.localhost`, a single label, or an IPv4 address in a C library's
+  spelling (`2130706433`, `0x7f.1`, `0177.0.0.1`, `127.1`); a trailing dot
+  is the same name. IPv4-mapped, NAT64 and 6to4 forms are judged as the
+  IPv4 address inside. A fake-IP resolver's answer (198.18.0.0/15) is not
+  public, so behind Clash's fake-ip TUN such a proxy is written as its
+  address.
+
 ## Area sign-ins
 
 An area admin signs in from a browser that isn't on this computer, so each

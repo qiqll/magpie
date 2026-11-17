@@ -1914,6 +1914,9 @@ func forHost(choice string) string {
 	case "", "direct":
 		return c
 	default:
+		// an area's proxy, at the address checked public (netproxy's
+		// publiconly.go)
+		c = netproxy.PinChoice(c)
 		if u, err := netproxy.Parse(c); err == nil {
 			return netproxy.ForBun(u.String())
 		}

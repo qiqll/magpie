@@ -173,7 +173,14 @@ func DialSOCKS(ctx context.Context, socks *url.URL, addr string) (net.Conn, erro
 	if err != nil || port < 1 || port > 65535 {
 		return nil, fail(fmt.Errorf("bad port %q", portS))
 	}
-	c, err := (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, "tcp", proxy)
+	dial := (&net.Dialer{Timeout: 15 * time.Second}).DialContext
+	var c net.Conn
+	if publicOnly(socks.String()) {
+		// an area's proxy, at a public address alone (publiconly.go)
+		c, err = dialPublic(ctx, dial, "tcp", proxy)
+	} else {
+		c, err = dial(ctx, "tcp", proxy)
+	}
 	if err != nil {
 		return nil, fail(err)
 	}
@@ -331,7 +338,13 @@ func EnvForBun(env []string) []string {
 // or where the bridge can't start, is an error, at once: the CLI would
 // fail with it every time.
 func EnvForBunWith(choice string, env []string, loopback bool) ([]string, error) {
-	env = EnvWith(choice, env)
+	// an area's proxy whose address isn't public fails the run at once
+	// (publiconly.go), rather than every request it makes
+	pinned, err := pinPublic(choice)
+	if err != nil {
+		return nil, err
+	}
+	env = EnvWith(pinned, env)
 	out := make([]string, 0, len(env))
 	for _, e := range env {
 		k, v, _ := strings.Cut(e, "=")

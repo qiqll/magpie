@@ -264,6 +264,10 @@ func (pt publicTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return dialPinned(ctx, d, network, addr)
 		}
+	} else {
+		// a provider's proxy an area added is connected to at a public
+		// address alone (netproxy's publiconly.go)
+		t.DialContext = netproxy.GuardDial((&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext)
 	}
 	out := req.Clone(req.Context())
 	if byName {

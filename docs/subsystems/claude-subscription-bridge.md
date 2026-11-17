@@ -50,7 +50,10 @@ warm-up and model test `askClaude`, `/usage`, and the sign-in's
 `netproxy.EnvForBunWith`: the account's own proxy, else the
 subscription's, else the global one (`netproxy.EnvWith`), with a SOCKS5
 proxy replaced by magpie's loopback HTTP bridge to it (`netproxy.Bridge`,
-as for every bun magpie starts, #1409). Claude Code is built with Bun,
+as for every bun magpie starts, #1409). A proxy an area added
+([areas.md](areas.md#proxy-ips)) is checked public as the run starts and
+given as the address checked (an https:// one keeps its name); one that
+isn't public fails the run at once. Claude Code is built with Bun,
 which takes only http:// and https:// proxies: given `socks5://`, every
 request failed as `UnsupportedProxyProtocol`, after about three minutes of
 Claude Code's own retries, as a 502 (#2651). A Claude Code in a WSL

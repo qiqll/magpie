@@ -182,6 +182,9 @@ var HTTP1 func(u *url.URL) bool
 // is dialed over IPv4 (v4Fallback).
 func Dispatch(base *http.Transport) http.RoundTripper {
 	v4Fallback(base)
+	// a proxy an area added is connected to at a public address alone
+	// (publiconly.go); clones made for a choice dial through it too
+	base.DialContext = guardDial(base.DialContext)
 	return &dispatch{base: base, own: map[route]*http.Transport{}, moved: Watch()}
 }
 
@@ -384,6 +387,11 @@ func EnvSaid(choice string, env []string) (proxy, source string) {
 // it came from (EnvSaid) and whether env is kept as it is (keep).
 func envPick(choice string, env []string) (p string, bypass []string, source string, keep bool) {
 	s, source := strings.TrimSpace(choice), "own"
+	if s != "" && s != "direct" {
+		// an area's proxy: the address checked, or one that reaches
+		// nothing (publiconly.go)
+		s = PinChoice(s)
+	}
 	if s == "" {
 		s, source = strings.TrimSpace(settings.Load().Proxy), "settings"
 	}
