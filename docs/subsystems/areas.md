@@ -277,6 +277,12 @@ proxies on its own accounts
   text nor magpie's own exit. Each area gets 10 in 10 minutes, one at a
   time (`proxyChecks`, in memory), else `429 too_many_checks` with
   `Retry-After`; a held check connects nowhere.
+- **The owner's window** (Models › Proxy IPs,
+  [`plugins/accounts/ips.js`](../../internal/gui/assets/plugins/accounts/ips.js)
+  `ipsAreaButton`): each IP's "Give to area…" opens the app's menu of
+  areas (`/api/ips` lists them as `areas`), and one an area has reads
+  "Take back from <note>". `POST /api/ips/area` gives or takes back, then
+  sweeps the areas' proxies.
 - The console reads `GET /ips` (every area's, `?area=` narrows, each IP
   with its `area`; never the owner's) and `GET /areas/{id}/ips`, and
   changes nothing.

@@ -20,6 +20,8 @@
 // the IP keeps, one read from a saved proxy among them), the IP whose
 // start date is being picked, the last error, and whether a save is under
 // way: the list takes no other change till it is answered (T-155 review M2)
+// ipsAreas: the areas an IP can be given to ({id, note}), as /api/ips lists them (T-198)
+let ipsAreas = [];
 let ipsList = null, ipsRev = "", ipsEdit = null, ipsDraft = { ip: "", name: "", proxies: [], proxy: "" }, ipsRenewing = "", ipsErr = "", ipsSaving = false;
 // Import from accounts under way, and what the last one did
 let ipsImporting = false, ipsSaid = "";
@@ -261,6 +263,7 @@ async function ipsLoad() {
     const got = await api("ips");
     ipsList = got.ips || [];
     ipsRev = got.rev || "";
+    ipsAreas = got.areas || [];
     ipsErr = "";
     ipsPicksSet(ipsList);
   } catch (e) {
@@ -282,6 +285,7 @@ async function ipsKeep(next) {
     const got = await api("ips", { rev: ipsRev, ips: next.map(({ ip, name, opened, proxies }) => ({ ip, name, opened, proxies: proxies?.length ? proxies : undefined })) });
     ipsList = got.ips || [];
     ipsRev = got.rev || "";
+    ipsAreas = got.areas || [];
     ipsErr = "";
     ipsPicksSet(ipsList);
     return true;
@@ -449,9 +453,45 @@ function ipsRow(x, i, accts, read) {
     rm.classList.add("busy");
     ipsKeep(ipsList.filter((y) => y.ip !== x.ip));
   };
-  acts.append(edit, rm);
+  acts.append(ipsAreaButton(x), edit, rm);
   row.append(acts);
   return row;
+}
+
+// ipsAreaButton: give the IP to an area (its admin may then put its
+// proxies on the area's accounts, never check or change them), or take
+// it back from the area that has it (T-198, /api/ips/area). An IP an
+// area made says whose it is the same way.
+function ipsAreaButton(x) {
+  const owner = x.area ? ipsAreas.find((a) => a.id === x.area) : null;
+  const b = el("button", "text ips-area", x.area ? t("Take back from {area}", { area: owner?.note || x.area }) : t("Give to area…"));
+  b.type = "button";
+  b.disabled = ipsHeld() || (!x.area && !ipsAreas.length);
+  if (!x.area && !ipsAreas.length) b.title = t("No area yet: make one in Gateway › Areas");
+  const send = async (area) => {
+    if (ipsSaving) return;
+    ipsSaving = true;
+    b.classList.add("busy");
+    try {
+      const got = await api("ips/area", { ip: x.ip, area });
+      ipsList = got.ips || [];
+      ipsRev = got.rev || "";
+      ipsAreas = got.areas || [];
+      ipsErr = "";
+      ipsPicksSet(ipsList);
+    } catch (e) {
+      ipsErr = t(e.message);
+    } finally {
+      ipsSaving = false;
+      ipsDraw();
+    }
+  };
+  b.onclick = () => {
+    if (ipsHeld()) return;
+    if (x.area) { send(""); return; }
+    openProtoMenu(b, ipsAreas.map((a) => ({ v: a.id, name: a.note, literalName: true, note: "" })), "", (id) => send(id), "Give to area…", "", "right");
+  };
+  return b;
 }
 
 // ipsReadExit: the typed proxy's exit as Cloudflare sees it put in the
