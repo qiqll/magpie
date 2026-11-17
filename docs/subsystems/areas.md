@@ -106,9 +106,10 @@ agent's (`codex`, `claude`, `copilot`, `gemini`, `antigravity`).
 ## Routes
 
 `/v1/magpie/admin/*`. Area: `me`, `options`, `accounts`, `accounts/key`,
-`accounts/remove`, `usage`, `signin`, `signin/{id}`, `signin/{id}/callback`,
+`accounts/remove`, `usage`, `usage/requests`, `signin`, `signin/{id}`, `signin/{id}/callback`,
 `signin/{id}/cancel`, `signin/claude-token`. Console: `me`, `catalog`,
 `areas`, `areas/{id}`, `areas/{id}/accounts`, `areas/{id}/usage`,
+`usage/requests`, `areas/{id}/usage/requests`,
 `areas/{id}/update`, `areas/{id}/rotate-key`, `areas/{id}/delete`. Request
 and reply bodies are in magpie-console's `docs/magpie-api.md`.
 
@@ -133,7 +134,55 @@ and reply bodies are in magpie-console's `docs/magpie-api.md`.
   given the whole ledger. The areas list (the console's `areas`, the
   window's `/api/areas`) gives every area its `today` from one visit
   (`areasToday`), by the same rules; `TestAdminAreasTodayIsEachAreasUsage`
-  holds it to each area's own usage.
+  holds it to each area's own usage. Usage, the areas list and the
+  request rows count the gateway's own records alone (`areaRecord`): not
+  one refused before any account was asked (`IsRejected`), nor one a
+  client reported (`IsReported`), which went straight to its vendor.
+  `failed` counts a request the agent got an error for (`LostRequest`): a
+  try that failed and handed the request on to another account is
+  neither a request nor a failure.
+
+## Request rows
+
+`GET /usage/requests` (area key: its own area; console key: every area,
+`?area=` narrows) and the console's `GET /areas/{id}/usage/requests`
+([`admin_requests.go`](../../internal/gateway/admin_requests.go)).
+
+- **Scope from the key alone** (`adminScope`): an area key is its own
+  area, and `?area=`, its own id too, is `400`. The console's "every
+  area" is every area in `areas.json`, never the owner's own accounts,
+  which are in none. Every admin read of usage takes its areas from
+  `adminScope`, so the stats routes (T-197) do too.
+- **Rows from the area's accounts alone** (`areaRows`): the same
+  matching as usage, from each account's `Added`, over `usage.Visit`
+  (never `usageapi.LedgerPage`, which brings in agents' session files,
+  other computers and whole-ledger lists). An area with no account
+  visits nothing. An `account=` filter naming an account outside the
+  scope is `404`.
+- **An allow-list of fields** (`adminRow`, filled by `adminRowOf` field
+  by field). Never told, to an area or the console: the client's
+  address, `Host`, the alias asked for (`req`), session ids and
+  subagents, `X-Magpie-User`, other computers, the archive, and the
+  vendor's error text (`err`, which often echoes the request): a failure
+  is its `errorType` and `httpStatus`. Every JSON field of `usage.Record`
+  and `usage.Row` is in `adminRowAllowed` or `adminRowDenied`;
+  `TestAdminRowFieldsClassified` fails on a field in neither.
+- **Caller keys** reach an area as `callerKey`, `ck_` and the first 8 hex
+  of HMAC-SHA256 over the gateway key id, keyed by the area's own
+  `callerSalt` (32 random bytes in `areas.json`, made with the area, or
+  on first read for an area made before; never told). It is stable
+  within the area and differs across areas. A call with no key is
+  `ck_none`. The console also gets `callerKeyName`.
+- **Paging by cursor**: the first page fixes `asOf`, and calls made after
+  it are on no page. Rows go newest first by time, route id and their
+  order in the log; the cursor (base64url JSON, unsigned) holds `asOf`,
+  the last row and a hash of the scope, period, zone and filters. A
+  cursor for another query is `400`. It only narrows: the scope is read
+  from the key again on every page. Each page reads the log again.
+- `period` is one `usage.Period.Known()` accepts except `all`, reaching
+  back 92 days at most, today included; anything else is `400` (never
+  30 days in its place). `limit` is 1 to 500 (default 100). `summary` and
+  `total` cover every row the filters keep, not just the page.
 
 ## Area sign-ins
 

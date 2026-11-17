@@ -60,6 +60,7 @@ var adminRoutes = map[string]map[string]bool{
 		"POST " + AdminPath + "/accounts/key":         true,
 		"POST " + AdminPath + "/accounts/remove":      true,
 		"GET " + AdminPath + "/usage":                 true,
+		"GET " + AdminPath + "/usage/requests":        true,
 		"POST " + AdminPath + "/signin":               true,
 		"GET " + AdminPath + "/signin/{id}":           true,
 		"POST " + AdminPath + "/signin/{id}/callback": true,
@@ -67,16 +68,18 @@ var adminRoutes = map[string]map[string]bool{
 		"POST " + AdminPath + "/signin/claude-token":  true,
 	},
 	access.AdminConsole: {
-		"GET " + AdminPath + "/me":                     true,
-		"GET " + AdminPath + "/catalog":                true,
-		"GET " + AdminPath + "/areas":                  true,
-		"POST " + AdminPath + "/areas":                 true,
-		"GET " + AdminPath + "/areas/{id}":             true,
-		"GET " + AdminPath + "/areas/{id}/accounts":    true,
-		"GET " + AdminPath + "/areas/{id}/usage":       true,
-		"POST " + AdminPath + "/areas/{id}/update":     true,
-		"POST " + AdminPath + "/areas/{id}/rotate-key": true,
-		"POST " + AdminPath + "/areas/{id}/delete":     true,
+		"GET " + AdminPath + "/me":                        true,
+		"GET " + AdminPath + "/catalog":                   true,
+		"GET " + AdminPath + "/areas":                     true,
+		"POST " + AdminPath + "/areas":                    true,
+		"GET " + AdminPath + "/areas/{id}":                true,
+		"GET " + AdminPath + "/areas/{id}/accounts":       true,
+		"GET " + AdminPath + "/areas/{id}/usage":          true,
+		"GET " + AdminPath + "/usage/requests":            true,
+		"GET " + AdminPath + "/areas/{id}/usage/requests": true,
+		"POST " + AdminPath + "/areas/{id}/update":        true,
+		"POST " + AdminPath + "/areas/{id}/rotate-key":    true,
+		"POST " + AdminPath + "/areas/{id}/delete":        true,
 	},
 }
 
@@ -96,6 +99,7 @@ func (s *Server) adminRoutesOn(mux *routeMux) {
 	mux.HandleFunc("POST "+AdminPath+"/accounts/key", s.admin(access.AdminArea, s.probeHeld(s.adminAddKey)))
 	mux.HandleFunc("POST "+AdminPath+"/accounts/remove", s.admin(access.AdminArea, s.adminRemove))
 	mux.HandleFunc("GET "+AdminPath+"/usage", s.admin(access.AdminArea, s.adminUsage))
+	mux.HandleFunc("GET "+AdminPath+"/usage/requests", s.admin("", s.adminUsageRequests))
 	mux.HandleFunc("POST "+AdminPath+"/signin", s.admin(access.AdminArea, s.adminSignIn))
 	mux.HandleFunc("GET "+AdminPath+"/signin/{id}", s.admin(access.AdminArea, s.adminSignInState))
 	mux.HandleFunc("POST "+AdminPath+"/signin/{id}/callback", s.admin(access.AdminArea, s.adminSignInCallback))
@@ -108,6 +112,7 @@ func (s *Server) adminRoutesOn(mux *routeMux) {
 	mux.HandleFunc("GET "+AdminPath+"/areas/{id}", s.admin(access.AdminConsole, s.adminArea))
 	mux.HandleFunc("GET "+AdminPath+"/areas/{id}/accounts", s.admin(access.AdminConsole, s.adminAreaAccounts))
 	mux.HandleFunc("GET "+AdminPath+"/areas/{id}/usage", s.admin(access.AdminConsole, s.adminAreaUsage))
+	mux.HandleFunc("GET "+AdminPath+"/areas/{id}/usage/requests", s.admin(access.AdminConsole, s.adminUsageRequests))
 	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/update", s.admin(access.AdminConsole, s.adminUpdateArea))
 	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/rotate-key", s.admin(access.AdminConsole, s.adminRotateArea))
 	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/delete", s.admin(access.AdminConsole, s.adminDeleteArea))
@@ -501,7 +506,7 @@ type adminTotals struct {
 func (t *adminTotals) add(r usage.Record, cost float64, priced bool) {
 	if r.Answered() {
 		t.Requests++
-	} else if r.Failed() {
+	} else if r.LostRequest() {
 		t.Failed++
 	}
 	t.Input += r.Input
@@ -604,8 +609,8 @@ func areaUsage(a area.Area, p usage.Period, loc *time.Location, now time.Time) A
 		}
 		return m[id]
 	}
-	usage.Visit(since, func(r usage.Record) {
-		if r.Time.Before(since) {
+	visitLedger(since, func(r usage.Record) {
+		if r.Time.Before(since) || !areaRecord(r) {
 			return
 		}
 		var owned string
@@ -703,8 +708,8 @@ func areasToday(areas []area.Area, accs [][]adminAccount, loc *time.Location, no
 	counted := make([]int, len(areas))
 	n := 0
 	cost := usage.NewCoster()
-	usage.Visit(since, func(r usage.Record) {
-		if r.Time.Before(since) {
+	visitLedger(since, func(r usage.Record) {
+		if r.Time.Before(since) || !areaRecord(r) {
 			return
 		}
 		ms := byProvider[r.Provider]

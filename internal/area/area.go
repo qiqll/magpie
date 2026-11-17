@@ -40,6 +40,11 @@ type Area struct {
 	// Accounts are the accounts it owns, as access.Key.Accounts writes
 	// them: "<provider>/<login id>" or "<provider>/<key fingerprint>".
 	Accounts []Account `json:"accounts,omitempty"`
+	// CallerSalt is the area's own random key (hex) that names a gateway
+	// key to it opaquely (the admin routes' callerKey): the same caller
+	// reads alike within the area and apart across two. Made with the
+	// area, or on first use for one made before; never told.
+	CallerSalt string `json:"callerSalt,omitempty"`
 }
 
 // Account is an account an area owns, and since when: what it spent
@@ -159,7 +164,7 @@ func Create(note string, providers, signIns []string) (Area, error) {
 		if noteInUse(f.Areas, note, "") {
 			return ErrNoteInUse
 		}
-		made = Area{ID: newID(), Note: note, Created: time.Now().UTC(), Providers: tidy(providers), SignIns: tidy(signIns)}
+		made = Area{ID: newID(), Note: note, Created: time.Now().UTC(), Providers: tidy(providers), SignIns: tidy(signIns), CallerSalt: newSalt()}
 		f.Areas = append(f.Areas, made)
 		return nil
 	})
@@ -202,6 +207,31 @@ func Update(id string, s Spec) (Area, error) {
 		return nil
 	})
 	return got, err
+}
+
+// Salt is the area id's CallerSalt, made and kept first for an area
+// that has none (made before it was).
+func Salt(id string) (string, error) {
+	a, err := Get(id)
+	if err != nil {
+		return "", err
+	}
+	if a.CallerSalt != "" {
+		return a.CallerSalt, nil
+	}
+	var salt string
+	err = change(func(f *file) error {
+		i := index(f.Areas, id)
+		if i < 0 {
+			return ErrNotFound
+		}
+		if f.Areas[i].CallerSalt == "" {
+			f.Areas[i].CallerSalt = newSalt()
+		}
+		salt = f.Areas[i].CallerSalt
+		return nil
+	})
+	return salt, err
 }
 
 // Delete removes an area that owns no account.
@@ -361,6 +391,12 @@ func newID() string {
 	b := make([]byte, 6)
 	rand.Read(b)
 	return "ar_" + hex.EncodeToString(b)
+}
+
+func newSalt() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func clone(areas []Area) []Area {
