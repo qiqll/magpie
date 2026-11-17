@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"time"
@@ -442,6 +443,60 @@ func (q rowQuery) keeps(vals map[string]string) bool {
 	return true
 }
 
+// readPeriodZone reads v's period (def when there is none) and tz: a
+// period usage.Period.Known() takes except all, never another in place
+// of one it doesn't, and an IANA zone (this computer's by default).
+func readPeriodZone(w http.ResponseWriter, v url.Values, def usage.Period) (usage.Period, *time.Location, bool) {
+	p, loc := def, time.Local
+	if s := v.Get("period"); s != "" {
+		p = usage.Period(s)
+	}
+	if !p.Known() || p == usage.All {
+		adminError(w, http.StatusBadRequest, adminBadRequest, "period is today, 7d, 30d, last:<duration>, YYYY-MM-DD..YYYY-MM-DD or YYYY-MM-DDTHH:MM..YYYY-MM-DDTHH:MM")
+		return "", nil, false
+	}
+	if tz := v.Get("tz"); tz != "" {
+		l, err := time.LoadLocation(tz)
+		if err != nil {
+			adminError(w, http.StatusBadRequest, adminBadRequest, "tz is an IANA time zone, such as Asia/Shanghai")
+			return "", nil, false
+		}
+		loc = l
+	}
+	return p, loc, true
+}
+
+// readFilters reads v's filters (rowFilters, each repeatable), sorted,
+// accounts being the accounts the account filter may name: another is
+// 404, as one that isn't.
+func readFilters(w http.ResponseWriter, v url.Values, accounts map[string]bool) (map[string][]string, bool) {
+	out := map[string][]string{}
+	for _, k := range rowFilters {
+		for _, x := range v[k] {
+			if x == "" {
+				continue
+			}
+			switch k {
+			case "status":
+				if !slices.Contains([]string{rowOK, rowRetried, rowFailed, rowCanceled}, x) {
+					adminError(w, http.StatusBadRequest, adminBadRequest, "status is ok, retried, failed or canceled")
+					return nil, false
+				}
+			case "account":
+				if !accounts[x] {
+					adminError(w, http.StatusNotFound, adminNotFound, "no such account")
+					return nil, false
+				}
+			}
+			if !slices.Contains(out[k], x) {
+				out[k] = append(out[k], x)
+			}
+		}
+		slices.Sort(out[k])
+	}
+	return out, true
+}
+
 // readRowQuery reads r's period, tz, filters, limit and cursor for
 // scope's ids, accounts being the accounts the account filter may name.
 // now is the clock's time.
@@ -451,19 +506,10 @@ func readRowQuery(w http.ResponseWriter, r *http.Request, ids []string, accounts
 		adminError(w, http.StatusBadRequest, adminBadRequest, msg)
 		return rowQuery{}, false
 	}
-	q := rowQuery{period: usage.Today, loc: time.Local, filters: map[string][]string{}, limit: requestsLimit}
-	if s := v.Get("period"); s != "" {
-		q.period = usage.Period(s)
-	}
-	if !q.period.Known() || q.period == usage.All {
-		return bad("period is today, 7d, 30d, last:<duration>, YYYY-MM-DD..YYYY-MM-DD or YYYY-MM-DDTHH:MM..YYYY-MM-DDTHH:MM")
-	}
-	if tz := v.Get("tz"); tz != "" {
-		l, err := time.LoadLocation(tz)
-		if err != nil {
-			return bad("tz is an IANA time zone, such as Asia/Shanghai")
-		}
-		q.loc = l
+	q := rowQuery{limit: requestsLimit}
+	var ok bool
+	if q.period, q.loc, ok = readPeriodZone(w, v, usage.Today); !ok {
+		return rowQuery{}, false
 	}
 	if s := v.Get("limit"); s != "" {
 		n, err := strconv.Atoi(s)
@@ -472,27 +518,8 @@ func readRowQuery(w http.ResponseWriter, r *http.Request, ids []string, accounts
 		}
 		q.limit = n
 	}
-	for _, k := range rowFilters {
-		for _, x := range v[k] {
-			if x == "" {
-				continue
-			}
-			switch k {
-			case "status":
-				if !slices.Contains([]string{rowOK, rowRetried, rowFailed, rowCanceled}, x) {
-					return bad("status is ok, retried, failed or canceled")
-				}
-			case "account":
-				if !accounts[x] {
-					adminError(w, http.StatusNotFound, adminNotFound, "no such account")
-					return rowQuery{}, false
-				}
-			}
-			if !slices.Contains(q.filters[k], x) {
-				q.filters[k] = append(q.filters[k], x)
-			}
-		}
-		slices.Sort(q.filters[k])
+	if q.filters, ok = readFilters(w, v, accounts); !ok {
+		return rowQuery{}, false
 	}
 	h := sha256.New()
 	sorted := slices.Sorted(slices.Values(ids))
@@ -570,14 +597,10 @@ func (s *Server) adminUsageRequests(w http.ResponseWriter, r *http.Request, c ad
 		return
 	}
 	ids := make([]string, len(scope))
-	accounts := map[string]bool{}
 	for i, a := range scope {
 		ids[i] = a.ID
 	}
-	for id := range sc.names {
-		accounts[id] = true
-	}
-	q, ok := readRowQuery(w, r, ids, accounts, usage.Clock())
+	q, ok := readRowQuery(w, r, ids, scopedAccounts(sc), usage.Clock())
 	if !ok {
 		return
 	}

@@ -551,6 +551,9 @@ type Server struct {
 	titlePrompts titlePrompts
 	// conflicts are each area's 409s on its add routes (admin_probe.go)
 	conflicts conflictProbes
+	// stats are the usage stats each area and the console have running
+	// (admin_stats.go)
+	stats statsSlots
 	// compactFails are the summaries each Codex conversation failed to
 	// get in a row, for a compaction that keeps failing to stop being
 	// asked (codex_compact_guard.go, #2274)

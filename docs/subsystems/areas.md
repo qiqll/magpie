@@ -106,10 +106,11 @@ agent's (`codex`, `claude`, `copilot`, `gemini`, `antigravity`).
 ## Routes
 
 `/v1/magpie/admin/*`. Area: `me`, `options`, `accounts`, `accounts/key`,
-`accounts/remove`, `usage`, `usage/requests`, `signin`, `signin/{id}`, `signin/{id}/callback`,
+`accounts/remove`, `usage`, `usage/requests`, `usage/stats`, `signin`, `signin/{id}`, `signin/{id}/callback`,
 `signin/{id}/cancel`, `signin/claude-token`. Console: `me`, `catalog`,
 `areas`, `areas/{id}`, `areas/{id}/accounts`, `areas/{id}/usage`,
-`usage/requests`, `areas/{id}/usage/requests`,
+`usage/requests`, `areas/{id}/usage/requests`, `usage/stats`,
+`areas/{id}/usage/stats`,
 `areas/{id}/update`, `areas/{id}/rotate-key`, `areas/{id}/delete`. Request
 and reply bodies are in magpie-console's `docs/magpie-api.md`.
 
@@ -183,6 +184,40 @@ and reply bodies are in magpie-console's `docs/magpie-api.md`.
   back 92 days at most, today included; anything else is `400` (never
   30 days in its place). `limit` is 1 to 500 (default 100). `summary` and
   `total` cover every row the filters keep, not just the page.
+
+## Usage stats
+
+`GET /usage/stats` (area key: its own area; console key: every area,
+`?area=` narrows, and only it may `groupBy=area`) and the console's
+`GET /areas/{id}/usage/stats`
+([`admin_stats.go`](../../internal/gateway/admin_stats.go)).
+
+- Same scope, rows and filters as the request rows: `adminScope`,
+  `areaRows`, `readPeriodZone` and `readFilters`. A group's name comes
+  from the scope's own accounts, the provider and agent tables, an
+  area's note (console) and a caller key's name (console); an area is
+  told a caller key as its `ck_` value alone.
+- **One tally** (`tallyStats`) adds every record up once, into the
+  totals, each bucket and each grouping asked for. `/usage` and
+  `/areas/{id}/usage` are that tally split by model and by account in
+  day buckets (`usageStats`), so the two can't drift; their JSON is as
+  before. `TestAdminStatsMatchesUsage` holds them together. In the
+  stats, `requests` is every request (a try handed on is none; it is an
+  `attempts` and a `failed` row's), split by status into ok, retried,
+  failed and canceled; `/usage`'s `requests` stays the answered ones.
+- Buckets are `usage.BucketStart`/`BucketStarts`/`BucketIndex`, which
+  the Usage page's timeline uses too: an hour by the zone's own clock
+  (a DST day is 23 or 25 of them), a midnight, a Monday's midnight.
+- Bounds: the period reaches back 366 days and spans no more; hour
+  buckets for 7 days at most, day buckets for 92; up to two `groupBy`
+  dimensions; `top` 1 to 100 (default 20), the rest merged into
+  `other`; at most 5000 points after `top`, else `400` (found after the
+  tally, since the groups are known only then). Each area runs two
+  stats at once (`statsSlots`, in memory); a third is `429
+  too_many_requests` with `Retry-After: 1` and reads nothing. The
+  console has two of its own. Another area is never held.
+- Cost: one `usage.Visit` from the period's start, whatever the
+  groupings; a year of weeks reads a year of the log.
 
 ## Area sign-ins
 

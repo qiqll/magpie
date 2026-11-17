@@ -63,6 +63,7 @@ var readOnlyRefused = []string{
 	"GET " + AdminPath + "/catalog", "GET " + AdminPath + "/areas", "POST " + AdminPath + "/areas",
 	"GET " + AdminPath + "/areas/{id}", "GET " + AdminPath + "/areas/{id}/accounts", "GET " + AdminPath + "/areas/{id}/usage",
 	"GET " + AdminPath + "/usage/requests", "GET " + AdminPath + "/areas/{id}/usage/requests",
+	"GET " + AdminPath + "/usage/stats", "GET " + AdminPath + "/areas/{id}/usage/stats",
 	"POST " + AdminPath + "/areas/{id}/update", "POST " + AdminPath + "/areas/{id}/rotate-key", "POST " + AdminPath + "/areas/{id}/delete",
 }
 

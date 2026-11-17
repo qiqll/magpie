@@ -61,6 +61,7 @@ var adminRoutes = map[string]map[string]bool{
 		"POST " + AdminPath + "/accounts/remove":      true,
 		"GET " + AdminPath + "/usage":                 true,
 		"GET " + AdminPath + "/usage/requests":        true,
+		"GET " + AdminPath + "/usage/stats":           true,
 		"POST " + AdminPath + "/signin":               true,
 		"GET " + AdminPath + "/signin/{id}":           true,
 		"POST " + AdminPath + "/signin/{id}/callback": true,
@@ -77,6 +78,8 @@ var adminRoutes = map[string]map[string]bool{
 		"GET " + AdminPath + "/areas/{id}/usage":          true,
 		"GET " + AdminPath + "/usage/requests":            true,
 		"GET " + AdminPath + "/areas/{id}/usage/requests": true,
+		"GET " + AdminPath + "/usage/stats":               true,
+		"GET " + AdminPath + "/areas/{id}/usage/stats":    true,
 		"POST " + AdminPath + "/areas/{id}/update":        true,
 		"POST " + AdminPath + "/areas/{id}/rotate-key":    true,
 		"POST " + AdminPath + "/areas/{id}/delete":        true,
@@ -100,6 +103,7 @@ func (s *Server) adminRoutesOn(mux *routeMux) {
 	mux.HandleFunc("POST "+AdminPath+"/accounts/remove", s.admin(access.AdminArea, s.adminRemove))
 	mux.HandleFunc("GET "+AdminPath+"/usage", s.admin(access.AdminArea, s.adminUsage))
 	mux.HandleFunc("GET "+AdminPath+"/usage/requests", s.admin("", s.adminUsageRequests))
+	mux.HandleFunc("GET "+AdminPath+"/usage/stats", s.admin("", s.adminUsageStats))
 	mux.HandleFunc("POST "+AdminPath+"/signin", s.admin(access.AdminArea, s.adminSignIn))
 	mux.HandleFunc("GET "+AdminPath+"/signin/{id}", s.admin(access.AdminArea, s.adminSignInState))
 	mux.HandleFunc("POST "+AdminPath+"/signin/{id}/callback", s.admin(access.AdminArea, s.adminSignInCallback))
@@ -113,6 +117,7 @@ func (s *Server) adminRoutesOn(mux *routeMux) {
 	mux.HandleFunc("GET "+AdminPath+"/areas/{id}/accounts", s.admin(access.AdminConsole, s.adminAreaAccounts))
 	mux.HandleFunc("GET "+AdminPath+"/areas/{id}/usage", s.admin(access.AdminConsole, s.adminAreaUsage))
 	mux.HandleFunc("GET "+AdminPath+"/areas/{id}/usage/requests", s.admin(access.AdminConsole, s.adminUsageRequests))
+	mux.HandleFunc("GET "+AdminPath+"/areas/{id}/usage/stats", s.admin(access.AdminConsole, s.adminUsageStats))
 	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/update", s.admin(access.AdminConsole, s.adminUpdateArea))
 	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/rotate-key", s.admin(access.AdminConsole, s.adminRotateArea))
 	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/delete", s.admin(access.AdminConsole, s.adminDeleteArea))
@@ -461,7 +466,7 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, c adminCall)
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, areaUsage(c.area, p, loc, time.Now()))
+	writeJSON(w, http.StatusOK, areaUsage(c.area, p, loc, usage.Clock()))
 }
 
 // usageArgs reads ?period= (today, 7d or 30d) and ?tz=.
@@ -588,61 +593,24 @@ func areaMatches(accs []adminAccount) map[string][]areaMatch {
 
 // areaUsage is what a's accounts answered over p, each from the time the
 // area got it: a key's calls by its fingerprint, an account's by the name
-// the ledger keeps (Record.Account) under its provider.
+// the ledger keeps (Record.Account) under its provider. It is the stats'
+// tally (usageStats), so /usage and /usage/stats can't disagree.
 func areaUsage(a area.Area, p usage.Period, loc *time.Location, now time.Time) AreaUsage {
-	now = now.In(loc)
-	since := p.Since(now)
-	out := AreaUsage{Period: periodNames[p], Zone: loc.String(), Since: since, ByModel: []modelShare{}, ByAccount: []adminShare{}, ByDay: []dayShare{}}
-	byProvider := areaMatches(areaAccounts(a))
-	if len(byProvider) == 0 {
-		return out // no account, nothing spent: never the whole ledger
+	q, t, names := usageStats(a, p, loc, now)
+	out := AreaUsage{Period: periodNames[p], Zone: loc.String(), Since: q.since, Totals: t.totals.totals(), ByModel: []modelShare{}, ByAccount: []adminShare{}, ByDay: []dayShare{}}
+	for _, g := range t.groups[0] {
+		out.ByModel = append(out.ByModel, modelShare{g.key["model"], g.totals.totals()})
 	}
-	names := map[string]string{}
-	for _, acc := range areaAccounts(a) {
-		names[acc.ID] = acc.Name
+	for _, g := range t.groups[1] {
+		id := g.key["account"]
+		out.ByAccount = append(out.ByAccount, adminShare{ID: id, Name: names[id], adminTotals: g.totals.totals()})
 	}
-	cost := usage.NewCoster()
-	models, accounts, days := map[string]*adminShare{}, map[string]*adminShare{}, map[string]*adminShare{}
-	share := func(m map[string]*adminShare, id string) *adminShare {
-		if m[id] == nil {
-			m[id] = &adminShare{ID: id}
+	for i, m := range t.series {
+		if m.Attempts > 0 {
+			out.ByDay = append(out.ByDay, dayShare{q.buckets[i].Format(time.DateOnly), m.totals()})
 		}
-		return m[id]
 	}
-	visitLedger(since, func(r usage.Record) {
-		if r.Time.Before(since) || !areaRecord(r) {
-			return
-		}
-		var owned string
-		for _, m := range byProvider[r.Provider] {
-			if r.Time.Before(m.added) {
-				continue
-			}
-			if m.names(r) {
-				owned = m.ref
-				break
-			}
-		}
-		if owned == "" {
-			return
-		}
-		c, priced := cost(r)
-		out.Totals.add(r, c, priced)
-		share(models, r.Model).add(r, c, priced)
-		share(accounts, owned).add(r, c, priced)
-		share(days, r.Time.In(loc).Format(time.DateOnly)).add(r, c, priced)
-	})
-	for _, s := range models {
-		out.ByModel = append(out.ByModel, modelShare{s.ID, s.adminTotals})
-	}
-	for _, s := range accounts {
-		s.Name = names[s.ID]
-		out.ByAccount = append(out.ByAccount, *s)
-	}
-	for _, s := range days {
-		out.ByDay = append(out.ByDay, dayShare{s.ID, s.adminTotals})
-	}
-	most := func(x, y adminShare) int {
+	most := func(x, y adminTotals) int {
 		if x.Cost != y.Cost {
 			if x.Cost > y.Cost {
 				return -1
@@ -651,11 +619,8 @@ func areaUsage(a area.Area, p usage.Period, loc *time.Location, now time.Time) A
 		}
 		return y.Requests - x.Requests
 	}
-	slices.SortFunc(out.ByModel, func(x, y modelShare) int {
-		return most(adminShare{adminTotals: x.adminTotals}, adminShare{adminTotals: y.adminTotals})
-	})
-	slices.SortFunc(out.ByAccount, most)
-	slices.SortFunc(out.ByDay, func(x, y dayShare) int { return strings.Compare(x.Day, y.Day) })
+	slices.SortFunc(out.ByModel, func(x, y modelShare) int { return most(x.adminTotals, y.adminTotals) })
+	slices.SortFunc(out.ByAccount, func(x, y adminShare) int { return most(x.adminTotals, y.adminTotals) })
 	return out
 }
 
@@ -818,7 +783,7 @@ func (s *Server) adminAreaUsage(w http.ResponseWriter, r *http.Request, c adminC
 		return
 	}
 	if p, loc, ok := usageArgs(w, r); ok {
-		writeJSON(w, http.StatusOK, areaUsage(a, p, loc, time.Now()))
+		writeJSON(w, http.StatusOK, areaUsage(a, p, loc, usage.Clock()))
 	}
 }
 

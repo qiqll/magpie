@@ -871,7 +871,7 @@ func timeline(p Period, now, first time.Time) (since time.Time, bucket string, p
 			bucket = "hour"
 		} else if n > 60 {
 			bucket = "week"
-			since = since.AddDate(0, 0, -((int(since.Weekday()) + 6) % 7))
+			since = BucketStart(bucket, since)
 			n = calendarDays(since, last)/7 + 1
 		}
 		p = ""
@@ -894,33 +894,73 @@ func timeline(p Period, now, first time.Time) (since time.Time, bucket string, p
 		if n = calendarDays(since, day) + 1; n > 60 {
 			bucket = "week"
 			// start on the Monday of the first week
-			off := (int(since.Weekday()) + 6) % 7
-			since = since.AddDate(0, 0, -off)
+			since = BucketStart(bucket, since)
 			n = calendarDays(since, day)/7 + 1
 		}
 	}
+	end, label := since.AddDate(0, 0, n), "Jan 2"
 	switch bucket {
 	case "hour":
-		end := since.AddDate(0, 0, 1)
+		end, label = since.AddDate(0, 0, 1), "15"
 		if hours > 0 {
 			end = since.Add(time.Duration(hours) * time.Hour)
 		}
-		for h := 0; since.Add(time.Duration(h) * time.Hour).Before(end); h++ {
-			t := since.Add(time.Duration(h) * time.Hour)
-			pts = append(pts, Point{Label: t.Format("15"), Time: t})
-		}
-	case "day":
-		for i := 0; i < n; i++ {
-			t := since.AddDate(0, 0, i)
-			pts = append(pts, Point{Label: t.Format("Jan 2"), Time: t})
-		}
 	case "week":
-		for i := 0; i < n; i++ {
-			t := since.AddDate(0, 0, 7*i)
-			pts = append(pts, Point{Label: t.Format("Jan 2"), Time: t})
-		}
+		end = since.AddDate(0, 0, 7*n)
+	}
+	for _, t := range BucketStarts(bucket, since, end) {
+		pts = append(pts, Point{Label: t.Format(label), Time: t})
 	}
 	return since, bucket, pts
+}
+
+// BucketStart is the start of the bucket ("hour", "day" or "week") t
+// falls in, in t's location: its hour (by the local minute, so a
+// half-hour zone's hours and the hour a DST change repeats stay whole),
+// its midnight, or the midnight of its week's Monday. The timeline here
+// and the admin stats (gateway's admin_stats.go) share it.
+func BucketStart(bucket string, t time.Time) time.Time {
+	switch bucket {
+	case "hour":
+		return t.Add(-time.Duration(t.Minute())*time.Minute - time.Duration(t.Second())*time.Second - time.Duration(t.Nanosecond()))
+	case "week":
+		day := BucketStart("day", t)
+		return day.AddDate(0, 0, -((int(day.Weekday()) + 6) % 7))
+	}
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+// BucketStarts are the starts of a timeline's buckets from since (a
+// bucket's start, BucketStart) up to until, until itself left out: an
+// hour each, as many as the days have (23 or 25 across a DST change), a
+// calendar day each, or seven. BucketIndex is which of them a time falls
+// in.
+func BucketStarts(bucket string, since, until time.Time) []time.Time {
+	var out []time.Time
+	for i := 0; ; i++ {
+		var t time.Time
+		switch bucket {
+		case "hour":
+			t = since.Add(time.Duration(i) * time.Hour)
+		case "week":
+			t = since.AddDate(0, 0, 7*i)
+		default:
+			t = since.AddDate(0, 0, i)
+		}
+		if !t.Before(until) {
+			return out
+		}
+		out = append(out, t)
+	}
+}
+
+// BucketIndex is which of BucketStarts(bucket, since, …) t falls in, t
+// being in since's location; negative before since.
+func BucketIndex(bucket string, since, t time.Time) int {
+	if t.Before(since) {
+		return -1
+	}
+	return bucketIndex(bucket, since, t)
 }
 
 func calendarDays(from, to time.Time) int {
