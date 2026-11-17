@@ -4,8 +4,10 @@ An **area** is a note the owner hands out (学习, 工作, 娱乐…) with the p
 accounts it owns. Its **area admin** adds, lists and removes those accounts
 and reads what they spent, through the gateway's admin routes, from a
 separate console ([magpie-console](../../../magpie-console/README.md), whose
-`docs/magpie-api.md` is the contract both sides keep). The **console key**
-reads every area and makes, changes and deletes them.
+`docs/magpie-api.md` is the contract both sides keep, and whose
+[`docs/operator.md`](../../../magpie-console/docs/operator.md) sets both up on
+a Linux server from zero). The **console key** reads every area and makes,
+changes and deletes them.
 
 An area decides who may manage an account and see what it spent, **never
 where a request goes**: routing reads no area, and an area's accounts serve
