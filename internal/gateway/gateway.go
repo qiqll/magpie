@@ -875,14 +875,24 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 	})
 	defer stopLimits()
+	// the loops below and WhileServing's end before this returns: a
+	// Refresh or a prune under way when the gateway stops still takes its
+	// lock files, and a gateway stopped (a restart, a test's home removed
+	// after) has written all it will (T-206)
+	var fresh sync.WaitGroup
+	defer fresh.Wait()
 	freshCtx, stopFresh := context.WithCancel(ctx)
 	defer stopFresh()
 	// what another process writes to them is seen at once, not on the
 	// loops' next look (#3185)
-	go filememo.Watch(freshCtx, pluginrt.Path(), settings.Path(), provider.Path(), plugin.ListPath(), plugin.ToolsPath(), access.Path())
-	go pluginrt.KeepFresh(freshCtx, filememo.OthersEvery, settings.Path(), provider.Path(), plugin.ListPath(), plugin.ToolsPath(), access.Path())
+	fresh.Go(func() {
+		filememo.Watch(freshCtx, pluginrt.Path(), settings.Path(), provider.Path(), plugin.ListPath(), plugin.ToolsPath(), access.Path())
+	})
+	fresh.Go(func() {
+		pluginrt.KeepFresh(freshCtx, filememo.OthersEvery, settings.Path(), provider.Path(), plugin.ListPath(), plugin.ToolsPath(), access.Path())
+	})
 	// and the MCP hub's servers that the Library no longer gives are ended
-	go keepHubPruned(freshCtx)
+	fresh.Go(func() { keepHubPruned(freshCtx) })
 	srv := &http.Server{Handler: s.closesWhenHandedOff(s.Front()), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 5 * time.Minute, ConnState: s.unread.note}
 	// the magpie serving the gateway, and only it, keeps the saved accounts
 	// signed in, so two never refresh one sign-in at once
@@ -961,8 +971,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		b := s.Busy()
 		return awake.State{Busy: b.Any(), Last: b.Last}
 	})
+	// ended with it, and waited for as the loops above are: a prune under
+	// way when the gateway stops still takes its lock files
 	for _, f := range WhileServing {
-		go f(ctx)
+		fresh.Go(func() { f(freshCtx) })
 	}
 	// and, on Windows, serves WSL distros under NAT at Windows' address on
 	// their network (wsl.go)
