@@ -217,9 +217,11 @@ func (idx *rowIndex) pageOf(q rowQuery) ([]indexedRow, bool) {
 }
 
 // pageRecords are the records of page, read from the ledger from its
-// oldest row on (as buildRowIndex counted their order), false when one
-// of them is gone from it (the ledger rewritten since).
-func pageRecords(sc scopedAreas, q rowQuery, page []indexedRow) ([]usage.Record, bool) {
+// oldest row on (as buildRowIndex counted their order) until the last of
+// them is found, false when one of them is gone from it (the ledger
+// rewritten since). A page deep in the period reads about its own rows,
+// not the rest of the period after them.
+func pageRecords(sc scopedAreas, q rowQuery, page []indexedRow, refs []string) ([]usage.Record, bool) {
 	out := make([]usage.Record, len(page))
 	if len(page) == 0 {
 		return out, true
@@ -234,19 +236,20 @@ func pageRecords(sc scopedAreas, q rowQuery, page []indexedRow) ([]usage.Record,
 	}
 	ords := map[[2]int64]int{}
 	found := 0
-	areaRows(sc.accs, since, q.until, func(_ int, _ string, r usage.Record) bool {
+	areaRows(sc.accs, since, q.until, func(a int, ref string, r usage.Record) bool {
 		if r.Time.After(q.asOf) {
 			return true
 		}
 		k := rowKey{T: r.Time.UnixNano(), R: r.RouteID}
 		k.Ord = ords[[2]int64{k.T, k.R}]
 		ords[[2]int64{k.T, k.R}]++
-		if i, ok := at[k]; ok {
+		// the same row: its key, and the account the index says it is
+		if i, ok := at[k]; ok && int(page[i].area) == a && refs[page[i].ref] == ref {
 			out[i] = r
 			delete(at, k)
 			found++
 		}
-		return true
+		return found < len(page) // every row of the page found: read no further
 	})
 	return out, found == len(page)
 }

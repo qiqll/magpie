@@ -618,7 +618,7 @@ func requestRows(sc scopedAreas, q rowQuery, console bool) requestsPage {
 		rowIndexes.put(key, idx)
 	}
 	page, more := idx.pageOf(q)
-	recs, ok := pageRecords(sc, q, page)
+	recs, ok := pageRecords(sc, q, page, idx.refs)
 	if !ok && !fresh {
 		// a row the index has is gone from the ledger (rewritten since):
 		// read the period again
@@ -626,7 +626,7 @@ func requestRows(sc scopedAreas, q rowQuery, console bool) requestsPage {
 		idx = buildRowIndex(sc, q)
 		rowIndexes.put(key, idx)
 		page, more = idx.pageOf(q)
-		recs, _ = pageRecords(sc, q, page)
+		recs, _ = pageRecords(sc, q, page, idx.refs)
 	}
 	out.Summary, out.Total = idx.summary, idx.total
 	if more && len(page) > 0 {

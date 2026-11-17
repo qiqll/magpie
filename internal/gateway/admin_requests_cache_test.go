@@ -200,3 +200,31 @@ func TestRowCacheBounds(t *testing.T) {
 		t.Fatal("an index over the whole bound kept")
 	}
 }
+
+// A later page stops reading the ledger once it has its rows: a page
+// at the period's far end doesn't read the rest of the period.
+func TestAdminRequestsPageStopsAtItsRows(t *testing.T) {
+	w := newRowsWorld(t)
+	freshRowCache(t)
+	for i := range 20 { // the oldest first, as the ledger grows
+		usage.Append(usage.Record{Time: w.now.Add(-time.Duration(40-i) * time.Minute), Provider: "plan", ProviderKeyID: w.aFP, Model: "m1", Status: 200, RequestID: "req-" + string(rune('a'+i))})
+	}
+	var mu sync.Mutex
+	read := 0
+	was := visitLedger
+	visitLedger = func(since time.Time, fn func(usage.Record) bool) {
+		was(since, func(r usage.Record) bool { mu.Lock(); read++; mu.Unlock(); return fn(r) })
+	}
+	t.Cleanup(func() { visitLedger = was })
+	path := AdminPath + "/usage/requests?period=7d&limit=2"
+	p, _ := w.page(t, w.aKey, path)
+	c, _ := cursorOf(p.Next)
+	c.After = rowKey{T: w.now.Add(-37*time.Minute - time.Second).UnixNano()} // the far end: req-c and req-b after it
+	mu.Lock()
+	read = 0
+	mu.Unlock()
+	far, _ := w.page(t, w.aKey, path+"&cursor="+c.String())
+	if len(far.Rows) != 2 || far.Rows[0].VendorRequestID != "req-c" || far.Rows[1].VendorRequestID != "req-b" || read != 2 {
+		t.Fatalf("%d records read for %+v", read, far.Rows)
+	}
+}
