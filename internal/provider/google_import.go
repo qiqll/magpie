@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -230,12 +231,23 @@ func ImportGoogleAccountsWith(ctx context.Context, agent string, files []string,
 	}
 	loginsMu.Unlock()
 	// Gemini CLI's own sign-in is in magpie too, read from its file, its
-	// row (if listed yet) holding no token: never imported over
-	ownUser := ""
-	if own, ok := geminiOwnLogin(); ok && agent == "gemini" {
-		haveTok[own.auth.RefreshToken] = own.user
-		haveUser[strings.ToLower(own.user)] = own.auth.RefreshToken
-		ownUser = own.user
+	// row (if listed yet) holding no token: never imported over, by its
+	// name here or by its account's email, which its name may not be
+	var own []string
+	if g, ok := geminiOwnLogin(); ok && agent == "gemini" {
+		haveTok[g.auth.RefreshToken] = g.user
+		own = append(own, g.user)
+		email := geminiOwnEmail(ctx, g)
+		if email == "" && o.NewOnly {
+			// an area could be handed the owner's account under its email
+			return nil, errors.New("Gemini CLI's own sign-in on this computer couldn't be told apart from these accounts: try again later")
+		}
+		if email != "" {
+			own = append(own, email)
+		}
+		for _, u := range own {
+			haveUser[strings.ToLower(u)] = g.auth.RefreshToken
+		}
 	}
 
 	out := make([]ImportedAccount, len(all))
@@ -243,6 +255,9 @@ func ImportGoogleAccountsWith(ctx context.Context, agent string, files []string,
 	sem := make(chan struct{}, 4)
 	for i, e := range all {
 		name := e.email
+		if agent == "gemini" {
+			name = "" // a Gemini CLI account is named by Google alone
+		}
 		if name == "" && e.file == 0 {
 			name = fmt.Sprintf("#%d", i+1)
 		}
@@ -266,7 +281,7 @@ func ImportGoogleAccountsWith(ctx context.Context, agent string, files []string,
 			defer func() { <-sem }()
 			c, cancel := context.WithTimeout(ctx, 45*time.Second)
 			defer cancel()
-			out[i] = end(importGoogleAccount(c, app, e, name, haveUser, ownUser, o))
+			out[i] = end(importGoogleAccount(c, app, e, name, haveUser, own, o))
 		}()
 	}
 	wg.Wait()
@@ -282,8 +297,8 @@ func ImportGoogleAccountsWith(ctx context.Context, agent string, files []string,
 }
 
 // importGoogleAccount checks one account as a sign-in is finished and
-// keeps it. ownUser is Gemini CLI's own account, "" for none.
-func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, name string, haveUser map[string]string, ownUser string, o ImportOptions) ImportedAccount {
+// keeps it. own are the names of Gemini CLI's own account, none for none.
+func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, name string, haveUser map[string]string, own []string, o ImportOptions) ImportedAccount {
 	fail := func(msg string) ImportedAccount {
 		return ImportedAccount{User: name, Status: "failed", Error: msg}
 	}
@@ -327,9 +342,11 @@ func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, nam
 	if _, ok := haveUser[strings.ToLower(g.user)]; ok && o.NewOnly {
 		return o.known(ImportedAccount{Status: "exists"})
 	}
-	if ownUser != "" && strings.EqualFold(g.user, ownUser) {
-		// Gemini CLI's own: its file is Gemini CLI's to write, not magpie's
-		return ImportedAccount{User: g.user, Status: "exists"}
+	for _, u := range own {
+		if strings.EqualFold(g.user, u) {
+			// Gemini CLI's own: its file is Gemini CLI's to write, not magpie's
+			return ImportedAccount{User: own[0], Status: "exists"}
+		}
 	}
 	status := "added"
 	if old, ok := haveUser[strings.ToLower(g.user)]; ok {
@@ -344,7 +361,9 @@ func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, nam
 	if p, err := g.project(ctx); err == nil {
 		g.auth.Project, plan = p.id, p.plan
 	} else if e.project != "" {
-		g.auth.Project = e.project
+		// CLIProxyAPI may list several, comma-separated: the first
+		g.auth.Project, _, _ = strings.Cut(e.project, ",")
+		g.auth.Project = strings.TrimSpace(g.auth.Project)
 	}
 	if o.NewOnly {
 		claim, undo := o.claimer(app.agent)
@@ -363,6 +382,30 @@ func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, nam
 	googleState.tokens[e.refreshToken] = g.auth
 	googleState.Unlock()
 	return ImportedAccount{User: g.user, Status: status, Plan: plan}
+}
+
+// geminiOwnEmail is the email of Gemini CLI's own account g: its name
+// when that is one, else its id_token's, else Google's answer for it; ""
+// when none says.
+func geminiOwnEmail(ctx context.Context, g googleAccount) string {
+	if strings.Contains(g.user, "@") {
+		return g.user
+	}
+	var id struct {
+		IDToken string `json:"id_token"`
+	}
+	readJSON(filepath.Join(geminiDir(), "oauth_creds.json"), &id)
+	if e := claimString(jwtClaims(id.IDToken), "email"); strings.Contains(e, "@") {
+		return e
+	}
+	c, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	at, err := g.token(c)
+	if err != nil {
+		return ""
+	}
+	who, _ := googleWho(c, at)
+	return who
 }
 
 // GoogleForTest points Google's token and userinfo endpoints and Code

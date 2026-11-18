@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -270,16 +272,16 @@ func TestImportGeminiAccounts(t *testing.T) {
 	for _, r := range res {
 		st = append(st, r.User+":"+r.Status)
 	}
-	if strings.Join(st, " ") != "g@x.com:added h@x.com:added liar@x.com:failed ag@x.com:failed own@x.com:exists own@x.com:exists" {
+	if strings.Join(st, " ") != "g@x.com:added h@x.com:added #3:failed #4:failed own@x.com:exists own@x.com:exists" {
 		t.Fatalf("results = %v (%+v)", st, res)
 	}
 	if !strings.Contains(res[3].Error, "not Gemini CLI's") {
 		t.Errorf("an Antigravity file says %q", res[3].Error)
 	}
 	out, _ := json.Marshal(res)
-	for _, tok := range []string{"1//", "at-", "ya29"} {
+	for _, tok := range []string{"1//", "at-", "ya29", "liar@", "ag@"} {
 		if strings.Contains(string(out), tok) {
-			t.Errorf("results carry a token: %s", out)
+			t.Errorf("results carry a token or a file's name: %s", out)
 		}
 	}
 	// refreshed with Gemini CLI's own client; its own sign-in wasn't
@@ -332,5 +334,72 @@ func TestImportGeminiAccounts(t *testing.T) {
 	after, _ := os.ReadFile(loginsPath())
 	if strings.Contains(string(after), "1//g2") || strings.Contains(string(after), "1//own2") || !strings.Contains(string(after), `"1//k"`) {
 		t.Errorf("a conflict was written, or the new one wasn't:\nbefore %s\nafter %s", before, after)
+	}
+}
+
+// An area's import of Gemini CLI's own account, by another sign-in, is a
+// conflict on a magpie that hasn't listed its Gemini CLI accounts yet
+// (logins.json has no row for it), the account named by its id_token or,
+// with none, by Google, when Gemini CLI says no email of its own; with
+// Google not answering for it, the area's import is refused whole.
+func TestImportGeminiOwnNewOnly(t *testing.T) {
+	idToken := func(email string) string {
+		b, _ := json.Marshal(map[string]any{"email": email, "azp": geminiApp.clientID})
+		return "e30." + base64.RawURLEncoding.EncodeToString(b) + ".sig"
+	}
+	for _, c := range []struct {
+		name, creds string
+		want        string
+	}{
+		{"named in google_accounts.json", `{"refresh_token":"1//own"}`, ":conflict k@x.com:added"},
+		{"named by its id_token", `{"refresh_token":"1//own","id_token":"` + idToken("own@x.com") + `"}`, ":conflict k@x.com:added"},
+		{"named by Google", `{"refresh_token":"1//own"}`, ":conflict k@x.com:added"},
+		{"Google not answering", `{"refresh_token":"1//dead-own"}`, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			googleSandbox(t, &fakeGoogle{})
+			f := &fakeGoogleImport{users: map[string]string{"1//own": "own@x.com", "1//own2": "own@x.com", "1//k": "k@x.com"}}
+			srv := httptest.NewServer(f)
+			defer srv.Close()
+			oldToken, oldWho := googleTokenURL, googleUserInfoURL
+			googleTokenURL, codeAssistProd, codeAssistDaily, googleUserInfoURL = srv.URL+"/token", srv.URL+"/prod", srv.URL+"/daily", srv.URL+"/userinfo"
+			t.Cleanup(func() { googleTokenURL, googleUserInfoURL = oldToken, oldWho })
+			home, _ := os.UserHomeDir()
+			dir := filepath.Join(home, ".gemini")
+			os.MkdirAll(dir, 0o700)
+			os.WriteFile(filepath.Join(dir, "oauth_creds.json"), []byte(c.creds), 0o600)
+			if c.name == "named in google_accounts.json" {
+				os.WriteFile(filepath.Join(dir, "google_accounts.json"), []byte(`{"active":"own@x.com"}`), 0o600)
+			}
+			res, err := ImportGoogleAccountsWith(context.Background(), "gemini", []string{"1//own2\n1//k"}, ImportOptions{NewOnly: true})
+			if c.want == "" {
+				if err == nil {
+					t.Fatalf("imported with Gemini CLI's own account unknown: %+v", res)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var st []string
+			for _, r := range res {
+				st = append(st, r.User+":"+r.Status)
+			}
+			if strings.Join(st, " ") != c.want {
+				t.Fatalf("results = %v", st)
+			}
+			b, _ := os.ReadFile(loginsPath())
+			if strings.Contains(string(b), "1//own2") {
+				t.Errorf("the owner's account written: %s", b)
+			}
+			// Google is asked about Gemini CLI's own only when nothing here
+			// names it
+			f.mu.Lock()
+			askedOwn := slices.Contains(f.refreshed, "1//own")
+			f.mu.Unlock()
+			if askedOwn != (c.name == "named by Google") {
+				t.Errorf("Google asked for Gemini CLI's own account: %v", askedOwn)
+			}
+		})
 	}
 }
