@@ -636,17 +636,17 @@ taken: an area pastes it to `signin/{id}/callback`.
   and the readers' requests go through it, an area-added one held public
   on every connection (`netproxy.WithPublicOnly`); none picked goes
   through the subscription's (`provider.Via`). One import runs per area
-  at a time (`areaImports`); a second is `429 too_many_imports` with
-  `Retry-After`. It runs to its end, at most 3 minutes, whether or not
+  at a time, and 4 in all (`startImport`, taken before the body is
+  read); another is `429 too_many_imports` with `Retry-After`. It runs to its end, at most 3 minutes, whether or not
   the caller is still there.
 - **A new account only** (`ImportOptions.NewOnly`, T-220). An account
   magpie has, the owner's, another area's or this area's, by its refresh
   token (or access token, `accessOnly`) or by who it is once its vendor
   says (`sameLogin` for ChatGPT and Claude, the email for Google), is
   `conflict`: nothing of it is written or renewed, and the row names no
-  one. A ChatGPT file whose own id_token names an account magpie has is
-  never refreshed, as refreshing would sign the file's own sign-in out.
-  The check and the write are one step under the logins' lock
+  one. A ChatGPT account whose refresh token magpie doesn't have is
+  refreshed before it is judged, which signs the file's own sign-in out:
+  the file's id_token says nothing an area can be believed on. The check and the write are one step under the logins' lock
   (`addLoginWith`, `addSideLoginNew`), which also claims the account for
   the area (`ImportOptions.Claim`, `area.ClaimUpTo` of its 500) before
   anything of it is written; another area's ref is `ErrTaken`, read as a
@@ -654,7 +654,10 @@ taken: an area pastes it to `signin/{id}/callback`.
   It is kept as an area's sign-in keeps one (`addLoginOf(…, magpieOnly)`):
   the agent here is not signed in to it.
 - **Named by the vendor, never the file.** A ChatGPT account by the
-  id_token ChatGPT's refresh gives (none given fails), a Google one by
+  id_token ChatGPT's refresh gives (none given fails); one kept access
+  token only (`accessOnly`, never refreshed) only once its access token's
+  own claims name the id_token's email, workspace and plan and ChatGPT
+  answers `/wham/usage` with it (`codexAccessChecked`); a Google one by
   Google's userinfo (none fails), a Claude one by Anthropic's answer for
   its access token (`askClaudeProfile`, `/api/oauth/profile`, the owner's
   call of 2026-11-18: the window still asks Anthropic nothing). A Claude
@@ -671,7 +674,9 @@ taken: an area pastes it to `signin/{id}/callback`.
   A whole file of several that can't be read is a row with its `file`; a
   single file that can't be read is `400`. A reason that says back a run
   of 12 or more token characters with a digit that is in the files is
-  left out (`heldFrom`), as a vendor's answer may repeat the token.
+  left out (`heldFrom`), as a vendor's answer may repeat the token; the
+  readers' new-only mode says a vendor's refusal in magpie's words and its
+  HTTP status alone (`vendorRefused`), never the vendor's text.
 - **Limits midway.** Each account is admitted in the files' order before
   it is judged or its vendor asked (`ImportOptions.Admit`): past the
   area's 500, or once the area's conflicts reach the line, the rest fail

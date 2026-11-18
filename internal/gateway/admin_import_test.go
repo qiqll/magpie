@@ -163,7 +163,7 @@ func TestAdminImportCodexLimits(t *testing.T) {
 		asked++
 		mu.Unlock()
 		who := strings.TrimPrefix(in["refresh_token"], "r-")
-		json.NewEncoder(w).Encode(map[string]any{"id_token": importIDToken(who), "access_token": "a-" + who, "refresh_token": "n-" + who})
+		json.NewEncoder(w).Encode(map[string]any{"id_token": importIDToken(who), "access_token": "a-" + who, "refresh_token": "n-" + who + strconv.Itoa(asked)})
 	}))
 	t.Cleanup(srv.Close)
 	t.Cleanup(provider.CodexTokenURLForTest(srv.URL))
@@ -179,21 +179,17 @@ func TestAdminImportCodexLimits(t *testing.T) {
 	if acc == nil || acc.Name != "cid@example.com" || acc.Proxy == nil || !acc.Proxy.Direct || acc.Opened != "2026-11-01" {
 		t.Fatal("the account:", body)
 	}
-	if strings.Contains(body, "r-cid") || strings.Contains(body, "n-cid") {
+	if strings.Contains(body, "r-cid") || strings.Contains(body, "n-cid") || strings.Contains(body, "a-cid") {
 		t.Fatal("a token in the answer:", body)
 	}
-	// the same again: conflicts, nothing asked of ChatGPT
-	mu.Lock()
-	asked = 0
-	mu.Unlock()
-	if c, out, body := importOf(t, do, a, map[string]any{"agent": "codex", "files": []string{`{"tokens":{"refresh_token":"r-x","id_token":"` + importIDToken("cid") + `"}}`}}); c != http.StatusOK || importStatuses(out) != "1:conflict" {
+	// the same account by another sign-in: a conflict, magpie's kept; a
+	// forged id_token saying it is cid's isn't believed
+	logins := filepath.Join(filepath.Dir(provider.Path()), "logins.json")
+	if c, out, body := importOf(t, do, a, map[string]any{"agent": "codex", "files": []string{`{"tokens":{"refresh_token":"r-cid","id_token":"` + importIDToken("dan") + `"}}`}}); c != http.StatusOK || importStatuses(out) != "1:conflict" || strings.Contains(body, "cid@") || strings.Contains(body, "dan@") {
 		t.Fatal("again:", c, body)
 	}
-	if mu.Lock(); asked != 0 {
-		mu.Unlock()
-		t.Fatal("an account magpie has was refreshed")
-	} else {
-		mu.Unlock()
+	if b, _ := os.ReadFile(logins); !strings.Contains(string(b), "n-cid") {
+		t.Fatal("cid's sign-in was written over")
 	}
 
 	for _, x := range []struct {
@@ -222,15 +218,20 @@ func TestAdminImportCodexLimits(t *testing.T) {
 	if c, _ := do("POST", AdminPath+"/accounts/key", lanPeer, a, `{"provider":"plan","key":"`+strings.Repeat("k", 70<<10)+`"}`); c != http.StatusBadRequest {
 		t.Fatal("accounts/key over 64 KB:", c)
 	}
-	areaImports.Lock()
-	areaImports.m = map[string]bool{aID: true}
-	areaImports.Unlock()
-	c, body = do("POST", AdminPath+"/accounts/import", lanPeer, a, `{"agent":"codex","files":["r-f"]}`)
-	areaImports.Lock()
-	areaImports.m = nil
-	areaImports.Unlock()
-	if c != http.StatusTooManyRequests || !strings.Contains(body, adminTooManyImports) {
-		t.Fatal("a second import:", c, body)
+	for name, running := range map[string]map[string]bool{
+		"a second import of the area": {aID: true},
+		"as many as magpie takes":     {"x1": true, "x2": true, "x3": true, "x4": true},
+	} {
+		areaImports.Lock()
+		areaImports.m = running
+		areaImports.Unlock()
+		c, body = do("POST", AdminPath+"/accounts/import", lanPeer, a, big)
+		areaImports.Lock()
+		areaImports.m = nil
+		areaImports.Unlock()
+		if c != http.StatusTooManyRequests || !strings.Contains(body, adminTooManyImports) {
+			t.Fatal(name, "(its body not read):", c, body[:min(len(body), 200)])
+		}
 	}
 }
 

@@ -33,7 +33,10 @@ const (
 	// adminImportFiles is the most files one import takes
 	adminImportFiles = 50
 	// adminImportTime is how long one import runs at most
-	adminImportTime     = 3 * time.Minute
+	adminImportTime = 3 * time.Minute
+	// adminImportsMost is the most imports running at once, every area's:
+	// each holds up to 8 MB of files
+	adminImportsMost    = 4
 	adminTooLarge       = "too_large"
 	adminTooManyImports = "too_many_imports"
 )
@@ -47,10 +50,36 @@ var importAgents = []string{"codex", "claude", "antigravity", "gemini"}
 // window's import finds them.
 var keyImports = map[string]func([]string) []string{"factory": provider.FactoryKeysIn}
 
-// areaImports are the areas with an import running: one each at a time.
+// areaImports are the areas with an import running: one each at a time,
+// adminImportsMost in all.
 var areaImports struct {
 	sync.Mutex
 	m map[string]bool
+}
+
+// startImport takes area id's import slot, before its body is read, or
+// answers 429 too_many_imports; the func it gives lets it go.
+func startImport(w http.ResponseWriter, id string) (func(), bool) {
+	areaImports.Lock()
+	defer areaImports.Unlock()
+	if areaImports.m[id] || len(areaImports.m) >= adminImportsMost {
+		w.Header().Set("Retry-After", "10")
+		msg := "this area has an import running: try again once it ends"
+		if !areaImports.m[id] {
+			msg = "magpie is running as many imports as it takes at once: try again shortly"
+		}
+		adminError(w, http.StatusTooManyRequests, adminTooManyImports, msg)
+		return nil, false
+	}
+	if areaImports.m == nil {
+		areaImports.m = map[string]bool{}
+	}
+	areaImports.m[id] = true
+	return func() {
+		areaImports.Lock()
+		delete(areaImports.m, id)
+		areaImports.Unlock()
+	}, true
 }
 
 // importRow is how one account of an import went, in the files' order:
@@ -96,6 +125,11 @@ func (s *Server) adminImport(w http.ResponseWriter, r *http.Request, c adminCall
 	if s.heldAnswered(w, c, time.Now()) {
 		return
 	}
+	done, ok := startImport(w, c.area.ID)
+	if !ok {
+		return
+	}
+	defer done()
 	var in struct {
 		Agent      string          `json:"agent"`
 		Files      []string        `json:"files"`
@@ -176,24 +210,6 @@ func (s *Server) adminImport(w http.ResponseWriter, r *http.Request, c adminCall
 		}
 		o.Proxy, o.PublicOnly = &url, public
 	}
-	areaImports.Lock()
-	if areaImports.m[c.area.ID] {
-		areaImports.Unlock()
-		w.Header().Set("Retry-After", "10")
-		adminError(w, http.StatusTooManyRequests, adminTooManyImports, "this area has an import running: try again once it ends")
-		return
-	}
-	if areaImports.m == nil {
-		areaImports.m = map[string]bool{}
-	}
-	areaImports.m[c.area.ID] = true
-	areaImports.Unlock()
-	defer func() {
-		areaImports.Lock()
-		delete(areaImports.m, c.area.ID)
-		areaImports.Unlock()
-	}()
-
 	im := &areaImport{s: s, c: c, agent: in.Agent, pid: subscriptionOf(in.Agent), pick: in.Proxy, opened: opened, owned: len(c.area.Accounts)}
 	var out importResult
 	var err error

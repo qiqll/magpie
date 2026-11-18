@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,7 +35,7 @@ func fakeImportRefresh(t *testing.T) map[string]int {
 			"id_token": fakeJWT(map[string]any{"email": who + "@example.com",
 				"https://api.openai.com/auth": map[string]any{"chatgpt_plan_type": "pro", "chatgpt_account_id": "acct-" + who}}),
 			"access_token":  fakeJWT(map[string]any{"exp": float64(time.Now().Add(time.Hour).Unix())}),
-			"refresh_token": "n-" + who,
+			"refresh_token": "n-" + strings.TrimPrefix(rt, "r-"),
 		})
 	}))
 	t.Cleanup(fake.Close)
@@ -45,7 +47,7 @@ func fakeImportRefresh(t *testing.T) map[string]int {
 
 // An area's import (NewOnly) adds a new ChatGPT account, claimed before it
 // is written, and tells one magpie has as a conflict: no name, nothing of
-// it written, not refreshed when the file's id_token names it. The
+// it written. The file's own id_token is never taken for whose it is. The
 // window's import of the same file still renews it ("updated").
 func TestImportNewOnlyCodex(t *testing.T) {
 	home := claudeHome(t)
@@ -83,14 +85,14 @@ func TestImportNewOnlyCodex(t *testing.T) {
 			t.Errorf("a conflict says %q", r.Error)
 		}
 	}
-	if asked["r-kept2"] != 0 || asked["r-live"] != 0 {
-		t.Fatalf("an account magpie has was refreshed: %v", asked)
+	if asked["r-live"] != 0 {
+		t.Fatalf("a refresh token magpie has was refreshed: %v", asked)
 	}
 	if len(claimed) != 1 || claimed[0] != "codex:new@example.com" {
 		t.Fatalf("claimed %v", claimed)
 	}
 	after, _ := os.ReadFile(loginsPath())
-	if !bytes.Contains(after, []byte("new@example.com")) || bytes.Contains(after, []byte("n-kept2")) {
+	if !bytes.Contains(after, []byte("new@example.com")) || bytes.Contains(after, []byte("n-kept2")) || !bytes.Contains(after, []byte("n-kept")) {
 		t.Fatal("logins.json after:", string(after))
 	}
 	if !bytes.Contains(before, []byte("n-kept")) {
@@ -226,5 +228,60 @@ func TestImportNewOnlyGoogle(t *testing.T) {
 	defer mu.Unlock()
 	if asked != 0 {
 		t.Fatal("Google was asked of an account not admitted")
+	}
+}
+
+// An area's import kept access token only names the account only once
+// ChatGPT takes the access token and its own claims name the id_token's
+// account: a forged id_token beside another account's token fails, and
+// so does a token ChatGPT refuses.
+func TestImportNewOnlyAccessOnlyAsksChatGPT(t *testing.T) {
+	claudeHome(t)
+	var mu sync.Mutex
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked = append(asked, r.URL.Path+" "+r.Header.Get("chatgpt-account-id"))
+		mu.Unlock()
+		if r.URL.Path != "/backend-api/wham/usage" || r.Header.Get("chatgpt-account-id") == "acct-bob" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		io.WriteString(w, `{"plan_type":"plus"}`)
+	}))
+	t.Cleanup(srv.Close)
+	old := CodexBase
+	CodexBase = srv.URL + "/backend-api/codex"
+	t.Cleanup(func() { CodexBase = old })
+	exp := float64(time.Now().Add(time.Hour).Unix())
+	id := func(who string) string {
+		return fakeJWT(map[string]any{"email": who + "@example.com", "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-" + who, "chatgpt_plan_type": "plus"}})
+	}
+	at := func(who, mark string) string {
+		return fakeJWT(map[string]any{"exp": exp, "mark": mark, "https://api.openai.com/profile": map[string]any{"email": who + "@example.com"},
+			"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-" + who, "chatgpt_plan_type": "plus"}})
+	}
+	file := func(idTok, atTok string) string {
+		return `{"tokens":{"id_token":"` + idTok + `","access_token":"` + atTok + `"}}`
+	}
+	o := ImportOptions{NewOnly: true, Claim: func(string, string) error { return nil }}
+	rs, err := ImportLoginsWith(context.Background(), "codex", []string{
+		file(id("ann"), at("ann", "1")),
+		file(id("victim"), at("eve", "2")),
+		file(id("bob"), at("bob", "refused")),
+	}, true, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := importStatuses(rs); got != "ann@example.com:added,#2:failed,#3:failed" {
+		t.Fatalf("got %s", got)
+	}
+	if b, _ := os.ReadFile(loginsPath()); bytes.Contains(b, []byte("victim@")) || bytes.Contains(b, []byte("bob@")) {
+		t.Fatal("an account ChatGPT didn't vouch for was kept")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) != 2 || !slices.Contains(asked, "/backend-api/wham/usage acct-ann") || !slices.Contains(asked, "/backend-api/wham/usage acct-bob") {
+		t.Fatalf("asked %v", asked)
 	}
 }

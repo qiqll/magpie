@@ -33,7 +33,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -449,6 +448,10 @@ func ImportLoginsWith(ctx context.Context, agent string, files []string, accessO
 		case seen[e.refreshToken]:
 			r = ImportedAccount{User: name, Status: "failed", Error: "in the files twice"}
 		}
+		if r.Status == "failed" {
+			out[i] = r // its own reason, whatever the line
+			continue
+		}
 		// admitted in the files' order: a line reached midway (the
 		// area's conflicts) fails the rest
 		end, ok := o.admit(&out[i], name)
@@ -468,7 +471,7 @@ func ImportLoginsWith(ctx context.Context, agent string, files []string, accessO
 			c, cancel := context.WithTimeout(ctx, 45*time.Second)
 			defer cancel()
 			if accessOnly {
-				out[i] = end(importAccessOnly(e, name, kept, o))
+				out[i] = end(importAccessOnly(c, e, name, kept, o))
 				return
 			}
 			out[i] = end(importLogin(c, agent, e, name, kept, o))
@@ -546,7 +549,7 @@ func loginAccessToken(l savedLogin) string {
 // importAccessOnly keeps one ChatGPT account access token only, as the
 // file has it: nothing is asked of ChatGPT, whose refresh would rotate
 // the file's sign-in. Its id_token says whose account it is.
-func importAccessOnly(e loginImport, name string, kept []savedLogin, o ImportOptions) ImportedAccount {
+func importAccessOnly(ctx context.Context, e loginImport, name string, kept []savedLogin, o ImportOptions) ImportedAccount {
 	fail := func(msg string) ImportedAccount {
 		return ImportedAccount{User: name, Status: "failed", Error: msg}
 	}
@@ -562,6 +565,11 @@ func importAccessOnly(e loginImport, name string, kept []savedLogin, o ImportOpt
 	}
 	l.AccessOnly = true
 	if o.NewOnly {
+		// the id_token is the file's word: the access token is ChatGPT's
+		// once ChatGPT takes it, and its own claims must say the same
+		if err := codexAccessChecked(ctx, e.idToken, e.accessToken, e.accountID); err != nil {
+			return fail(err.Error())
+		}
 		return o.save(l, name)
 	}
 	status := "added"
@@ -626,15 +634,12 @@ func importLogin(ctx context.Context, agent string, e loginImport, name string, 
 	var err error
 	switch agent {
 	case "codex":
-		if o.NewOnly && e.idToken != "" {
-			// one the file's own id_token says magpie has is never
-			// refreshed: that would sign the file's sign-in out for nothing
-			if fl, err := codexLogin(e.idToken, "", "", e.accountID); err == nil && slices.ContainsFunc(kept, func(k savedLogin) bool { return sameLogin(k, fl) }) {
-				return o.known(ImportedAccount{Status: "exists"})
-			}
-		}
 		raw := map[string]any{"tokens": map[string]any{"refresh_token": e.refreshToken}}
 		if _, err := codexRefresh(ctx, raw, codexRefreshForced); err != nil {
+			if o.NewOnly {
+				// ChatGPT's own words may say back what it was sent
+				return fail(vendorRefused("ChatGPT", err))
+			}
 			return refused("ChatGPT", err)
 		}
 		t := raw["tokens"].(map[string]any)

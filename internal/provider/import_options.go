@@ -9,7 +9,10 @@ package provider
 // magpie's without being the area's.
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -114,4 +117,50 @@ func (o ImportOptions) save(l savedLogin, name string) ImportedAccount {
 		undo()
 	}
 	return o.saved(user, l.Plan, name, err)
+}
+
+// vendorRefused is why an area's import failed with err from vendor, in
+// magpie's words alone: its HTTP status, never its text, which may say
+// back the token it was sent.
+func vendorRefused(vendor string, err error) string {
+	var r refreshRefused
+	if errors.As(err, &r) {
+		return vendor + " didn't take the refresh token: it has been used since (by the tool it came from, which refreshes it), expired or signed out"
+	}
+	st := httpStatusOf(err)
+	var ae *accountStatusError
+	if errors.As(err, &ae) {
+		st = ae.status
+	}
+	if st != 0 {
+		return fmt.Sprintf("%s didn't take it (HTTP %d): it has expired or been signed out, or isn't the sign-in it is said to be", vendor, st)
+	}
+	return vendor + " couldn't be asked whose it is: try again later"
+}
+
+// codexAccessChecked says ChatGPT takes accessToken, an area's import
+// kept access token only (NewOnly), as the account idToken names: the
+// access token's own claims, ChatGPT's once it takes the token, name the
+// same email and workspace, and /wham/usage answers it. An id_token alone
+// is the file's word (jwtClaims checks no signature).
+func codexAccessChecked(ctx context.Context, idToken, accessToken, accountID string) error {
+	id, at := jwtClaims(idToken), jwtClaims(accessToken)
+	email := claimString(at, "https://api.openai.com/profile", "email")
+	ws := claimString(at, "https://api.openai.com/auth", "chatgpt_account_id")
+	idWS := claimString(id, "https://api.openai.com/auth", "chatgpt_account_id")
+	if idWS == "" {
+		idWS = accountID
+	}
+	if email == "" || ws == "" || !strings.EqualFold(email, claimString(id, "email")) || ws != idWS {
+		return errors.New("its access token doesn't say it is the account its id_token names")
+	}
+	if p := claimString(at, "https://api.openai.com/auth", "chatgpt_plan_type"); p != "" && p != claimString(id, "https://api.openai.com/auth", "chatgpt_plan_type") {
+		return errors.New("its access token doesn't say it is the account its id_token names")
+	}
+	var data codexUsage
+	base := strings.TrimSuffix(CodexBase, "/codex")
+	if err := accountJSON(ctx, base+"/wham/usage", accessToken, codexAccountHeaders(ws), &data); err != nil {
+		return errors.New(vendorRefused("ChatGPT", err))
+	}
+	return nil
 }

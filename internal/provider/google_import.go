@@ -281,6 +281,10 @@ func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, nam
 		ExpiresIn   int64  `json:"expires_in"`
 	}
 	if err := postToken(ctx, googleTokenURL, "application/x-www-form-urlencoded", []byte(form), &tok); err != nil {
+		if o.NewOnly {
+			// Google's own words may say back what it was sent
+			return fail(vendorRefused("Google", err))
+		}
 		msg := err.Error()
 		if strings.Contains(msg, "(401)") || strings.Contains(strings.ToLower(msg), "unauthorized") {
 			msg += " — this sign-in was made for another app, not " + app.name
@@ -301,7 +305,7 @@ func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, nam
 		g.user = who
 	case o.NewOnly:
 		// the file's email is its word, not Google's
-		return fail(err.Error())
+		return fail(vendorRefused("Google", err))
 	case e.email != "":
 		g.user = e.email // the file says, and the token works
 	default:
