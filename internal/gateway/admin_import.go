@@ -225,7 +225,7 @@ func (s *Server) adminImport(w http.ResponseWriter, r *http.Request, c adminCall
 	for i := range out.Results {
 		out.Results[i].Message = heldFrom(out.Results[i].Message, in.Files)
 	}
-	log.Printf("admin: area %s (%s) imported %s: added %d, conflict %d, failed %d", c.area.ID, c.area.Note, in.Agent, out.Added, out.Conflict, out.Failed)
+	c.logf("imported %s: added %d, conflict %d, failed %d", in.Agent, out.Added, out.Conflict, out.Failed)
 	writeJSON(w, http.StatusOK, out)
 }
 

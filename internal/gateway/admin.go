@@ -22,9 +22,10 @@ import (
 // The admin routes (docs/subsystems/areas.md): an area's admin key lists,
 // adds and removes the accounts its area owns and reads what they spent;
 // the console's key reads every area and makes, changes and deletes
-// them. Neither reaches anything else (readOnlyGuard refuses an admin key
-// every other route), and neither routes a request: traffic is the
-// owner's, and an area's accounts serve it as any other.
+// them, and does what an area's key does for any area (forArea).
+// Neither reaches anything else (readOnlyGuard refuses an admin key every
+// other route), and neither routes a request: traffic is the owner's, and
+// an area's accounts serve it as any other.
 //
 // Each handler judges the caller again (admin), never by where it came
 // from: lanGuard lets a request from this computer through with no key,
@@ -98,6 +99,27 @@ var adminRoutes = map[string]map[string]bool{
 		"POST " + AdminPath + "/areas/{id}/delete":        true,
 		"GET " + AdminPath + "/ips":                       true,
 		"GET " + AdminPath + "/areas/{id}/ips":            true,
+		// an area's routes, for the area the path names (forArea)
+		"POST " + AdminPath + "/areas/{id}/accounts/key":          true,
+		"POST " + AdminPath + "/areas/{id}/accounts/keys":         true,
+		"POST " + AdminPath + "/areas/{id}/accounts/remove":       true,
+		"POST " + AdminPath + "/areas/{id}/accounts/import":       true,
+		"POST " + AdminPath + "/areas/{id}/accounts/proxy":        true,
+		"POST " + AdminPath + "/areas/{id}/signin":                true,
+		"POST " + AdminPath + "/areas/{id}/signin/plugin":         true,
+		"POST " + AdminPath + "/areas/{id}/signin/plugin/prompt":  true,
+		"POST " + AdminPath + "/areas/{id}/signin/claude-token":   true,
+		"GET " + AdminPath + "/areas/{id}/signin/{sid}":           true,
+		"POST " + AdminPath + "/areas/{id}/signin/{sid}/callback": true,
+		"POST " + AdminPath + "/areas/{id}/signin/{sid}/cancel":   true,
+		"POST " + AdminPath + "/areas/{id}/ips":                   true,
+		"POST " + AdminPath + "/areas/{id}/ips/update":            true,
+		"POST " + AdminPath + "/areas/{id}/ips/delete":            true,
+		"POST " + AdminPath + "/areas/{id}/ips/check":             true,
+		"POST " + AdminPath + "/areas/{id}/ips/probe":             true,
+		"POST " + AdminPath + "/areas/{id}/ips/batch":             true,
+		"POST " + AdminPath + "/areas/{id}/ips/reread":            true,
+		"GET " + AdminPath + "/areas/{id}/options":                true,
 	},
 }
 
@@ -150,12 +172,122 @@ func (s *Server) adminRoutesOn(mux *routeMux) {
 	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/rotate-key", s.admin(access.AdminConsole, s.adminRotateArea))
 	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/delete", s.admin(access.AdminConsole, s.adminDeleteArea))
 	mux.HandleFunc("GET "+AdminPath+"/areas/{id}/ips", s.admin(access.AdminConsole, s.adminIPs))
+
+	// the console acting for an area (magpie-api.md §17): the area's own
+	// handlers, on the area the path names
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/accounts/key", s.admin(access.AdminConsole, s.forArea(s.probeHeld(s.adminAddKey))))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/accounts/keys", s.admin(access.AdminConsole, s.forArea(s.adminAddKeys)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/accounts/remove", s.admin(access.AdminConsole, s.forArea(s.adminRemove)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/accounts/import", s.adminUpTo(access.AdminConsole, adminImportMost, s.forArea(s.adminImport)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/accounts/proxy", s.admin(access.AdminConsole, s.forArea(s.adminAccountProxy)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/signin", s.admin(access.AdminConsole, s.forArea(s.adminSignIn)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/signin/plugin", s.admin(access.AdminConsole, s.forArea(s.adminPluginSignIn)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/signin/plugin/prompt", s.admin(access.AdminConsole, s.forArea(s.adminPluginPrompt)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/signin/claude-token", s.admin(access.AdminConsole, s.forArea(s.probeHeld(s.adminClaudeToken))))
+	mux.HandleFunc("GET "+AdminPath+"/areas/{id}/signin/{sid}", s.admin(access.AdminConsole, s.forArea(s.adminSignInState)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/signin/{sid}/callback", s.admin(access.AdminConsole, s.forArea(s.adminSignInCallback)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/signin/{sid}/cancel", s.admin(access.AdminConsole, s.forArea(s.adminSignInCancel)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/ips", s.admin(access.AdminConsole, s.forArea(s.probeHeld(s.adminAddIP))))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/ips/update", s.admin(access.AdminConsole, s.forArea(s.adminUpdateIP)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/ips/delete", s.admin(access.AdminConsole, s.forArea(s.adminDeleteIP)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/ips/check", s.admin(access.AdminConsole, s.forArea(s.adminCheckProxy)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/ips/probe", s.admin(access.AdminConsole, s.forArea(s.adminProbeProxy)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/ips/batch", s.admin(access.AdminConsole, s.forArea(s.adminBatchIPs)))
+	mux.HandleFunc("POST "+AdminPath+"/areas/{id}/ips/reread", s.admin(access.AdminConsole, s.forArea(s.adminRereadIPs)))
+	mux.HandleFunc("GET "+AdminPath+"/areas/{id}/options", s.admin(access.AdminConsole, s.forArea(s.adminOptions)))
 }
 
-// adminCall is a judged admin request: its key, and an area admin's area.
+// adminCall is a judged admin request: its key, and an area admin's area,
+// or the area the console acts for (forArea).
 type adminCall struct {
 	who  access.Identity
 	area area.Area
+	// console: the console acts for area, which the path names; actor is
+	// who it says did it (X-Magpie-Actor, "" for none sent)
+	console bool
+	actor   string
+	// logged is set once the action wrote its line (logf)
+	logged *bool
+}
+
+// logf writes an area's action to the log: "admin: area <id> (<note>)
+// …", or "admin: console for area <id> (<note>) … actor=<actor>" for the
+// console acting for it. Never a secret: the args are ids, names and
+// counts.
+func (c adminCall) logf(format string, args ...any) {
+	if c.logged != nil {
+		*c.logged = true
+	}
+	if !c.console {
+		log.Printf("admin: area %s (%s) "+format, append([]any{c.area.ID, c.area.Note}, args...)...)
+		return
+	}
+	log.Printf("admin: console for area %s (%s) "+format+" actor=%s", append(append([]any{c.area.ID, c.area.Note}, args...), actorOrDash(c.actor))...)
+}
+
+func actorOrDash(actor string) string {
+	if actor == "" {
+		return "-"
+	}
+	return actor
+}
+
+// ActorHeader names who at the console did an action it takes for an
+// area: the console's own, told in magpie's log alone, never checked.
+const ActorHeader = "X-Magpie-Actor"
+
+// validActor: s is an actor ActorHeader may name.
+func validActor(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	return strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._@-") == ""
+}
+
+// forArea runs an area's route h for the console, on the area the path
+// names (magpie-api.md §17): the same handler, so the same checks, and
+// the area's limits, which it shares. Its role was judged before (the
+// route is the console's), the id after: 404 for no such area. An area
+// turned off is acted for still. A sign-in it starts is its own, read by
+// neither the area's key nor another's (ownSignIn).
+func (s *Server) forArea(h func(http.ResponseWriter, *http.Request, adminCall)) func(http.ResponseWriter, *http.Request, adminCall) {
+	return func(w http.ResponseWriter, r *http.Request, c adminCall) {
+		actors := r.Header.Values(ActorHeader)
+		if len(actors) > 1 || len(actors) == 1 && !validActor(actors[0]) {
+			adminError(w, http.StatusBadRequest, adminBadRequest, ActorHeader+" is 1 to 64 of A-Z, a-z, 0-9 and . _ @ -, sent once")
+			return
+		}
+		a, ok := consoleArea(w, r)
+		if !ok {
+			return
+		}
+		logged := false
+		c.area, c.console, c.logged = a, true, &logged
+		if len(actors) == 1 {
+			c.actor = actors[0]
+		}
+		sw := &statusOf{ResponseWriter: w}
+		h(sw, r, c)
+		// every write has its line: one its handler didn't write says what
+		// was asked and how it was answered
+		if r.Method != http.MethodGet && !logged {
+			code := sw.code
+			if code == 0 {
+				code = http.StatusOK
+			}
+			action := strings.TrimPrefix(r.Pattern, r.Method+" "+AdminPath+"/areas/{id}/")
+			c.logf("%s: %d", action, code)
+		}
+	}
+}
+
+// signInID is the sign-in a route names: {sid} on the console's
+// /areas/{id}/signin/{sid}, {id} on an area's /signin/{id}.
+func signInID(r *http.Request) string {
+	if id := r.PathValue("sid"); id != "" {
+		return id
+	}
+	return r.PathValue("id")
 }
 
 // admin judges an admin route's caller before h runs: from an address
@@ -188,7 +320,7 @@ func (s *Server) adminUpTo(role string, most int64, h func(http.ResponseWriter, 
 			if role == access.AdminConsole {
 				adminError(w, http.StatusForbidden, adminConsoleOnly, "this route is the console's: an area admin's key reaches its own area's routes alone")
 			} else {
-				adminError(w, http.StatusForbidden, adminAreaOnly, "this route is an area admin's: the console's key reads areas and manages them, and adds or removes no account")
+				adminError(w, http.StatusForbidden, adminAreaOnly, "this route is an area admin's: the console's key acts for an area at "+AdminPath+"/areas/{id}/…")
 			}
 			return
 		}
@@ -453,7 +585,7 @@ func (s *Server) adminAddKey(w http.ResponseWriter, r *http.Request, c adminCall
 		adminError(w, status, code, msg)
 		return
 	}
-	log.Printf("admin: area %s (%s) added a key of %s", c.area.ID, c.area.Note, p.ID)
+	c.logf("added a key of %s", p.ID)
 	writeJSON(w, http.StatusCreated, acc)
 }
 
@@ -512,7 +644,7 @@ func (s *Server) adminRemove(w http.ResponseWriter, r *http.Request, c adminCall
 		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
 		return
 	}
-	log.Printf("admin: area %s (%s) removed %s", c.area.ID, c.area.Note, pid)
+	c.logf("removed %s", pid)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -924,7 +1056,7 @@ func (s *Server) adminUpdateArea(w http.ResponseWriter, r *http.Request, c admin
 		return
 	}
 	if a.Off {
-		CancelAreaSignIns(a.ID)
+		CancelAreaKeySignIns(a.ID)
 	}
 	writeJSON(w, http.StatusOK, areaOf(a, time.Now()))
 }

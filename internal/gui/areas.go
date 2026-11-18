@@ -132,7 +132,7 @@ func areaAction(r *http.Request, action, id, note, ref string, off *bool, provid
 		}
 		a, err := areas.Update(id, s)
 		if err == nil && a.Off {
-			gateway.CancelAreaSignIns(id)
+			gateway.CancelAreaKeySignIns(id)
 		}
 		return "", err
 	case "delete":

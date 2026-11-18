@@ -600,7 +600,7 @@ func (s *Server) adminPluginSignIn(w http.ResponseWriter, r *http.Request, c adm
 		adminError(w, http.StatusBadRequest, adminBadRequest, said.held(err.Error()))
 		return
 	}
-	log.Printf("admin: area %s (%s) started a %s sign-in", c.area.ID, c.area.Note, in.Agent)
+	c.logf("started a %s sign-in", in.Agent)
 	areaPluginSaid.Lock()
 	if areaPluginSaid.m == nil {
 		areaPluginSaid.m = map[string]pluginSaid{}
@@ -628,7 +628,7 @@ func keepAreaSignIn(c adminCall, id string, box *pickBox) {
 			areaPluginSaid.Unlock()
 		}
 	}
-	areaSignIns.m[id] = areaSignIn{area: c.area.ID, pick: box}
+	areaSignIns.m[id] = areaSignIn{area: c.area.ID, pick: box, console: c.console}
 }
 
 // adminPluginKey signs c's area in to pp with a key, as its api method
@@ -685,7 +685,7 @@ func (s *Server) areaPluginKey(c adminCall, pp plugin.Provider, pm adminPluginMe
 		}
 		return claimFailure(err)
 	}
-	log.Printf("admin: area %s (%s) signed in to %s with a key", c.area.ID, c.area.Note, agent)
+	c.logf("signed in to %s with a key", agent)
 	if pick != nil {
 		if err := pick.mount(c.area.ID, ref); err != nil {
 			log.Printf("admin: area %s's %s account, %s", c.area.ID, agent, mountFailed(err))

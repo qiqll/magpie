@@ -80,7 +80,7 @@ func (s *Server) adminProbeProxy(w http.ResponseWriter, r *http.Request, c admin
 	out := checkAreaProxy(r.Context(), p, host)
 	out.Proxy = proxyShown(p)
 	out.Matches = out.OK && host != "" && out.Matches
-	log.Printf("admin: area %s probed a proxy not saved: ok=%v %s", c.area.ID, out.OK, out.Error)
+	c.logf("probed a proxy not saved: ok=%v %s", out.OK, out.Error)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -254,7 +254,7 @@ func (s *Server) adminBatchIPs(w http.ResponseWriter, r *http.Request, c adminCa
 			}
 		}
 	}
-	log.Printf("admin: area %s (%s) batch-added proxies: %d lines, %d new IPs, %d merged, %d in magpie already", c.area.ID, c.area.Note, len(rows), added, merged, conflicts)
+	c.logf("batch-added proxies: %d lines, %d new IPs, %d merged, %d in magpie already", len(rows), added, merged, conflicts)
 	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "added": added + merged})
 }
 
@@ -361,6 +361,6 @@ func (s *Server) adminRereadIPs(w http.ResponseWriter, r *http.Request, c adminC
 			out.Failed = append(out.Failed, x.id)
 		}
 	}
-	log.Printf("admin: area %s (%s) read its proxies' exits again: %d moved, %d failed, %d unchanged", a.ID, a.Note, len(out.Moved), len(out.Failed), out.Unchanged)
+	c.logf("read its proxies' exits again: %d moved, %d failed, %d unchanged", len(out.Moved), len(out.Failed), out.Unchanged)
 	writeJSON(w, http.StatusOK, out)
 }

@@ -70,6 +70,14 @@ var readOnlyRefused = []string{
 	"POST " + AdminPath + "/ips/check", "POST " + AdminPath + "/accounts/proxy", "GET " + AdminPath + "/areas/{id}/ips",
 	"POST " + AdminPath + "/accounts/keys", "POST " + AdminPath + "/ips/probe", "POST " + AdminPath + "/ips/batch",
 	"POST " + AdminPath + "/ips/reread", "POST " + AdminPath + "/accounts/import",
+	// the console's for an area (forArea, T-215)
+	"POST " + AdminPath + "/areas/{id}/accounts/key", "POST " + AdminPath + "/areas/{id}/accounts/keys", "POST " + AdminPath + "/areas/{id}/accounts/remove",
+	"POST " + AdminPath + "/areas/{id}/accounts/import", "POST " + AdminPath + "/areas/{id}/accounts/proxy", "POST " + AdminPath + "/areas/{id}/signin",
+	"POST " + AdminPath + "/areas/{id}/signin/plugin", "POST " + AdminPath + "/areas/{id}/signin/plugin/prompt", "POST " + AdminPath + "/areas/{id}/signin/claude-token",
+	"POST " + AdminPath + "/areas/{id}/signin/{sid}/callback", "POST " + AdminPath + "/areas/{id}/signin/{sid}/cancel", "POST " + AdminPath + "/areas/{id}/ips",
+	"POST " + AdminPath + "/areas/{id}/ips/update", "POST " + AdminPath + "/areas/{id}/ips/delete", "POST " + AdminPath + "/areas/{id}/ips/check",
+	"POST " + AdminPath + "/areas/{id}/ips/probe", "POST " + AdminPath + "/areas/{id}/ips/batch", "POST " + AdminPath + "/areas/{id}/ips/reread",
+	"GET " + AdminPath + "/areas/{id}/signin/{sid}", "GET " + AdminPath + "/areas/{id}/options",
 }
 
 var wildcard = regexp.MustCompile(`\{[a-z]+(\.\.\.)?\}`)

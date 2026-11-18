@@ -7,7 +7,8 @@ separate console ([magpie-console](../../../magpie-console/README.md), whose
 `docs/magpie-api.md` is the contract both sides keep, and whose
 [`docs/operator.md`](../../../magpie-console/docs/operator.md) sets both up on
 a Linux server from zero). The **console key** reads every area and makes,
-changes and deletes them.
+changes and deletes them, and does for any area what its admin does
+([The console acting for an area](#the-console-acting-for-an-area-t-215)).
 
 An area decides who may manage an account and see what it spent, **never
 where a request goes**: routing reads no area, and an area's accounts serve
@@ -113,7 +114,8 @@ agent's (`codex`, `claude`, `copilot`, `gemini`, `antigravity`).
 `usage/requests`, `areas/{id}/usage/requests`, `usage/stats`,
 `areas/{id}/usage/stats`,
 `areas/{id}/update`, `areas/{id}/rotate-key`, `areas/{id}/delete`, `ips`,
-`areas/{id}/ips`. Request
+`areas/{id}/ips`, and each area write route and `options` under
+`areas/{id}/` ([The console acting for an area](#the-console-acting-for-an-area-t-215)). Request
 and reply bodies are in magpie-console's `docs/magpie-api.md`.
 
 - Adding a key claims it first and adds it after (a failed add releases
@@ -714,59 +716,54 @@ by the owner or another area) is left out: its calls can't be told apart.
 An areas.json from before `previous` reads as it did. One the area couldn't
 be told of lists as `gone`.
 
-## Agreed, not built yet (T-215)
+## The console acting for an area (T-215)
 
-Everything above is what magpie does today. On 2026-11-18 the owner settled
-the next contract (magpie-console's `docs/magpie-api.md` §10–19, T-208):
-plugin sign-ins, credential imports, a proxy picked for a sign-in, import
-or key, more key fields, more proxy-IP routes, and the console acting for
-an area. The missing built-in sign-ins (§12, T-210: `chatgpt-api` and
-Copilot's `site`) are in [Area sign-ins](#area-sign-ins), and the key fields, many keys,
-opened dates and direct (§15, T-213) in [Routes](#routes),
-[Proxy IPs](#proxy-ips) and [Area sign-ins](#area-sign-ins), and the
-proxy routes (§16, T-214: renewal days, probe, batch, reread) in
-[Proxy IPs](#proxy-ips), and a proxy picked for a sign-in, a setup-token
-or a key (§14, T-212) in [Area sign-ins](#area-sign-ins), and plugin
-sign-ins (§11, T-209, T-229) in [Plugin sign-ins](#plugin-sign-ins-t-209),
-and credential imports (§13, T-211, T-220) in [Imports](#imports-t-211-t-220). The console
-reaching them through `/areas/{id}/signin` comes with the rest of its
-acting for an area. Each task moves its part into the sections above as
-it lands. What the magpie side
-must hold, beside the contract's bodies and codes:
+The console's key does for any area what its admin's key does, under
+`/v1/magpie/admin/areas/{id}/…` (magpie-console's `docs/magpie-api.md`
+§17): `accounts/key`, `accounts/keys`, `accounts/remove`,
+`accounts/import`, `accounts/proxy`; `signin`, `signin/plugin`,
+`signin/plugin/prompt`, `signin/claude-token`, `signin/{sid}`,
+`signin/{sid}/callback`, `signin/{sid}/cancel`; `ips`, `ips/update`,
+`ips/delete`, `ips/check`, `ips/probe`, `ips/batch`, `ips/reread`; and
+`GET options`, the area's own. Every one is in `adminRoutes` under the
+console, so `TestAdminKeyEveryRoute` covers it.
 
-- **One reader, never a copy.** Sign-ins go through `StartSignInWith` and
-  the plugin host's sign-in (`PluginAPIKey` and the paste paths in
-  `pluginsignin_paste.go`); imports through `ImportLoginsWith`,
-  `ImportGoogleAccountsWith` and the plugin's key sign-in (built);
-  proxies through `settings.CheckProxy` and `netproxy.CheckPublic`;
-  renewal through `internal/renewal` (`WarnDays`). The one new parser,
-  the batch-proxy one, is built ([Proxy IPs](#proxy-ips)).
-- **Never written over.** An account magpie has (the owner's or another
-  area's) is `conflict` on every add path, and its tokens, proxy and name
-  stay as they were. The import readers' new-only mode does neither
-  (built, T-220). A plugin's sign-in as the owner's
-  (`plugin.Authorize`, `plugin.APIKey`) replaces an account it has
-  (host.js `settle`). An area's goes through `plugin.AuthorizeNew` and
-  `plugin.APIKeyNew` (built, T-221): host.js judges the plugin's result
-  before anything is written, and a known account is `ErrKnown` with its
-  tokens untouched. Which methods that makes safe is in
-  [Plugin sign-ins an area can use](#plugin-sign-ins-an-area-can-use-t-221).
-- **Limits are the area's, from both keys.** Every add, sign-in, import
-  and proxy route the console reaches as `/areas/{id}/…` runs the area's
-  own handler and checks: what the area may add, 500 accounts, 50 IPs,
-  `conflictProbes`, `proxyChecks` (which probe, a batch's host-name lines
-  and reread share already) and one import at a time. The console also has totals
-  of its own across areas (40 conflicts, 20 checks in 10 minutes), so
-  more areas don't buy more probes. The role is judged before `{id}` is
-  looked up. Another area's account, IP or proxy is `404`; a sign-in not
-  started by the caller is `404`, and only its starter (area or console)
-  reads, pastes into or cancels it.
-- **Log:** a console action writes the area, its note, the action and the
-  optional `X-Magpie-Actor`, marked `console`; magpie keeps no audit file.
-- Every new route is in `adminRoutes` under its role, so
-  `TestAdminKeyEveryRoute` covers it.
+- **One handler, never a copy.** Each route is the area's own handler
+  wrapped in `forArea` ([`admin.go`](../../internal/gateway/admin.go)),
+  which sets the call's area to the one the path names and runs it. So
+  the checks are the area's: what it was given (`providers`, `signIns`),
+  500 accounts, 50 IPs, a public proxy, `conflictProbes`, `proxyChecks`
+  and one import at a time, all counted under the area's id, shared with
+  its own key. The console has no limit of its own to go round them.
+  What isn't opened is first opened with `areas/{id}/update`.
+- **Role, then id.** `Server.admin` judges the role first: an area's key
+  is `403 admin_console_only` on these routes whatever the id, and the
+  console's on the unprefixed area routes is `403 admin_area_only`. Then
+  `forArea` reads `{id}` (`consoleArea`): none is `404`, unreadable is
+  `503`. An area turned off is acted for still (the owner manages it).
+- **The resources are the area's.** An account is claimed by the area,
+  an IP is `addedBy:"area"` and held to public addresses. Another area's
+  account, IP or proxy through `{id}` is `404`, as it is to that area's
+  key.
+- **A sign-in is its starter's.** `areaSignIns` records whether the
+  console started it (`areaSignIn.console`), and `ownSignIn` matches the
+  area and the starter: the area's key reads, pastes into and cancels
+  the console's as `404`, and the console the area's. One agent's sign-in
+  under way is still `409` to both. Turning an area off cancels the
+  sign-ins its key started (`CancelAreaKeySignIns`, the window's too);
+  the console's go on. Deleting it cancels both (`CancelAreaSignIns`).
+- **Log.** Each action's line is `admin: console for area <id> (<note>)
+  <action> actor=<X-Magpie-Actor or ->` (`adminCall.logf`, the same line
+  an area's key writes as `admin: area <id> (<note>) <action>`). A write
+  whose handler logs nothing (refused before it acts) is logged by
+  `forArea` as `<route>: <status>`. `X-Magpie-Actor` is 1 to 64 of
+  `[A-Za-z0-9._@-]`, sent once, or `400`; magpie neither checks nor keeps
+  it, and keeps no audit file: the console's is the audit. Neither line
+  holds a secret.
+- **Not built:** the console's own totals across areas (40 conflicts and
+  20 checks in 10 minutes, magpie-api.md §18) wait on T-222.
 
-### Plugin sign-ins an area can use (T-221)
+## Plugin sign-ins an area can use (T-221)
 
 Read from the plugins repo at 63c2ff93f (2026-11-18), every package with
 an `auth.methods`, and from the host (`internal/plugin/host.js`,
@@ -1008,6 +1005,6 @@ The way column follows §11.1:
 `go test ./internal/gateway -run TestAdminPlugin`;
 `node --test internal/gui/tests/proxy-ips-batch-lines.test.cjs`;
 `go test ./internal/gui -run TestIPAreaRoute`; `go test ./internal/gui -run
-TestAreasRoutes`. `TestAdminKeyEveryRoute` fails
+TestAreasRoutes`; `go test ./internal/gateway -run TestAdminConsole`. `TestAdminKeyEveryRoute` fails
 when a route is under `/v1/magpie/admin` and in no role's list, or when an
 admin key reaches any other route or an upstream.

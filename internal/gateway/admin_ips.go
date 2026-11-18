@@ -264,7 +264,7 @@ func (s *Server) adminAddIP(w http.ResponseWriter, r *http.Request, c adminCall)
 		ipWriteErr(w, err)
 		return
 	}
-	log.Printf("admin: area %s (%s) added an IP with %d proxies", c.area.ID, c.area.Note, len(got.Proxies))
+	c.logf("added an IP with %d proxies", len(got.Proxies))
 	replyIP(w, c, got, http.StatusCreated)
 }
 
@@ -366,7 +366,7 @@ func (s *Server) adminDeleteIP(w http.ResponseWriter, r *http.Request, c adminCa
 	if err := provider.SweepAreaProxies(); err != nil {
 		log.Printf("admin: area %s's proxies not swept: %v", c.area.ID, err)
 	}
-	log.Printf("admin: area %s (%s) removed an IP", c.area.ID, c.area.Note)
+	c.logf("removed an IP")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -589,7 +589,7 @@ func (s *Server) adminCheckProxy(w http.ResponseWriter, r *http.Request, c admin
 	}
 	out := checkAreaProxy(r.Context(), p, x.IP)
 	out.Proxy = in.Proxy
-	log.Printf("admin: area %s checked proxy %s: ok=%v %s", c.area.ID, in.Proxy, out.OK, out.Error)
+	c.logf("checked proxy %s: ok=%v %s", in.Proxy, out.OK, out.Error)
 	writeJSON(w, http.StatusOK, out)
 }
 

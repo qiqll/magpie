@@ -276,6 +276,6 @@ func (s *Server) adminAddKeys(w http.ResponseWriter, r *http.Request, c adminCal
 		}
 		out.Results = append(out.Results, row)
 	}
-	log.Printf("admin: area %s (%s) added %d keys of %s (%d in magpie already, %d failed, %d sent twice)", c.area.ID, c.area.Note, out.Added, p.ID, out.Conflict, out.Failed, len(keys)-out.Added-out.Conflict-out.Failed)
+	c.logf("added %d keys of %s (%d in magpie already, %d failed, %d sent twice)", out.Added, p.ID, out.Conflict, out.Failed, len(keys)-out.Added-out.Conflict-out.Failed)
 	writeJSON(w, http.StatusOK, out)
 }

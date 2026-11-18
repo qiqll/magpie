@@ -114,16 +114,22 @@ var areaSignIns struct {
 }
 
 // areaSignIn is a sign-in an area started: whose, and the proxy its
-// account is to have (T-212).
+// account is to have (T-212). console: the console started it for the
+// area (forArea, T-215).
 type areaSignIn struct {
-	area string
-	pick *pickBox
+	area    string
+	pick    *pickBox
+	console bool
 }
 
+// ownSignIn: c started the sign-in id, its area's key or the console for
+// it, as the other is not: each reads, pastes into and cancels its own
+// alone (magpie-api.md §17).
 func ownSignIn(c adminCall, id string) bool {
 	areaSignIns.Lock()
 	defer areaSignIns.Unlock()
-	return id != "" && areaSignIns.m[id].area == c.area.ID
+	x, ok := areaSignIns.m[id]
+	return id != "" && ok && x.area == c.area.ID && x.console == c.console
 }
 
 // pickOf is the pick box of the sign-in id, nil for none listed.
@@ -365,7 +371,7 @@ func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall
 }
 
 func (s *Server) adminSignInState(w http.ResponseWriter, r *http.Request, c adminCall) {
-	id := r.PathValue("id")
+	id := signInID(r)
 	st, ok := provider.SignInStatus(id)
 	if !ok || !ownSignIn(c, id) {
 		adminNotFoundErr(w)
@@ -375,7 +381,7 @@ func (s *Server) adminSignInState(w http.ResponseWriter, r *http.Request, c admi
 }
 
 func (s *Server) adminSignInCallback(w http.ResponseWriter, r *http.Request, c adminCall) {
-	id := r.PathValue("id")
+	id := signInID(r)
 	var in struct {
 		URL, Code, Key string
 		Proxy          *proxyPick
@@ -445,7 +451,7 @@ func (s *Server) adminSignInCallback(w http.ResponseWriter, r *http.Request, c a
 const errSignInProxyFixed = "this sign-in's proxy was fixed when it started"
 
 func (s *Server) adminSignInCancel(w http.ResponseWriter, r *http.Request, c adminCall) {
-	id := r.PathValue("id")
+	id := signInID(r)
 	if _, ok := provider.SignInStatus(id); !ok || !ownSignIn(c, id) {
 		adminNotFoundErr(w)
 		return
@@ -505,7 +511,7 @@ func (s *Server) adminClaudeToken(w http.ResponseWriter, r *http.Request, c admi
 		adminError(w, http.StatusBadRequest, adminBadRequest, err.Error())
 		return
 	}
-	log.Printf("admin: area %s (%s) added a Claude setup-token", c.area.ID, c.area.Note)
+	c.logf("added a Claude setup-token")
 	if !opened.IsZero() {
 		if err := provider.SetAccountOpened(pid, user, opened); err != nil {
 			log.Printf("admin: area %s's Claude account, its opening date not kept: %v", c.area.ID, err)
@@ -526,13 +532,22 @@ func (s *Server) adminClaudeToken(w http.ResponseWriter, r *http.Request, c admi
 	writeJSON(w, http.StatusCreated, adminAccount{ID: ref, Provider: pid, Kind: "account", Name: user})
 }
 
-// CancelAreaSignIns cancels the sign-ins area id started: one turned off
-// or deleted adds no account.
-func CancelAreaSignIns(id string) {
+// CancelAreaSignIns cancels the sign-ins area id started, and those the
+// console started for it: one deleted adds no account.
+func CancelAreaSignIns(id string) { cancelSignIns(id, true) }
+
+// CancelAreaKeySignIns cancels the sign-ins area id's own key started:
+// one turned off adds no account from its key, while the console acts for
+// it still (magpie-api.md §17), its sign-ins too.
+func CancelAreaKeySignIns(id string) { cancelSignIns(id, false) }
+
+// cancelSignIns cancels the sign-ins area id's key started, and the
+// console's for it too when console.
+func cancelSignIns(id string, console bool) {
 	var ids []string
 	areaSignIns.Lock()
 	for sid, a := range areaSignIns.m {
-		if a.area == id {
+		if a.area == id && (console || !a.console) {
 			ids = append(ids, sid)
 			delete(areaSignIns.m, sid)
 		}

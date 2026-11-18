@@ -153,7 +153,8 @@ func TestAdminKeyEveryRoute(t *testing.T) {
 // Areas never see or touch each other's accounts: each lists its own,
 // another's id is a 404 to remove, the same key added twice is a
 // conflict that names no owner, and the console reads every area and
-// adds or removes no account.
+// adds or removes none through an area's own routes (it acts for one at
+// /areas/{id}/…, TestAdminConsoleActsForArea).
 func TestAdminAreasApart(t *testing.T) {
 	do, console, _ := adminWorld(t)
 	studyID, study := makeArea(t, do, console, "学习", "plan")
