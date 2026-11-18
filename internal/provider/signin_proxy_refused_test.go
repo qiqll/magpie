@@ -2,11 +2,13 @@ package provider
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/settings"
@@ -103,5 +105,91 @@ func TestClaudeSignInProxyRefusedUnasked(t *testing.T) {
 	}
 	if got := claudeProxyRefused("Login failed: timed out", []string{"HTTPS_PROXY=" + addr}); got != "Login failed: timed out" {
 		t.Fatalf("the reason is %q", got)
+	}
+}
+
+// One that is reached but doesn't reach the host (502) is said as that,
+// not as a rule to change (review of T-107, M1).
+func TestClaudeSignInProxyRefusedUpstream(t *testing.T) {
+	proxy, _ := connectProxy(t, map[string]int{"platform.claude.com:443": http.StatusBadGateway})
+	got := claudeRefusedThrough(t, proxy)
+	if !strings.Contains(got, `"502 Bad Gateway"`) || !strings.Contains(got, "doesn't reach the host") || strings.Contains(got, "let it pass CONNECT") {
+		t.Fatalf("the reason is %q", got)
+	}
+}
+
+// magpie's own bridge to a SOCKS proxy is not asked: its answer is
+// magpie's word on the SOCKS proxy, not a rule of a proxy's (review of
+// T-107, M1).
+func TestClaudeSignInProxyRefusedSkipsTheBridge(t *testing.T) {
+	// a SOCKS proxy that drops every connection: the bridge answers each
+	// CONNECT with its own 502 at once
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	socks, _ := netproxy.Parse("socks5://" + ln.Addr().String())
+	bridge, err := netproxy.Bridge(socks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := claudeProxyRefused("Login failed: proxy refused the connection", []string{"HTTPS_PROXY=" + bridge}); got != "Login failed: proxy refused the connection" {
+		t.Fatalf("the reason is %q", got)
+	}
+}
+
+// A proxy that takes the connection and never answers holds the failure
+// back for claudeTunnelWait in all, then adds nothing (review of T-107,
+// M2).
+func TestClaudeSignInProxyRefusedWaitsBounded(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	var mu sync.Mutex
+	var held []net.Conn
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range held {
+			c.Close()
+		}
+	})
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			held = append(held, c)
+			mu.Unlock()
+		}
+	}()
+	was := claudeTunnelWait
+	claudeTunnelWait = 200 * time.Millisecond
+	t.Cleanup(func() { claudeTunnelWait = was })
+	done := make(chan string, 1)
+	go func() {
+		done <- claudeProxyRefused("Login failed: proxy refused the connection", []string{"HTTPS_PROXY=http://" + ln.Addr().String()})
+	}()
+	select {
+	case got := <-done:
+		if got != "Login failed: proxy refused the connection" {
+			t.Fatalf("the reason is %q", got)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("the failure waited past claudeTunnelWait")
 	}
 }

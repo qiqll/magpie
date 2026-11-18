@@ -74,6 +74,20 @@ func Bridge(socks *url.URL) (string, error) {
 	return a, nil
 }
 
+// Bridged is whether raw is the address of a bridge Bridge stands: what
+// it answers is magpie's own word on the SOCKS proxy behind it, never a
+// proxy's of its own.
+func Bridged(raw string) bool {
+	bridgesMu.Lock()
+	defer bridgesMu.Unlock()
+	for _, a := range bridges {
+		if a == strings.TrimSpace(raw) {
+			return true
+		}
+	}
+	return false
+}
+
 // listenLoopback is where a bridge listens; a test hands out a chosen port.
 var listenLoopback = func() (net.Listener, error) { return net.Listen("tcp", "127.0.0.1:0") }
 

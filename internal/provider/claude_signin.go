@@ -361,10 +361,11 @@ var claudeTunnelHosts = []string{"platform.claude.com:443", "api.anthropic.com:4
 // failed, and when that is Claude Code's "proxy refused the connection"
 // (its proxy answered CONNECT with something other than 200, whose status
 // it doesn't say), what the http:// proxy env gave it answers magpie's own
-// CONNECT to the same hosts, and what to do. A proxy that can't be asked
-// adds nothing. The T-107 report's proxy refused the tunnel until magpie
-// was restarted, and with no status no one could tell a proxy's rule from
-// a cap on one client's connections.
+// CONNECT to the same hosts, and what to do, within claudeTunnelWait. A
+// proxy that can't be asked adds nothing, nor does magpie's own bridge to
+// a SOCKS proxy, whose answer isn't a proxy's rule. The T-107 report's
+// proxy refused the tunnel until magpie was restarted, and with no status
+// no one could tell a proxy's rule from a cap on one client's connections.
 func claudeProxyRefused(msg string, env []string) string {
 	if !strings.Contains(msg, "proxy refused the connection") {
 		return msg
@@ -375,11 +376,13 @@ func claudeProxyRefused(msg string, env []string) string {
 			break
 		}
 	}
-	if p == "" {
+	if p == "" || netproxy.Bridged(p) {
 		return msg
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), claudeTunnelWait)
+	defer cancel()
 	for _, h := range claudeTunnelHosts {
-		status, code, err := claudeTunnel(context.Background(), p, h)
+		status, code, err := claudeTunnel(ctx, p, h)
 		if err != nil {
 			return msg
 		}
@@ -389,14 +392,21 @@ func claudeProxyRefused(msg string, env []string) string {
 		if len(status) > 64 {
 			status = status[:64]
 		}
-		do := "let it pass CONNECT to platform.claude.com, claude.com and api.anthropic.com on port 443, or pick another proxy for this sign-in"
-		if code == http.StatusProxyAuthRequired {
+		why, do := "it turns the tunnel away", "let it pass CONNECT to platform.claude.com, claude.com and api.anthropic.com on port 443, or pick another proxy for this sign-in"
+		switch code {
+		case http.StatusProxyAuthRequired:
 			do = "it wants a user and password: write them into the proxy's address, http://user:password@host:port"
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			why, do = "it is reached but doesn't reach the host", "look at the proxy's own way out (its upstream, its rules for these hosts), or pick another proxy for this sign-in"
 		}
-		return fmt.Sprintf("%s (asked by magpie, the same proxy answers a tunnel to %s with %q, so it turns the tunnel away: %s)", msg, h, status, do)
+		return fmt.Sprintf("%s (asked by magpie, the same proxy answers a tunnel to %s with %q, so %s: %s)", msg, h, status, why, do)
 	}
-	return msg + " (asked by magpie just now, the same proxy let tunnels to platform.claude.com and api.anthropic.com through, so it turned Claude Code away for a while only: a cap on one client's connections, or a fault on its own way out. Try again; if it comes back, look at the proxy's log and its connection cap)"
+	return msg + " (asked by magpie just now, the same proxy let tunnels to platform.claude.com and api.anthropic.com through: it may have turned Claude Code away for a while only, at a cap on one client's connections or a fault on its own way out, or for another host or for Claude Code itself. Try again; if it comes back, look at the proxy's log and its connection cap)"
 }
+
+// claudeTunnelWait is how long claudeProxyRefused waits for the proxy's
+// answers in all, the failure held back meanwhile.
+var claudeTunnelWait = 4 * time.Second
 
 // envValue is k's value in env, "" when it has none.
 func envValue(env []string, k string) string {
