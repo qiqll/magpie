@@ -99,6 +99,9 @@ func subscriptionOf(agent string) string {
 var areaSignIns struct {
 	sync.Mutex
 	m map[string]areaSignIn
+	// pending are the picks of sign-ins starting, not listed yet, by
+	// area: an IP's removal sees them too (signingThrough)
+	pending map[*pickBox]string
 }
 
 // areaSignIn is a sign-in an area started: whose, and the proxy its
@@ -226,7 +229,12 @@ func openOnDone(done func(provider.SignInState) provider.SignInState, at time.Ti
 		}
 		if err := provider.SetAccountOpened(subscriptionOf(st.Agent), st.User, at); err != nil {
 			log.Printf("admin: an area's %s account signed in, its opening date not kept: %v", st.Agent, err)
-			st.Error = "signed in, but its opening date wasn't kept: " + err.Error()
+			msg := "signed in, but its opening date wasn't kept: " + err.Error()
+			if st.Error != "" {
+				// what an earlier step said (its proxy) is kept beside it
+				msg = st.Error + "; " + msg
+			}
+			st.Error = msg
 		}
 		return st
 	}
@@ -271,20 +279,35 @@ func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall
 		return
 	}
 	box := &pickBox{}
+	o := provider.SignInOptions{Site: site, Area: true, Done: openOnDone(mountOnDone(claimOnDone(c.area.ID), c.area.ID, box), opened)}
 	if in.Proxy != nil {
-		url, ok := pickedProxy(w, c, in.Proxy)
+		url, public, ok := pickedProxy(w, c, in.Proxy)
 		if !ok {
 			return
 		}
-		box.set(in.Proxy, url)
+		box.add(url, *in.Proxy)
+		// seen by an IP's removal from now on, and judged again after,
+		// so a removal and this start never pass each other (ipInUse
+		// reads under ipsMu, as pickedProxy does)
+		areaSignIns.Lock()
+		if areaSignIns.pending == nil {
+			areaSignIns.pending = map[*pickBox]string{}
+		}
+		areaSignIns.pending[box] = c.area.ID
+		areaSignIns.Unlock()
+		defer func() {
+			areaSignIns.Lock()
+			delete(areaSignIns.pending, box)
+			areaSignIns.Unlock()
+		}()
+		if _, _, ok := pickedProxy(w, c, in.Proxy); !ok {
+			return
+		}
+		o.Proxy, o.PublicOnly = &url, public
 	}
 	if len(c.area.Accounts) >= adminAccountsLimit {
 		adminError(w, http.StatusConflict, adminConflict, "an area has at most 500 accounts")
 		return
-	}
-	o := provider.SignInOptions{Site: site, Area: true, Done: openOnDone(mountOnDone(claimOnDone(c.area.ID), c.area.ID, box), opened)}
-	if p, url := box.get(); p != nil {
-		o.Proxy = &url
 	}
 	if in.Agent == "codex" && in.Way == wayDevice {
 		o.Site = provider.CodexDeviceSite
@@ -353,21 +376,25 @@ func (s *Server) adminSignInCallback(w http.ResponseWriter, r *http.Request, c a
 		box = &pickBox{}
 	}
 	if in.Proxy != nil {
-		url, ok := pickedProxy(w, c, in.Proxy)
+		url, public, ok := pickedProxy(w, c, in.Proxy)
 		if !ok {
 			return
 		}
-		if _, was := box.get(); st.ProxyFixed && url != was {
+		// the proxy it goes through now, picked or not: the same one is
+		// taken by any sign-in, another by one not fixed
+		if st.ProxyFixed && url != st.Proxy {
 			adminError(w, http.StatusBadRequest, adminBadRequest, errSignInProxyFixed)
 			return
 		}
+		// seen by an IP's removal before it is judged again
+		box.add(url, *in.Proxy)
+		if _, _, ok := pickedProxy(w, c, in.Proxy); !ok {
+			return
+		}
+		if public {
+			provider.HoldSignInPublic(id, url)
+		}
 		through = &url
-		wasPick, wasURL := box.set(in.Proxy, url)
-		defer func() {
-			if through != nil {
-				box.set(wasPick, wasURL)
-			}
-		}()
 	}
 	if err := provider.SubmitSignInCallbackThrough(id, raw, through); err != nil {
 		msg := err.Error()
@@ -377,7 +404,6 @@ func (s *Server) adminSignInCallback(w http.ResponseWriter, r *http.Request, c a
 		adminError(w, http.StatusBadRequest, adminBadRequest, msg)
 		return
 	}
-	through = nil // taken: the pick stays the sign-in's
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -416,7 +442,7 @@ func (s *Server) adminClaudeToken(w http.ResponseWriter, r *http.Request, c admi
 	}
 	// a setup-token is added with no request out: the pick is only put on
 	if in.Proxy != nil {
-		if _, ok := pickedProxy(w, c, in.Proxy); !ok {
+		if _, _, ok := pickedProxy(w, c, in.Proxy); !ok {
 			return
 		}
 	}

@@ -162,6 +162,9 @@ type signInFlow struct {
 	// repicked is a proxy picked as the address or code was pasted
 	// (repick), after the sign-in started through another
 	repicked bool
+	// held is a proxy held to public addresses while the sign-in goes
+	// through it (SignInOptions.PublicOnly, HoldSignInPublic)
+	held string
 	// proxyFrom is whose proxy is: "picked", "account", "subscription",
 	// or "" for the global one
 	proxyFrom string
@@ -204,6 +207,11 @@ type SignInOptions struct {
 	Proxy *string
 	// User is the account signed in to again, for the proxy it goes through
 	User string
+	// PublicOnly holds the picked Proxy to public addresses on every
+	// connection the sign-in makes through it, whatever ips.json says
+	// then (netproxy.WithPublicOnly): an area's own proxy, which the area
+	// may take out of ips.json while the sign-in runs (T-212)
+	PublicOnly bool
 	// Area is a sign-in an area's admin started (signin_area.go): it
 	// starts only while no other sign-in to its agent is under way and
 	// never cancels one, an owner's started after replaces it, the agent
@@ -222,8 +230,11 @@ type SignInOptions struct {
 // It carries the sign-in too, for keepLogin.
 func (s *signInFlow) via(ctx context.Context) context.Context {
 	s.mu.Lock()
-	proxy := s.proxy
+	proxy, held := s.proxy, s.held
 	s.mu.Unlock()
+	if held != "" && proxy == held {
+		ctx = netproxy.WithPublicOnly(ctx)
+	}
 	return context.WithValue(netproxy.With(ctx, proxy), signInKey{}, s)
 }
 
@@ -444,6 +455,9 @@ func StartSignInWith(agent string, o SignInOptions) (SignInState, error) {
 		return failed(err)
 	}
 	s.st.Proxy = s.proxy
+	if o.PublicOnly && o.Proxy != nil {
+		s.held = s.proxy
+	}
 	cli, install := missingCLI(agent)
 	var installing context.Context
 	if install {
@@ -702,6 +716,21 @@ func CancelSignIn(id string) {
 	}
 }
 
+// HoldSignInPublic has the sign-in id hold proxy to public addresses
+// whenever it goes through it (SignInOptions.PublicOnly): one an area
+// picks as the address is pasted, given before the paste.
+func HoldSignInPublic(id, proxy string) {
+	signIns.Lock()
+	s, ok := signIns.m[id]
+	signIns.Unlock()
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	s.held = strings.TrimSpace(proxy)
+	s.mu.Unlock()
+}
+
 // SubmitSignInCallback finishes a browser sign-in whose callback could not
 // reach this machine — the address the browser ended on, pasted — or a
 // plugin's with the code its page showed.
@@ -938,8 +967,9 @@ func (s *signInFlow) finish(out SignInState) bool {
 		// an area's pick is the area's to put on, never the owner's
 		// own value (an account another has would be written over)
 		agent, proxy, chosen, onDone := s.st.Agent, s.proxy, s.chosen && !s.area, s.onDone
-		// Done is told whose sign-in it is: the area claims by agent
-		out.ID, out.Agent = s.st.ID, agent
+		// Done is told whose sign-in it is, and the proxy it went
+		// through: the area claims by agent, and puts on that proxy
+		out.ID, out.Agent, out.Proxy = s.st.ID, agent, proxy
 		s.mu.Unlock()
 		// signing in again brings back an account removed from magpie
 		_ = ShowAccount(agent)

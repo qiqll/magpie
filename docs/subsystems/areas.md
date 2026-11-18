@@ -490,10 +490,17 @@ file imports.
   claimed: another area's IP or proxy, the owner's own, or none such is
   `404` (`areaIP`, `ProxyOf`); neither or both sent is `400`. A sign-in
   goes through it (`SignInOptions.Proxy`), so its requests to the vendor
-  leave from where the account's will, and an area-added proxy is held to
-  public addresses on every connection, as the account's traffic is
-  (`netproxy.PublicOnly`). Once the sign-in is done and the account the
-  area's, `mountOnDone` (after `claimOnDone`) puts the pick on with
+  leave from where the account's will. An area-added proxy is held to
+  public addresses on every connection the sign-in makes through it
+  (`SignInOptions.PublicOnly`, `netproxy.WithPublicOnly`), whatever
+  ips.json says by then, and while a sign-in of the area under way (or
+  starting) was given a proxy, the area's `ips/delete` of its IP and
+  `ips/update` removing it are `409 in_use` (`ipInUse`, under `ipsMu`;
+  a start judges its pick again once it is seen there), since Claude
+  Code's own sign-in is given the proxy as ips.json says it. Once the
+  sign-in is done and the account the area's, `mountOnDone` (after
+  `claimOnDone`) puts on the pick of the proxy it went through
+  (`SignInState.Proxy`, told to Done) with
   `AttachAreaProxy` or `AttachAreaDirect`, so the owner's own value for
   the account wins (`overridden`), and a `conflict` gets nothing. An
   area's pick is never kept as the owner's own value (`finish` keeps a
@@ -504,12 +511,14 @@ file imports.
   row's `message`); `accounts/key` and `claude-token` answer `201` with
   no `proxy` on the account.
 - **A proxy picked as it is pasted:** the callback's `proxy` trades the
-  address through it (`SubmitSignInCallbackThrough`), and the account has
-  it once done (`pickBox`); a paste that isn't taken leaves the pick the
-  sign-in had. A sign-in whose proxy was handed out as it started (a
-  device code, `claude auth login`: `ProxyFixed`) is `400` "this
-  sign-in's proxy was fixed when it started" for another proxy; the same
-  one is taken.
+  address through it (`SubmitSignInCallbackThrough`, held public by
+  `HoldSignInPublic`), and the account has it once done (`pickBox` maps
+  each proxy given to its pick); a paste that isn't taken leaves the
+  sign-in going through the one it had, whose pick is put on. A sign-in
+  whose proxy was handed out as it started (a device code, `claude auth
+  login`: `ProxyFixed`) is `400` "this sign-in's proxy was fixed when it
+  started" for a proxy other than the one it goes through now; that one
+  is taken.
 
 - `SignInOptions.Area`: the sign-in starts only while none of its agent is
   under way (`reserveSignIn`, held as pending until listed); while it runs
@@ -630,7 +639,7 @@ must hold, beside the contract's bodies and codes:
 `go test ./internal/renewal ./internal/netproxy -run 'Area|Owner|OldIPs'`;
 `go test ./internal/gateway -run 'TestAdmin(IPRenewalDays|ProbeProxy|Batch|Reread|ProxyChecksHoldSpend)'`;
 `go test ./internal/provider -run TestAreaSweepBesideARereadMove`;
-`go test ./internal/gateway -run 'TestAdmin(SignInThroughAreaProxy|SignInCallbackPicksAreaProxy|DeviceSignInProxyFixed|KeyAndTokenTakeAreaProxy)'`;
+`go test ./internal/gateway -run 'TestAdmin(SignInThroughAreaProxy|SignInCallbackPicksAreaProxy|DeviceSignInProxyFixed|KeyAndTokenTakeAreaProxy|SignInHoldsItsProxyPublic|SignInRefusedPasteKeepsItsPick)'`;
 `node --test internal/gui/tests/proxy-ips-batch-lines.test.cjs`;
 `go test ./internal/gui -run TestIPAreaRoute`; `go test ./internal/gui -run
 TestAreasRoutes`. `TestAdminKeyEveryRoute` fails

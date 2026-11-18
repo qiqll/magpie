@@ -351,3 +351,83 @@ func TestAdminKeyAndTokenTakeAreaProxy(t *testing.T) {
 		t.Fatal("token, A's proxy:", c, body)
 	}
 }
+
+// Review H1: an area takes out no IP or proxy a sign-in of its under way
+// goes through (409 in_use), and once it is gone anyway (the owner's
+// window, or ips.json by hand) the sign-in still holds it to public
+// addresses: a name now answering this computer is refused before any
+// request reaches it.
+func TestAdminSignInHoldsItsProxyPublic(t *testing.T) {
+	w := newIPsWorld(t)
+	openSignIns(t, w.do, w.console, w.aID, provider.ChatGPTAPIID)
+	v := startVendorBehind(t)
+	t.Cleanup(provider.SIWCForTest("http://"+vendorHost, "http://"+vendorHost+"/v1"))
+	pxA := w.addVendorIP(t, w.a, "203.0.113.7", v)
+
+	b, _ := json.Marshal(map[string]any{"agent": provider.ChatGPTAPIID, "proxy": map[string]any{"ip": "203.0.113.7", "id": pxA}})
+	st, end := w.startSIWC(t, w.a, string(b), v, "held")
+	if c, body := w.post(t, w.a, "/ips/delete", map[string]any{"ip": "203.0.113.7"}); c != http.StatusConflict || !strings.Contains(body, adminInUse) {
+		t.Fatal("deleting the IP a sign-in goes through:", c, body)
+	}
+	if c, body := w.post(t, w.a, "/ips/update", map[string]any{"ip": "203.0.113.7", "removeProxies": []string{pxA}}); c != http.StatusConflict || !strings.Contains(body, adminInUse) {
+		t.Fatal("removing the proxy a sign-in goes through:", c, body)
+	}
+
+	// gone all the same, and its name pointed home
+	if err := renewal.RemoveAreaIP(w.aID, "203.0.113.7", func(renewal.IP) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	w.answer.Store("127.0.0.1")
+	v.srv.CloseClientConnections()
+	c, body := w.paste(t, w.a, st.ID, map[string]any{"url": end})
+	if c != http.StatusBadRequest || !strings.Contains(body, netproxy.ErrNotPublic.Error()) || v.asked("/api/accounts/oauth/token") != 0 {
+		t.Fatalf("traded through a proxy at a home address: %d %s %v", c, body, v.paths())
+	}
+
+	// a sign-in over takes nothing: the IP goes
+	provider.CancelSignIn(st.ID)
+	w.answer.Store(ipsPublic)
+	w.addVendorIP(t, w.a, "203.0.113.9", v)
+	if c, body := w.post(t, w.a, "/ips/delete", map[string]any{"ip": "203.0.113.9"}); c != http.StatusNoContent {
+		t.Fatal("deleting an IP no sign-in goes through:", c, body)
+	}
+}
+
+// Review M1/M2: a paste refused, with a proxy picked, leaves the pick the
+// sign-in started with: the account has the proxy it was signed in
+// through. An IP the owner gave the area is one it may pick.
+func TestAdminSignInRefusedPasteKeepsItsPick(t *testing.T) {
+	w := newIPsWorld(t)
+	openSignIns(t, w.do, w.console, w.aID, provider.ChatGPTAPIID)
+	v := startVendorBehind(t)
+	t.Cleanup(provider.SIWCForTest("http://"+vendorHost, "http://"+vendorHost+"/v1"))
+	pxA := w.addVendorIP(t, w.a, "203.0.113.7", v)
+	px2 := w.addVendorIP(t, w.a, "203.0.113.9", v)
+
+	b, _ := json.Marshal(map[string]any{"agent": provider.ChatGPTAPIID, "proxy": map[string]any{"ip": "203.0.113.7", "id": pxA}})
+	st, end := w.startSIWC(t, w.a, string(b), v, "kept")
+	u, _ := url.Parse(end)
+	q := u.Query()
+	q.Set("state", "not-its-state")
+	u.RawQuery = q.Encode()
+	if c, body := w.paste(t, w.a, st.ID, map[string]any{"url": u.String(), "proxy": map[string]any{"ip": "203.0.113.9", "id": px2}}); c != http.StatusBadRequest {
+		t.Fatal("a wrong state:", c, body)
+	}
+	if c, body := w.paste(t, w.a, st.ID, map[string]any{"url": end}); c != http.StatusNoContent {
+		t.Fatal("paste:", c, body)
+	}
+	if st = w.ended(t, w.a, st.ID); st.State != "done" || st.Account == nil || st.Account.Proxy == nil || st.Account.Proxy.ID != pxA {
+		t.Fatalf("ended: %+v %+v", st, st.Account)
+	}
+
+	if err := renewal.GiveIP("198.51.100.1", w.aID); err != nil {
+		t.Fatal(err)
+	}
+	owners := renewal.ProxyID("http://owner:secret@192.168.1.2:7890")
+	c, body := w.post(t, w.a, "/accounts/key", map[string]any{"provider": "plan", "key": "sk-given-0000000", "proxy": map[string]any{"ip": "198.51.100.1", "id": owners}})
+	var acc adminAccount
+	json.Unmarshal([]byte(body), &acc)
+	if c != http.StatusCreated || acc.Proxy == nil || acc.Proxy.IP != "198.51.100.1" || acc.Proxy.ID != owners || strings.Contains(body, "secret") {
+		t.Fatal("an IP the owner gave:", c, body)
+	}
+}

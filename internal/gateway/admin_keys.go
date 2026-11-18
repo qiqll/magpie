@@ -82,7 +82,7 @@ func keyTarget(w http.ResponseWriter, c adminCall, in keyFields) (provider.Provi
 		return provider.Provider{}, "", "", false
 	}
 	if in.Proxy != nil {
-		if _, ok := pickedProxy(w, c, in.Proxy); !ok {
+		if _, _, ok := pickedProxy(w, c, in.Proxy); !ok {
 			return provider.Provider{}, "", "", false
 		}
 	}
