@@ -40,9 +40,12 @@ func TestSignInNewLeavesAKnownAccount(t *testing.T) {
 	signIn := func(fresh bool, team string) (Saved, error) {
 		t.Helper()
 		in := map[string]string{"where": "work", "team": team}
-		a, err := Authorize(ctx, "fakeco", 1, in, NewAccount)
+		var a Authorization
+		var err error
 		if fresh {
 			a, err = AuthorizeNew(ctx, "fakeco", 1, in)
+		} else {
+			a, err = Authorize(ctx, "fakeco", 1, in, NewAccount)
 		}
 		if err != nil {
 			t.Fatal(err)
@@ -170,5 +173,97 @@ func TestAPIKeyNewSingleHasOne(t *testing.T) {
 	}
 	if m := saved(); len(m) != 1 || m["fakeco"]["key"] != "c-one" {
 		t.Fatalf("the single plugin's account was changed: %v", m)
+	}
+}
+
+// The owner's sign-in and an area's begun side by side are never handed
+// one key: the one to finish last wrote over the other's account, and an
+// area's claimed key held the owner's.
+func TestSignInNewBesideTheOwnersKeepsBoth(t *testing.T) {
+	ctx, saved := newSignInSandbox(t)
+	owner, err := Authorize(ctx, "fakeco", 1, map[string]string{"where": "work", "team": "o"}, NewAccount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	area, err := AuthorizeNew(ctx, "fakeco", 1, map[string]string{"where": "work", "team": "n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := Finish(ctx, area.Session, "good")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := Finish(ctx, owner.Session, "good")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := saved(); len(m) != 2 || m[a.Account]["accountId"] != "n@fake" || m[o.Account]["accountId"] != "o@fake" {
+		t.Fatalf("area %+v owner %+v: %v", a, o, m)
+	}
+}
+
+// A key to a new account only never takes its name from the answers:
+// an area typing another's email would have the owner's sign-in to it
+// folded into the area's account.
+func TestAPIKeyNewTakesNoNameFromInputs(t *testing.T) {
+	ctx, saved := newSignInSandbox(t)
+	a, err := Authorize(ctx, "fakeco", 1, map[string]string{"where": "work", "team": "boss"}, NewAccount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := Finish(ctx, a.Session, "good")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := APIKeyNew(ctx, "fakeco", 0, map[string]string{"email": "boss@fake", "accountId": "boss@fake", "cli": "true"}, "sk-junk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := saved()
+	if md, _ := m[s.Account]["metadata"].(map[string]any); len(md) != 0 {
+		t.Fatalf("the area's key was kept with %v", md)
+	}
+	// the owner's sign-in again goes to its own account, not the area's
+	a, err = Authorize(ctx, "fakeco", 1, map[string]string{"where": "work", "team": "boss"}, NewAccount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := Finish(ctx, a.Session, "good"); err != nil || again != owner {
+		t.Fatalf("the owner's again as %+v %v, not %+v", again, err, owner)
+	}
+	if m := saved(); m[s.Account]["key"] != "sk-junk" {
+		t.Fatalf("the area's account was written over: %v", m)
+	}
+}
+
+// What a sign-in to a new account only starts is held only until the
+// account is kept: then a timer it started renews its own account.
+func TestSignInNewLetsItsWritesThroughOnceKept(t *testing.T) {
+	ctx, saved := newSignInSandbox(t)
+	a, err := AuthorizeNew(ctx, "fakeco", 1, map[string]string{"where": "work", "team": "write-later"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Finish(ctx, a.Session, "good")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(20 * time.Second); saved()[s.Account]["refresh"] != "r-later"; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the renewal after the sign-in was dropped: %v", saved())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// A key with nothing to tell it by (no key, no name) is unnamed: each one
+// would be kept as another account.
+func TestAPIKeyNewEmptyIsUnnamed(t *testing.T) {
+	ctx, saved := newSignInSandbox(t)
+	if _, err := APIKeyNew(ctx, "fakeco", 0, nil, ""); !errors.Is(err, ErrUnnamed) {
+		t.Fatalf("an empty key: %v, not ErrUnnamed", err)
+	}
+	if m := saved(); len(m) != 0 {
+		t.Fatalf("saved %v", m)
 	}
 }

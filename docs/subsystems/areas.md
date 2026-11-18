@@ -663,8 +663,23 @@ area's way in:
   - the plugin is `single` and has an account already.
 - The result is `ErrUnnamed` and nothing is written when a page's
   sign-in (OAuth) names no account. A fresh token matches nothing, so
-  magpie can't tell such an account from one it has.
+  magpie can't tell such an account from one it has. So is a result
+  with neither a name nor a secret (an empty key).
 - An API key needs no name: the same key is the same account.
+- The name comes from the plugin's result alone (`ownInputs`): answers
+  are kept only for the questions the method asks, and never as
+  `email`, `accountId`, `uid` or `cli`. Otherwise an area could type the
+  owner's email beside a junk key, and the owner's next sign-in to that
+  account would be folded into the area's (`settle`).
+- The new key is reserved while the sign-in runs (`signingKeys`), so an
+  owner's sign-in begun beside an area's is never handed the same key
+  and can't write over the area's account.
+- The plugin's own writes are held only until the account is kept. A
+  timer the sign-in started (a keep-alive renewing the token) writes to
+  the kept account after that.
+- A plugin that hands its tokens over only through `client.auth.set`,
+  with an empty result, gets "gave nothing to keep". None of the
+  packages read does this.
 
 Tests: `TestSignInNew*` and `TestAPIKeyNew*` in
 `internal/plugin/plugin_signin_new_test.go`.
@@ -675,8 +690,13 @@ changes (a display name, a fingerprint of this sign-in's token, a name
 the user types) gets a second record of an account magpie has. Those
 methods need a plugin change. A name that falls back to a constant
 (`"Zed account"`) is safe: a second such account reads as known and
-fails. It does cost coverage, so the plugin should fail rather than fall
-back.
+fails. The other way round it is not safe: the owner's later sign-in to
+another account that falls back to the same constant is folded into the
+area's account by `settle`, the owner's path, which knows nothing of
+areas. A name the plugin takes from what the user typed (Gumloop's
+email, Agnes Code's username) is unsafe the same way. Both are marked
+plugin below: the plugin should fail rather than fall back, or look the
+account up.
 
 **Legend:**
 - **yes**: safe through `AuthorizeNew`/`APIKeyNew` now. A name the
@@ -684,8 +704,6 @@ back.
 - **yes, by key**: the host keeps the key, and the same key is known.
   Another key of the same vendor account is another account, as for the
   owner.
-- **yes\***: safe, but a fallback name can make a new account read as
-  known.
 - **plugin**: a plugin change is needed (named in the row). The method is
   not offered until then.
 - **not offered**: the method needs this computer. It opens a browser or
@@ -704,12 +722,12 @@ The way column follows §11.1:
 | cursor | 0 | Cursor (browser) | device | `accountId` = email, when `whoIs` has one | yes |
 | cursor | 1 | cursor-agent's sign-in | — | reads `~/.cursor`, keychain | not offered |
 | cursor | 2 | Cursor API key | api-key | — | yes, by key |
-| kiro | 0 | Kiro (Google … IdC) | paste-url (fixed ports) | email + login way, else `"Kiro account"`; uid = login way | yes\*: drop the constant |
+| kiro | 0 | Kiro (Google … IdC) | paste-url (fixed ports) | email + login way, else `"Kiro account"`; uid = login way | plugin: fail in place of the constant |
 | kiro | 1 | Kiro CLI's / IDE's sign-in | — | reads kiro-cli / IDE files | not offered |
 | kiro | 2 | Kiro API key (ksk_) | api-key | — | yes, by key |
 | factory | 0 | Factory (device code) | device | email or userId, always | yes |
 | factory | 1 | Factory API key | api-key | — | yes, by key |
-| zed | 0 | Zed (browser) | paste-url | GitHub login, username, name, id, else `"Zed account"` | yes\*: drop the constant |
+| zed | 0 | Zed (browser) | paste-url | GitHub login, username, name, id, else `"Zed account"` | plugin: fail in place of the constant |
 | grok | 0 | Grok Build (device code) | — | runs `grok login` here, which opens the browser | not offered (Q1) |
 | grok | 1 | Grok Build's current sign-in | — | reads the CLI's home | not offered |
 | grok | 2 | Import CPA Grok JSON | — | a file path here | not offered; plugin: take the JSON pasted |
@@ -723,8 +741,8 @@ The way column follows §11.1:
 | workbuddy, workbuddy-ai | 0 | {site} account (browser) | device | display name, else `site.name`; uid may be "" | plugin: name by uid |
 | workbuddy, workbuddy-ai | 1 | {site} desktop's sign-in | — | reads CodeBuddy files | not offered |
 | workbuddy, workbuddy-ai | 2 | {site} API key | api-key | — | yes, by key |
-| zcode | 0, 1 | ZCode: Z.ai / BigModel | device | email, name, id, else `"ZCode"`; uid when known | yes\*: drop the constant |
-| zcode | 2 | a team's plan | device (select `site`) | as #0, `" (team)"` | yes\* |
+| zcode | 0, 1 | ZCode: Z.ai / BigModel | device | email, name, id, else `"ZCode"`; uid when known | plugin: fail in place of the constant |
+| zcode | 2 | a team's plan | device (select `site`) | as #0, `" (team)"` | plugin: as #0 |
 | zcode | 3 | ZCode app's sign-in | — | reads `~/.zcode` | not offered |
 | zcode | 4 | GLM Coding Plan API key | api-key (select `site`) | — | yes, by key |
 | mimo (mimo-app) | 0 | Xiaomi account | device | userId, always | yes |
@@ -752,23 +770,23 @@ The way column follows §11.1:
 | cline | 0 | Cline (browser) | device | email or uid, may be "" | yes |
 | cline | 1 | Cline API key | api-key | — | yes, by key |
 | cloudflare-workers-ai | 0 | API token | api-key (prompts) | none (`metadata.accountId` is CF's) | yes, by key |
-| codearts, officeace | 0 (and Intl.) | Sign in with Huawei Cloud | paste-url | uid = IAM id, may be ""; writes its record itself | yes: its own write is held |
+| codearts, officeace | 0 (and Intl.) | Sign in with Huawei Cloud | paste-url | `accountId` = IAM id, may be "" (`ErrUnnamed`); writes its record itself | yes: its own write is held |
 | codearts | 1 | CodeArts Agent on this machine | — | reads the IDE's state | not offered |
 | doubao-work | 0 | 在豆包窗口中登录 | — | starts the Doubao app here | not offered |
 | gcp-ai | 0 | ADC / gcloud | — | runs gcloud and Chrome here | not offered |
 | goanyapi | 0 | GoAnyAPI (browser) | paste-url | none (single) | plugin: name the account |
 | goanyapi | 1 | API key | api-key (single) | — | yes, by key; one account |
-| gumloop | 0 | API key | api-key (keyless, prompts) | email as typed | yes, by key |
+| gumloop | 0 | API key | api-key (keyless, prompts) | email as typed | plugin: no typed name |
 | inkstone (intern-inkstone) | 0, 1 | browser sign-in | — | opens a browser here (`opened`) | not offered |
 | inkstone | 2 | API key only | api-key | `inkstone-<fp(key)>` | yes, by key |
 | inkstone | 3 | API key + console token | api-key | whoami name, always | yes |
 | joycode | 0 | 浏览器登录 | paste-url | userName or userId, may be none | yes |
 | joycode | 1 | ptKey | api-key (tenant) | — | yes, by key |
 | kimi-work | 0 | 本机 Kimi Work | — | reads the app's files | not offered |
-| loomy | 0 | 短信验证码登录 | paste-code (phone) | masked phone; uid when given | yes\*: name by uid |
+| loomy | 0 | 短信验证码登录 | paste-code (phone) | masked phone; uid when given | plugin: name by uid (two phones mask alike) |
 | loomy | 1 | 手动粘贴 session | text prompt | the session's last 6 | plugin: look the account up |
 | mclaw | 0 | 浏览器登录 | — | Chrome here | not offered |
-| minimax (minimax-code, -global) | 0 | {site} account | device | email, name, uid, else `site.name` | yes\*: drop the constant |
+| minimax (minimax-code, -global) | 0 | {site} account | device | email, name, uid, else `site.name` | plugin: fail in place of the constant |
 | nous (nous-portal) | 0 | device code | device | JWT `sub`, when present | yes |
 | openai-decisions | 0 | OpenAI API key | api-key | — | yes, by key |
 | opendesign | 0 | Open Design account | device | email when present; uid | yes |
@@ -788,31 +806,33 @@ The way column follows §11.1:
 | tabbit | 1 | paste token | api-key | — | yes, by key |
 | trae (trae-cn, trae-global) | 0 | {site} account | paste-url | name or uid; uid | yes |
 | warp | 0 | Warp app's sign-in | — | reads Warp's keychain | not offered |
-| warp | 1 | refresh token | text prompt | email or sub, else `"warp"` | yes\*: drop the constant |
+| warp | 1 | refresh token | text prompt | email or sub, else `"warp"` | plugin: fail in place of the constant |
 | zen-free (opencode-zen-free) | 0 | Zen 免费访问 | api-key (keyless, single) | constant `public` | not offered: nothing an area owns |
 
 **What this leaves T-209.**
 
 - **The 13 subscriptions an area can sign in to today:**
   - Cursor: browser, key.
-  - Kiro: browser\*, key.
+  - Kiro: key only.
   - Factory: device, key.
-  - Zed: browser\*.
+  - Zed: nothing.
   - Devin: key only.
   - Qoder and Qoder CN: device, PAT, VPC.
   - WorkBuddy and WorkBuddy AI: key only.
-  - ZCode: device\*, team\*, GLM key.
+  - ZCode: GLM key only.
   - MiMo: device.
   - Command Code: browser via paste-key, key.
   - Grok: nothing. Every one of its methods needs this computer.
 - **What plugin releases would add:**
+  - Kiro's, Zed's and ZCode's browser and device sign-ins (fail in place
+    of the constant name).
   - Devin's browser (no fingerprint name).
   - WorkBuddy's browser (name by uid).
   - Qoder CN's dedicated domain (offer the device branch alone).
   - Grok's import (take pasted JSON).
   - Each such change raises its mover's `min`.
 - **The method list.** T-209's `/options` and `/catalog` list only the
-  rows marked yes, yes by key, or yes\*. That list lives in magpie
+  rows marked yes or yes by key. That list lives in magpie
   (package, version and method), not in the plugin, so a method a new
   plugin version adds is not offered until it is read.
   - Index alone isn't enough: a version's method order can change, and
@@ -832,7 +852,13 @@ The way column follows §11.1:
   reason but `ErrTaken`, the saved record is signed out again
   (`plugin.SignOut`).
   - `ErrTaken` can't follow a fresh save: an account an area owns is in
-    plugin-auth.json, so it was known.
+    plugin-auth.json, so it was known, and its key was reserved while it
+    signed in.
+- **The owner's side.** The owner's sign-in still folds into any
+  account of the same name (`settle`), an area's included. With names
+  from the plugin alone and constants refused, that is a sign-in to the
+  area's own account; T-209 should still make the owner's `pluginDone`
+  refuse (sign out again) a save that lands on a key an area owns.
 
 
 ## Verification

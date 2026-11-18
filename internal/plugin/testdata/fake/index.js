@@ -236,6 +236,9 @@ export const FakePlugin = async ({ client }) => ({
             // kept as fakeco#x itself, as the CodeArts plugin's writes its
             // account's record by its id
             inputs.team === "write-x" && (await client.auth.set({ path: { id: ID + "#x" }, body: { type: "oauth", refresh: "r-written", access: "", expires: 0, accountId: "x@fake" } })),
+            // team "write-later": a timer the sign-in starts renews its
+            // own account's token once it is kept, as a plugin's keep-alive
+            inputs.team === "write-later" && setTimeout(() => client.auth.set({ path: { id: ID }, body: { type: "oauth", refresh: "r-later", access: "", expires: 0, accountId: "write-later@fake" } }), 300),
             code === "good")
               ? { type: "success", refresh: "r-" + (inputs.team ?? "none"), access: "stale", expires: 0, ...fakeWho(inputs.team) }
               : code === "expired"
