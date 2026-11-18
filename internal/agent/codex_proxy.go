@@ -224,7 +224,11 @@ func realProxyProbe(base, proxy string) bool {
 	if strings.HasPrefix(strings.ToLower(p.Scheme), "socks") {
 		p.Scheme = "http"
 	}
-	c := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(p)}}
+	// a transport of its own each time, so no connection is kept: one
+	// left idle in it, with no idle timeout, stayed open to the user's
+	// proxy until magpie quit, a probe every reachAge, until a proxy with
+	// a cap on one client's connections turned new tunnels away (T-107)
+	c := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(p), DisableKeepAlives: true}}
 	res, err := c.Get(strings.TrimSuffix(base, "/") + "/")
 	if err != nil {
 		return false

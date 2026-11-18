@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -542,5 +543,54 @@ func TestRelayOpenCodexLeftForRunningCodex(t *testing.T) {
 	t.Setenv("MAGPIE_ADDR", "192.0.2.7:3425")
 	if err := RelayOpenCodex(); err != nil || len(started) != 2 {
 		t.Fatalf("a relay for another computer's address: %v %+v", err, started)
+	}
+}
+
+// A probe leaves no connection open to the proxy it asked (T-107). It made
+// a transport of its own each time and kept the connection idle in it with
+// no idle timeout, so asked every reachAge for as long as the Codex page
+// was open it piled up connections to the user's proxy until magpie was
+// restarted: a proxy with a cap on one client's connections then turned
+// away new tunnels, a Claude sign-in's among them ("proxy refused the
+// connection"), and a restart let them go.
+func TestRealProxyProbeLeavesNoConnection(t *testing.T) {
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"name":"magpie"}`)
+	}))
+	defer gw.Close()
+	var mu sync.Mutex
+	open := map[net.Conn]bool{}
+	proxy := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"name":"magpie"}`)
+	}))
+	proxy.Config.ConnState = func(c net.Conn, s http.ConnState) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch s {
+		case http.StateNew:
+			open[c] = true
+		case http.StateClosed, http.StateHijacked:
+			delete(open, c)
+		}
+	}
+	proxy.Start()
+	defer proxy.Close()
+	for i := 0; i < 3; i++ {
+		if !realProxyProbe(gw.URL+"/v1", proxy.URL) {
+			t.Fatal("a proxy passing the request on didn't count")
+		}
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		mu.Lock()
+		n := len(open)
+		mu.Unlock()
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d connections to the proxy left open after 3 probes", n)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
