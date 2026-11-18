@@ -133,6 +133,10 @@ func (s *Server) adminBatchIPs(w http.ResponseWriter, r *http.Request, c adminCa
 		adminError(w, http.StatusBadRequest, adminBadRequest, "type is http, https, socks5 or socks5h")
 		return
 	}
+	if err := renewal.CheckBatch(in.Text); err != nil {
+		adminError(w, http.StatusBadRequest, adminBadRequest, err.Error())
+		return
+	}
 	lines := renewal.ReadBatch(in.Text, typ)
 	if len(lines) == 0 || len(lines) > renewal.BatchMost {
 		adminError(w, http.StatusBadRequest, adminBadRequest, "send 1 to "+strconv.Itoa(renewal.BatchMost)+" proxies, one a line")
@@ -220,7 +224,7 @@ func (s *Server) adminBatchIPs(w http.ResponseWriter, r *http.Request, c adminCa
 			return s.conflicts.conflicted(c.area.ID, time.Now()) >= conflictMost
 		})
 		if err != nil {
-			ipWriteErr(w, err)
+			batchWriteErr(w, c, err)
 			return
 		}
 		for k, i := range at {
@@ -252,6 +256,18 @@ func (s *Server) adminBatchIPs(w http.ResponseWriter, r *http.Request, c adminCa
 	}
 	log.Printf("admin: area %s (%s) batch-added proxies: %d lines, %d new IPs, %d merged, %d in magpie already", c.area.ID, c.area.Note, len(rows), added, merged, conflicts)
 	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "added": added + merged})
+}
+
+// batchWriteErr answers a batch's write that failed as ipWriteErr does,
+// but a whole-list check's text (CheckIPs), which can name an IP not the
+// area's, is logged and not told (security review L2).
+func batchWriteErr(w http.ResponseWriter, c adminCall, err error) {
+	if errors.Is(err, renewal.ErrIPsUnreadable) || errors.Is(err, renewal.ErrIPNotFound) {
+		ipWriteErr(w, err)
+		return
+	}
+	log.Printf("admin: area %s's batch not written: %v", c.area.ID, err)
+	adminError(w, http.StatusServiceUnavailable, adminIPsUnread, "magpie's IPs can't take this batch now: nothing was written")
 }
 
 // rereadMove is a proxy reread moved to the IP it now leaves from.

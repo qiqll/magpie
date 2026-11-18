@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // batchLine is a line of testdata/batch_lines.json, which
@@ -96,5 +97,32 @@ func TestAreaProxyKeyFolds(t *testing.T) {
 	}
 	if ProxyKey("socks5://u:p@h.example:1") == ProxyKey("socks5://u:q@h.example:1") {
 		t.Error("two logins are one proxy")
+	}
+}
+
+// TestAreaCheckBatchBounds (security review H1): a batch of more than
+// BatchMost lines, or one line past BatchLineMost bytes, is refused before
+// any line is read, and the longest line taken reads in well under a
+// second.
+func TestAreaCheckBatchBounds(t *testing.T) {
+	if err := CheckBatch(strings.Repeat("a", 250<<10)); err == nil {
+		t.Fatal("a 250KB line was taken")
+	}
+	if err := CheckBatch(strings.Repeat("203.0.113.7:1080\n", BatchMost+1)); err == nil {
+		t.Fatal("101 lines were taken")
+	}
+	if err := CheckBatch(strings.Repeat("# note\n\n", 500) + strings.Repeat("203.0.113.7:1080\n", BatchMost)); err != nil {
+		t.Fatalf("100 lines and comments: %v", err)
+	}
+	long := strings.Repeat("[", BatchLineMost/2) + strings.Repeat("a", BatchLineMost/2)
+	if err := CheckBatch(long); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	for range BatchMost {
+		ParseBatchProxy(long, "socks5")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("100 lines of %d bytes read in %v", BatchLineMost, d)
 	}
 }

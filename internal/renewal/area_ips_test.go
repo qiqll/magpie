@@ -333,3 +333,33 @@ func TestAreaMoveProxyToItsExit(t *testing.T) {
 		t.Fatalf("after: %+v", ips)
 	}
 }
+
+// TestAreaFullBeforeTaken (security review M1): once the area keeps
+// MaxAreaIPs, an IP magpie has and one it doesn't are both area_full,
+// and no conflict is asked; its own IPs still take proxies.
+func TestAreaFullBeforeTaken(t *testing.T) {
+	ipsHome(t)
+	now := time.Now()
+	if err := SetIPs([]IP{{IP: "198.51.100.1"}}, "", now); err != nil {
+		t.Fatal(err)
+	}
+	var adds []AreaProxyAdd
+	for i := range MaxAreaIPs {
+		adds = append(adds, AreaProxyAdd{"203.0.113." + strconv.Itoa(i+1), "http://93.184.216.34:" + strconv.Itoa(1000+i)})
+	}
+	if _, err := AddAreaProxies("ar_a", adds, now, nil); err != nil {
+		t.Fatal(err)
+	}
+	asked := 0
+	got, err := AddAreaProxies("ar_a", []AreaProxyAdd{
+		{"198.51.100.1", "http://93.184.216.35:80"},
+		{"198.51.100.9", "http://93.184.216.36:80"},
+		{"203.0.113.1", "http://93.184.216.37:80"},
+	}, now, func() bool { asked++; return false })
+	if err != nil || !slices.Equal(got, []string{BatchAreaFull, BatchAreaFull, BatchMerged}) || asked != 0 {
+		t.Fatalf("%v %v asked %d", got, err, asked)
+	}
+	if err := MoveAreaProxy("ar_a", "203.0.113.2", ProxyID("http://93.184.216.34:1001"), "198.51.100.1", now, nil); !errors.Is(err, ErrAreaFull) {
+		t.Fatalf("a move onto the owner's from a full area: %v", err)
+	}
+}

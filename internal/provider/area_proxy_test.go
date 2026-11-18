@@ -405,3 +405,57 @@ func TestAreaSweepLeavesARecordSetSince(t *testing.T) {
 		t.Fatal("the record read now stays:", err)
 	}
 }
+
+// TestAreaSweepBesideARereadMove (T-214 code review M1): a sweep that read
+// ips.json before a reread moved a proxy, and areas.json after, takes the
+// moved proxy off no account: the detach is judged again with both files
+// read under ipsMu.
+func TestAreaSweepBesideARereadMove(t *testing.T) {
+	a, _, keys, _ := areaProxyHome(t)
+	id := renewal.ProxyID(areaProxyA)
+	if err := AttachAreaProxy(a.ID, keys[0], "203.0.113.9", id); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sweepBetween = nil })
+	moved := false
+	sweepBetween = func() {
+		if moved {
+			return
+		}
+		moved = true
+		if err := renewal.MoveAreaProxy(a.ID, "203.0.113.9", id, "203.0.113.20", time.Now(), func(to string) error {
+			return area.MoveProxy(a.ID, "203.0.113.9", id, to)
+		}); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := SweepAreaProxies(); err != nil {
+		t.Fatal(err)
+	}
+	if !moved {
+		t.Fatal("the move didn't run")
+	}
+	if got := keyProxy(t, keys[0]); got != areaProxyA {
+		t.Fatalf("the moved proxy was taken off: the key goes through %q", got)
+	}
+	if got, _ := area.Get(a.ID); got.Accounts[0].Proxy == nil || got.Accounts[0].Proxy.IP != "203.0.113.20" {
+		t.Fatalf("the record: %+v", got.Accounts[0].Proxy)
+	}
+	// a sweep after it still takes off what is gone
+	ips, rev, _ := renewal.IPs()
+	keep := ips[:0]
+	for _, x := range ips {
+		if x.IP != "203.0.113.20" {
+			keep = append(keep, x)
+		}
+	}
+	if err := renewal.SetIPs(keep, rev, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := SweepAreaProxies(); err != nil {
+		t.Fatal(err)
+	}
+	if got := keyProxy(t, keys[0]); got != "" {
+		t.Fatalf("the IP removed, the key still goes through %q", got)
+	}
+}

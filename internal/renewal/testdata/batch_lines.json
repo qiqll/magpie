@@ -554,5 +554,53 @@
       "ip": "203.0.113.32",
       "url": "socks5://203.0.113.32:80"
     }
+  },
+  {
+    "line": "203.0.113.33:1080 # c\r203.0.113.34:1080",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "203.0.113.35:1080 # c x",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "203.0.113.36:1080 # c x",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "203.0.113.37:1080 # the end",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.37",
+      "v6": false,
+      "port": "1080",
+      "user": "",
+      "pass": "",
+      "ip": "203.0.113.37",
+      "url": "socks5://203.0.113.37:1080"
+    }
+  },
+  {
+    "line": "[a:b]:1080:u:p",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "u:p:[2001:db8::4]:1080",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "2001:db8::4",
+      "v6": true,
+      "port": "1080",
+      "user": "u",
+      "pass": "p",
+      "ip": "2001:db8::4",
+      "url": "socks5://u:p@[2001:db8::4]:1080"
+    }
   }
 ]

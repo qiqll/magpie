@@ -236,6 +236,9 @@ func TestAdminBatchIPs(t *testing.T) {
 	if c, body := w.post(t, w.a, "/ips/batch", map[string]any{"text": strings.Repeat(pubIP+"22:1080\n", renewal.BatchMost+1)}); c != http.StatusBadRequest {
 		t.Fatalf("101 lines: %d %s", c, body)
 	}
+	if c, body := w.post(t, w.a, "/ips/batch", map[string]any{"text": strings.Repeat("a", 200<<10), "dryRun": true}); c != http.StatusBadRequest {
+		t.Fatalf("a 200KB line: %d %s", c, body)
+	}
 	if c, body := w.post(t, w.a, "/ips/batch", map[string]any{"text": "# nothing\n\n"}); c != http.StatusBadRequest {
 		t.Fatalf("no lines: %d %s", c, body)
 	}

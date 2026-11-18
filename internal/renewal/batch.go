@@ -1,6 +1,7 @@
 package renewal
 
 import (
+	"fmt"
 	"net"
 	"net/url"
 	"regexp"
@@ -17,8 +18,31 @@ import (
 // same. It only reads: whether the proxy is public, and whose its IP is,
 // is the caller's to judge.
 
-// BatchMost is the most lines one batch reads.
-const BatchMost = 100
+// BatchMost is the most lines one batch reads, and BatchLineMost the
+// longest line in bytes: a proxy is at most 2048, its login and refresh
+// URL beside it (security review H1: one long line was read in O(n²)).
+const (
+	BatchMost     = 100
+	BatchLineMost = 4096
+)
+
+// CheckBatch says whether text can be read as a batch: at most BatchMost
+// lines that say something, none longer than BatchLineMost, judged
+// before any line is read.
+func CheckBatch(text string) error {
+	n := 0
+	for _, l := range strings.Split(text, "\n") {
+		if len(l) > BatchLineMost {
+			return fmt.Errorf("a line is at most %d bytes", BatchLineMost)
+		}
+		if t := jsTrim(l); t != "" && !strings.HasPrefix(t, "#") {
+			if n++; n > BatchMost {
+				return fmt.Errorf("at most %d proxies, one a line", BatchMost)
+			}
+		}
+	}
+	return nil
+}
 
 // BatchTypes are the types a line may write, by what it writes ("socks"
 // is SOCKS5), as ipsbatch.js' IPS_BATCH_TYPES.
@@ -49,7 +73,8 @@ func (e *BatchError) Error() string { return e.Why }
 const jsSpace = `\t\n\v\f\r \x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}\x{feff}`
 
 var (
-	batchComment = regexp.MustCompile(`[` + jsSpace + `]+#.*$`)
+	// JavaScript's . takes no \r, U+2028 nor U+2029; Go's takes them
+	batchComment = regexp.MustCompile(`[` + jsSpace + `]+#[^\n\r\x{2028}\x{2029}]*$`)
 	batchRefresh = regexp.MustCompile(`\[[^\]]*\]$`)
 	batchScheme  = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*)://`)
 	batchSlashes = regexp.MustCompile(`/+$`)
@@ -142,26 +167,19 @@ func canonIP(ip net.IP, v6 string) string {
 // batchColons is s split at each : outside [ ], an empty part kept.
 func batchColons(s string) []string {
 	var parts []string
-	cur := ""
+	start := 0
 	for i := 0; i < len(s); i++ {
-		j := -1
-		if s[i] == '[' {
-			if k := strings.IndexByte(s[i:], ']'); k >= 0 {
-				j = i + k
+		switch s[i] {
+		case '[':
+			if k := strings.IndexByte(s[i:], ']'); k > 0 {
+				i += k
 			}
-		}
-		switch {
-		case j > 0:
-			cur += s[i : j+1]
-			i = j
-		case s[i] == ':':
-			parts = append(parts, cur)
-			cur = ""
-		default:
-			cur += s[i : i+1]
+		case ':':
+			parts = append(parts, s[start:i])
+			start = i + 1
 		}
 	}
-	return append(parts, cur)
+	return append(parts, s[start:])
 }
 
 // encodeURIComponent is JavaScript's: all but A-Z a-z 0-9 - _ . ! ~ * ' ( )

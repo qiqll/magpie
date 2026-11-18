@@ -356,6 +356,9 @@ func SweepAreaProxies() error {
 	if err != nil {
 		return err
 	}
+	if sweepBetween != nil {
+		sweepBetween()
+	}
 	areas, err := area.List()
 	if err != nil {
 		return err
@@ -365,18 +368,49 @@ func SweepAreaProxies() error {
 			if c.Proxy == nil || c.Proxy.Direct {
 				continue
 			}
-			kept := slices.ContainsFunc(ips, func(x renewal.IP) bool {
-				_, ok := x.ProxyOf(c.Proxy.ID)
-				return x.IP == c.Proxy.IP && x.Area == a.ID && ok
-			})
-			if !kept {
-				if err := detachIf(a.ID, c.Ref, c.Proxy); err != nil {
+			if !areaIPKept(ips, a.ID, *c.Proxy) {
+				if err := sweepDetach(a.ID, c.Ref, c.Proxy); err != nil {
 					return err
 				}
 			}
 		}
 	}
 	return nil
+}
+
+// areaIPKept says ips has the area's IP rec names with rec's proxy on it.
+func areaIPKept(ips []renewal.IP, areaID string, rec area.AccountProxy) bool {
+	return slices.ContainsFunc(ips, func(x renewal.IP) bool {
+		_, ok := x.ProxyOf(rec.ID)
+		return x.IP == rec.IP && x.Area == areaID && ok
+	})
+}
+
+// sweepBetween, when set (a test), is called by a sweep between its read
+// of ips.json and its read of areas.json, where a reread's move can come.
+var sweepBetween func()
+
+// sweepDetach is detachIf for a sweep that read was gone from ips.json:
+// the record and ips.json are read again together, under attachMu and
+// then ipsMu (renewal.WithIPs, the lock order an attach takes), and the
+// proxy is taken off only while both still say it is gone. A reread's
+// move (renewal.MoveAreaProxy) writes both files in one hold of ipsMu, so
+// a sweep that read ips.json before it never takes the moved proxy off
+// (code review M1).
+func sweepDetach(areaID, ref string, was *area.AccountProxy) error {
+	attachMu.Lock()
+	defer attachMu.Unlock()
+	return renewal.WithIPs(func(ips []renewal.IP) error {
+		rec := recordOf(areaID, ref)
+		if rec == nil || *rec != *was || rec.Direct || areaIPKept(ips, areaID, *rec) {
+			return nil
+		}
+		pid, _, _ := strings.Cut(ref, "/")
+		if err := clearAreaProxy(pid, *rec); err != nil {
+			return err
+		}
+		return area.SetProxy(areaID, ref, nil)
+	})
 }
 
 // InUseError is an IP or proxy of an area still on the area's accounts.

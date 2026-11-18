@@ -362,7 +362,8 @@ proxies on its own accounts
   shared lines (`internal/renewal/testdata/batch_lines.json`, held by
   `TestAreaBatchLinesReadAsTheWindowReads` and
   `internal/gui/tests/proxy-ips-batch-lines.test.cjs`; a change to either
-  reader regenerates them from `ipsbatch.js`). A line whose host is an IP
+  reader regenerates them from `ipsbatch.js`). The text is bounded before
+  any line is read (`CheckBatch`: 100 lines, 4096 bytes a line). A line whose host is an IP
   is kept under it, judged public by its address and never connected to;
   a host name is kept under its exit, read only with `check:true`, each
   such line one of `proxyChecks` (the batch holds the area's one at a
@@ -373,7 +374,10 @@ proxies on its own accounts
   IP magpie has as no IP the area made (whose not said; each counted in
   `conflictProbes`, and the one that reaches the line fails the rest),
   and `failed` for an IP the owner gave, a full IP (20 proxies), the
-  area's 50 or magpie's 500. A batch is 429 at the door while the area
+  area's 50 or magpie's 500. A full area is said before a conflict, for
+  an IP magpie has or not, so a full area's misses tell nothing of other
+  IPs. A whole-list check's error (`CheckIPs`, which can name another's
+  IP) is logged, never told. A batch is 429 at the door while the area
   is held for conflicts, or, with `check` and a name in it, while its
   checks are spent. `dryRun` reads the lines and judges an IP host public
   and no more: it resolves no name, connects nowhere, spends nothing and
@@ -387,8 +391,11 @@ proxies on its own accounts
   another IP now moves there (`renewal.MoveAreaProxy`): to an IP the area
   made, or a new one of the area's (50 at most). Its accounts' records
   move with it in the same hold of `ipsMu` (`area.MoveProxy`; a failure
-  there puts `ips.json` back), so no sweep reads one without the other;
-  the address written to the account is the proxy's and stays. An exit
+  there puts `ips.json` back). `SweepAreaProxies` reads the two files
+  apart, so before it takes a proxy off it reads both again under
+  `attachMu` and `ipsMu` (`sweepDetach`, `renewal.WithIPs`), and a move
+  that came between leaves the account as moved. The address written to
+  the account is the proxy's and stays. An exit
   that is magpie's as no IP the area made is `failed`, whose not said,
   and counted in `conflictProbes`. An IP the owner gave is never read.
 - **The owner's window** (Models › Proxy IPs,
@@ -590,6 +597,7 @@ must hold, beside the contract's bodies and codes:
 ./internal/provider -run 'TestAreaSignIn|TestAreaLetsGo|TestAttachOnlyOwnIP|TestReleaseClearsAreaProxy|TestSweepAreaProxies'`;
 `go test ./internal/renewal ./internal/netproxy -run 'Area|Owner|OldIPs'`;
 `go test ./internal/gateway -run 'TestAdmin(IPRenewalDays|ProbeProxy|Batch|Reread|ProxyChecksHoldSpend)'`;
+`go test ./internal/provider -run TestAreaSweepBesideARereadMove`;
 `node --test internal/gui/tests/proxy-ips-batch-lines.test.cjs`;
 `go test ./internal/gui -run TestIPAreaRoute`; `go test ./internal/gui -run
 TestAreasRoutes`. `TestAdminKeyEveryRoute` fails

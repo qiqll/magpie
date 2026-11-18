@@ -209,18 +209,20 @@ func AddAreaProxies(areaID string, adds []AreaProxyAdd, now time.Time, taken fun
 			out[i] = BatchExists
 		case j >= 0 && all[j].Area == areaID && all[j].AddedBy != AddedByArea:
 			out[i] = BatchGiven
-		case j >= 0 && (all[j].Area != areaID || all[j].AddedBy != AddedByArea):
-			out[i] = BatchTaken
-			stop = taken != nil && taken()
-		case j >= 0 && len(all[j].Proxies) >= MaxIPProxies:
+		case j >= 0 && all[j].Area == areaID && len(all[j].Proxies) >= MaxIPProxies:
 			out[i] = BatchIPFull
-		case j >= 0:
+		case j >= 0 && all[j].Area == areaID:
 			all[j].Proxies = append(all[j].Proxies, a.Proxy)
 			out[i], changed = BatchMerged, true
+		// full is said before taken, whether magpie has the IP or not: a
+		// full area is told nothing of other IPs by its misses
 		case owned >= MaxAreaIPs:
 			out[i] = BatchAreaFull
 		case len(all) >= MaxIPs:
 			out[i] = BatchAllFull
+		case j >= 0:
+			out[i] = BatchTaken
+			stop = taken != nil && taken()
 		default:
 			all = append(all, IP{IP: addr, Proxies: []string{a.Proxy}, Area: areaID, AddedBy: AddedByArea})
 			owned++
@@ -272,23 +274,23 @@ func MoveAreaProxy(areaID, from, proxyID, to string, now time.Time, moved func(t
 		all[k].Proxies = slices.Clone(all[k].Proxies)
 	}
 	all[i].Proxies = slices.DeleteFunc(all[i].Proxies, func(p string) bool { return ProxyID(p) == proxyID })
+	n := 0
+	for _, x := range all {
+		if x.Area == areaID {
+			n++
+		}
+	}
 	switch j := slices.IndexFunc(all, func(x IP) bool { return x.IP == addr }); {
-	case j >= 0 && (all[j].Area != areaID || all[j].AddedBy != AddedByArea):
-		return ErrIPTaken
-	case j >= 0 && len(all[j].Proxies) >= MaxIPProxies:
+	case j >= 0 && all[j].Area == areaID && all[j].AddedBy == AddedByArea && len(all[j].Proxies) >= MaxIPProxies:
 		return ErrIPProxiesFull
-	case j >= 0:
+	case j >= 0 && all[j].Area == areaID && all[j].AddedBy == AddedByArea:
 		all[j].Proxies = append(all[j].Proxies, url)
+	// full before taken, as AddAreaProxies says it
+	case n >= MaxAreaIPs:
+		return ErrAreaFull
+	case j >= 0:
+		return ErrIPTaken
 	default:
-		n := 0
-		for _, x := range all {
-			if x.Area == areaID {
-				n++
-			}
-		}
-		if n >= MaxAreaIPs {
-			return ErrAreaFull
-		}
 		all = append(all, IP{IP: addr, Proxies: []string{url}, Area: areaID, AddedBy: AddedByArea})
 	}
 	if err := CheckIPs(all, keptTimes(was), now); err != nil {
@@ -380,6 +382,20 @@ func areaIndex(ips []IP, areaID, ip string) int {
 		return -1
 	}
 	return slices.IndexFunc(ips, func(x IP) bool { return x.IP == addr && x.Area == areaID })
+}
+
+// WithIPs runs fn with ips.json's IPs, read afresh, while ipsMu is held,
+// so no area write (a reread's move among them) comes between what fn
+// reads and what it does. fn may take areas.json's and providers.json's
+// locks, never ipsMu.
+func WithIPs(fn func([]IP) error) error {
+	ipsMu.Lock()
+	defer ipsMu.Unlock()
+	ips, _, err := readIPs()
+	if err != nil {
+		return err
+	}
+	return fn(ips)
 }
 
 // GiveIP gives the owner's IP ip to the area areaID (Models › Proxy IPs):
