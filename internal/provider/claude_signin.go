@@ -269,6 +269,9 @@ func startClaudeSignIn(s *signInFlow) error {
 				}
 			}
 			msg = lerr.Error()
+		} else if cli.wsl == nil {
+			// the proxy's status, which Claude Code leaves out (T-107)
+			msg = claudeProxyRefused(msg, env)
 		}
 		cleanup()
 		// the window shows only the last line: the failure's one line in
@@ -344,6 +347,66 @@ type lastSaid struct {
 func (l *lastSaid) set(s string) { l.mu.Lock(); l.line = s; l.mu.Unlock() }
 
 func (l *lastSaid) get() string { l.mu.Lock(); defer l.mu.Unlock(); return l.line }
+
+// claudeTunnel asks a proxy for a tunnel (netproxy.TunnelStatus); a test
+// stands a fake in.
+var claudeTunnel = netproxy.TunnelStatus
+
+// claudeTunnelHosts are where Claude Code's sign-in goes: the token at
+// platform.claude.com, the account's roles and profile at
+// api.anthropic.com.
+var claudeTunnelHosts = []string{"platform.claude.com:443", "api.anthropic.com:443"}
+
+// claudeProxyRefused is msg, the last line of a `claude auth login` that
+// failed, and when that is Claude Code's "proxy refused the connection"
+// (its proxy answered CONNECT with something other than 200, whose status
+// it doesn't say), what the http:// proxy env gave it answers magpie's own
+// CONNECT to the same hosts, and what to do. A proxy that can't be asked
+// adds nothing. The T-107 report's proxy refused the tunnel until magpie
+// was restarted, and with no status no one could tell a proxy's rule from
+// a cap on one client's connections.
+func claudeProxyRefused(msg string, env []string) string {
+	if !strings.Contains(msg, "proxy refused the connection") {
+		return msg
+	}
+	p := ""
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
+		if p = envValue(env, k); p != "" {
+			break
+		}
+	}
+	if p == "" {
+		return msg
+	}
+	for _, h := range claudeTunnelHosts {
+		status, code, err := claudeTunnel(context.Background(), p, h)
+		if err != nil {
+			return msg
+		}
+		if code == http.StatusOK {
+			continue
+		}
+		if len(status) > 64 {
+			status = status[:64]
+		}
+		do := "let it pass CONNECT to platform.claude.com, claude.com and api.anthropic.com on port 443, or pick another proxy for this sign-in"
+		if code == http.StatusProxyAuthRequired {
+			do = "it wants a user and password: write them into the proxy's address, http://user:password@host:port"
+		}
+		return fmt.Sprintf("%s (asked by magpie, the same proxy answers a tunnel to %s with %q, so it turns the tunnel away: %s)", msg, h, status, do)
+	}
+	return msg + " (asked by magpie just now, the same proxy let tunnels to platform.claude.com and api.anthropic.com through, so it turned Claude Code away for a while only: a cap on one client's connections, or a fault on its own way out. Try again; if it comes back, look at the proxy's log and its connection cap)"
+}
+
+// envValue is k's value in env, "" when it has none.
+func envValue(env []string, k string) string {
+	for i := len(env) - 1; i >= 0; i-- {
+		if name, v, ok := strings.Cut(env[i], "="); ok && name == k {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
 
 // claudeNoLink is the error of a `claude auth login` that gave no link in
 // linkWait: what it last printed, or, when it printed nothing at all, the

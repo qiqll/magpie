@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -26,9 +27,14 @@ echo "Opening browser to sign in…"
 echo "Login failed: proxy refused the connection"
 exit 1
 `)
-	old := claudeExecutable
+	old, tunnel := claudeExecutable, claudeTunnel
 	claudeExecutable = func() string { return exe }
-	t.Cleanup(func() { claudeExecutable = old })
+	// the proxy isn't asked for a tunnel here: these proxies aren't ours
+	// (10.0.0.1), and a test never reaches the network
+	claudeTunnel = func(context.Context, string, string) (string, int, error) {
+		return "", 0, errors.New("not asked in this test")
+	}
+	t.Cleanup(func() { claudeExecutable, claudeTunnel = old, tunnel })
 	endClaudeSignIns(t)
 	return given
 }
