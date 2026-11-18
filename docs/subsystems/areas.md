@@ -752,11 +752,14 @@ console, so `TestAdminKeyEveryRoute` covers it.
   under way is still `409` to both. Turning an area off cancels the
   sign-ins its key started (`CancelAreaKeySignIns`, the window's too);
   the console's go on. Deleting it cancels both (`CancelAreaSignIns`).
+  A sign-in recorded after either (`keepAreaSignIn` reads the area again
+  once it is recorded) is cancelled there.
 - **Log.** Each action's line is `admin: console for area <id> (<note>)
   <action> actor=<X-Magpie-Actor or ->` (`adminCall.logf`, the same line
   an area's key writes as `admin: area <id> (<note>) <action>`). A write
   whose handler logs nothing (refused before it acts) is logged by
-  `forArea` as `<route>: <status>`. `X-Magpie-Actor` is 1 to 64 of
+  `forArea` as `<route>: <status>`. The account a console sign-in adds
+  is logged as the console's with its actor too (`claimDone`). `X-Magpie-Actor` is 1 to 64 of
   `[A-Za-z0-9._@-]`, sent once, or `400`; magpie neither checks nor keeps
   it, and keeps no audit file: the console's is the audit. Neither line
   holds a secret.

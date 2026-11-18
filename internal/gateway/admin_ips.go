@@ -337,6 +337,7 @@ func (s *Server) adminUpdateIP(w http.ResponseWriter, r *http.Request, c adminCa
 			log.Printf("admin: area %s's proxies not swept: %v", c.area.ID, err)
 		}
 	}
+	c.logf("changed an IP")
 	replyIP(w, c, got, http.StatusOK)
 }
 
@@ -410,6 +411,15 @@ func (s *Server) adminAccountProxy(w http.ResponseWriter, r *http.Request, c adm
 		if !attachAnswered(w, areaIPAttach(c.area.ID, in.ID, x.IP, in.Proxy)) {
 			return
 		}
+	}
+	pid, _, _ := strings.Cut(in.ID, "/")
+	switch {
+	case in.Direct:
+		c.logf("set an account of %s direct", pid)
+	case in.Proxy == "":
+		c.logf("took the proxy off an account of %s", pid)
+	default:
+		c.logf("put a proxy on an account of %s", pid)
 	}
 	a, err := area.Get(c.area.ID)
 	if err != nil {

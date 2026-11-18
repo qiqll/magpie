@@ -589,7 +589,7 @@ func (s *Server) adminPluginSignIn(w http.ResponseWriter, r *http.Request, c adm
 	}
 	areaID := c.area.ID
 	o.Area, o.PluginWay = true, pm.Way
-	o.Done = s.conflictOnDone(openOnDone(mountOnDone(claimOnDone(areaID), areaID, box), opened), areaID)
+	o.Done = s.conflictOnDone(openOnDone(mountOnDone(claimDone(c), areaID, box), opened), areaID)
 	o.Conflicted = func() { s.countConflict(areaID) }
 	st, err := startAreaPluginSignIn(pp.ID, pm.Method, inputs, o)
 	switch {
@@ -613,8 +613,18 @@ func (s *Server) adminPluginSignIn(w http.ResponseWriter, r *http.Request, c adm
 
 // keepAreaSignIn records the sign-in id as c's area's, with the box of
 // its proxy picks; those magpie no longer has are dropped, not kept till
-// it quits.
+// it quits. An area deleted, or turned off for its key's, while it
+// started is read after it is recorded, so a cancel (cancelSignIns) that
+// came before it saw it is made here instead.
 func keepAreaSignIn(c adminCall, id string, box *pickBox) {
+	recordAreaSignIn(c, id, box)
+	a, err := area.Get(c.area.ID)
+	if errors.Is(err, area.ErrNotFound) || err == nil && a.Off && !c.console {
+		cancelSignIns(c.area.ID, errors.Is(err, area.ErrNotFound))
+	}
+}
+
+func recordAreaSignIn(c adminCall, id string, box *pickBox) {
 	areaSignIns.Lock()
 	defer areaSignIns.Unlock()
 	if areaSignIns.m == nil {

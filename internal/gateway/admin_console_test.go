@@ -181,8 +181,9 @@ func TestAdminConsoleSignInIsItsOwn(t *testing.T) {
 	t.Cleanup(oai.Close)
 	t.Cleanup(provider.SIWCForTest(oai.URL, oai.URL+"/v1"))
 
+	logs := catchLog(t)
 	base := AdminPath + "/areas/" + id
-	c, body := do("POST", base+"/signin", lanPeer, console, `{"agent":"chatgpt-api","way":"paste-url"}`)
+	c, body := do("POST", base+"/signin", lanPeer, console, `{"agent":"chatgpt-api","way":"paste-url"}`, ActorHeader, "bob")
 	if c != http.StatusOK {
 		t.Fatal("start:", c, body)
 	}
@@ -240,6 +241,9 @@ func TestAdminConsoleSignInIsItsOwn(t *testing.T) {
 	if owner, _, _ := area.Owner(ref); owner != id {
 		t.Fatal("owner:", owner)
 	}
+	// the account it adds is logged as the console's, with its actor
+	waitLogged(t, logs, "admin: console for area "+id+" (A) started a chatgpt-api sign-in", "actor=bob")
+	waitLogged(t, logs, "admin: console for area "+id+" (A) signed in to a chatgpt-api account", "actor=bob")
 
 	// one the area starts is no such sign-in to the console
 	if c, body := do("POST", AdminPath+"/areas/"+id+"/update", lanPeer, console, `{"off":false}`); c != http.StatusOK {
@@ -311,5 +315,39 @@ func TestAdminConsoleIPsForArea(t *testing.T) {
 	}
 	if c, body := w.post(t, w.console, base+"/ips/delete", map[string]any{"ip": "203.0.113.7"}); c != http.StatusNoContent && c != http.StatusOK {
 		t.Fatal("A's IP removed:", c, body)
+	}
+}
+
+// A sign-in recorded after its area was turned off (its key's) or
+// deleted (anyone's) is let go at once: the cancel that came first never
+// saw it.
+func TestAdminSignInKeptAfterOffIsLetGo(t *testing.T) {
+	do, console, _ := adminWorld(t)
+	id, _ := makeArea(t, do, console, "A")
+	if c, body := do("POST", AdminPath+"/areas/"+id+"/update", lanPeer, console, `{"off":true}`); c != http.StatusOK {
+		t.Fatal("off:", c, body)
+	}
+	kept := func(sid string) bool {
+		areaSignIns.Lock()
+		defer areaSignIns.Unlock()
+		_, ok := areaSignIns.m[sid]
+		return ok
+	}
+	a, _ := area.Get(id)
+	// each read before the next is kept, which drops those magpie hasn't
+	keepAreaSignIn(adminCall{area: a}, "si-key", nil)
+	if kept("si-key") {
+		t.Fatal("off: the key's kept")
+	}
+	keepAreaSignIn(adminCall{area: a, console: true}, "si-console", nil)
+	if !kept("si-console") {
+		t.Fatal("off: the console's let go")
+	}
+	if c, body := do("POST", AdminPath+"/areas/"+id+"/delete", lanPeer, console, ""); c != http.StatusNoContent {
+		t.Fatal("delete:", c, body)
+	}
+	keepAreaSignIn(adminCall{area: a, console: true}, "si-console-2", nil)
+	if kept("si-console-2") {
+		t.Fatal("deleted: the console's kept")
 	}
 }

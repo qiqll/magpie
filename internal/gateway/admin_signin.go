@@ -206,6 +206,15 @@ func signInStateOf(c adminCall, st provider.SignInState) adminSignInState {
 // area, as it is done: one magpie had before it (Again), the owner's or
 // another area's, stays whose it was, and reads as a conflict.
 func claimOnDone(id string) func(provider.SignInState) provider.SignInState {
+	return claimDone(adminCall{area: area.Area{ID: id}})
+}
+
+// claimDone is claimOnDone for the sign-in c started: its lines name the
+// console and its actor when it was the console's (T-215).
+func claimDone(c adminCall) func(provider.SignInState) provider.SignInState {
+	// the request has ended by then: its line was written or not already
+	c.logged = nil
+	id := c.area.ID
 	return func(st provider.SignInState) provider.SignInState {
 		pid := subscriptionOf(st.Agent)
 		ref := pid + "/" + provider.LoginID(st.Agent, st.User)
@@ -233,10 +242,10 @@ func claimOnDone(id string) func(provider.SignInState) provider.SignInState {
 					log.Printf("admin: area %s's %s account, not claimed, not removed either: %v", id, st.Agent, ferr)
 				}
 			}
-			log.Printf("admin: area %s signed in to %s, not claimed: %v", id, st.Agent, err)
+			c.logf("signed in to %s, not claimed: %v", st.Agent, err)
 			return st
 		}
-		log.Printf("admin: area %s signed in to a %s account", id, st.Agent)
+		c.logf("signed in to a %s account", st.Agent)
 		return st
 	}
 }
@@ -324,7 +333,7 @@ func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall
 		return
 	}
 	box := &pickBox{}
-	o := provider.SignInOptions{Site: site, Area: true, Done: openOnDone(mountOnDone(claimOnDone(c.area.ID), c.area.ID, box), opened)}
+	o := provider.SignInOptions{Site: site, Area: true, Done: openOnDone(mountOnDone(claimDone(c), c.area.ID, box), opened)}
 	if in.Proxy != nil {
 		url, public, ok := pickedProxy(w, c, in.Proxy)
 		if !ok {
@@ -367,6 +376,7 @@ func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall
 		return
 	}
 	keepAreaSignIn(c, st.ID, box)
+	c.logf("started a %s sign-in", in.Agent)
 	writeJSON(w, http.StatusOK, signInStateOf(c, st))
 }
 
