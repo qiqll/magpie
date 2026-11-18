@@ -413,6 +413,52 @@ by the owner or another area) is left out: its calls can't be told apart.
 An areas.json from before `previous` reads as it did. One the area couldn't
 be told of lists as `gone`.
 
+## Agreed, not built yet (T-209 to T-215)
+
+Everything above is what magpie does today. On 2026-11-18 the owner settled
+the next contract (magpie-console's `docs/magpie-api.md` §10–19, T-208):
+plugin and missing built-in sign-ins, credential imports, a proxy picked
+for a sign-in, import or key, more key fields, more proxy-IP routes, and
+the console acting for an area. None of it is in the code yet; each task
+moves its part into the sections above as it lands. What the magpie side
+must hold, beside the contract's bodies and codes:
+
+- **One reader, never a copy.** Sign-ins go through `StartSignInWith` and
+  the plugin host's sign-in (`PluginAPIKey` and the paste paths in
+  `pluginsignin_paste.go`); imports through `ImportLogins`,
+  `ImportCodexAccessOnly`, `ImportGoogleAccounts` and `ImportFactoryKeys`;
+  proxies through `settings.CheckProxy` and `netproxy.CheckPublic`;
+  renewal through `internal/renewal` (`WarnDays`). The one new parser is
+  the batch-proxy one (Go, `internal/renewal`), which shares its test
+  lines with the window's `ipsbatch.js`.
+- **Never written over.** An account magpie has (the owner's or another
+  area's) is `conflict` on every add path, and its tokens, proxy and name
+  stay as they were. The import readers today renew such an account
+  (`updated`) and name it (`exists`); an area's import needs a mode that
+  does neither (T-220). A plugin's API-key sign-in replaces an account it
+  has; it is offered to areas only for a plugin that can refuse instead
+  (T-221).
+- **Claude imports are checked with Anthropic** (`ClaudeTokenUser`), and
+  named by its answer, never by the file's email.
+- **Not offered:** a plugin method whose browser opens on this computer
+  (`Authorization.Opened`).
+- **Secrets stay in.** A plugin's password and hidden inputs are not sent
+  back by the prompt route; no key, token, code, pasted address or proxy
+  login reaches a reply or the log.
+- **Limits are the area's, from both keys.** Every add, sign-in, import
+  and proxy route the console reaches as `/areas/{id}/…` runs the area's
+  own handler and checks: what the area may add, 500 accounts, 50 IPs,
+  `conflictProbes`, `proxyChecks` (probe, a batch's host-name lines and
+  reread share it) and one import at a time. A route of another area's,
+  IP or proxy is `404`. A sign-in is read, pasted into and cancelled only
+  by whoever started it (area or console).
+- **New codes:** `409 plugin_unavailable`, `413 too_large` (the import
+  route's 8 MB body alone), `429 too_many_imports`.
+- **Log:** a console action writes the area, its note, the action and the
+  optional `X-Magpie-Actor`, marked `console`; magpie keeps no audit file.
+- Every new route is in `adminRoutes` under its role, so
+  `TestAdminKeyEveryRoute` covers it.
+
 ## Verification
 
 `go test -race ./internal/area`; `go test ./internal/gateway -run
