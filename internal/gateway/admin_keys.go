@@ -34,6 +34,8 @@ type keyFields struct {
 	Plan string `json:"plan"`
 	// Opened, sent at all, is refused: a key has no opening date
 	Opened json.RawMessage `json:"opened"`
+	// Proxy is put on each key added, as accounts/proxy puts it (T-212)
+	Proxy *proxyPick `json:"proxy"`
 }
 
 // keyProtocols are the protocols a key of p may be set to: any, and each
@@ -54,7 +56,8 @@ func keyProtocols(p provider.Provider) []string {
 // keyTarget is the provider in's keys go to, with their protocol and
 // plan, or false with the answer written: 404 for a provider the area
 // wasn't given (or one that takes no keys), 400 for an opened date, a
-// protocol it has no address for or a plan its preset doesn't sell.
+// protocol it has no address for or a plan its preset doesn't sell, and
+// a proxy picked as pickedProxy answers it.
 func keyTarget(w http.ResponseWriter, c adminCall, in keyFields) (provider.Provider, provider.Protocol, string, bool) {
 	if !slices.Contains(c.area.Providers, in.Provider) {
 		adminNotFoundErr(w)
@@ -78,6 +81,11 @@ func keyTarget(w http.ResponseWriter, c adminCall, in keyFields) (provider.Provi
 		adminError(w, http.StatusBadRequest, adminBadRequest, p.Name+" sells no plan "+strconv.Quote(plan)+" on keys of its own")
 		return provider.Provider{}, "", "", false
 	}
+	if in.Proxy != nil {
+		if _, ok := pickedProxy(w, c, in.Proxy); !ok {
+			return provider.Provider{}, "", "", false
+		}
+	}
 	return *p, provider.Protocol(in.Protocol), plan, true
 }
 
@@ -89,10 +97,12 @@ func quoteEach(ss []string) []string {
 	return out
 }
 
-// addAreaKey claims the key for c's area, then adds it to p: the account
-// as told and 201, or the status, code and message to answer. A key
-// magpie has (the owner's, another area's) is 409 and stays as it was.
-func addAreaKey(c adminCall, p provider.Provider, name, key string, proto provider.Protocol, plan string) (adminAccount, int, string, string) {
+// addAreaKey claims the key for c's area, then adds it to p, and puts
+// pick (nil: none) on it: the account as told and 201, or the status,
+// code and message to answer. A key magpie has (the owner's, another
+// area's) is 409 and stays as it was. A key added whose pick couldn't be
+// put on stays added, 201 with the message saying so.
+func addAreaKey(c adminCall, p provider.Provider, name, key string, proto provider.Protocol, plan string, pick *proxyPick) (adminAccount, int, string, string) {
 	fp := provider.KeyID(key)
 	ref := p.ID + "/" + fp
 	if slices.ContainsFunc(p.KeyList(), func(k provider.KeyInfo) bool { return k.ID == fp }) {
@@ -121,6 +131,13 @@ func addAreaKey(c adminCall, p provider.Provider, name, key string, proto provid
 		}
 		return adminAccount{}, http.StatusBadRequest, adminBadRequest, err.Error()
 	}
+	msg := ""
+	if pick != nil {
+		if err := pick.mount(c.area.ID, ref); err != nil {
+			log.Printf("admin: area %s's key of %s, %s", c.area.ID, p.ID, mountFailed(err))
+			msg = "added, but " + mountFailed(err)
+		}
+	}
 	acc := adminAccount{ID: ref, Provider: p.ID, ProviderName: p.Name, Kind: "key", Name: fp, Gone: true}
 	if q, err := provider.Find(p.ID); err == nil {
 		describe(&acc, *q, fp)
@@ -128,9 +145,12 @@ func addAreaKey(c adminCall, p provider.Provider, name, key string, proto provid
 	if a, err := area.Get(c.area.ID); err == nil {
 		if i := slices.IndexFunc(a.Accounts, func(o area.Account) bool { return o.Ref == ref }); i >= 0 {
 			acc.Added = a.Accounts[i].Added
+			if rec := a.Accounts[i].Proxy; rec != nil {
+				acc.Proxy = &adminAccountProxy{IP: rec.IP, ID: rec.ID, Direct: rec.Direct, Overridden: provider.AreaProxyOverridden(p.ID, *rec)}
+			}
 		}
 	}
-	return acc, http.StatusCreated, "", ""
+	return acc, http.StatusCreated, "", msg
 }
 
 // adminFull is addAreaKey's code for an area at its 500 accounts, a 409
@@ -224,13 +244,13 @@ func (s *Server) adminAddKeys(w http.ResponseWriter, r *http.Request, c adminCal
 			if n != "" && i > 0 {
 				n += " #" + strconv.Itoa(i+1)
 			}
-			acc, status, code, msg := addAreaKey(c, p, n, k, proto, plan)
+			acc, status, code, msg := addAreaKey(c, p, n, k, proto, plan, in.Proxy)
 			switch {
 			case code == adminFull:
 				row.Status, row.Message = keyFailed, msg
 				stop = msg
 			case status == http.StatusCreated:
-				row.Status, row.Account = keyAdded, &acc
+				row.Status, row.Account, row.Message = keyAdded, &acc, msg
 				owned++
 			case status == http.StatusConflict:
 				row.Status, row.Message = keyConflict, msg

@@ -433,7 +433,7 @@ func (s *Server) adminAddKey(w http.ResponseWriter, r *http.Request, c adminCall
 		adminError(w, http.StatusConflict, adminConflict, "an area has at most 500 accounts")
 		return
 	}
-	acc, status, code, msg := addAreaKey(c, p, in.Name, in.Key, proto, plan)
+	acc, status, code, msg := addAreaKey(c, p, in.Name, in.Key, proto, plan, in.Proxy)
 	if status != http.StatusCreated {
 		if code == adminFull {
 			code = adminConflict

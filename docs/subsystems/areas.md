@@ -312,6 +312,9 @@ proxies on its own accounts
   since. A
   direct sent with an IP or proxy is `400`. Attaches, directs and
   detaches take `attachMu` first, so two on one account never cross.
+- **Picked as it is added** (T-212): a sign-in, a setup-token and a key
+  take `proxy` too, and the account added has it put on as above; see
+  [Area sign-ins](#area-sign-ins).
 - **No race with a removal.** An attach checks the IP and proxy, records
   them and writes the address while holding `ipsMu`
   (`renewal.WithAreaProxy`). The area's removal of an IP or proxy asks
@@ -479,6 +482,34 @@ file imports.
   area's (`openOnDone`, after `claimOnDone`): a `conflict` keeps none on
   an account that isn't the area's. The area's accounts tell `opened`
   for a subscription account that has one, never for a key.
+- **A proxy picked** (T-212, admin_signin_proxy.go): `signin`,
+  `signin/{id}/callback`, `signin/claude-token`, `accounts/key` and
+  `accounts/keys` take `"proxy": {"ip","id"}` (one of the area's IPs,
+  added by it or given by the owner, and a proxy of it) or
+  `{"direct":true}`. `pickedProxy` judges it before anything starts or is
+  claimed: another area's IP or proxy, the owner's own, or none such is
+  `404` (`areaIP`, `ProxyOf`); neither or both sent is `400`. A sign-in
+  goes through it (`SignInOptions.Proxy`), so its requests to the vendor
+  leave from where the account's will, and an area-added proxy is held to
+  public addresses on every connection, as the account's traffic is
+  (`netproxy.PublicOnly`). Once the sign-in is done and the account the
+  area's, `mountOnDone` (after `claimOnDone`) puts the pick on with
+  `AttachAreaProxy` or `AttachAreaDirect`, so the owner's own value for
+  the account wins (`overridden`), and a `conflict` gets nothing. An
+  area's pick is never kept as the owner's own value (`finish` keeps a
+  picked proxy for the owner's sign-ins alone), so an account another has
+  keeps the proxy it had. A setup-token and a key make no request out:
+  the pick is only put on. One that can't be (the IP removed meanwhile)
+  leaves the account added and says so (a sign-in's `message`, a key
+  row's `message`); `accounts/key` and `claude-token` answer `201` with
+  no `proxy` on the account.
+- **A proxy picked as it is pasted:** the callback's `proxy` trades the
+  address through it (`SubmitSignInCallbackThrough`), and the account has
+  it once done (`pickBox`); a paste that isn't taken leaves the pick the
+  sign-in had. A sign-in whose proxy was handed out as it started (a
+  device code, `claude auth login`: `ProxyFixed`) is `400` "this
+  sign-in's proxy was fixed when it started" for another proxy; the same
+  one is taken.
 
 - `SignInOptions.Area`: the sign-in starts only while none of its agent is
   under way (`reserveSignIn`, held as pending until listed); while it runs
@@ -524,7 +555,7 @@ by the owner or another area) is left out: its calls can't be told apart.
 An areas.json from before `previous` reads as it did. One the area couldn't
 be told of lists as `gone`.
 
-## Agreed, not built yet (T-209, T-211, T-212, T-215)
+## Agreed, not built yet (T-209, T-211, T-215)
 
 Everything above is what magpie does today. On 2026-11-18 the owner settled
 the next contract (magpie-console's `docs/magpie-api.md` §10–19, T-208):
@@ -535,8 +566,9 @@ Copilot's `site`) are in [Area sign-ins](#area-sign-ins), and the key fields, ma
 opened dates and direct (§15, T-213) in [Routes](#routes),
 [Proxy IPs](#proxy-ips) and [Area sign-ins](#area-sign-ins), and the
 proxy routes (§16, T-214: renewal days, probe, batch, reread) in
-[Proxy IPs](#proxy-ips); a `proxy`
-sent with a key (§14) comes with T-212. The console
+[Proxy IPs](#proxy-ips), and a proxy picked for a sign-in, a setup-token
+or a key (§14, T-212) in [Area sign-ins](#area-sign-ins); the plugin
+sign-in's and an import's `proxy` come with T-209 and T-211. The console
 reaching them through `/areas/{id}/signin` comes with the rest of its
 acting for an area. Each task moves its part into the sections above as
 it lands. What the magpie side
@@ -598,6 +630,7 @@ must hold, beside the contract's bodies and codes:
 `go test ./internal/renewal ./internal/netproxy -run 'Area|Owner|OldIPs'`;
 `go test ./internal/gateway -run 'TestAdmin(IPRenewalDays|ProbeProxy|Batch|Reread|ProxyChecksHoldSpend)'`;
 `go test ./internal/provider -run TestAreaSweepBesideARereadMove`;
+`go test ./internal/gateway -run 'TestAdmin(SignInThroughAreaProxy|SignInCallbackPicksAreaProxy|DeviceSignInProxyFixed|KeyAndTokenTakeAreaProxy)'`;
 `node --test internal/gui/tests/proxy-ips-batch-lines.test.cjs`;
 `go test ./internal/gui -run TestIPAreaRoute`; `go test ./internal/gui -run
 TestAreasRoutes`. `TestAdminKeyEveryRoute` fails

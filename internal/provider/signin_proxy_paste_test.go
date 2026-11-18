@@ -162,7 +162,7 @@ func TestClaudeSignInKeepsItsProxyAtPaste(t *testing.T) {
 		t.Fatal("Claude Code's sign-in says it takes a proxy as its code is pasted")
 	}
 	other := "http://127.0.0.1:9"
-	if err := SubmitSignInCallbackThrough(st.ID, "code#state", &other); !errors.Is(err, errProxyFixed) {
+	if err := SubmitSignInCallbackThrough(st.ID, "code#state", &other); !errors.Is(err, ErrProxyFixed) {
 		t.Fatalf("another proxy at paste: %v", err)
 	}
 	if now, _ := SignInStatus(st.ID); now.State != "waiting" || now.Proxy != "" {

@@ -411,7 +411,7 @@ func TestAdminSignInClaims(t *testing.T) {
 		t.Fatal("the owner's account moved to", owner)
 	}
 	areaSignIns.Lock()
-	areaSignIns.m = map[string]string{"si-a": a}
+	areaSignIns.m = map[string]areaSignIn{"si-a": {area: a}}
 	areaSignIns.Unlock()
 	if !ownSignIn(adminCall{area: area.Area{ID: a}}, "si-a") || ownSignIn(adminCall{area: area.Area{ID: b}}, "si-a") || ownSignIn(adminCall{area: area.Area{ID: a}}, "") {
 		t.Fatal("a sign-in read by an area that didn't start it")

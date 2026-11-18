@@ -198,7 +198,9 @@ type SignInOptions struct {
 	// Proxy is the one to sign in through, as netproxy.With takes it ("" the
 	// global one, "direct" none, or its address); nil for the one the
 	// account's requests would go through. Picked, it is kept as the
-	// account's own once the sign-in is done.
+	// account's own once the sign-in is done; an area's is not (T-212):
+	// its Done puts it on as the area's, and an account that isn't the
+	// area's keeps the proxy it had.
 	Proxy *string
 	// User is the account signed in to again, for the proxy it goes through
 	User string
@@ -255,7 +257,7 @@ func (s *signInFlow) repick(proxy string) (undo func(), err error) {
 		return func() {}, nil
 	}
 	if s.proxyFixed() {
-		return nil, errProxyFixed
+		return nil, ErrProxyFixed
 	}
 	if s.st.State != "waiting" || s.claimed {
 		return nil, errors.New("this sign-in is over or already finishing; start it again if it doesn't end")
@@ -276,9 +278,9 @@ func (s *signInFlow) repick(proxy string) (undo func(), err error) {
 	return undo, nil
 }
 
-// errProxyFixed is another proxy picked for a sign-in that can't take one
+// ErrProxyFixed is another proxy picked for a sign-in that can't take one
 // once it started (proxyFixed).
-var errProxyFixed = errors.New("this sign-in keeps the proxy it started through; to finish it through another, start it again through that one")
+var ErrProxyFixed = errors.New("this sign-in keeps the proxy it started through; to finish it through another, start it again through that one")
 
 type signInKey struct{}
 
@@ -933,7 +935,9 @@ func (s *signInFlow) finish(out SignInState) bool {
 			out.For = s.user
 		}
 		back = slices.Contains(s.lapsed, accountKey(out.User))
-		agent, proxy, chosen, onDone := s.st.Agent, s.proxy, s.chosen, s.onDone
+		// an area's pick is the area's to put on, never the owner's
+		// own value (an account another has would be written over)
+		agent, proxy, chosen, onDone := s.st.Agent, s.proxy, s.chosen && !s.area, s.onDone
 		// Done is told whose sign-in it is: the area claims by agent
 		out.ID, out.Agent = s.st.ID, agent
 		s.mu.Unlock()

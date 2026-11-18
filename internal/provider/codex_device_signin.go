@@ -25,6 +25,14 @@ import (
 // it elsewhere.
 var codexIssuer = "https://auth.openai.com"
 
+// CodexDeviceForTest points Codex's device sign-in at issuer, for another
+// package's test; the restore puts it back.
+func CodexDeviceForTest(issuer string) func() {
+	old := codexIssuer
+	codexIssuer = issuer
+	return func() { codexIssuer = old }
+}
+
 // CodexDeviceSite is the "site" of a ChatGPT sign-in by device code
 // (StartSignInWith): the window asks for it when it is opened from
 // another computer.

@@ -98,13 +98,27 @@ func subscriptionOf(agent string) string {
 // pastes into and cancels its own alone.
 var areaSignIns struct {
 	sync.Mutex
-	m map[string]string
+	m map[string]areaSignIn
+}
+
+// areaSignIn is a sign-in an area started: whose, and the proxy its
+// account is to have (T-212).
+type areaSignIn struct {
+	area string
+	pick *pickBox
 }
 
 func ownSignIn(c adminCall, id string) bool {
 	areaSignIns.Lock()
 	defer areaSignIns.Unlock()
-	return id != "" && areaSignIns.m[id] == c.area.ID
+	return id != "" && areaSignIns.m[id].area == c.area.ID
+}
+
+// pickOf is the pick box of the sign-in id, nil for none listed.
+func pickOf(id string) *pickBox {
+	areaSignIns.Lock()
+	defer areaSignIns.Unlock()
+	return areaSignIns.m[id].pick
 }
 
 // adminSignInState is a sign-in as the admin routes tell it.
@@ -219,7 +233,10 @@ func openOnDone(done func(provider.SignInState) provider.SignInState, at time.Ti
 }
 
 func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall) {
-	var in struct{ Agent, Way, Site, Opened string }
+	var in struct {
+		Agent, Way, Site, Opened string
+		Proxy                    *proxyPick
+	}
 	if !decodeAdmin(w, r, &in) {
 		return
 	}
@@ -253,11 +270,22 @@ func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall
 		adminError(w, http.StatusBadRequest, adminBadRequest, err.Error())
 		return
 	}
+	box := &pickBox{}
+	if in.Proxy != nil {
+		url, ok := pickedProxy(w, c, in.Proxy)
+		if !ok {
+			return
+		}
+		box.set(in.Proxy, url)
+	}
 	if len(c.area.Accounts) >= adminAccountsLimit {
 		adminError(w, http.StatusConflict, adminConflict, "an area has at most 500 accounts")
 		return
 	}
-	o := provider.SignInOptions{Site: site, Area: true, Done: openOnDone(claimOnDone(c.area.ID), opened)}
+	o := provider.SignInOptions{Site: site, Area: true, Done: openOnDone(mountOnDone(claimOnDone(c.area.ID), c.area.ID, box), opened)}
+	if p, url := box.get(); p != nil {
+		o.Proxy = &url
+	}
 	if in.Agent == "codex" && in.Way == wayDevice {
 		o.Site = provider.CodexDeviceSite
 	}
@@ -272,7 +300,7 @@ func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall
 	}
 	areaSignIns.Lock()
 	if areaSignIns.m == nil {
-		areaSignIns.m = map[string]string{}
+		areaSignIns.m = map[string]areaSignIn{}
 	}
 	// those magpie no longer has: not kept till it quits
 	for sid := range areaSignIns.m {
@@ -280,7 +308,7 @@ func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall
 			delete(areaSignIns.m, sid)
 		}
 	}
-	areaSignIns.m[st.ID] = c.area.ID
+	areaSignIns.m[st.ID] = areaSignIn{area: c.area.ID, pick: box}
 	areaSignIns.Unlock()
 	writeJSON(w, http.StatusOK, signInStateOf(c, st))
 }
@@ -297,11 +325,15 @@ func (s *Server) adminSignInState(w http.ResponseWriter, r *http.Request, c admi
 
 func (s *Server) adminSignInCallback(w http.ResponseWriter, r *http.Request, c adminCall) {
 	id := r.PathValue("id")
-	var in struct{ URL, Code string }
+	var in struct {
+		URL, Code string
+		Proxy     *proxyPick
+	}
 	if !decodeAdmin(w, r, &in) {
 		return
 	}
-	if _, ok := provider.SignInStatus(id); !ok || !ownSignIn(c, id) {
+	st, ok := provider.SignInStatus(id)
+	if !ok || !ownSignIn(c, id) {
 		adminNotFoundErr(w)
 		return
 	}
@@ -313,12 +345,46 @@ func (s *Server) adminSignInCallback(w http.ResponseWriter, r *http.Request, c a
 		adminError(w, http.StatusBadRequest, adminBadRequest, "send the address the vendor's page ended on as url, or the code it showed as code")
 		return
 	}
-	if err := provider.SubmitSignInCallbackThrough(id, raw, nil); err != nil {
-		adminError(w, http.StatusBadRequest, adminBadRequest, err.Error())
+	// a proxy picked as it is pasted (T-212): the address is traded for
+	// the account through it, and the account has it once done
+	var through *string
+	box := pickOf(id)
+	if box == nil {
+		box = &pickBox{}
+	}
+	if in.Proxy != nil {
+		url, ok := pickedProxy(w, c, in.Proxy)
+		if !ok {
+			return
+		}
+		if _, was := box.get(); st.ProxyFixed && url != was {
+			adminError(w, http.StatusBadRequest, adminBadRequest, errSignInProxyFixed)
+			return
+		}
+		through = &url
+		wasPick, wasURL := box.set(in.Proxy, url)
+		defer func() {
+			if through != nil {
+				box.set(wasPick, wasURL)
+			}
+		}()
+	}
+	if err := provider.SubmitSignInCallbackThrough(id, raw, through); err != nil {
+		msg := err.Error()
+		if errors.Is(err, provider.ErrProxyFixed) {
+			msg = errSignInProxyFixed
+		}
+		adminError(w, http.StatusBadRequest, adminBadRequest, msg)
 		return
 	}
+	through = nil // taken: the pick stays the sign-in's
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// errSignInProxyFixed answers another proxy picked as a sign-in's address
+// is pasted, for one whose proxy was handed out as it started (a device
+// code, Claude Code's own sign-in): magpie-api.md §14.
+const errSignInProxyFixed = "this sign-in's proxy was fixed when it started"
 
 func (s *Server) adminSignInCancel(w http.ResponseWriter, r *http.Request, c adminCall) {
 	id := r.PathValue("id")
@@ -331,7 +397,10 @@ func (s *Server) adminSignInCancel(w http.ResponseWriter, r *http.Request, c adm
 }
 
 func (s *Server) adminClaudeToken(w http.ResponseWriter, r *http.Request, c adminCall) {
-	var in struct{ Token, Opened string }
+	var in struct {
+		Token, Opened string
+		Proxy         *proxyPick
+	}
 	if !decodeAdmin(w, r, &in) {
 		return
 	}
@@ -344,6 +413,12 @@ func (s *Server) adminClaudeToken(w http.ResponseWriter, r *http.Request, c admi
 	if err != nil {
 		adminError(w, http.StatusBadRequest, adminBadRequest, err.Error())
 		return
+	}
+	// a setup-token is added with no request out: the pick is only put on
+	if in.Proxy != nil {
+		if _, ok := pickedProxy(w, c, in.Proxy); !ok {
+			return
+		}
 	}
 	if len(c.area.Accounts) >= adminAccountsLimit {
 		adminError(w, http.StatusConflict, adminConflict, "an area has at most 500 accounts")
@@ -378,6 +453,11 @@ func (s *Server) adminClaudeToken(w http.ResponseWriter, r *http.Request, c admi
 			log.Printf("admin: area %s's Claude account, its opening date not kept: %v", c.area.ID, err)
 		}
 	}
+	if in.Proxy != nil {
+		if err := in.Proxy.mount(c.area.ID, ref); err != nil {
+			log.Printf("admin: area %s's Claude account, %s", c.area.ID, mountFailed(err))
+		}
+	}
 	a, _ := area.Get(c.area.ID)
 	for _, acc := range areaAccounts(a) {
 		if acc.ID == ref {
@@ -394,7 +474,7 @@ func CancelAreaSignIns(id string) {
 	var ids []string
 	areaSignIns.Lock()
 	for sid, a := range areaSignIns.m {
-		if a == id {
+		if a.area == id {
 			ids = append(ids, sid)
 			delete(areaSignIns.m, sid)
 		}
