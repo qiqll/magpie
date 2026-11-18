@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +26,9 @@ type adminSignInWay struct {
 	Agent string   `json:"agent"`
 	Name  string   `json:"name"`
 	Ways  []string `json:"ways"`
+	// Sites are where it signs in, for one with more than one: "ghe.com"
+	// is an enterprise's <name>.ghe.com, sent as the sign-in's site
+	Sites []string `json:"sites,omitempty"`
 }
 
 // The ways a sign-in finishes.
@@ -38,7 +42,8 @@ const (
 // adminSignIns are the subscriptions an area may sign in to.
 var adminSignIns = []adminSignInWay{
 	{Agent: "codex", Name: "ChatGPT (Codex)", Ways: []string{wayDevice, wayPasteURL}},
-	{Agent: "copilot", Name: "GitHub Copilot", Ways: []string{wayDevice}},
+	{Agent: provider.ChatGPTAPIID, Name: "Sign in with ChatGPT (API)", Ways: []string{wayPasteURL}},
+	{Agent: "copilot", Name: "GitHub Copilot", Ways: []string{wayDevice}, Sites: []string{"github.com", "ghe.com"}},
 	{Agent: "claude", Name: "Claude", Ways: []string{waySetupToken, wayPasteCode}},
 	{Agent: "gemini", Name: "Gemini", Ways: []string{wayPasteURL}},
 	{Agent: "antigravity", Name: "Antigravity", Ways: []string{wayPasteURL}},
@@ -55,6 +60,24 @@ func signInWays() []adminSignInWay {
 	}
 	return out
 }
+
+// gheSite is an enterprise's GHE.com host, the one site other than
+// github.com an area signs in to Copilot on. A GitHub Enterprise Server's
+// own host, an IP, a port or a path is none: a GitHub token is never sent
+// to a host the console names.
+var gheSite = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.ghe\.com$`)
+
+// copilotSite is the <name>.ghe.com an area's Copilot sign-in was sent,
+// lower case with a leading https:// and a trailing / taken off; ok is
+// false for anything else, github.com included (which is no site sent).
+func copilotSite(s string) (string, bool) {
+	h := strings.TrimSuffix(strings.TrimPrefix(strings.ToLower(s), "https://"), "/")
+	return h, gheSite.MatchString(h)
+}
+
+// startAreaSignIn starts an area's sign-in; a var so tests see what it
+// was started with.
+var startAreaSignIn = provider.StartSignInWith
 
 // subscriptionOf is the id of the provider agent's accounts are served
 // by: a built-in subscription's is its agent's (provider.loginProvider),
@@ -157,7 +180,7 @@ func claimOnDone(id string) func(provider.SignInState) provider.SignInState {
 }
 
 func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall) {
-	var in struct{ Agent, Way string }
+	var in struct{ Agent, Way, Site string }
 	if !decodeAdmin(w, r, &in) {
 		return
 	}
@@ -174,15 +197,27 @@ func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall
 		adminError(w, http.StatusBadRequest, adminBadRequest, in.Agent+" signs in by "+strings.Join(way.Ways, " or ")+" (a setup-token is sent to "+AdminPath+"/signin/claude-token)")
 		return
 	}
+	site := ""
+	if in.Site != "" {
+		ok := false
+		if site, ok = copilotSite(in.Site); !ok || len(way.Sites) == 0 {
+			msg := in.Agent + " takes no site"
+			if len(way.Sites) > 0 {
+				msg = "site is an enterprise's <name>.ghe.com; leave it out for github.com"
+			}
+			adminError(w, http.StatusBadRequest, adminBadRequest, msg)
+			return
+		}
+	}
 	if len(c.area.Accounts) >= adminAccountsLimit {
 		adminError(w, http.StatusConflict, adminConflict, "an area has at most 500 accounts")
 		return
 	}
-	o := provider.SignInOptions{Area: true, Done: claimOnDone(c.area.ID)}
+	o := provider.SignInOptions{Site: site, Area: true, Done: claimOnDone(c.area.ID)}
 	if in.Agent == "codex" && in.Way == wayDevice {
 		o.Site = provider.CodexDeviceSite
 	}
-	st, err := provider.StartSignInWith(in.Agent, o)
+	st, err := startAreaSignIn(in.Agent, o)
 	if errors.Is(err, provider.ErrSignInBusy) {
 		adminError(w, http.StatusConflict, adminConflict, err.Error())
 		return

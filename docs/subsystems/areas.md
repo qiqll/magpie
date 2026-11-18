@@ -365,10 +365,22 @@ connection magpie makes to it, so a name pointed home after it was saved
 
 An area admin signs in from a browser that isn't on this computer, so each
 way finishes with nothing coming back to this computer's ports: Codex by
-device code or the address pasted, Copilot by device code, Claude by a
-setup-token or `claude auth login`'s code pasted, Gemini and Antigravity
-by the address pasted. A subscription a plugin serves is offered to no
-area yet, nor are Sign in with ChatGPT and file imports.
+device code or the address pasted, Sign in with ChatGPT (`chatgpt-api`)
+by the address pasted, Copilot by device code, Claude by a setup-token or
+`claude auth login`'s code pasted, Gemini and Antigravity by the address
+pasted. A subscription a plugin serves is offered to no area yet, nor are
+file imports.
+
+- Copilot signs in on github.com, or on an enterprise's `<name>.ghe.com`
+  when the request has `site` (`copilotSite`, admin_signin.go): lower
+  case, a leading `https://` and a trailing `/` taken off, it must match
+  `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.ghe\.com$`. Anything else
+  (github.com, a GHE Server host, an IP, a port or path) is `400`, and so
+  is a `site` sent for another subscription; no site, or `""`, is
+  github.com as before. Copilot's entry in `options` and `catalog` has
+  `"sites": ["github.com", "ghe.com"]`.
+- A pasted address reaches only the sign-in's own callback
+  (`pastedCallback`): its port, path and state. Another is `400`.
 
 - `SignInOptions.Area`: the sign-in starts only while none of its agent is
   under way (`reserveSignIn`, held as pending until listed); while it runs
@@ -379,7 +391,8 @@ area yet, nor are Sign in with ChatGPT and file imports.
   (`addLoginOf(…, magpieOnly)`), unless it was signed in to that account
   already.
 - `SignInOptions.Done` claims the account as the sign-in is done, whether
-  or not the console asks again. One magpie had before (`Again`, the
+  or not the console asks again. It is told the sign-in's agent and id
+  (`finish`), which the claim is made by. One magpie had before (`Again`, the
   owner's or another area's) stays whose it was and reads `conflict`;
   its tokens were renewed by the sign-in, which hands no account across.
 - Each sign-in is read, pasted into and cancelled by the area that started
@@ -413,14 +426,17 @@ by the owner or another area) is left out: its calls can't be told apart.
 An areas.json from before `previous` reads as it did. One the area couldn't
 be told of lists as `gone`.
 
-## Agreed, not built yet (T-209 to T-215)
+## Agreed, not built yet (T-209, T-211 to T-215)
 
 Everything above is what magpie does today. On 2026-11-18 the owner settled
 the next contract (magpie-console's `docs/magpie-api.md` §10–19, T-208):
-plugin and missing built-in sign-ins, credential imports, a proxy picked
-for a sign-in, import or key, more key fields, more proxy-IP routes, and
-the console acting for an area. None of it is in the code yet; each task
-moves its part into the sections above as it lands. What the magpie side
+plugin sign-ins, credential imports, a proxy picked for a sign-in, import
+or key, more key fields, more proxy-IP routes, and the console acting for
+an area. The missing built-in sign-ins (§12, T-210: `chatgpt-api` and
+Copilot's `site`) are in [Area sign-ins](#area-sign-ins); the console
+reaching them through `/areas/{id}/signin` comes with the rest of its
+acting for an area. Each task moves its part into the sections above as
+it lands. What the magpie side
 must hold, beside the contract's bodies and codes:
 
 - **One reader, never a copy.** Sign-ins go through `StartSignInWith` and
