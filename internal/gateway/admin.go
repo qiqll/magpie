@@ -58,6 +58,7 @@ var adminRoutes = map[string]map[string]bool{
 		"GET " + AdminPath + "/options":               true,
 		"GET " + AdminPath + "/accounts":              true,
 		"POST " + AdminPath + "/accounts/key":         true,
+		"POST " + AdminPath + "/accounts/keys":        true,
 		"POST " + AdminPath + "/accounts/remove":      true,
 		"GET " + AdminPath + "/usage":                 true,
 		"GET " + AdminPath + "/usage/requests":        true,
@@ -108,6 +109,7 @@ func (s *Server) adminRoutesOn(mux *routeMux) {
 	mux.HandleFunc("GET "+AdminPath+"/options", s.admin(access.AdminArea, s.adminOptions))
 	mux.HandleFunc("GET "+AdminPath+"/accounts", s.admin(access.AdminArea, s.adminAccounts))
 	mux.HandleFunc("POST "+AdminPath+"/accounts/key", s.admin(access.AdminArea, s.probeHeld(s.adminAddKey)))
+	mux.HandleFunc("POST "+AdminPath+"/accounts/keys", s.admin(access.AdminArea, s.adminAddKeys))
 	mux.HandleFunc("POST "+AdminPath+"/accounts/remove", s.admin(access.AdminArea, s.adminRemove))
 	mux.HandleFunc("GET "+AdminPath+"/usage", s.admin(access.AdminArea, s.adminUsage))
 	mux.HandleFunc("GET "+AdminPath+"/usage/requests", s.admin("", s.adminUsageRequests))
@@ -237,6 +239,18 @@ func (s *Server) adminMe(w http.ResponseWriter, r *http.Request, c adminCall) {
 type adminProvider struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// Protocols are those a key of it may be set to (T-213): "" for any,
+	// and each API it has an address for (keyProtocols)
+	Protocols []string `json:"protocols"`
+	// Plans are the plans a key of it may be for, of a preset that sells
+	// more than one on keys of their own (provider.KeyPlans)
+	Plans []adminPlan `json:"plans,omitempty"`
+}
+
+// adminPlan is a plan a provider's key may be for.
+type adminPlan struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // keyProviders are the providers that take API keys, by id: those with
@@ -245,7 +259,11 @@ func keyProviders() []adminProvider {
 	out := []adminProvider{}
 	for _, p := range provider.All() {
 		if p.Account == nil && !p.IsPlugin() {
-			out = append(out, adminProvider{ID: p.ID, Name: p.Name})
+			ap := adminProvider{ID: p.ID, Name: p.Name, Protocols: keyProtocols(p)}
+			for _, r := range provider.KeyPlans(p) {
+				ap.Plans = append(ap.Plans, adminPlan{ID: r.ID, Name: r.Name})
+			}
+			out = append(out, ap)
 		}
 	}
 	return out
@@ -283,7 +301,11 @@ type adminAccount struct {
 	Plan         string `json:"plan,omitempty"`
 	On           bool   `json:"on"`
 	SignedOut    bool   `json:"signedOut,omitempty"`
-	Gone         bool   `json:"gone,omitempty"` // removed from magpie by its owner
+	// Opened is when a subscription account's paid period was opened
+	// (provider.AccountOpenedOf), YYYY-MM-DD in this computer's zone;
+	// none when unset, and never a key's (T-213)
+	Opened string `json:"opened,omitempty"`
+	Gone   bool   `json:"gone,omitempty"` // removed from magpie by its owner
 	// Contested: another area has it too (areas.json written by hand):
 	// neither removes it nor is told what it spent until the owner settles it
 	Contested bool      `json:"contested,omitempty"`
@@ -314,7 +336,7 @@ func areaAccounts(a area.Area) []adminAccount {
 		pid, ref, _ := strings.Cut(owned.Ref, "/")
 		acc := adminAccount{ID: owned.Ref, Provider: pid, Name: ref, Added: owned.Added, Gone: true, Contested: !ownsRef(a, owned.Ref)}
 		if rec := owned.Proxy; rec != nil {
-			acc.Proxy = &adminAccountProxy{IP: rec.IP, ID: rec.ID, Overridden: provider.AreaProxyOverridden(pid, *rec)}
+			acc.Proxy = &adminAccountProxy{IP: rec.IP, ID: rec.ID, Direct: rec.Direct, Overridden: provider.AreaProxyOverridden(pid, *rec)}
 		}
 		p, err := provider.Find(pid)
 		if err == nil {
@@ -360,6 +382,9 @@ func describe(acc *adminAccount, p provider.Provider, ref string) {
 			continue
 		}
 		acc.Name, acc.Plan, acc.Gone = r.User, r.Plan, false
+		if at := provider.AccountOpenedOf(p.ID, r.User); !at.IsZero() {
+			acc.Opened = at.In(time.Local).Format(time.DateOnly)
+		}
 		for _, l := range provider.Logins(agentID) {
 			if strings.EqualFold(l.User, r.User) {
 				acc.On = (l.On || l.Active) && !l.Banned && !l.Disabled
@@ -382,20 +407,18 @@ func (s *Server) adminAccounts(w http.ResponseWriter, r *http.Request, c adminCa
 }
 
 func (s *Server) adminAddKey(w http.ResponseWriter, r *http.Request, c adminCall) {
-	var in struct{ Provider, Name, Key string }
+	var in struct {
+		keyFields
+		Key string `json:"key"`
+	}
 	if !decodeAdmin(w, r, &in) {
 		return
 	}
+	p, proto, plan, ok := keyTarget(w, c, in.keyFields)
+	if !ok {
+		return
+	}
 	in.Key, in.Name = strings.TrimSpace(in.Key), strings.TrimSpace(in.Name)
-	if !slices.Contains(c.area.Providers, in.Provider) {
-		adminNotFoundErr(w)
-		return
-	}
-	p, err := provider.Find(in.Provider)
-	if err != nil || p.Account != nil || p.IsPlugin() {
-		adminNotFoundErr(w)
-		return
-	}
 	if in.Key == "" || len(in.Key) > 4096 {
 		adminError(w, http.StatusBadRequest, adminBadRequest, "send the API key, up to 4096 characters")
 		return
@@ -404,31 +427,13 @@ func (s *Server) adminAddKey(w http.ResponseWriter, r *http.Request, c adminCall
 		adminError(w, http.StatusConflict, adminConflict, "an area has at most 500 accounts")
 		return
 	}
-	fp := provider.KeyID(in.Key)
-	ref := p.ID + "/" + fp
-	if slices.ContainsFunc(p.KeyList(), func(k provider.KeyInfo) bool { return k.ID == fp }) {
-		adminError(w, http.StatusConflict, adminConflict, "this key is in magpie already")
-		return
-	}
-	// owned first, so the key is the area's from the moment it is there
-	if err := area.Claim(c.area.ID, ref); err != nil {
-		adminClaimErr(w, err)
-		return
-	}
-	if err := provider.AddKey(p.ID, in.Name, in.Key, ""); err != nil {
-		area.Release(ref)
-		adminError(w, http.StatusBadRequest, adminBadRequest, err.Error())
+	acc, status, code, msg := addAreaKey(c, p, in.Name, in.Key, proto, plan)
+	if status != http.StatusCreated {
+		adminError(w, status, code, msg)
 		return
 	}
 	log.Printf("admin: area %s (%s) added a key of %s", c.area.ID, c.area.Note, p.ID)
-	a, _ := area.Get(c.area.ID)
-	for _, acc := range areaAccounts(a) {
-		if acc.ID == ref {
-			writeJSON(w, http.StatusCreated, acc)
-			return
-		}
-	}
-	writeJSON(w, http.StatusCreated, adminAccount{ID: ref, Provider: p.ID, ProviderName: p.Name, Kind: "key"})
+	writeJSON(w, http.StatusCreated, acc)
 }
 
 func adminClaimErr(w http.ResponseWriter, err error) {

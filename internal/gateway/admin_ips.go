@@ -53,6 +53,7 @@ var (
 	areaIPChange = renewal.ChangeAreaIP
 	areaIPRemove = renewal.RemoveAreaIP
 	areaIPAttach = provider.AttachAreaProxy
+	areaDirect   = provider.AttachAreaDirect
 )
 
 // adminIP is an IP as the admin routes tell it (magpie-api.md's AreaIP).
@@ -77,11 +78,12 @@ type adminIPProxy struct {
 	URL string `json:"url"`
 }
 
-// adminAccountProxy is the area's proxy on an account: overridden once
-// the owner set the account's proxy since.
+// adminAccountProxy is the area's proxy on an account, or its direct (no
+// IP nor proxy): overridden once the owner set the account's proxy since.
 type adminAccountProxy struct {
-	IP         string `json:"ip"`
-	ID         string `json:"id"`
+	IP         string `json:"ip,omitempty"`
+	ID         string `json:"id,omitempty"`
+	Direct     bool   `json:"direct,omitempty"`
 	Overridden bool   `json:"overridden"`
 }
 
@@ -365,6 +367,8 @@ func (s *Server) adminAccountProxy(w http.ResponseWriter, r *http.Request, c adm
 		ID    string `json:"id"`
 		IP    string `json:"ip"`
 		Proxy string `json:"proxy"`
+		// Direct: the account goes through no proxy (T-213)
+		Direct bool `json:"direct"`
 	}
 	if !decodeAdmin(w, r, &in) {
 		return
@@ -373,7 +377,15 @@ func (s *Server) adminAccountProxy(w http.ResponseWriter, r *http.Request, c adm
 		adminNotFoundErr(w)
 		return
 	}
-	if in.Proxy == "" {
+	if in.Direct && (in.IP != "" || in.Proxy != "") {
+		adminError(w, http.StatusBadRequest, adminBadRequest, "send direct, or an ip and its proxy, not both")
+		return
+	}
+	if in.Direct {
+		if !attachAnswered(w, areaDirect(c.area.ID, in.ID)) {
+			return
+		}
+	} else if in.Proxy == "" {
 		if err := provider.DetachAreaProxy(c.area.ID, in.ID); err != nil {
 			adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
 			return
@@ -387,20 +399,7 @@ func (s *Server) adminAccountProxy(w http.ResponseWriter, r *http.Request, c adm
 			adminError(w, http.StatusNotFound, adminNotFound, "no such proxy")
 			return
 		}
-		err := areaIPAttach(c.area.ID, in.ID, x.IP, in.Proxy)
-		switch {
-		case err == nil:
-		case errors.Is(err, renewal.ErrIPNotFound), errors.Is(err, area.ErrNotOwned), errors.Is(err, provider.ErrNoAccount):
-			adminNotFoundErr(w)
-			return
-		case errors.Is(err, provider.ErrOverridden):
-			adminError(w, http.StatusConflict, adminConflict, "the owner set this account's proxy: it stays the owner's")
-			return
-		case errors.Is(err, renewal.ErrIPsUnreadable):
-			ipWriteErr(w, err)
-			return
-		default:
-			adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
+		if !attachAnswered(w, areaIPAttach(c.area.ID, in.ID, x.IP, in.Proxy)) {
 			return
 		}
 	}
@@ -416,6 +415,24 @@ func (s *Server) adminAccountProxy(w http.ResponseWriter, r *http.Request, c adm
 		}
 	}
 	adminNotFoundErr(w)
+}
+
+// attachAnswered says an attach, of a proxy or direct, went, or answers
+// why not.
+func attachAnswered(w http.ResponseWriter, err error) bool {
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, renewal.ErrIPNotFound), errors.Is(err, area.ErrNotOwned), errors.Is(err, provider.ErrNoAccount):
+		adminNotFoundErr(w)
+	case errors.Is(err, provider.ErrOverridden):
+		adminError(w, http.StatusConflict, adminConflict, "the owner set this account's proxy: it stays the owner's")
+	case errors.Is(err, renewal.ErrIPsUnreadable):
+		ipWriteErr(w, err)
+	default:
+		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
+	}
+	return false
 }
 
 // proxyChecks holds each area's proxy checks to checksMost in

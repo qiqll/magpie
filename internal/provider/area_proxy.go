@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/yetone/magpie/internal/area"
 	"github.com/yetone/magpie/internal/netproxy"
@@ -21,7 +22,8 @@ import (
 // (area.AccountProxy), by its id alone. A value there that is no longer
 // the area's proxy (the owner changed or cleared it) is the owner's: the
 // area is told it is overridden, can't change it, and nothing of the
-// area's ever takes it away.
+// area's ever takes it away. A direct (T-213) is the same with "direct"
+// written there, and no IP or proxy recorded.
 
 // ErrOverridden: the owner set this account's proxy.
 var ErrOverridden = errors.New("the owner set this account's proxy")
@@ -56,7 +58,7 @@ func areaAttachedProxy(raw string) bool {
 	id := renewal.ProxyID(raw)
 	for _, a := range areas {
 		for _, c := range a.Accounts {
-			if c.Proxy != nil && c.Proxy.ID == id {
+			if c.Proxy != nil && !c.Proxy.Direct && c.Proxy.ID == id {
 				return true
 			}
 		}
@@ -102,9 +104,35 @@ func ownProxyOf(pid, key string) string {
 // AreaProxyOverridden says the account's proxy as the provider has it is
 // no longer the one the area put on it (rec): the owner's.
 func AreaProxyOverridden(pid string, rec area.AccountProxy) bool {
-	cur := ownProxyOf(pid, rec.Key)
-	return cur == "" || renewal.ProxyID(cur) != rec.ID
+	return !areaValue(rec, ownProxyOf(pid, rec.Key))
 }
+
+// areaValue says cur, an account's own proxy, is the one rec put there:
+// "direct" for a direct, else the proxy of rec's id.
+func areaValue(rec area.AccountProxy, cur string) bool {
+	if rec.Direct {
+		return cur == "direct"
+	}
+	return cur != "" && renewal.ProxyID(cur) == rec.ID
+}
+
+// overWrites is the check setOwnProxy makes before an area's attach
+// writes the account key's own proxy: the value there is none, with no
+// record of the area's before (was), or still the area's own; else it is
+// the owner's (ErrOverridden).
+func overWrites(was *area.AccountProxy, key string) func(cur string) error {
+	return func(cur string) error {
+		if cur == "" && was == nil || was != nil && was.Key == key && areaValue(*was, cur) {
+			return nil
+		}
+		return ErrOverridden
+	}
+}
+
+// attachMu holds an area's attaches, directs and detaches one at a time:
+// each reads the record there before (recordOf) and writes it again, so
+// two on one account never cross. Taken before ipsMu.
+var attachMu sync.Mutex
 
 // AttachAreaProxy puts the proxy proxyID of the area areaID's IP ip on its
 // account ref ("<provider>/<id>"). Each is checked here, whatever the
@@ -128,6 +156,8 @@ func AttachAreaProxy(areaID, ref, ip, proxyID string) error {
 	if err != nil {
 		return err
 	}
+	attachMu.Lock()
+	defer attachMu.Unlock()
 	// the IP and its proxy read, recorded and written under ipsMu: no
 	// removal of either comes between (renewal.WithAreaProxy)
 	return renewal.WithAreaProxy(areaID, ip, proxyID, func(x renewal.IP, url string) error {
@@ -139,14 +169,7 @@ func AttachAreaProxy(areaID, ref, ip, proxyID string) error {
 		if err := area.SetProxy(areaID, ref, &rec); err != nil {
 			return err
 		}
-		// written only while the value there is none, with no record of
-		// the area's before, or still the area's own: else the owner's
-		if err := setOwnProxy(pid, key, url, func(cur string) error {
-			if cur == "" && was == nil || cur != "" && was != nil && was.Key == key && renewal.ProxyID(cur) == was.ID {
-				return nil
-			}
-			return ErrOverridden
-		}); err != nil {
+		if err := setOwnProxy(pid, key, url, overWrites(was, key)); err != nil {
 			area.SetProxy(areaID, ref, was)
 			return err
 		}
@@ -159,9 +182,53 @@ func AttachAreaProxy(areaID, ref, ip, proxyID string) error {
 	})
 }
 
-// DetachAreaProxy takes the area's proxy off its account ref: off the
-// provider where it is still the area's, and out of areas.json whatever.
+// AttachAreaDirect has the area areaID's account ref go through no proxy
+// (T-213): "direct" is written as its own proxy, and areas.json keeps a
+// direct record, no IP nor proxy in it. Checked as AttachAreaProxy
+// checks, an IP aside: the account is the area's alone
+// (area.ErrNotOwned) and magpie has it (ErrNoAccount), and its own proxy
+// is none or the area's (ErrOverridden). The owner's own value for the
+// account wins over it; the subscription's and the global proxy don't,
+// as with a proxy.
+func AttachAreaDirect(areaID, ref string) error {
+	pid, id, ok := strings.Cut(ref, "/")
+	if !ok {
+		return ErrNoAccount
+	}
+	if owner, contested, err := area.Owner(ref); err != nil {
+		return err
+	} else if contested || owner != areaID {
+		return area.ErrNotOwned
+	}
+	key, err := areaAccountKey(pid, id)
+	if err != nil {
+		return err
+	}
+	attachMu.Lock()
+	defer attachMu.Unlock()
+	was := recordOf(areaID, ref)
+	rec := area.AccountProxy{Key: key, Direct: true}
+	if err := area.SetProxy(areaID, ref, &rec); err != nil {
+		return err
+	}
+	if err := setOwnProxy(pid, key, "direct", overWrites(was, key)); err != nil {
+		area.SetProxy(areaID, ref, was)
+		return err
+	}
+	if owner, contested, err := area.Owner(ref); err != nil || contested || owner != areaID {
+		clearAreaProxy(pid, rec)
+		return area.ErrNotOwned
+	}
+	log.Printf("areas: area %s put direct on %s", areaID, pid)
+	return nil
+}
+
+// DetachAreaProxy takes the area's proxy, or direct, off its account
+// ref: off the provider where it is still the area's, and out of
+// areas.json whatever.
 func DetachAreaProxy(areaID, ref string) error {
+	attachMu.Lock()
+	defer attachMu.Unlock()
 	rec := recordOf(areaID, ref)
 	if rec == nil {
 		return nil
@@ -202,14 +269,14 @@ func releaseAreaProxy(c area.Account) {
 	}
 }
 
-// clearAreaProxy takes rec's proxy off the account rec.Key of provider
-// pid when it is still the area's (by its id).
+// clearAreaProxy takes rec's proxy, or direct, off the account rec.Key
+// of provider pid when it is still the area's (areaValue).
 func clearAreaProxy(pid string, rec area.AccountProxy) error {
-	if cur := ownProxyOf(pid, rec.Key); cur == "" || renewal.ProxyID(cur) != rec.ID {
+	if !areaValue(rec, ownProxyOf(pid, rec.Key)) {
 		return nil
 	}
 	return setOwnProxy(pid, rec.Key, "", func(cur string) error {
-		if cur == "" || renewal.ProxyID(cur) != rec.ID {
+		if !areaValue(rec, cur) {
 			return errLeftAlone
 		}
 		return nil
@@ -274,8 +341,9 @@ func setOwnProxy(pid, key, url string, allow func(cur string) error) error {
 
 // SweepAreaProxies takes every area's proxy off its accounts where the
 // IP is no longer the area's, or no longer has that proxy: the owner
-// removed it, took the IP back or took the proxy out of it. ips.json
-// that can't be read is unknown, and nothing is taken off.
+// removed it, took the IP back or took the proxy out of it. A direct
+// goes through no IP, and stays. ips.json that can't be read is
+// unknown, and nothing is taken off.
 func SweepAreaProxies() error {
 	ips, _, err := renewal.IPs()
 	if err != nil {
@@ -287,7 +355,7 @@ func SweepAreaProxies() error {
 	}
 	for _, a := range areas {
 		for _, c := range a.Accounts {
-			if c.Proxy == nil {
+			if c.Proxy == nil || c.Proxy.Direct {
 				continue
 			}
 			kept := slices.ContainsFunc(ips, func(x renewal.IP) bool {

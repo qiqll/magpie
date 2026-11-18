@@ -106,7 +106,7 @@ agent's (`codex`, `claude`, `copilot`, `gemini`, `antigravity`).
 ## Routes
 
 `/v1/magpie/admin/*`. Area: `me`, `options`, `accounts`, `accounts/key`,
-`accounts/remove`, `usage`, `usage/requests`, `usage/stats`, `signin`, `signin/{id}`, `signin/{id}/callback`,
+`accounts/keys`, `accounts/remove`, `usage`, `usage/requests`, `usage/stats`, `signin`, `signin/{id}`, `signin/{id}/callback`,
 `signin/{id}/cancel`, `signin/claude-token`, `ips`, `ips/update`,
 `ips/delete`, `ips/check`, `accounts/proxy`. Console: `me`, `catalog`,
 `areas`, `areas/{id}`, `areas/{id}/accounts`, `areas/{id}/usage`,
@@ -119,9 +119,29 @@ and reply bodies are in magpie-console's `docs/magpie-api.md`.
 - Adding a key claims it first and adds it after (a failed add releases
   it), so it is the area's from the moment it is in magpie. A key magpie
   has already is `409` and names no owner.
+- **A key's fields** (T-213, [`admin_keys.go`](../../internal/gateway/admin_keys.go)):
+  `protocol` is `""` (any) or an API the provider has an address for, as
+  the window's protocol picker offers (`keyProtocols`); `plan` is one of
+  the preset's plans when it sells them on keys of their own
+  (`provider.KeyPlans`), the provider's own kept as none
+  (`keyPlanOf`, shared with `SetKeyPlan`). The key is added with both
+  (`provider.AddKeyOnPlan`). Any other value is `400` and adds nothing.
+  `options` and `catalog` give each provider its `protocols` and, when
+  there are any, `plans`. A key sent with `opened`, even `""`, is `400`:
+  a key has no opening date.
+- **Many keys** (`accounts/keys`, `adminAddKeys`): 1 to 100 after blank
+  ones are dropped, each claimed and added on its own as `accounts/key`
+  does, and none rolled back. Each gets a row in the order sent, by its
+  `masked` value and never the key: `added` (with its account), `conflict`,
+  `duplicate` (sent twice in the request) or `failed` with why. A `name`
+  is given ` #2`, ` #3`… by row. Past the area's 500 accounts the rest fail
+  with "an area has at most 500 accounts". Each conflict counts toward the
+  area's conflict line; at the 20th the rest fail with "too many
+  conflicts; try again later", and an area already held is `429` at the
+  door (`heldAnswered`, shared with `probeHeld`).
 - That `409` would let an area admin test whether some key or account is in
   magpie, so each area's `409`s on `accounts/key` and
-  `signin/claude-token` are counted (`conflictProbes`, admin_probe.go):
+  `signin/claude-token`, and each conflict row of `accounts/keys`, are counted (`conflictProbes`, admin_probe.go):
   after 20 in 10 minutes both routes answer that area `429
   too_many_conflicts` with a `Retry-After`, whatever it sends, until the
   oldest leaves the window. A held request is not run. The 20th is logged
@@ -276,6 +296,16 @@ proxies on its own accounts
   account. Once the value there is no longer the area's proxy, the owner
   set it: the account says `overridden`, a new attach is `409`, and
   nothing of the area's takes the owner's value off.
+- **Direct** (`{"id","direct":true}`, `provider.AttachAreaDirect`, T-213):
+  `"direct"` is written as the account's own proxy, so it goes through
+  none, and `areas.json` keeps `{key, direct: true}` with no IP or proxy.
+  It is checked and taken off as a proxy is (`areaValue`, `overWrites`):
+  the owner's own value for the account, set before or since, wins
+  (`overridden`, `409`); the subscription's and the global proxy don't.
+  The account tells `"proxy": {"direct": true, "overridden": …}`.
+  `SweepAreaProxies` leaves a direct alone: it goes through no IP. A
+  direct sent with an IP or proxy is `400`. Attaches, directs and
+  detaches take `attachMu` first, so two on one account never cross.
 - **No race with a removal.** An attach checks the IP and proxy, records
   them and writes the address while holding `ipsMu`
   (`renewal.WithAreaProxy`). The area's removal of an IP or proxy asks
@@ -381,6 +411,13 @@ file imports.
   `"sites": ["github.com", "ghe.com"]`.
 - A pasted address reaches only the sign-in's own callback
   (`pastedCallback`): its port, path and state. Another is `400`.
+- **Opened** (T-213): `signin` and `signin/claude-token` take `opened`,
+  `YYYY-MM-DD` in this computer's zone (`areaOpened`), checked by
+  `renewal.CheckOpened` before anything starts (`400` else). It is kept
+  with `provider.SetAccountOpened` once the sign-in leaves the account the
+  area's (`openOnDone`, after `claimOnDone`): a `conflict` keeps none on
+  an account that isn't the area's. The area's accounts tell `opened`
+  for a subscription account that has one, never for a key.
 
 - `SignInOptions.Area`: the sign-in starts only while none of its agent is
   under way (`reserveSignIn`, held as pending until listed); while it runs
@@ -426,14 +463,17 @@ by the owner or another area) is left out: its calls can't be told apart.
 An areas.json from before `previous` reads as it did. One the area couldn't
 be told of lists as `gone`.
 
-## Agreed, not built yet (T-209, T-211 to T-215)
+## Agreed, not built yet (T-209, T-211, T-212, T-214, T-215)
 
 Everything above is what magpie does today. On 2026-11-18 the owner settled
 the next contract (magpie-console's `docs/magpie-api.md` §10–19, T-208):
 plugin sign-ins, credential imports, a proxy picked for a sign-in, import
 or key, more key fields, more proxy-IP routes, and the console acting for
 an area. The missing built-in sign-ins (§12, T-210: `chatgpt-api` and
-Copilot's `site`) are in [Area sign-ins](#area-sign-ins); the console
+Copilot's `site`) are in [Area sign-ins](#area-sign-ins), and the key fields, many keys,
+opened dates and direct (§15, T-213) in [Routes](#routes),
+[Proxy IPs](#proxy-ips) and [Area sign-ins](#area-sign-ins); a `proxy`
+sent with a key (§14) comes with T-212. The console
 reaching them through `/areas/{id}/signin` comes with the rest of its
 acting for an area. Each task moves its part into the sections above as
 it lands. What the magpie side
@@ -467,14 +507,10 @@ must hold, beside the contract's bodies and codes:
   `error`, `instructions`, a sign-in's `message`) is withheld whole when
   it holds the key, a hidden input or any input of 4 characters or more:
   `keyFailure` cleans the log alone today.
-- **Opened dates are a subscription's.** A request that makes a key
-  (`accounts/key(s)`, a plugin's `api-key`, a Factory import) with
-  `opened` is `400`.
-- **Many keys keep what was added**: `accounts/keys` claims and writes one
-  at a time and rolls none back.
-- **Direct is an area attachment** (`{"direct": true}` in `areas.json`),
-  told apart from no attachment. The owner's own value for the account
-  wins over it; a subscription's or the global proxy doesn't.
+- **Opened dates are a subscription's.** A plugin's `api-key` and a
+  Factory import with `opened` are `400`, as the key routes are already;
+  a plugin's other methods and the other imports take it, as `signin`
+  does.
 - **Limits are the area's, from both keys.** Every add, sign-in, import
   and proxy route the console reaches as `/areas/{id}/…` runs the area's
   own handler and checks: what the area may add, 500 accounts, 50 IPs,

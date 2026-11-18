@@ -64,10 +64,14 @@ type Account struct {
 // in its provider's AccountProxies (a key's fingerprint, an account's
 // login in lower case), where the proxy's address is written. The
 // address itself is not kept here. Never told as it is.
+//
+// Direct is the admin's "direct" on the account (T-213): no IP and no
+// proxy, "direct" written as its own proxy, so it goes through none.
 type AccountProxy struct {
-	IP  string `json:"ip"`
-	ID  string `json:"id"`
-	Key string `json:"key"`
+	IP     string `json:"ip,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Key    string `json:"key"`
+	Direct bool   `json:"direct,omitempty"`
 }
 
 // Released is told each account an area let go of (Release,
@@ -343,7 +347,7 @@ func SetProxy(id, ref string, p *AccountProxy) error {
 			return ErrNotOwned
 		}
 		if p != nil {
-			p = &AccountProxy{IP: p.IP, ID: p.ID, Key: p.Key}
+			p = &AccountProxy{IP: p.IP, ID: p.ID, Key: p.Key, Direct: p.Direct}
 		}
 		f.Areas[i].Accounts[j].Proxy = p
 		return nil

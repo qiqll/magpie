@@ -183,6 +183,13 @@ func KeysListed() int64 { return keysListed.Load() }
 // AddKey saves one more key for a provider, on: it takes requests after
 // the ones before it. It becomes the first when the provider has none.
 func AddKey(id, name, key string, proto Protocol) error {
+	return AddKeyOnPlan(id, name, key, proto, "")
+}
+
+// AddKeyOnPlan is AddKey with the key for the preset's plan plan (a
+// Region's id, as SetKeyPlan takes it; "" the provider's own), set as it
+// is added.
+func AddKeyOnPlan(id, name, key string, proto Protocol, plan string) error {
 	name, key = strings.TrimSpace(name), strings.TrimSpace(key)
 	if err := keyProtocolOK(proto); err != nil {
 		return err
@@ -193,6 +200,9 @@ func AddKey(id, name, key string, proto Protocol) error {
 	}
 	if p.Account != nil {
 		return errors.New("a signed-in account has no keys")
+	}
+	if plan, err = keyPlanOf(*p, plan); err != nil {
+		return err
 	}
 	// added to the keys as they are stored then: one added or changed
 	// meanwhile stays (T-094)
@@ -215,9 +225,9 @@ func AddKey(id, name, key string, proto Protocol) error {
 			return fmt.Errorf("%s already has this key", p.Name)
 		}
 		if q.Key == "" {
-			q.Key, q.KeyName, q.KeyProtocol = key, name, proto
+			q.Key, q.KeyName, q.KeyProtocol, q.KeyPlan = key, name, proto, plan
 		} else {
-			q.Keys = append(q.Keys, KeyAccount{Name: name, Key: key, Protocol: proto})
+			q.Keys = append(q.Keys, KeyAccount{Name: name, Key: key, Protocol: proto, Plan: plan})
 		}
 		return nil
 	})
@@ -394,20 +404,8 @@ func SetKeyPlan(id, keyRef, plan string) error {
 	if err != nil {
 		return err
 	}
-	plan = strings.TrimSpace(plan)
-	if plan != "" {
-		pr := Preset(p.Preset)
-		if pr == nil || !pr.KeyPlans {
-			return fmt.Errorf("%s's keys are all on one plan", p.Name)
-		}
-		if !slices.ContainsFunc(pr.Regions, func(r Region) bool { return r.ID == plan }) {
-			return fmt.Errorf("%s has no plan %q", pr.Name, plan)
-		}
-		// the provider's own plan is kept as none: the key follows the
-		// provider when its plan is changed in the editor
-		if r := p.regionOf(pr); r != nil && r.ID == plan {
-			plan = ""
-		}
+	if plan, err = keyPlanOf(*p, plan); err != nil {
+		return err
 	}
 	// set on the key as it is stored then: another key's setting, or a
 	// key added, meanwhile stays (T-094)
@@ -423,6 +421,38 @@ func SetKeyPlan(id, keyRef, plan string) error {
 		}
 		return nil
 	})
+}
+
+// keyPlanOf is plan as a key of p keeps it, or why p's keys can't take
+// it: one of the preset's plans (a Region's id), and "" for the
+// provider's own, which a key follows when its plan is changed in the
+// editor.
+func keyPlanOf(p Provider, plan string) (string, error) {
+	plan = strings.TrimSpace(plan)
+	if plan == "" {
+		return "", nil
+	}
+	pr := Preset(p.Preset)
+	if pr == nil || !pr.KeyPlans {
+		return "", fmt.Errorf("%s's keys are all on one plan", p.Name)
+	}
+	if !slices.ContainsFunc(pr.Regions, func(r Region) bool { return r.ID == plan }) {
+		return "", fmt.Errorf("%s has no plan %q", pr.Name, plan)
+	}
+	if r := p.regionOf(pr); r != nil && r.ID == plan {
+		return "", nil
+	}
+	return plan, nil
+}
+
+// KeyPlans are the plans a key of p may be for (keyPlanOf), when its
+// preset sells more than one on keys of their own; none else.
+func KeyPlans(p Provider) []Region {
+	pr := Preset(p.Preset)
+	if pr == nil || !pr.KeyPlans || len(pr.Regions) < 2 {
+		return nil
+	}
+	return slices.Clone(pr.Regions)
 }
 
 // MaxKeyWeight is the most a key's weight can be.

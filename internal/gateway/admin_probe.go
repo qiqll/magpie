@@ -3,7 +3,6 @@ package gateway
 import (
 	"log"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -11,7 +10,8 @@ import (
 // An area's add routes answer 409 for an account magpie has already, so
 // an area admin could test whether some key or account is in magpie by
 // adding it. conflictProbes counts each area's 409s on those routes
-// (accounts/key, signin/claude-token): past conflictMost in conflictWindow
+// (accounts/key, signin/claude-token, and each key accounts/keys is
+// told is there: adminAddKeys): past conflictMost in conflictWindow
 // they answer that area 429 whatever it sends, until the window lets go of
 // its oldest. Other areas are not held.
 const (
@@ -84,9 +84,7 @@ func (w *statusOf) WriteHeader(code int) {
 func (s *Server) probeHeld(h func(http.ResponseWriter, *http.Request, adminCall)) func(http.ResponseWriter, *http.Request, adminCall) {
 	return func(w http.ResponseWriter, r *http.Request, c adminCall) {
 		now := time.Now()
-		if wait := s.conflicts.held(c.area.ID, now); wait > 0 {
-			w.Header().Set("Retry-After", strconv.Itoa(max(int((wait+time.Second-1)/time.Second), 1)))
-			adminError(w, http.StatusTooManyRequests, adminTooManyConflicts, "this area was told an account is in magpie already too often: try again later")
+		if s.heldAnswered(w, c, now) {
 			return
 		}
 		sw := &statusOf{ResponseWriter: w}

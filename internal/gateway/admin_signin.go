@@ -7,9 +7,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/yetone/magpie/internal/area"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/renewal"
 )
 
 // An area admin's sign-in to a subscription (docs/subsystems/areas.md),
@@ -181,8 +183,43 @@ func claimOnDone(id string) func(provider.SignInState) provider.SignInState {
 	}
 }
 
+// areaOpened is when a subscription account's paid period was opened,
+// sent as YYYY-MM-DD in this computer's zone (T-213), as
+// provider.SetAccountOpened takes it: zero for none sent, or why it
+// can't be one (renewal.CheckOpened).
+func areaOpened(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, nil
+	}
+	at, err := time.ParseInLocation(time.DateOnly, s, time.Local)
+	if err != nil {
+		return time.Time{}, errors.New("opened is a date, YYYY-MM-DD")
+	}
+	if err := renewal.CheckOpened(at, time.Now()); err != nil {
+		return time.Time{}, err
+	}
+	return at, nil
+}
+
+// openOnDone is done, and then at (none when zero) kept as the opening
+// date of the account a sign-in left the area's.
+func openOnDone(done func(provider.SignInState) provider.SignInState, at time.Time) func(provider.SignInState) provider.SignInState {
+	return func(st provider.SignInState) provider.SignInState {
+		st = done(st)
+		if at.IsZero() || st.State != "done" {
+			return st
+		}
+		if err := provider.SetAccountOpened(subscriptionOf(st.Agent), st.User, at); err != nil {
+			log.Printf("admin: an area's %s account signed in, its opening date not kept: %v", st.Agent, err)
+			st.Error = "signed in, but its opening date wasn't kept: " + err.Error()
+		}
+		return st
+	}
+}
+
 func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall) {
-	var in struct{ Agent, Way, Site string }
+	var in struct{ Agent, Way, Site, Opened string }
 	if !decodeAdmin(w, r, &in) {
 		return
 	}
@@ -211,11 +248,16 @@ func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall
 			return
 		}
 	}
+	opened, err := areaOpened(in.Opened)
+	if err != nil {
+		adminError(w, http.StatusBadRequest, adminBadRequest, err.Error())
+		return
+	}
 	if len(c.area.Accounts) >= adminAccountsLimit {
 		adminError(w, http.StatusConflict, adminConflict, "an area has at most 500 accounts")
 		return
 	}
-	o := provider.SignInOptions{Site: site, Area: true, Done: claimOnDone(c.area.ID)}
+	o := provider.SignInOptions{Site: site, Area: true, Done: openOnDone(claimOnDone(c.area.ID), opened)}
 	if in.Agent == "codex" && in.Way == wayDevice {
 		o.Site = provider.CodexDeviceSite
 	}
@@ -289,13 +331,18 @@ func (s *Server) adminSignInCancel(w http.ResponseWriter, r *http.Request, c adm
 }
 
 func (s *Server) adminClaudeToken(w http.ResponseWriter, r *http.Request, c adminCall) {
-	var in struct{ Token string }
+	var in struct{ Token, Opened string }
 	if !decodeAdmin(w, r, &in) {
 		return
 	}
 	pid := subscriptionOf("claude")
 	if !slices.Contains(c.area.SignIns, "claude") || pid == "" || provider.PluginServes("claude") {
 		adminNotFoundErr(w)
+		return
+	}
+	opened, err := areaOpened(in.Opened)
+	if err != nil {
+		adminError(w, http.StatusBadRequest, adminBadRequest, err.Error())
 		return
 	}
 	if len(c.area.Accounts) >= adminAccountsLimit {
@@ -326,6 +373,11 @@ func (s *Server) adminClaudeToken(w http.ResponseWriter, r *http.Request, c admi
 		return
 	}
 	log.Printf("admin: area %s (%s) added a Claude setup-token", c.area.ID, c.area.Note)
+	if !opened.IsZero() {
+		if err := provider.SetAccountOpened(pid, user, opened); err != nil {
+			log.Printf("admin: area %s's Claude account, its opening date not kept: %v", c.area.ID, err)
+		}
+	}
 	a, _ := area.Get(c.area.ID)
 	for _, acc := range areaAccounts(a) {
 		if acc.ID == ref {

@@ -1,0 +1,243 @@
+package gateway
+
+import (
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/yetone/magpie/internal/area"
+	"github.com/yetone/magpie/internal/provider"
+)
+
+// An area's keys (docs/subsystems/areas.md, T-213): accounts/key adds one,
+// accounts/keys up to adminKeysMost at once, each claimed and written on
+// its own, and none rolled back when a later one fails. Both take the
+// protocol and plan the window's key row does, and no opened date: that
+// is a subscription account's.
+
+// adminKeysMost is the most keys one accounts/keys takes.
+const adminKeysMost = 100
+
+// keyFields are what both key routes take beside the keys.
+type keyFields struct {
+	Provider string `json:"provider"`
+	Name     string `json:"name"`
+	// Protocol is the one protocol the key works with, "" any (the
+	// window's protocol picker)
+	Protocol string `json:"protocol"`
+	// Plan is the preset's plan the key is for, "" the provider's own
+	Plan string `json:"plan"`
+	// Opened, sent at all, is refused: a key has no opening date
+	Opened json.RawMessage `json:"opened"`
+}
+
+// keyProtocols are the protocols a key of p may be set to: any, and each
+// API p has an address for, as the window's protocol picker offers.
+func keyProtocols(p provider.Provider) []string {
+	out := []string{""}
+	for _, x := range []struct {
+		proto provider.Protocol
+		url   string
+	}{{provider.Anthropic, p.Anthropic}, {provider.Chat, p.Chat}, {provider.Responses, p.Responses}, {provider.Gemini, p.Gemini}} {
+		if x.url != "" {
+			out = append(out, string(x.proto))
+		}
+	}
+	return out
+}
+
+// keyTarget is the provider in's keys go to, with their protocol and
+// plan, or false with the answer written: 404 for a provider the area
+// wasn't given (or one that takes no keys), 400 for an opened date, a
+// protocol it has no address for or a plan its preset doesn't sell.
+func keyTarget(w http.ResponseWriter, c adminCall, in keyFields) (provider.Provider, provider.Protocol, string, bool) {
+	if !slices.Contains(c.area.Providers, in.Provider) {
+		adminNotFoundErr(w)
+		return provider.Provider{}, "", "", false
+	}
+	p, err := provider.Find(in.Provider)
+	if err != nil || p.Account != nil || p.IsPlugin() {
+		adminNotFoundErr(w)
+		return provider.Provider{}, "", "", false
+	}
+	if in.Opened != nil {
+		adminError(w, http.StatusBadRequest, adminBadRequest, "a key has no opening date: opened is a subscription account's")
+		return provider.Provider{}, "", "", false
+	}
+	if !slices.Contains(keyProtocols(*p), in.Protocol) {
+		adminError(w, http.StatusBadRequest, adminBadRequest, p.Name+" takes a key's protocol as one of "+strings.Join(quoteEach(keyProtocols(*p)), ", "))
+		return provider.Provider{}, "", "", false
+	}
+	plan := strings.TrimSpace(in.Plan)
+	if plan != "" && !slices.ContainsFunc(provider.KeyPlans(*p), func(r provider.Region) bool { return r.ID == plan }) {
+		adminError(w, http.StatusBadRequest, adminBadRequest, p.Name+" sells no plan "+strconv.Quote(plan)+" on keys of its own")
+		return provider.Provider{}, "", "", false
+	}
+	return *p, provider.Protocol(in.Protocol), plan, true
+}
+
+func quoteEach(ss []string) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = strconv.Quote(s)
+	}
+	return out
+}
+
+// addAreaKey claims the key for c's area, then adds it to p: the account
+// as told and 201, or the status, code and message to answer. A key
+// magpie has (the owner's, another area's) is 409 and stays as it was.
+func addAreaKey(c adminCall, p provider.Provider, name, key string, proto provider.Protocol, plan string) (adminAccount, int, string, string) {
+	fp := provider.KeyID(key)
+	ref := p.ID + "/" + fp
+	if slices.ContainsFunc(p.KeyList(), func(k provider.KeyInfo) bool { return k.ID == fp }) {
+		return adminAccount{}, http.StatusConflict, adminConflict, "this key is in magpie already"
+	}
+	// owned first, so the key is the area's from the moment it is there
+	if err := area.Claim(c.area.ID, ref); err != nil {
+		switch {
+		case errors.Is(err, area.ErrTaken):
+			return adminAccount{}, http.StatusConflict, adminConflict, "this account is in magpie already"
+		case errors.Is(err, area.ErrNotFound):
+			return adminAccount{}, http.StatusUnauthorized, adminKeyRequired, "this admin key's area was deleted"
+		default:
+			return adminAccount{}, http.StatusServiceUnavailable, adminAreasUnread, err.Error()
+		}
+	}
+	if err := provider.AddKeyOnPlan(p.ID, name, key, proto, plan); err != nil {
+		area.Release(ref)
+		return adminAccount{}, http.StatusBadRequest, adminBadRequest, err.Error()
+	}
+	a, _ := area.Get(c.area.ID)
+	for _, acc := range areaAccounts(a) {
+		if acc.ID == ref {
+			return acc, http.StatusCreated, "", ""
+		}
+	}
+	return adminAccount{ID: ref, Provider: p.ID, ProviderName: p.Name, Kind: "key"}, http.StatusCreated, "", ""
+}
+
+// keyRow is how one key of an accounts/keys went, in the order sent:
+// never the key itself.
+type keyRow struct {
+	Index   int           `json:"index"` // from 1
+	Status  string        `json:"status"`
+	Account *adminAccount `json:"account,omitempty"`
+	Masked  string        `json:"masked"`
+	Message string        `json:"message,omitempty"`
+}
+
+// The statuses of a keyRow.
+const (
+	keyAdded     = "added"
+	keyConflict  = "conflict"
+	keyFailed    = "failed"
+	keyDuplicate = "duplicate"
+)
+
+// heldAnswered answers 429 while c's area is held for its conflicts
+// (conflictProbes), and says so.
+func (s *Server) heldAnswered(w http.ResponseWriter, c adminCall, now time.Time) bool {
+	wait := s.conflicts.held(c.area.ID, now)
+	if wait <= 0 {
+		return false
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(max(int((wait+time.Second-1)/time.Second), 1)))
+	adminError(w, http.StatusTooManyRequests, adminTooManyConflicts, "this area was told an account is in magpie already too often: try again later")
+	return true
+}
+
+// adminAddKeys adds each key sent as accounts/key adds one, one at a
+// time, and tells how each went. One added stays whatever comes after.
+// An area held for its conflicts is 429 at the door; a request that
+// reaches the line, or the area's 500 accounts, partway fails the rest,
+// each saying why.
+func (s *Server) adminAddKeys(w http.ResponseWriter, r *http.Request, c adminCall) {
+	if s.heldAnswered(w, c, time.Now()) {
+		return
+	}
+	var in struct {
+		keyFields
+		Keys []string `json:"keys"`
+	}
+	if !decodeAdmin(w, r, &in) {
+		return
+	}
+	p, proto, plan, ok := keyTarget(w, c, in.keyFields)
+	if !ok {
+		return
+	}
+	keys := []string{}
+	for _, k := range in.Keys {
+		if k = strings.TrimSpace(k); k != "" {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 || len(keys) > adminKeysMost {
+		adminError(w, http.StatusBadRequest, adminBadRequest, "send 1 to "+strconv.Itoa(adminKeysMost)+" keys")
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	out := struct {
+		Results  []keyRow `json:"results"`
+		Added    int      `json:"added"`
+		Conflict int      `json:"conflict"`
+		Failed   int      `json:"failed"`
+	}{Results: []keyRow{}}
+	owned := len(c.area.Accounts)
+	seen := map[string]bool{}
+	stop := "" // why the rest fail, once one did for all
+	for i, k := range keys {
+		row := keyRow{Index: i + 1, Masked: provider.Mask(k)}
+		fp := provider.KeyID(k)
+		switch {
+		case seen[fp]:
+			row.Status = keyDuplicate
+		case stop != "":
+			row.Status, row.Message = keyFailed, stop
+		case len(k) > 4096:
+			row.Status, row.Message = keyFailed, "a key is up to 4096 characters"
+		case owned >= adminAccountsLimit:
+			row.Status, row.Message = keyFailed, "an area has at most 500 accounts"
+		default:
+			n := name
+			if n != "" && i > 0 {
+				n += " #" + strconv.Itoa(i+1)
+			}
+			acc, status, _, msg := addAreaKey(c, p, n, k, proto, plan)
+			switch status {
+			case http.StatusCreated:
+				row.Status, row.Account = keyAdded, &acc
+				owned++
+			case http.StatusConflict:
+				row.Status, row.Message = keyConflict, msg
+				if s.conflicts.conflicted(c.area.ID, time.Now()) >= conflictMost {
+					log.Printf("admin: area %s had %d conflicts in %s: its add routes answer 429 for now", c.area.ID, conflictMost, conflictWindow)
+					stop = "too many conflicts; try again later"
+				}
+			case http.StatusUnauthorized, http.StatusServiceUnavailable:
+				row.Status, row.Message = keyFailed, msg
+				stop = msg
+			default:
+				row.Status, row.Message = keyFailed, msg
+			}
+		}
+		seen[fp] = true
+		switch row.Status {
+		case keyAdded:
+			out.Added++
+		case keyConflict:
+			out.Conflict++
+		case keyFailed:
+			out.Failed++
+		}
+		out.Results = append(out.Results, row)
+	}
+	log.Printf("admin: area %s (%s) added %d keys of %s (%d in magpie already, %d failed, %d sent twice)", c.area.ID, c.area.Note, out.Added, p.ID, out.Conflict, out.Failed, len(keys)-out.Added-out.Conflict-out.Failed)
+	writeJSON(w, http.StatusOK, out)
+}
