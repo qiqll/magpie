@@ -200,3 +200,16 @@ func TestSecondSeatSavedUnderItsOwnName(t *testing.T) {
 		t.Fatalf("two seats, one account: %q and %q", first, second)
 	}
 }
+
+// An area's Done is told whose sign-in it is, the agent and the id, as it
+// claims the account by its agent: one told neither claimed nothing, and
+// every area sign-in to a new account ended failed.
+func TestAreaSignInDoneSeesItsAgent(t *testing.T) {
+	s := areaFlow("si-done", "codex")
+	var told SignInState
+	s.area, s.onDone = true, func(st SignInState) SignInState { told = st; return st }
+	s.finish(SignInState{State: "done", User: "new@example.com"})
+	if told.Agent != "codex" || told.ID != "si-done" || told.User != "new@example.com" {
+		t.Fatalf("Done was told %+v", told)
+	}
+}

@@ -934,6 +934,8 @@ func (s *signInFlow) finish(out SignInState) bool {
 		}
 		back = slices.Contains(s.lapsed, accountKey(out.User))
 		agent, proxy, chosen, onDone := s.st.Agent, s.proxy, s.chosen, s.onDone
+		// Done is told whose sign-in it is: the area claims by agent
+		out.ID, out.Agent = s.st.ID, agent
 		s.mu.Unlock()
 		// signing in again brings back an account removed from magpie
 		_ = ShowAccount(agent)
