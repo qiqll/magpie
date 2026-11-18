@@ -231,7 +231,12 @@ export const FakePlugin = async ({ client }) => ({
           // `grok login` opens its own on macOS and Windows
           opened: inputs.team === "cli-opened",
           callback: async (code) =>
-            (process.env.FAKE_SIGNIN && (await fetch(process.env.FAKE_SIGNIN + "/token").catch(() => {})), code === "good")
+            (process.env.FAKE_SIGNIN && (await fetch(process.env.FAKE_SIGNIN + "/token").catch(() => {})),
+            // team "write-x": the sign-in writes the record of the account
+            // kept as fakeco#x itself, as the CodeArts plugin's writes its
+            // account's record by its id
+            inputs.team === "write-x" && (await client.auth.set({ path: { id: ID + "#x" }, body: { type: "oauth", refresh: "r-written", access: "", expires: 0, accountId: "x@fake" } })),
+            code === "good")
               ? { type: "success", refresh: "r-" + (inputs.team ?? "none"), access: "stale", expires: 0, ...fakeWho(inputs.team) }
               : code === "expired"
                 ? { type: "failed", error: "the sign-in page expired" }

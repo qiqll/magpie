@@ -594,12 +594,13 @@ must hold, beside the contract's bodies and codes:
   area's) is `conflict` on every add path, and its tokens, proxy and name
   stay as they were. The import readers today renew such an account
   (`updated`) and name it (`exists`); an area's import needs a mode that
-  does neither (T-220). A plugin's sign-in, by any method, replaces an
-  account it has, and magpie learns whose it is only after the plugin
-  saved it (`pluginDone` after `plugin.Saved`). A plugin method is
-  offered to areas only when the plugin tells the account first and saves
-  it after magpie claimed it, so a known account fails with its tokens
-  untouched (T-221, every method, not just API keys).
+  does neither (T-220). A plugin's sign-in as the owner's
+  (`plugin.Authorize`, `plugin.APIKey`) replaces an account it has
+  (host.js `settle`). An area's goes through `plugin.AuthorizeNew` and
+  `plugin.APIKeyNew` (built, T-221): host.js judges the plugin's result
+  before anything is written, and a known account is `ErrKnown` with its
+  tokens untouched. Which methods that makes safe is in
+  [Plugin sign-ins an area can use](#plugin-sign-ins-an-area-can-use-t-221).
 - **Claude imports are checked with Anthropic** (`ClaudeTokenUser`), and
   named by its answer, never by the file's email.
 - **Not offered:** a plugin method whose browser opens on this computer
@@ -631,6 +632,209 @@ must hold, beside the contract's bodies and codes:
 - Every new route is in `adminRoutes` under its role, so
   `TestAdminKeyEveryRoute` covers it.
 
+### Plugin sign-ins an area can use (T-221)
+
+Read from the plugins repo at 63c2ff93f (2026-11-18), every package with
+an `auth.methods`, and from the host (`internal/plugin/host.js`,
+`providers.go`, `internal/provider/pluginsignin.go`).
+
+**What the host does now.** Before T-221, every plugin sign-in was
+written first and judged after. host.js `save` wrote the result at the
+account's key, and `settle` then folded it into any account with the
+same name (`accountId ?? metadata.email ?? email`, uid apart) or, with
+no names on either side, the same secret. A plugin could also write
+records itself while signing in (`client.auth.set`). The CodeArts plugin
+does this: it writes its account's record by the account's id. So every
+method, keys included, replaced a known account, and magpie learned whose
+account it was only from `plugin.Saved`.
+
+`plugin.AuthorizeNew` and `plugin.APIKeyNew` (`fresh` in host.js) are the
+area's way in:
+
+- They sign in to a fresh key only. `client.auth.set` and `auth.remove`
+  are held while the sign-in runs.
+- host.js `saveNew` judges the result before anything is written, in
+  one `changeAuth`. The result is `ErrKnown` and nothing is written when
+  any of these hold:
+  - an account of the provider has the same name or uid (`sameAccount`,
+    `settle`'s rule);
+  - an account of the provider has the same secret (refresh token or
+    key);
+  - the plugin is `single` and has an account already.
+- The result is `ErrUnnamed` and nothing is written when a page's
+  sign-in (OAuth) names no account. A fresh token matches nothing, so
+  magpie can't tell such an account from one it has.
+- An API key needs no name: the same key is the same account.
+
+Tests: `TestSignInNew*` and `TestAPIKeyNew*` in
+`internal/plugin/plugin_signin_new_test.go`.
+
+**What the host can't do.** It can't tell two names apart when they are
+the same account. A plugin that names an account by something that
+changes (a display name, a fingerprint of this sign-in's token, a name
+the user types) gets a second record of an account magpie has. Those
+methods need a plugin change. A name that falls back to a constant
+(`"Zed account"`) is safe: a second such account reads as known and
+fails. It does cost coverage, so the plugin should fail rather than fall
+back.
+
+**Legend:**
+- **yes**: safe through `AuthorizeNew`/`APIKeyNew` now. A name the
+  plugin sometimes lacks fails as `ErrUnnamed`.
+- **yes, by key**: the host keeps the key, and the same key is known.
+  Another key of the same vendor account is another account, as for the
+  owner.
+- **yes\***: safe, but a fallback name can make a new account read as
+  known.
+- **plugin**: a plugin change is needed (named in the row). The method is
+  not offered until then.
+- **not offered**: the method needs this computer. It opens a browser or
+  app here, runs the vendor's CLI here, or reads a file, keychain or app
+  state here (Q1, `Authorization.Opened`). An area's user can't reach
+  any of that, and it would claim the host's own account.
+
+The way column follows §11.1:
+- `paste-url`: a loopback page whose address is pasted
+  (`PluginPastesCallback`).
+- `device`: the plugin polls by itself.
+- `paste-code`: method `"code"`.
+
+| Plugin (provider) | # | Method | Way | Name in the result | Area |
+| --- | --- | --- | --- | --- | --- |
+| cursor | 0 | Cursor (browser) | device | `accountId` = email, when `whoIs` has one | yes |
+| cursor | 1 | cursor-agent's sign-in | — | reads `~/.cursor`, keychain | not offered |
+| cursor | 2 | Cursor API key | api-key | — | yes, by key |
+| kiro | 0 | Kiro (Google … IdC) | paste-url (fixed ports) | email + login way, else `"Kiro account"`; uid = login way | yes\*: drop the constant |
+| kiro | 1 | Kiro CLI's / IDE's sign-in | — | reads kiro-cli / IDE files | not offered |
+| kiro | 2 | Kiro API key (ksk_) | api-key | — | yes, by key |
+| factory | 0 | Factory (device code) | device | email or userId, always | yes |
+| factory | 1 | Factory API key | api-key | — | yes, by key |
+| zed | 0 | Zed (browser) | paste-url | GitHub login, username, name, id, else `"Zed account"` | yes\*: drop the constant |
+| grok | 0 | Grok Build (device code) | — | runs `grok login` here, which opens the browser | not offered (Q1) |
+| grok | 1 | Grok Build's current sign-in | — | reads the CLI's home | not offered |
+| grok | 2 | Import CPA Grok JSON | — | a file path here | not offered; plugin: take the JSON pasted |
+| devin | 0 | Devin (browser) | paste-url | `metadata.email` = user, else `"Devin · <hash>"` of this sign-in | plugin: no fingerprint name, fail without the user |
+| devin | 1 | Devin CLI's sign-in | — | reads `credentials.toml` | not offered |
+| devin | 2 | Devin API key (cog_) | api-key | — | yes, by key |
+| qoder, qoder-cn | 0 | Sign in with {site} | device | email or user id, may be none | yes |
+| qoder, qoder-cn | 1 | {site} PAT | api-key-like (password prompt) | email or uid, always | yes |
+| qoder-cn | 2 | Enterprise (VPC) | device | email or uid (vpc) | yes |
+| qoder-cn | 3 | Enterprise dedicated domain | device / Lingma | device: as #0; Lingma reads Qoder CN IDE files | plugin: offer the device branch alone |
+| workbuddy, workbuddy-ai | 0 | {site} account (browser) | device | display name, else `site.name`; uid may be "" | plugin: name by uid |
+| workbuddy, workbuddy-ai | 1 | {site} desktop's sign-in | — | reads CodeBuddy files | not offered |
+| workbuddy, workbuddy-ai | 2 | {site} API key | api-key | — | yes, by key |
+| zcode | 0, 1 | ZCode: Z.ai / BigModel | device | email, name, id, else `"ZCode"`; uid when known | yes\*: drop the constant |
+| zcode | 2 | a team's plan | device (select `site`) | as #0, `" (team)"` | yes\* |
+| zcode | 3 | ZCode app's sign-in | — | reads `~/.zcode` | not offered |
+| zcode | 4 | GLM Coding Plan API key | api-key (select `site`) | — | yes, by key |
+| mimo (mimo-app) | 0 | Xiaomi account | device | userId, always | yes |
+| commandcode (commandcode-plan) | 0 | Command Code (browser) | paste-key (to #2) | key from #2 | yes, by key |
+| commandcode | 1 | CLI's sign-in | — | reads `~/.commandcode` | not offered |
+| commandcode | 2 | API key | api-key | — | yes, by key |
+| copilot (github-copilot) | 0 | Login with GitHub Copilot | device | none | plugin: name by GitHub login (`/user`) |
+| agentcompass | 0 | decision provider | api-key (keyless, single) | constant key | not offered: nothing an area owns |
+| agnes-code | 0 | desktop sign-in | — | reads the app's DPAPI files | not offered |
+| agnes-code | 1 | paste accessToken | api-key (prompts) | username as typed | plugin: name by `/user/self` |
+| agnes | 0–2 | browser (plan / personal / enterprise) | — | Chrome over CDP here; constant names | not offered |
+| agnes | 3 | Agnes API key | api-key | — | yes, by key |
+| agy-cli | 0, 1 | Sign in with Google / another | — | runs `agy` here | not offered |
+| antigravity | 0 | Google (browser) | paste-url | email from userinfo, always | yes |
+| antigravity | 1 | Import refresh token / JSON | text prompt | email from the pasted JSON, unchecked | plugin: always ask userinfo |
+| astudio | 0, 1 | browser / desktop sign-in | — | opens a browser here / reads app files | not offered |
+| astudio | 2 | paste modelBearerToken | api-key (prompts) | accountId or uid as typed | plugin: look the account up |
+| atomcode | 0 | browser | device | email, username or id, always | yes |
+| atomcode | 1 | CLI's sign-in | — | a file path here | not offered |
+| autoclaw | 0 | 网页登录 | paste-url (fixed ports) | display name, else `"<vendor> 账号"` | plugin: name by user_id |
+| autoclaw-cn | 0 | 手机验证码登录 | paste-code (phone prompt) | display name, else phone | plugin: name by user_id |
+| catpaw | 0 | 网页登录 | device | userName, else a constant | plugin: name by uid |
+| catpaw | 1 | 桌面端登录态 | — | reads the app's auth.json | not offered |
+| catpaw | 2 | 手动粘贴 token | text prompt | `"手动粘贴"` for every token | plugin: look the account up |
+| cline | 0 | Cline (browser) | device | email or uid, may be "" | yes |
+| cline | 1 | Cline API key | api-key | — | yes, by key |
+| cloudflare-workers-ai | 0 | API token | api-key (prompts) | none (`metadata.accountId` is CF's) | yes, by key |
+| codearts, officeace | 0 (and Intl.) | Sign in with Huawei Cloud | paste-url | uid = IAM id, may be ""; writes its record itself | yes: its own write is held |
+| codearts | 1 | CodeArts Agent on this machine | — | reads the IDE's state | not offered |
+| doubao-work | 0 | 在豆包窗口中登录 | — | starts the Doubao app here | not offered |
+| gcp-ai | 0 | ADC / gcloud | — | runs gcloud and Chrome here | not offered |
+| goanyapi | 0 | GoAnyAPI (browser) | paste-url | none (single) | plugin: name the account |
+| goanyapi | 1 | API key | api-key (single) | — | yes, by key; one account |
+| gumloop | 0 | API key | api-key (keyless, prompts) | email as typed | yes, by key |
+| inkstone (intern-inkstone) | 0, 1 | browser sign-in | — | opens a browser here (`opened`) | not offered |
+| inkstone | 2 | API key only | api-key | `inkstone-<fp(key)>` | yes, by key |
+| inkstone | 3 | API key + console token | api-key | whoami name, always | yes |
+| joycode | 0 | 浏览器登录 | paste-url | userName or userId, may be none | yes |
+| joycode | 1 | ptKey | api-key (tenant) | — | yes, by key |
+| kimi-work | 0 | 本机 Kimi Work | — | reads the app's files | not offered |
+| loomy | 0 | 短信验证码登录 | paste-code (phone) | masked phone; uid when given | yes\*: name by uid |
+| loomy | 1 | 手动粘贴 session | text prompt | the session's last 6 | plugin: look the account up |
+| mclaw | 0 | 浏览器登录 | — | Chrome here | not offered |
+| minimax (minimax-code, -global) | 0 | {site} account | device | email, name, uid, else `site.name` | yes\*: drop the constant |
+| nous (nous-portal) | 0 | device code | device | JWT `sub`, when present | yes |
+| openai-decisions | 0 | OpenAI API key | api-key | — | yes, by key |
+| opendesign | 0 | Open Design account | device | email when present; uid | yes |
+| opendesign | 1 | API key | api-key | — | yes, by key |
+| orcaterm | 0 | WeChat QR | — | the QR page is on this computer's port 4080 | not offered; plugin: give the QR's URL |
+| orcaterm | 1 | cookie pair | api-key | — | yes, by key |
+| raccoon | 0, 2 | browser / paste callback | paste-url / paste-code | display name, `Raccoon-<uid>` or a constant | plugin: name by uid |
+| raccoon | 1 | 桌面端登录态 | — | reads the app's token | not offered |
+| river | 0 | API key | api-key | — | yes, by key |
+| sap-aicore | 0 | credential file | — | a file path here | not offered |
+| search1api | 0 | Search1API (browser) | paste-url | none (single) | plugin: name the account |
+| search1api | 1 | API key | api-key (single) | — | yes, by key; one account |
+| sensenova (sensenova-token-plan) | 0 | browser | — | Chromium here (`opened`) | not offered |
+| sensenova | 1 | account password | prompts | username, always | yes |
+| sensenova | 2 | API key only | api-key (keyless) | `key:<fp>` | yes, by key |
+| tabbit | 0 | Tabbit app's sign-in | — | reads cookies and keychain | not offered |
+| tabbit | 1 | paste token | api-key | — | yes, by key |
+| trae (trae-cn, trae-global) | 0 | {site} account | paste-url | name or uid; uid | yes |
+| warp | 0 | Warp app's sign-in | — | reads Warp's keychain | not offered |
+| warp | 1 | refresh token | text prompt | email or sub, else `"warp"` | yes\*: drop the constant |
+| zen-free (opencode-zen-free) | 0 | Zen 免费访问 | api-key (keyless, single) | constant `public` | not offered: nothing an area owns |
+
+**What this leaves T-209.**
+
+- **The 13 subscriptions an area can sign in to today:**
+  - Cursor: browser, key.
+  - Kiro: browser\*, key.
+  - Factory: device, key.
+  - Zed: browser\*.
+  - Devin: key only.
+  - Qoder and Qoder CN: device, PAT, VPC.
+  - WorkBuddy and WorkBuddy AI: key only.
+  - ZCode: device\*, team\*, GLM key.
+  - MiMo: device.
+  - Command Code: browser via paste-key, key.
+  - Grok: nothing. Every one of its methods needs this computer.
+- **What plugin releases would add:**
+  - Devin's browser (no fingerprint name).
+  - WorkBuddy's browser (name by uid).
+  - Qoder CN's dedicated domain (offer the device branch alone).
+  - Grok's import (take pasted JSON).
+  - Each such change raises its mover's `min`.
+- **The method list.** T-209's `/options` and `/catalog` list only the
+  rows marked yes, yes by key, or yes\*. That list lives in magpie
+  (package, version and method), not in the plugin, so a method a new
+  plugin version adds is not offered until it is read.
+  - Index alone isn't enough: a version's method order can change, and
+    `way` is checked as §11.3 says.
+  - A plugin that sets `opened`, or that has no URL and no `"code"`
+    method (it works on this computer), is refused at start even when
+    listed.
+- **Signing in to a known account fails.** An area's sign-in to an
+  account it owns already is `ErrKnown` too: `fresh` never replaces
+  anything. If areas are to renew their own accounts this way, T-209 needs
+  a path that signs in to that account's key (`plugin.Authorize` with
+  the account) after `ownsRef`. Otherwise the answer is `conflict`, as
+  for anyone's.
+- **Claiming the account.** `ErrKnown` and `ErrUnnamed` map to
+  `state:"conflict"` and `failed`. `area.ClaimUpTo` comes after
+  `plugin.Saved`, as `claimOnDone` does. When the claim fails for any
+  reason but `ErrTaken`, the saved record is signed out again
+  (`plugin.SignOut`).
+  - `ErrTaken` can't follow a fresh save: an account an area owns is in
+    plugin-auth.json, so it was known.
+
+
 ## Verification
 
 `go test -race ./internal/area`; `go test ./internal/gateway -run
@@ -640,6 +844,7 @@ must hold, beside the contract's bodies and codes:
 `go test ./internal/gateway -run 'TestAdmin(IPRenewalDays|ProbeProxy|Batch|Reread|ProxyChecksHoldSpend)'`;
 `go test ./internal/provider -run TestAreaSweepBesideARereadMove`;
 `go test ./internal/gateway -run 'TestAdmin(SignInThroughAreaProxy|SignInCallbackPicksAreaProxy|DeviceSignInProxyFixed|KeyAndTokenTakeAreaProxy|SignInHoldsItsProxyPublic|SignInRefusedPasteKeepsItsPick)'`;
+`go test ./internal/plugin -run 'TestSignInNew|TestAPIKeyNew'`;
 `node --test internal/gui/tests/proxy-ips-batch-lines.test.cjs`;
 `go test ./internal/gui -run TestIPAreaRoute`; `go test ./internal/gui -run
 TestAreasRoutes`. `TestAdminKeyEveryRoute` fails

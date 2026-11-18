@@ -999,12 +999,29 @@ const NewAccount = "new"
 // A plugin that can't start one says why ({ type: "failed", error }), and
 // that is the error (plugins#658).
 func Authorize(ctx context.Context, provider string, method int, inputs map[string]string, account string) (Authorization, error) {
+	return authorize(ctx, provider, method, inputs, account, false)
+}
+
+// AuthorizeNew is Authorize to a new account only, as an area signs in
+// (T-221): Finish gives ErrKnown for one magpie has, the owner's or an
+// area's, whose record stays as it was, and ErrUnnamed when the plugin
+// doesn't say which account it signed in to. Nothing is saved then, and
+// the plugin's own writes while it signs in are held.
+func AuthorizeNew(ctx context.Context, provider string, method int, inputs map[string]string) (Authorization, error) {
+	return authorize(ctx, provider, method, inputs, NewAccount, true)
+}
+
+func authorize(ctx context.Context, provider string, method int, inputs map[string]string, account string, fresh bool) (Authorization, error) {
 	var r struct {
 		OK    bool   `json:"ok"`
 		Error string `json:"error"`
 		Authorization
 	}
-	if err := Call(ctx, "authorize", map[string]any{"provider": provider, "method": method, "inputs": inputs, "account": account, "proxy": proxyOf(ctx)}, &r); err != nil {
+	params := map[string]any{"provider": provider, "method": method, "inputs": inputs, "account": account, "proxy": proxyOf(ctx)}
+	if fresh {
+		params["fresh"] = true
+	}
+	if err := Call(ctx, "authorize", params, &r); err != nil {
 		return Authorization{}, err
 	}
 	if !r.OK {
@@ -1022,6 +1039,36 @@ type Saved struct {
 
 // ErrFailed is a sign-in the plugin says failed.
 var ErrFailed = errors.New("the sign-in failed")
+
+// ErrKnown is a sign-in to a new account only (AuthorizeNew, APIKeyNew)
+// to one magpie has: nothing was saved, and that one is as it was.
+var ErrKnown = errors.New("this account is in magpie already")
+
+// ErrUnnamed is a sign-in to a new account only whose plugin didn't say
+// which account it is, so it can't be told from one magpie has: nothing
+// was saved.
+var ErrUnnamed = errors.New("the plugin didn't say which account this is")
+
+// signedIn is a sign-in step's answer: where it was saved, or why not.
+type signedIn struct {
+	OK      bool   `json:"ok"`
+	Error   string `json:"error"`
+	Known   bool   `json:"known"`
+	Unnamed bool   `json:"unnamed"`
+	Saved
+}
+
+func (r signedIn) result() (Saved, error) {
+	switch {
+	case r.OK:
+		return r.Saved, nil
+	case r.Known:
+		return Saved{}, ErrKnown
+	case r.Unnamed:
+		return Saved{}, ErrUnnamed
+	}
+	return Saved{}, failure(r.Error)
+}
 
 // failure is ErrFailed with why, where the plugin told it.
 func failure(why string) error {
@@ -1042,11 +1089,7 @@ func Finish(ctx context.Context, session, code string) (Saved, error) {
 // netproxy.With choice) in place of the one Authorize was given, when it
 // isn't nil: one picked as the code is pasted (T-110).
 func FinishThrough(ctx context.Context, session, code string, proxy *string) (Saved, error) {
-	var r struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-		Saved
-	}
+	var r signedIn
 	params := map[string]any{"session": session, "code": code}
 	if proxy != nil {
 		params["proxy"] = forHost(*proxy)
@@ -1054,27 +1097,32 @@ func FinishThrough(ctx context.Context, session, code string, proxy *string) (Sa
 	if err := Call(ctx, "callback", params, &r); err != nil {
 		return Saved{}, err
 	}
-	if !r.OK {
-		return Saved{}, failure(r.Error)
-	}
-	return r.Saved, nil
+	return r.result()
 }
 
 // APIKey signs in to account (a key, or NewAccount) with a key, as an
 // "api" method does, through the proxy ctx names.
 func APIKey(ctx context.Context, provider string, method int, inputs map[string]string, key, account string) (Saved, error) {
-	var r struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-		Saved
+	return apiKey(ctx, provider, method, inputs, key, account, false)
+}
+
+// APIKeyNew is APIKey to a new account only, as AuthorizeNew: a key
+// magpie has, or an account its plugin names that magpie has, is
+// ErrKnown and stays as it was.
+func APIKeyNew(ctx context.Context, provider string, method int, inputs map[string]string, key string) (Saved, error) {
+	return apiKey(ctx, provider, method, inputs, key, NewAccount, true)
+}
+
+func apiKey(ctx context.Context, provider string, method int, inputs map[string]string, key, account string, fresh bool) (Saved, error) {
+	var r signedIn
+	params := map[string]any{"provider": provider, "method": method, "inputs": inputs, "key": key, "account": account, "proxy": proxyOf(ctx)}
+	if fresh {
+		params["fresh"] = true
 	}
-	if err := Call(ctx, "apiKey", map[string]any{"provider": provider, "method": method, "inputs": inputs, "key": key, "account": account, "proxy": proxyOf(ctx)}, &r); err != nil {
+	if err := Call(ctx, "apiKey", params, &r); err != nil {
 		return Saved{}, err
 	}
-	if !r.OK {
-		return Saved{}, failure(r.Error)
-	}
-	return r.Saved, nil
+	return r.result()
 }
 
 // SignOut forgets one account of the provider's, every one when account
