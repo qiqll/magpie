@@ -783,11 +783,16 @@ func siwcAccount() (Provider, bool) {
 	return siwcProvider(ls[0]), true
 }
 
-// SIWCForTest points the sign-in and the API at test servers.
+// SIWCForTest points the sign-in and the API at test servers, and the
+// browser's way back at a port of its own, never OpenAI's 1455 that a
+// real sign-in on this computer may be waiting on.
 func SIWCForTest(issuer, api string) func() {
-	oldI, oldA, oldT, oldS := siwcIssuer, siwcAuthorizeURL, siwcTokenURL, siwcAPI
+	oldI, oldA, oldT, oldS, oldC := siwcIssuer, siwcAuthorizeURL, siwcTokenURL, siwcAPI, siwcCallbackAddr
 	siwcIssuer, siwcAuthorizeURL, siwcTokenURL, siwcAPI = issuer, issuer+"/api/accounts/authorize", issuer+"/api/accounts/oauth/token", api
-	return func() { siwcIssuer, siwcAuthorizeURL, siwcTokenURL, siwcAPI = oldI, oldA, oldT, oldS }
+	siwcCallbackAddr = "127.0.0.1:0"
+	return func() {
+		siwcIssuer, siwcAuthorizeURL, siwcTokenURL, siwcAPI, siwcCallbackAddr = oldI, oldA, oldT, oldS, oldC
+	}
 }
 
 // siwcAlsoOn is the ChatGPT API accounts in use behind the first.

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -61,18 +60,21 @@ func signInWays() []adminSignInWay {
 	return out
 }
 
-// gheSite is an enterprise's GHE.com host, the one site other than
-// github.com an area signs in to Copilot on. A GitHub Enterprise Server's
-// own host, an IP, a port or a path is none: a GitHub token is never sent
-// to a host the console names.
-var gheSite = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.ghe\.com$`)
-
 // copilotSite is the <name>.ghe.com an area's Copilot sign-in was sent,
 // lower case with a leading https:// and a trailing / taken off; ok is
 // false for anything else, github.com included (which is no site sent).
+// The host is judged by provider.CopilotHost, the one reader of where
+// Copilot signs in, after a check that leaves nothing but a bare host
+// name to it: a GitHub Enterprise Server's own host, an IP, a port or a
+// path is none, so a GitHub token is never sent to a host the console
+// names.
 func copilotSite(s string) (string, bool) {
 	h := strings.TrimSuffix(strings.TrimPrefix(strings.ToLower(s), "https://"), "/")
-	return h, gheSite.MatchString(h)
+	if h == "" || strings.Trim(h, "abcdefghijklmnopqrstuvwxyz0123456789.-") != "" {
+		return "", false
+	}
+	host, err := provider.CopilotHost(h)
+	return h, err == nil && host == h
 }
 
 // startAreaSignIn starts an area's sign-in; a var so tests see what it
