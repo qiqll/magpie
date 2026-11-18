@@ -64,6 +64,27 @@ func publicOnly(raw string) bool {
 	return err == nil && f(u.String())
 }
 
+// publicKey marks a context whose proxy is public-only whatever
+// PublicOnly says (WithPublicOnly).
+type publicKey struct{}
+
+// WithPublicOnly is ctx for requests through a proxy held to public
+// addresses whatever PublicOnly says: an area's check of a proxy it
+// hasn't saved, which no ips.json names yet (T-214, ips/probe and
+// ips/batch), is guarded at its dial as a saved one is, so a name
+// pointed home after it was judged reaches nothing.
+func WithPublicOnly(ctx context.Context) context.Context {
+	return context.WithValue(ctx, publicKey{}, true)
+}
+
+// heldPublic is publicOnly of raw, or ctx is WithPublicOnly's.
+func heldPublic(ctx context.Context, raw string) bool {
+	if on, _ := ctx.Value(publicKey{}).(bool); on && strings.TrimSpace(raw) != "" && raw != "direct" {
+		return true
+	}
+	return publicOnly(raw)
+}
+
 // proxySchemes are the schemes a public-only proxy may have, and the port
 // each is dialled at when it names none.
 var proxySchemes = map[string]string{"http": "80", "https": "443", "socks5": "1080", "socks5h": "1080"}
@@ -167,7 +188,7 @@ func proxyAddr(u *url.URL) string {
 func guardDial(dial DialFunc) DialFunc {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		c := choiceOf(ctx)
-		if c == "" || !publicOnly(c) {
+		if c == "" || !heldPublic(ctx, c) {
 			return dial(ctx, network, addr)
 		}
 		u, err := Parse(c)

@@ -175,7 +175,7 @@ func DialSOCKS(ctx context.Context, socks *url.URL, addr string) (net.Conn, erro
 	}
 	dial := (&net.Dialer{Timeout: 15 * time.Second}).DialContext
 	var c net.Conn
-	if publicOnly(socks.String()) {
+	if heldPublic(ctx, socks.String()) {
 		// an area's proxy, at a public address alone (publiconly.go)
 		c, err = dialPublic(ctx, dial, "tcp", proxy)
 	} else {

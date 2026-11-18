@@ -221,3 +221,51 @@ func parsed(t *testing.T, raw string) *url.URL {
 	}
 	return u
 }
+
+// TestAreaProxyWithPublicOnlyHoldsAnUnsavedProxy (T-214): a proxy no ips.json
+// names (an area's probe or batch line) is held to public addresses when
+// its request is WithPublicOnly's, over HTTP and SOCKS alike, and is
+// dialled as ever without it.
+func TestAreaProxyWithPublicOnlyHoldsAnUnsavedProxy(t *testing.T) {
+	fp := startFakeProxy(t)
+	unsaved := "http://proxy.example:" + fp.port()
+	socks := "socks5://proxy.example:" + fp.port()
+	loop := "http://127.0.0.1:" + fp.port()
+	answer := publicIP
+	areaProxies(t, &answer) // PublicOnly names none
+
+	base := &http.Transport{Proxy: Func, DisableKeepAlives: true}
+	client := &http.Client{Transport: Dispatch(base)}
+	defer base.CloseIdleConnections()
+	get := func(ctx context.Context, choice string) error {
+		req, _ := http.NewRequestWithContext(With(ctx, choice), http.MethodGet, "http://vendor.example/v1/models", nil)
+		res, err := client.Do(req)
+		if err == nil {
+			res.Body.Close()
+		}
+		return err
+	}
+	held := WithPublicOnly(context.Background())
+	if err := get(held, unsaved); err != nil {
+		t.Fatalf("at a public address: %v", err)
+	}
+	answer = "127.0.0.1" // pointed home after it was judged
+	if err := get(held, unsaved); !errors.Is(err, ErrNotPublic) {
+		t.Fatalf("rebound: %v, want ErrNotPublic", err)
+	}
+	if err := get(held, loop); !errors.Is(err, ErrNotPublic) {
+		t.Fatalf("written as loopback: %v, want ErrNotPublic", err)
+	}
+	if _, err := DialSOCKS(held, parsed(t, socks), "vendor.example:443"); !errors.Is(err, ErrNotPublic) {
+		t.Fatalf("SOCKS rebound: %v, want ErrNotPublic", err)
+	}
+	if n := fp.conns.Load(); n != 1 {
+		t.Fatalf("connections = %d, want 1", n)
+	}
+	if err := get(context.Background(), loop); err != nil {
+		t.Fatalf("the owner's own loopback proxy, not held: %v", err)
+	}
+	if n := fp.conns.Load(); n != 2 {
+		t.Fatalf("connections = %d, want 2", n)
+	}
+}

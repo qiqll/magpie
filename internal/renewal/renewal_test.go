@@ -71,3 +71,22 @@ func TestCheckOpened(t *testing.T) {
 		}
 	}
 }
+
+// TestAreaIPDaysFrom (T-214): days left while the period runs, as DaysLeft; once
+// it has ended, the whole days since, below 0.
+func TestAreaIPDaysFrom(t *testing.T) {
+	now := time.Date(2026, 11, 11, 9, 30, 0, 0, time.UTC)
+	day := 24 * time.Hour
+	for _, c := range []struct {
+		left time.Duration
+		want int
+	}{
+		{30 * day, 30}, {5*day + time.Hour, 6}, {time.Hour, 1},
+		{0, 0}, {-time.Hour, 0}, {-day + time.Second, 0}, {-day, -1}, {-40*day - time.Hour, -40},
+	} {
+		s := of(now.Add(c.left-Days*day), now, time.UTC)
+		if got := s.DaysFrom(now); got != c.want {
+			t.Errorf("%v left: %d, want %d", c.left, got, c.want)
+		}
+	}
+}

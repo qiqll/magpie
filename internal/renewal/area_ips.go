@@ -144,6 +144,170 @@ func ChangeAreaIP(areaID, ip string, now time.Time, fn func(*IP) error) (IP, err
 	return ips[i], nil
 }
 
+// AreaProxyAdd is a proxy a batch adds under the IP its exit is (T-214).
+type AreaProxyAdd struct{ IP, Proxy string }
+
+// What became of each AreaProxyAdd.
+const (
+	BatchAdded    = "added"     // a new IP of the area's, with the proxy
+	BatchMerged   = "merged"    // the proxy put on an IP the area made
+	BatchExists   = "exists"    // one of the area's IPs has the proxy already
+	BatchTaken    = "taken"     // magpie has the IP, as no IP the area made
+	BatchGiven    = "given"     // the owner gave the area the IP: its proxies are the owner's
+	BatchIPFull   = "ip_full"   // the IP has MaxIPProxies proxies
+	BatchAreaFull = "area_full" // the area has MaxAreaIPs IPs
+	BatchAllFull  = "all_full"  // magpie keeps MaxIPs IPs
+	BatchStopped  = "stopped"   // taken said to stop before this one
+)
+
+// ErrIPProxiesFull: the IP has MaxIPProxies proxies already.
+var ErrIPProxiesFull = fmt.Errorf("an IP has at most %d proxies", MaxIPProxies)
+
+// AddAreaProxies keeps each of adds as the area areaID's admin made it,
+// judged in order against ips.json read afresh under ipsMu, and writes
+// them all at once: what became of each, in the order sent. An add whose
+// IP magpie has as no IP the area made is BatchTaken (whose it is not
+// said), and taken is asked then whether to stop: every add after is
+// BatchStopped. Two adds of one new IP make it, then merge into it. A
+// proxy is told apart by ProxyKey. Nothing is written when nothing is
+// added; ips.json that can't be read is an error, never written over.
+func AddAreaProxies(areaID string, adds []AreaProxyAdd, now time.Time, taken func() (stop bool)) ([]string, error) {
+	if areaID == "" {
+		return nil, ErrIPNotFound
+	}
+	ipsMu.Lock()
+	defer ipsMu.Unlock()
+	was, _, err := readIPs()
+	if err != nil {
+		return nil, err
+	}
+	all := slices.Clone(was)
+	for i := range all {
+		all[i].Proxies = slices.Clone(all[i].Proxies)
+	}
+	owned := 0
+	for _, x := range all {
+		if x.Area == areaID {
+			owned++
+		}
+	}
+	out := make([]string, len(adds))
+	stop, changed := false, false
+	for i, a := range adds {
+		addr := normIP(a.IP)
+		key := ProxyKey(a.Proxy)
+		has := func(x IP) bool {
+			return slices.ContainsFunc(x.Proxies, func(p string) bool { return ProxyKey(p) == key })
+		}
+		j := slices.IndexFunc(all, func(x IP) bool { return x.IP == addr })
+		switch {
+		case stop:
+			out[i] = BatchStopped
+		case addr == "":
+			return nil, fmt.Errorf("%q is not an IP address", strings.TrimSpace(a.IP))
+		case slices.ContainsFunc(all, func(x IP) bool { return x.Area == areaID && has(x) }):
+			out[i] = BatchExists
+		case j >= 0 && all[j].Area == areaID && all[j].AddedBy != AddedByArea:
+			out[i] = BatchGiven
+		case j >= 0 && (all[j].Area != areaID || all[j].AddedBy != AddedByArea):
+			out[i] = BatchTaken
+			stop = taken != nil && taken()
+		case j >= 0 && len(all[j].Proxies) >= MaxIPProxies:
+			out[i] = BatchIPFull
+		case j >= 0:
+			all[j].Proxies = append(all[j].Proxies, a.Proxy)
+			out[i], changed = BatchMerged, true
+		case owned >= MaxAreaIPs:
+			out[i] = BatchAreaFull
+		case len(all) >= MaxIPs:
+			out[i] = BatchAllFull
+		default:
+			all = append(all, IP{IP: addr, Proxies: []string{a.Proxy}, Area: areaID, AddedBy: AddedByArea})
+			owned++
+			out[i], changed = BatchAdded, true
+		}
+	}
+	if !changed {
+		return out, nil
+	}
+	if err := CheckIPs(all, keptTimes(was), now); err != nil {
+		return nil, err
+	}
+	return out, writeIPs(all)
+}
+
+// MoveAreaProxy moves the proxy proxyID from the area areaID's IP from,
+// one its admin made, to the IP to, its exit read since: an IP the area
+// made, or a new one of the area's (ErrAreaFull past MaxAreaIPs). to
+// being magpie's as no IP the area made (the owner's, another area's, or
+// one the owner gave this area) is ErrIPTaken, whose not said;
+// ErrIPProxiesFull when to has MaxIPProxies. moved is called under ipsMu
+// once ips.json is written, to move the area's accounts on the proxy
+// with it (area.MoveProxy), so no sweep reads one moved without the
+// other; an error from it puts ips.json back as it was.
+func MoveAreaProxy(areaID, from, proxyID, to string, now time.Time, moved func(to string) error) error {
+	ipsMu.Lock()
+	defer ipsMu.Unlock()
+	was, _, err := readIPs()
+	if err != nil {
+		return err
+	}
+	i := areaIndex(was, areaID, from)
+	if i < 0 || was[i].AddedBy != AddedByArea {
+		return ErrIPNotFound
+	}
+	url, ok := was[i].ProxyOf(proxyID)
+	if !ok {
+		return ErrIPNotFound
+	}
+	addr := normIP(to)
+	if addr == "" {
+		return fmt.Errorf("%q is not an IP address", strings.TrimSpace(to))
+	}
+	if addr == was[i].IP {
+		return nil
+	}
+	all := slices.Clone(was)
+	for k := range all {
+		all[k].Proxies = slices.Clone(all[k].Proxies)
+	}
+	all[i].Proxies = slices.DeleteFunc(all[i].Proxies, func(p string) bool { return ProxyID(p) == proxyID })
+	switch j := slices.IndexFunc(all, func(x IP) bool { return x.IP == addr }); {
+	case j >= 0 && (all[j].Area != areaID || all[j].AddedBy != AddedByArea):
+		return ErrIPTaken
+	case j >= 0 && len(all[j].Proxies) >= MaxIPProxies:
+		return ErrIPProxiesFull
+	case j >= 0:
+		all[j].Proxies = append(all[j].Proxies, url)
+	default:
+		n := 0
+		for _, x := range all {
+			if x.Area == areaID {
+				n++
+			}
+		}
+		if n >= MaxAreaIPs {
+			return ErrAreaFull
+		}
+		all = append(all, IP{IP: addr, Proxies: []string{url}, Area: areaID, AddedBy: AddedByArea})
+	}
+	if err := CheckIPs(all, keptTimes(was), now); err != nil {
+		return err
+	}
+	if err := writeIPs(all); err != nil {
+		return err
+	}
+	if moved != nil {
+		if err := moved(addr); err != nil {
+			if werr := writeIPs(was); werr != nil {
+				return errors.Join(err, werr)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
 // RemoveAreaIP removes the IP ip of the area areaID; ErrIPNotFound when
 // the area has no such IP. busy, when set, is asked under ipsMu whether
 // the IP may go (its proxy on an account, read afresh): an error from it

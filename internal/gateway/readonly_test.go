@@ -67,6 +67,8 @@ var readOnlyRefused = []string{
 	"POST " + AdminPath + "/areas/{id}/update", "POST " + AdminPath + "/areas/{id}/rotate-key", "POST " + AdminPath + "/areas/{id}/delete",
 	"GET " + AdminPath + "/ips", "POST " + AdminPath + "/ips", "POST " + AdminPath + "/ips/update", "POST " + AdminPath + "/ips/delete",
 	"POST " + AdminPath + "/ips/check", "POST " + AdminPath + "/accounts/proxy", "GET " + AdminPath + "/areas/{id}/ips",
+	"POST " + AdminPath + "/accounts/keys", "POST " + AdminPath + "/ips/probe", "POST " + AdminPath + "/ips/batch",
+	"POST " + AdminPath + "/ips/reread",
 }
 
 var wildcard = regexp.MustCompile(`\{[a-z]+(\.\.\.)?\}`)

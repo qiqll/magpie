@@ -68,9 +68,15 @@ type adminIP struct {
 	Accounts     []string        `json:"accounts"`
 }
 
+// adminIPRenewal is an IP's period: Due as it was (true when State is
+// soon or ended), State ("", "soon", "ended", as the window says) and
+// DaysLeft, below 0 the days since it ended (T-214, §16.1).
 type adminIPRenewal struct {
-	Ends time.Time `json:"ends"`
-	Due  bool      `json:"due"`
+	Opened   time.Time `json:"opened"`
+	Ends     time.Time `json:"ends"`
+	Due      bool      `json:"due"`
+	State    string    `json:"state"`
+	DaysLeft int       `json:"daysLeft"`
 }
 
 type adminIPProxy struct {
@@ -98,7 +104,7 @@ func ipOf(x renewal.IP, a area.Area, withArea bool, now time.Time) adminIP {
 		at := x.Opened
 		out.Opened = &at
 		if st := renewal.Of(x.Opened, now); st != nil {
-			out.Renewal = &adminIPRenewal{Ends: st.Ends, Due: st.Due != ""}
+			out.Renewal = &adminIPRenewal{Opened: st.Opened, Ends: st.Ends, Due: st.Due != "", State: st.Due, DaysLeft: st.DaysFrom(now)}
 		}
 	}
 	for _, p := range x.Proxies {
@@ -448,6 +454,57 @@ type proxyChecks struct {
 func (p *proxyChecks) begin(id string, now time.Time) (wait time.Duration, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if wait, ok := p.free(id, now); !ok {
+		return wait, false
+	}
+	p.started[id] = append(p.started[id], now)
+	p.running[id] = true
+	return 0, true
+}
+
+// hold has id's checks for a request that makes many (a batch's host-name
+// lines, a reread), at now: none other runs until end, and each check it
+// makes is spent. False, with how long until it may, while one runs or
+// none is left in the window (T-214: the batch routes share the budget).
+func (p *proxyChecks) hold(id string, now time.Time) (wait time.Duration, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if wait, ok := p.free(id, now); !ok {
+		return wait, false
+	}
+	p.running[id] = true
+	return 0, true
+}
+
+// spend takes one of id's checks at now for a request that holds them;
+// false when none is left in the window.
+func (p *proxyChecks) spend(id string, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.recent(id, now)
+	if len(p.started[id]) >= checksMost {
+		return false
+	}
+	p.started[id] = append(p.started[id], now)
+	return true
+}
+
+// free says whether id may start a check at now, none running and one
+// left in the window, or how long until it may. Called with p.mu held.
+func (p *proxyChecks) free(id string, now time.Time) (time.Duration, bool) {
+	ts := p.recent(id, now)
+	if p.running[id] {
+		return time.Second, false
+	}
+	if len(ts) >= checksMost {
+		return ts[len(ts)-checksMost].Add(checksWindow).Sub(now), false
+	}
+	return 0, true
+}
+
+// recent are id's checks still in the window at now, the older let go
+// of. Called with p.mu held.
+func (p *proxyChecks) recent(id string, now time.Time) []time.Time {
 	if p.started == nil {
 		p.started, p.running = map[string][]time.Time{}, map[string]bool{}
 	}
@@ -456,15 +513,13 @@ func (p *proxyChecks) begin(id string, now time.Time) (wait time.Duration, ok bo
 		ts = ts[1:]
 	}
 	p.started[id] = ts
-	if p.running[id] {
-		return time.Second, false
-	}
-	if len(ts) >= checksMost {
-		return ts[len(ts)-checksMost].Add(checksWindow).Sub(now), false
-	}
-	p.started[id] = append(ts, now)
-	p.running[id] = true
-	return 0, true
+	return ts
+}
+
+// checksHeld answers 429 too_many_checks, to try again after wait.
+func checksHeld(w http.ResponseWriter, wait time.Duration) {
+	w.Header().Set("Retry-After", strconv.Itoa(max(int((wait+time.Second-1)/time.Second), 1)))
+	adminError(w, http.StatusTooManyRequests, adminTooManyChecks, "this area checks 10 proxies in 10 minutes, one at a time: try again later")
 }
 
 func (p *proxyChecks) end(id string) {
@@ -506,8 +561,7 @@ type adminProxyCheck struct {
 func (s *Server) adminCheckProxy(w http.ResponseWriter, r *http.Request, c adminCall) {
 	wait, ok := s.proxyChecks.begin(c.area.ID, time.Now())
 	if !ok {
-		w.Header().Set("Retry-After", strconv.Itoa(max(int((wait+time.Second-1)/time.Second), 1)))
-		adminError(w, http.StatusTooManyRequests, adminTooManyChecks, "this area checks 10 proxies in 10 minutes, one at a time: try again later")
+		checksHeld(w, wait)
 		return
 	}
 	defer s.proxyChecks.end(c.area.ID)
@@ -548,7 +602,9 @@ func checkAreaProxy(ctx context.Context, p, ip string) adminProxyCheck {
 		return out
 	}
 	start := time.Now()
-	req, err := http.NewRequestWithContext(netproxy.With(ctx, p), http.MethodGet, areaTraceURL, nil)
+	// held to public addresses at its dial whether or not ips.json names
+	// it: a probe's and a batch's proxies aren't saved yet
+	req, err := http.NewRequestWithContext(netproxy.With(netproxy.WithPublicOnly(ctx), p), http.MethodGet, areaTraceURL, nil)
 	if err != nil {
 		out.Error = "refused"
 		return out

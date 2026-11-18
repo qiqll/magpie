@@ -59,6 +59,18 @@ func of(opened, now time.Time, zone *time.Location) *State {
 	return s
 }
 
+// DaysFrom is the whole days from now to s's end: DaysLeft while the
+// period runs, and once it has ended the whole days since, below 0 (0 on
+// its first day over, -1 a day after), so an area's admin is told how
+// long ago (T-214, magpie-api.md §16.1).
+func (s *State) DaysFrom(now time.Time) int {
+	left := s.Ends.Sub(now)
+	if left > 0 {
+		return s.DaysLeft
+	}
+	return -int(-left / (24 * time.Hour))
+}
+
 // CheckOpened says whether t can be kept as an opening time: from 2000 on
 // and no more than a period ahead of now, so a mistyped year is refused
 // rather than kept as never due.

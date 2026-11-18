@@ -268,6 +268,7 @@ and reply bodies are in magpie-console's `docs/magpie-api.md`.
 An area's admin keeps the proxy exit IPs its area owns and puts their
 proxies on its own accounts
 ([`admin_ips.go`](../../internal/gateway/admin_ips.go),
+[`admin_ips_batch.go`](../../internal/gateway/admin_ips_batch.go),
 [`internal/renewal/area_ips.go`](../../internal/renewal/area_ips.go),
 [`internal/provider/area_proxy.go`](../../internal/provider/area_proxy.go)).
 
@@ -342,6 +343,54 @@ proxies on its own accounts
   text nor magpie's own exit. Each area gets 10 in 10 minutes, one at a
   time (`proxyChecks`, in memory), else `429 too_many_checks` with
   `Retry-After`; a held check connects nowhere.
+- **Renewal** (T-214): an IP with an opening date tells `renewal`
+  `{opened, ends, due, state, daysLeft}` from `renewal.Of`, the window's
+  one calculation: `state` is `""`, `soon` (within `WarnDays`) or `ended`,
+  `due` stays the boolean it was (either of the two), and `daysLeft` is
+  below 0 once ended, the whole days since (`State.DaysFrom`).
+- **A proxy not saved** (`POST /ips/probe`, T-214) is checked as a saved
+  one is, to the same page, its answer's `proxy` with the login left out.
+  It spends one of `proxyChecks` before anything else, since judging a
+  name public resolves it, and is `400 proxy_not_public` (connecting
+  nowhere) when `CheckPublic` refuses it. Its connection is held to
+  public addresses at its dial although no `ips.json` names it
+  (`netproxy.WithPublicOnly`, which every area check now sends), so a
+  name rebound after it was judged reaches nothing.
+- **Many at once** (`POST /ips/batch`, T-214): the lines are read by
+  `renewal.ReadBatch`, a Go port of the window's `ipsBatchParse` (six
+  formats, at most `BatchMost` 100 lines), and the two read the same
+  shared lines (`internal/renewal/testdata/batch_lines.json`, held by
+  `TestAreaBatchLinesReadAsTheWindowReads` and
+  `internal/gui/tests/proxy-ips-batch-lines.test.cjs`; a change to either
+  reader regenerates them from `ipsbatch.js`). A line whose host is an IP
+  is kept under it, judged public by its address and never connected to;
+  a host name is kept under its exit, read only with `check:true`, each
+  such line one of `proxyChecks` (the batch holds the area's one at a
+  time while it runs; past the budget the names left are `failed`
+  "check limit reached"). What is left is judged and written at once,
+  under `ipsMu` against `ips.json` read then (`renewal.AddAreaProxies`):
+  `added`, `merged` into an IP the area made, `exists`, `conflict` for an
+  IP magpie has as no IP the area made (whose not said; each counted in
+  `conflictProbes`, and the one that reaches the line fails the rest),
+  and `failed` for an IP the owner gave, a full IP (20 proxies), the
+  area's 50 or magpie's 500. A batch is 429 at the door while the area
+  is held for conflicts, or, with `check` and a name in it, while its
+  checks are spent. `dryRun` reads the lines and judges an IP host public
+  and no more: it resolves no name, connects nowhere, spends nothing and
+  judges no owner (`ok`, `invalid`, `not_public` alone), so it tells
+  nothing of other IPs.
+- **Exits read again** (`POST /ips/reread`, T-214, in place of "import
+  from accounts", whose proxies are either the area's IPs already or the
+  owner's): each proxy of an IP the area made that is on one of its
+  accounts is checked, a check spent each (those past the budget
+  `failed` unread; none left at the door is 429). One that leaves from
+  another IP now moves there (`renewal.MoveAreaProxy`): to an IP the area
+  made, or a new one of the area's (50 at most). Its accounts' records
+  move with it in the same hold of `ipsMu` (`area.MoveProxy`; a failure
+  there puts `ips.json` back), so no sweep reads one without the other;
+  the address written to the account is the proxy's and stays. An exit
+  that is magpie's as no IP the area made is `failed`, whose not said,
+  and counted in `conflictProbes`. An IP the owner gave is never read.
 - **The owner's window** (Models › Proxy IPs,
   [`plugins/accounts/ips.js`](../../internal/gui/assets/plugins/accounts/ips.js)
   `ipsAreaButton`): each IP's "Give to area…" opens the app's menu of
@@ -468,7 +517,7 @@ by the owner or another area) is left out: its calls can't be told apart.
 An areas.json from before `previous` reads as it did. One the area couldn't
 be told of lists as `gone`.
 
-## Agreed, not built yet (T-209, T-211, T-212, T-214, T-215)
+## Agreed, not built yet (T-209, T-211, T-212, T-215)
 
 Everything above is what magpie does today. On 2026-11-18 the owner settled
 the next contract (magpie-console's `docs/magpie-api.md` §10–19, T-208):
@@ -477,7 +526,9 @@ or key, more key fields, more proxy-IP routes, and the console acting for
 an area. The missing built-in sign-ins (§12, T-210: `chatgpt-api` and
 Copilot's `site`) are in [Area sign-ins](#area-sign-ins), and the key fields, many keys,
 opened dates and direct (§15, T-213) in [Routes](#routes),
-[Proxy IPs](#proxy-ips) and [Area sign-ins](#area-sign-ins); a `proxy`
+[Proxy IPs](#proxy-ips) and [Area sign-ins](#area-sign-ins), and the
+proxy routes (§16, T-214: renewal days, probe, batch, reread) in
+[Proxy IPs](#proxy-ips); a `proxy`
 sent with a key (§14) comes with T-212. The console
 reaching them through `/areas/{id}/signin` comes with the rest of its
 acting for an area. Each task moves its part into the sections above as
@@ -489,9 +540,8 @@ must hold, beside the contract's bodies and codes:
   `pluginsignin_paste.go`); imports through `ImportLogins`,
   `ImportCodexAccessOnly`, `ImportGoogleAccounts` and `ImportFactoryKeys`;
   proxies through `settings.CheckProxy` and `netproxy.CheckPublic`;
-  renewal through `internal/renewal` (`WarnDays`). The one new parser is
-  the batch-proxy one (Go, `internal/renewal`), which shares its test
-  lines with the window's `ipsbatch.js`.
+  renewal through `internal/renewal` (`WarnDays`). The one new parser,
+  the batch-proxy one, is built ([Proxy IPs](#proxy-ips)).
 - **Never written over.** An account magpie has (the owner's or another
   area's) is `conflict` on every add path, and its tokens, proxy and name
   stay as they were. The import readers today renew such an account
@@ -519,14 +569,13 @@ must hold, beside the contract's bodies and codes:
 - **Limits are the area's, from both keys.** Every add, sign-in, import
   and proxy route the console reaches as `/areas/{id}/…` runs the area's
   own handler and checks: what the area may add, 500 accounts, 50 IPs,
-  `conflictProbes`, `proxyChecks` (probe, a batch's host-name lines and
-  reread share it) and one import at a time. The console also has totals
+  `conflictProbes`, `proxyChecks` (which probe, a batch's host-name lines
+  and reread share already) and one import at a time. The console also has totals
   of its own across areas (40 conflicts, 20 checks in 10 minutes), so
   more areas don't buy more probes. The role is judged before `{id}` is
   looked up. Another area's account, IP or proxy is `404`; a sign-in not
   started by the caller is `404`, and only its starter (area or console)
-  reads, pastes into or cancels it. A batch's `dryRun` resolves no name
-  and judges no owner, so it tells nothing of other IPs.
+  reads, pastes into or cancels it.
 - **New codes:** `409 plugin_unavailable`, `413 too_large` (the import
   route's 8 MB body alone), `429 too_many_imports`.
 - **Log:** a console action writes the area, its note, the action and the
@@ -540,6 +589,8 @@ must hold, beside the contract's bodies and codes:
 'TestAdmin|TestReadOnlyKeyEveryRoute|TestKeySlotEveryRoute'`; `go test
 ./internal/provider -run 'TestAreaSignIn|TestAreaLetsGo|TestAttachOnlyOwnIP|TestReleaseClearsAreaProxy|TestSweepAreaProxies'`;
 `go test ./internal/renewal ./internal/netproxy -run 'Area|Owner|OldIPs'`;
+`go test ./internal/gateway -run 'TestAdmin(IPRenewalDays|ProbeProxy|Batch|Reread|ProxyChecksHoldSpend)'`;
+`node --test internal/gui/tests/proxy-ips-batch-lines.test.cjs`;
 `go test ./internal/gui -run TestIPAreaRoute`; `go test ./internal/gui -run
 TestAreasRoutes`. `TestAdminKeyEveryRoute` fails
 when a route is under `/v1/magpie/admin` and in no role's list, or when an

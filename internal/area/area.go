@@ -363,6 +363,25 @@ func SetProxy(id, ref string, p *AccountProxy) error {
 	})
 }
 
+// MoveProxy has each of the area id's accounts on the proxy proxyID of
+// its IP from say the IP to instead (T-214: the proxy's exit was read
+// again and it moved, renewal.MoveAreaProxy). The address written to the
+// account is the proxy's, and stays. ErrNotFound for no such area.
+func MoveProxy(id, from, proxyID, to string) error {
+	return change(func(f *file) error {
+		i := index(f.Areas, id)
+		if i < 0 {
+			return ErrNotFound
+		}
+		for j := range f.Areas[i].Accounts {
+			if p := f.Areas[i].Accounts[j].Proxy; p != nil && !p.Direct && p.IP == from && p.ID == proxyID {
+				p.IP = to
+			}
+		}
+		return nil
+	})
+}
+
 // ReleaseProvider takes every account of provider pid from the areas
 // that own them: the provider was deleted, its keys with it. A provider
 // of the same id added later doesn't bring them back to an area.

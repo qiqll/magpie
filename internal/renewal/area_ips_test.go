@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -197,5 +198,138 @@ func TestAreaAddedProxy(t *testing.T) {
 	os.WriteFile(path, []byte(`{"ips": [`), 0o600)
 	if !AreaAddedProxy("http://93.184.216.34:3128") {
 		t.Fatal("a file that stopped parsing lost the last good read")
+	}
+}
+
+// TestAddAreaProxiesJudgedInTheLock (T-214): a batch's adds are judged
+// against the file as it is: a new IP is made then merged into, one the
+// area has is merged into, the owner's and another area's are taken
+// (stop asked each time), one the owner gave is given, and all is
+// written at once. An add after taken says stop is stopped.
+func TestAddAreaProxiesJudgedInTheLock(t *testing.T) {
+	ipsHome(t)
+	now := time.Now()
+	if err := SetIPs([]IP{{IP: "198.51.100.1"}, {IP: "198.51.100.2"}}, "", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddAreaIP("ar_b", IP{IP: "203.0.113.8"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddAreaIP("ar_a", IP{IP: "203.0.113.7", Proxies: []string{"socks5://u:p@93.184.216.34:1080"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := GiveIP("198.51.100.2", "ar_a"); err != nil {
+		t.Fatal(err)
+	}
+	asked := 0
+	got, err := AddAreaProxies("ar_a", []AreaProxyAdd{
+		{"203.0.113.20", "http://93.184.216.40:80"},
+		{"203.0.113.20", "http://93.184.216.41:80"},
+		{"203.0.113.7", "http://93.184.216.42:80"},
+		{"203.0.113.7", "SOCKS5://u:p@93.184.216.34:1080"},
+		{"198.51.100.1", "http://93.184.216.43:80"},
+		{"203.0.113.8", "http://93.184.216.44:80"},
+		{"198.51.100.2", "http://93.184.216.45:80"},
+	}, now, func() bool { asked++; return false })
+	want := []string{BatchAdded, BatchMerged, BatchMerged, BatchExists, BatchTaken, BatchTaken, BatchGiven}
+	if err != nil || !slices.Equal(got, want) || asked != 2 {
+		t.Fatalf("%v %v (asked %d), want %v", got, err, asked, want)
+	}
+	ips, _, _ := IPs()
+	byIP := map[string]IP{}
+	for _, x := range ips {
+		byIP[x.IP] = x
+	}
+	if x := byIP["203.0.113.20"]; x.Area != "ar_a" || x.AddedBy != AddedByArea || len(x.Proxies) != 2 {
+		t.Fatalf("the new IP: %+v", x)
+	}
+	if len(byIP["203.0.113.7"].Proxies) != 2 || len(byIP["198.51.100.1"].Proxies) != 0 || len(byIP["203.0.113.8"].Proxies) != 0 || len(byIP["198.51.100.2"].Proxies) != 0 {
+		t.Fatalf("written: %+v", ips)
+	}
+	got, err = AddAreaProxies("ar_a", []AreaProxyAdd{{"198.51.100.1", "http://93.184.216.46:80"}, {"203.0.113.21", "http://93.184.216.47:80"}}, now, func() bool { return true })
+	if err != nil || !slices.Equal(got, []string{BatchTaken, BatchStopped}) {
+		t.Fatalf("stopped: %v %v", got, err)
+	}
+	if ips2, _, _ := IPs(); len(ips2) != len(ips) {
+		t.Fatal("a stopped add was written")
+	}
+	if _, err := AddAreaProxies("", []AreaProxyAdd{{"203.0.113.22", "http://93.184.216.48:80"}}, now, nil); !errors.Is(err, ErrIPNotFound) {
+		t.Fatalf("no area: %v", err)
+	}
+}
+
+// TestAddAreaProxiesBounds (T-214): an area's 50 IPs and an IP's 20
+// proxies are judged add by add; what fits is kept.
+func TestAddAreaProxiesBounds(t *testing.T) {
+	ipsHome(t)
+	now := time.Now()
+	var adds []AreaProxyAdd
+	for i := range MaxAreaIPs + 1 {
+		adds = append(adds, AreaProxyAdd{"203.0.113." + strconv.Itoa(i+1), "http://93.184.216.34:" + strconv.Itoa(1000+i)})
+	}
+	for i := range MaxIPProxies {
+		adds = append(adds, AreaProxyAdd{"203.0.113.1", "http://93.184.216.35:" + strconv.Itoa(2000+i)})
+	}
+	got, err := AddAreaProxies("ar_a", adds, now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[MaxAreaIPs-1] != BatchAdded || got[MaxAreaIPs] != BatchAreaFull {
+		t.Fatalf("the 50th and 51st: %v %v", got[MaxAreaIPs-1], got[MaxAreaIPs])
+	}
+	rest := got[MaxAreaIPs+1:]
+	if rest[MaxIPProxies-2] != BatchMerged || rest[MaxIPProxies-1] != BatchIPFull {
+		t.Fatalf("the 20th and 21st proxy of one IP: %v", rest)
+	}
+}
+
+// TestAreaMoveProxyToItsExit (T-214): a proxy moves from an IP the area made to
+// its exit, an IP the area made or a new one, and moved is called under
+// the lock; an exit magpie has otherwise is ErrIPTaken; moved failing
+// puts the file back.
+func TestAreaMoveProxyToItsExit(t *testing.T) {
+	ipsHome(t)
+	now := time.Now()
+	p1, p2 := "http://u:p@93.184.216.34:1080", "http://93.184.216.35:1080"
+	if err := SetIPs([]IP{{IP: "198.51.100.1"}}, "", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddAreaIP("ar_a", IP{IP: "203.0.113.50", Proxies: []string{p1, p2}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := MoveAreaProxy("ar_b", "203.0.113.50", ProxyID(p1), "203.0.113.7", now, nil); !errors.Is(err, ErrIPNotFound) {
+		t.Fatalf("another area moved it: %v", err)
+	}
+	if err := MoveAreaProxy("ar_a", "203.0.113.50", ProxyID(p1), "198.51.100.1", now, nil); !errors.Is(err, ErrIPTaken) {
+		t.Fatalf("onto the owner's: %v", err)
+	}
+	if err := MoveAreaProxy("ar_a", "198.51.100.1", "px_x", "203.0.113.7", now, nil); !errors.Is(err, ErrIPNotFound) {
+		t.Fatalf("from the owner's: %v", err)
+	}
+	before, _, _ := IPs()
+	boom := errors.New("areas.json")
+	if err := MoveAreaProxy("ar_a", "203.0.113.50", ProxyID(p1), "203.0.113.7", now, func(string) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("moved failing: %v", err)
+	}
+	if after, _, _ := IPs(); len(after) != len(before) || len(after[1].Proxies) != 2 {
+		t.Fatalf("not put back: %+v", after)
+	}
+	var to string
+	if err := MoveAreaProxy("ar_a", "203.0.113.50", ProxyID(p1), "203.0.113.7", now, func(ip string) error {
+		to = ip
+		if ipsMu.TryLock() {
+			ipsMu.Unlock()
+			t.Error("moved was called without ipsMu")
+		}
+		return nil
+	}); err != nil || to != "203.0.113.7" {
+		t.Fatalf("a move: %v %q", err, to)
+	}
+	if err := MoveAreaProxy("ar_a", "203.0.113.50", ProxyID(p2), "203.0.113.7", now, nil); err != nil {
+		t.Fatal(err)
+	}
+	ips, _, _ := IPs()
+	if len(ips) != 3 || len(ips[1].Proxies) != 0 || ips[2].IP != "203.0.113.7" || ips[2].Area != "ar_a" || ips[2].AddedBy != AddedByArea || !slices.Equal(ips[2].Proxies, []string{p1, p2}) {
+		t.Fatalf("after: %+v", ips)
 	}
 }

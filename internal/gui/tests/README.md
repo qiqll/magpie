@@ -35,6 +35,10 @@ password, escaped and non-UTF-8 credentials, a login saved in the address
 before loading into the fields, masked addresses/status, clearing
 authentication, Tab and Escape, mode switches, and narrow windows in all
 five languages on Chromium and WebKit.
+`proxy-ips-batch-lines.test.cjs` (T-214) runs the window's Batch add
+reader (`ipsBatchParse`) alone, no browser, on the lines Go's batch reader
+is tested with (`internal/renewal/testdata/batch_lines.json`), so an
+area's `POST /ips/batch` and the window read every format the same.
 `proxy-saved-pick.test.cjs` (T-110) checks a proxy picked beside a
 sign-in's Callback URL field: its menu (global, Direct, a saved proxy with
 no password shown, Custom…), the pick sent with the pasted address and

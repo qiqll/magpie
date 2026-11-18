@@ -1,0 +1,558 @@
+[
+  {
+    "line": "192.168.0.1:8000",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "192.168.0.1",
+      "v6": false,
+      "port": "8000",
+      "user": "",
+      "pass": "",
+      "ip": "192.168.0.1",
+      "url": "socks5://192.168.0.1:8000"
+    }
+  },
+  {
+    "line": "192.168.0.2:8000:alice:pw1",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "192.168.0.2",
+      "v6": false,
+      "port": "8000",
+      "user": "alice",
+      "pass": "pw1",
+      "ip": "192.168.0.2",
+      "url": "socks5://alice:pw1@192.168.0.2:8000"
+    }
+  },
+  {
+    "line": "socks5://192.168.0.3:8000[https://refresh.example/x]",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "192.168.0.3",
+      "v6": false,
+      "port": "8000",
+      "user": "",
+      "pass": "",
+      "ip": "192.168.0.3",
+      "url": "socks5://192.168.0.3:8000"
+    }
+  },
+  {
+    "line": "HTTP://192.168.0.4:8000:bob:pw2[https://refresh.example/y]",
+    "type": "socks5",
+    "want": {
+      "type": "http",
+      "host": "192.168.0.4",
+      "v6": false,
+      "port": "8000",
+      "user": "bob",
+      "pass": "pw2",
+      "ip": "192.168.0.4",
+      "url": "http://bob:pw2@192.168.0.4:8000"
+    }
+  },
+  {
+    "line": "http://carol:pw3@192.168.0.5:8000",
+    "type": "socks5",
+    "want": {
+      "type": "http",
+      "host": "192.168.0.5",
+      "v6": false,
+      "port": "8000",
+      "user": "carol",
+      "pass": "pw3",
+      "ip": "192.168.0.5",
+      "url": "http://carol:pw3@192.168.0.5:8000"
+    }
+  },
+  {
+    "line": "HTTP://[2001:db8:2de:0:0:0:0:e13]:8000:dave:pw4[https://refresh.example/z]",
+    "type": "socks5",
+    "want": {
+      "type": "http",
+      "host": "2001:db8:2de::e13",
+      "v6": true,
+      "port": "8000",
+      "user": "dave",
+      "pass": "pw4",
+      "ip": "2001:db8:2de::e13",
+      "url": "http://dave:pw4@[2001:db8:2de::e13]:8000"
+    }
+  },
+  {
+    "line": "dave:pw5:192.168.0.6:8000",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "192.168.0.6",
+      "v6": false,
+      "port": "8000",
+      "user": "dave",
+      "pass": "pw5",
+      "ip": "192.168.0.6",
+      "url": "socks5://dave:pw5@192.168.0.6:8000"
+    }
+  },
+  {
+    "line": "proxy.example.com 9000 erin pw6",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "proxy.example.com",
+      "v6": false,
+      "port": "9000",
+      "user": "erin",
+      "pass": "pw6",
+      "ip": "",
+      "url": "socks5://erin:pw6@proxy.example.com:9000"
+    }
+  },
+  {
+    "line": "ssh://192.168.0.7:22",
+    "type": "socks5",
+    "err": "SSH proxies aren't supported: use HTTP, HTTPS or SOCKS5"
+  },
+  {
+    "line": "not a proxy",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "socks5://u:s3cret@203.0.113.7:1080",
+    "type": "http",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.7",
+      "v6": false,
+      "port": "1080",
+      "user": "u",
+      "pass": "s3cret",
+      "ip": "203.0.113.7",
+      "url": "socks5://u:s3cret@203.0.113.7:1080"
+    }
+  },
+  {
+    "line": "203.0.113.8:3128",
+    "type": "http",
+    "want": {
+      "type": "http",
+      "host": "203.0.113.8",
+      "v6": false,
+      "port": "3128",
+      "user": "",
+      "pass": "",
+      "ip": "203.0.113.8",
+      "url": "http://203.0.113.8:3128"
+    }
+  },
+  {
+    "line": "203.0.113.9:3128",
+    "type": "socks5h",
+    "want": {
+      "type": "socks5h",
+      "host": "203.0.113.9",
+      "v6": false,
+      "port": "3128",
+      "user": "",
+      "pass": "",
+      "ip": "203.0.113.9",
+      "url": "socks5h://203.0.113.9:3128"
+    }
+  },
+  {
+    "line": "socks://203.0.113.10:1080",
+    "type": "http",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.10",
+      "v6": false,
+      "port": "1080",
+      "user": "",
+      "pass": "",
+      "ip": "203.0.113.10",
+      "url": "socks5://203.0.113.10:1080"
+    }
+  },
+  {
+    "line": "https://u:p@Proxy.Example.COM:443/",
+    "type": "socks5",
+    "want": {
+      "type": "https",
+      "host": "proxy.example.com",
+      "v6": false,
+      "port": "443",
+      "user": "u",
+      "pass": "p",
+      "ip": "",
+      "url": "https://u:p@proxy.example.com:443"
+    }
+  },
+  {
+    "line": "203.0.113.11:1080@user:pass",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.11",
+      "v6": false,
+      "port": "1080",
+      "user": "user",
+      "pass": "pass",
+      "ip": "203.0.113.11",
+      "url": "socks5://user:pass@203.0.113.11:1080"
+    }
+  },
+  {
+    "line": "user:p%40ss@203.0.113.12:1080",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.12",
+      "v6": false,
+      "port": "1080",
+      "user": "user",
+      "pass": "p@ss",
+      "ip": "203.0.113.12",
+      "url": "socks5://user:p%40ss@203.0.113.12:1080"
+    }
+  },
+  {
+    "line": "user:p%zz@203.0.113.13:1080",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.13",
+      "v6": false,
+      "port": "1080",
+      "user": "user",
+      "pass": "p%zz",
+      "ip": "203.0.113.13",
+      "url": "socks5://user:p%25zz@203.0.113.13:1080"
+    }
+  },
+  {
+    "line": "us er:pa ss@203.0.113.14:1080",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.14",
+      "v6": false,
+      "port": "1080",
+      "user": "us er",
+      "pass": "pa ss",
+      "ip": "203.0.113.14",
+      "url": "socks5://us%20er:pa%20ss@203.0.113.14:1080"
+    }
+  },
+  {
+    "line": "user:p@ss@203.0.113.15:1080",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.15",
+      "v6": false,
+      "port": "1080",
+      "user": "user",
+      "pass": "p@ss",
+      "ip": "203.0.113.15",
+      "url": "socks5://user:p%40ss@203.0.113.15:1080"
+    }
+  },
+  {
+    "line": "203.0.113.16:1080:user:p@ss",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "203.0.113.17:1080 # the office one",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.17",
+      "v6": false,
+      "port": "1080",
+      "user": "",
+      "pass": "",
+      "ip": "203.0.113.17",
+      "url": "socks5://203.0.113.17:1080"
+    }
+  },
+  {
+    "line": "\t203.0.113.18\t1080\tuser\tpw\t",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.18",
+      "v6": false,
+      "port": "1080",
+      "user": "user",
+      "pass": "pw",
+      "ip": "203.0.113.18",
+      "url": "socks5://user:pw@203.0.113.18:1080"
+    }
+  },
+  {
+    "line": "203.0.113.19:01080",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.19",
+      "v6": false,
+      "port": "1080",
+      "user": "",
+      "pass": "",
+      "ip": "203.0.113.19",
+      "url": "socks5://203.0.113.19:1080"
+    }
+  },
+  {
+    "line": "203.0.113.20:0",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "203.0.113.21:65536",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "256.1.1.1:80",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "[::ffff:203.0.113.22]:1080",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "::ffff:cb00:7116",
+      "v6": true,
+      "port": "1080",
+      "user": "",
+      "pass": "",
+      "ip": "203.0.113.22",
+      "url": "socks5://[::ffff:cb00:7116]:1080"
+    }
+  },
+  {
+    "line": "[1.2.3.4]:1080",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "[2001:DB8::1]:1080:u:p",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "2001:db8::1",
+      "v6": true,
+      "port": "1080",
+      "user": "u",
+      "pass": "p",
+      "ip": "2001:db8::1",
+      "url": "socks5://u:p@[2001:db8::1]:1080"
+    }
+  },
+  {
+    "line": "socks5://u:p@[2001:db8::2]:1080",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "2001:db8::2",
+      "v6": true,
+      "port": "1080",
+      "user": "u",
+      "pass": "p",
+      "ip": "2001:db8::2",
+      "url": "socks5://u:p@[2001:db8::2]:1080"
+    }
+  },
+  {
+    "line": "localhost:1080",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "localhost",
+      "v6": false,
+      "port": "1080",
+      "user": "",
+      "pass": "",
+      "ip": "",
+      "url": "socks5://localhost:1080"
+    }
+  },
+  {
+    "line": "LOCALHOST:1080",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "localhost",
+      "v6": false,
+      "port": "1080",
+      "user": "",
+      "pass": "",
+      "ip": "",
+      "url": "socks5://localhost:1080"
+    }
+  },
+  {
+    "line": "localhoſt:1080",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "ſ.example.com:1080",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "intranet:1080",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "203.0.113.23",
+    "type": "socks5",
+    "err": "No host and port found in it"
+  },
+  {
+    "line": "a:b:c:d:e",
+    "type": "socks5",
+    "err": "Too many parts: write it as username:password@host:port"
+  },
+  {
+    "line": "203.0.113.24:80:198.51.100.1:80",
+    "type": "socks5",
+    "err": "Read either way: write it as username:password@host:port"
+  },
+  {
+    "line": "a.example.com:80:b.example.com:80",
+    "type": "socks5",
+    "err": "Read either way: write it as username:password@host:port"
+  },
+  {
+    "line": "u.example.com:80:203.0.113.25:80",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.25",
+      "v6": false,
+      "port": "80",
+      "user": "u.example.com",
+      "pass": "80",
+      "ip": "203.0.113.25",
+      "url": "socks5://u.example.com:80@203.0.113.25:80"
+    }
+  },
+  {
+    "line": "::pass:203.0.113.26:80",
+    "type": "socks5",
+    "err": "Too many parts: write it as username:password@host:port"
+  },
+  {
+    "line": "203.0.113.27:80:user",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.27",
+      "v6": false,
+      "port": "80",
+      "user": "user",
+      "pass": "",
+      "ip": "203.0.113.27",
+      "url": "socks5://user@203.0.113.27:80"
+    }
+  },
+  {
+    "line": "socks5h://203.0.113.28:1080///",
+    "type": "socks5",
+    "want": {
+      "type": "socks5h",
+      "host": "203.0.113.28",
+      "v6": false,
+      "port": "1080",
+      "user": "",
+      "pass": "",
+      "ip": "203.0.113.28",
+      "url": "socks5h://203.0.113.28:1080"
+    }
+  },
+  {
+    "line": "http://ü:ö@203.0.113.29:80",
+    "type": "socks5",
+    "want": {
+      "type": "http",
+      "host": "203.0.113.29",
+      "v6": false,
+      "port": "80",
+      "user": "ü",
+      "pass": "ö",
+      "ip": "203.0.113.29",
+      "url": "http://%C3%BC:%C3%B6@203.0.113.29:80"
+    }
+  },
+  {
+    "line": "203.0.113.30:80:u:p:",
+    "type": "socks5",
+    "err": "Too many parts: write it as username:password@host:port"
+  },
+  {
+    "line": "socks5://203.0.113.31:1080[refresh]",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.31",
+      "v6": false,
+      "port": "1080",
+      "user": "",
+      "pass": "",
+      "ip": "203.0.113.31",
+      "url": "socks5://203.0.113.31:1080"
+    }
+  },
+  {
+    "line": "u:p@[2001:db8::3]:1080[https://r.example/]",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "2001:db8::3",
+      "v6": true,
+      "port": "1080",
+      "user": "u",
+      "pass": "p",
+      "ip": "2001:db8::3",
+      "url": "socks5://u:p@[2001:db8::3]:1080"
+    }
+  },
+  {
+    "line": "010.1.1.1:80",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "010.1.1.1",
+      "v6": false,
+      "port": "80",
+      "user": "",
+      "pass": "",
+      "ip": "010.1.1.1",
+      "url": "socks5://010.1.1.1:80"
+    }
+  },
+  {
+    "line": " 203.0.113.32:80　",
+    "type": "socks5",
+    "want": {
+      "type": "socks5",
+      "host": "203.0.113.32",
+      "v6": false,
+      "port": "80",
+      "user": "",
+      "pass": "",
+      "ip": "203.0.113.32",
+      "url": "socks5://203.0.113.32:80"
+    }
+  }
+]

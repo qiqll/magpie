@@ -38,6 +38,8 @@ var keySlotFree = []string{
 	"POST " + AdminPath + "/areas/{id}/rotate-key", "POST " + AdminPath + "/areas/{id}/delete",
 	"POST " + AdminPath + "/ips", "POST " + AdminPath + "/ips/update", "POST " + AdminPath + "/ips/delete",
 	"POST " + AdminPath + "/ips/check", "POST " + AdminPath + "/accounts/proxy",
+	"POST " + AdminPath + "/accounts/keys", "POST " + AdminPath + "/ips/probe", "POST " + AdminPath + "/ips/batch",
+	"POST " + AdminPath + "/ips/reread",
 }
 
 // Every route is judged for a key's MaxConcurrency: held (keySlotRoutes)

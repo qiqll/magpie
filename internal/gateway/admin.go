@@ -73,6 +73,9 @@ var adminRoutes = map[string]map[string]bool{
 		"POST " + AdminPath + "/ips/update":           true,
 		"POST " + AdminPath + "/ips/delete":           true,
 		"POST " + AdminPath + "/ips/check":            true,
+		"POST " + AdminPath + "/ips/probe":            true,
+		"POST " + AdminPath + "/ips/batch":            true,
+		"POST " + AdminPath + "/ips/reread":           true,
 		"POST " + AdminPath + "/accounts/proxy":       true,
 	},
 	access.AdminConsole: {
@@ -124,6 +127,9 @@ func (s *Server) adminRoutesOn(mux *routeMux) {
 	mux.HandleFunc("POST "+AdminPath+"/ips/update", s.admin(access.AdminArea, s.adminUpdateIP))
 	mux.HandleFunc("POST "+AdminPath+"/ips/delete", s.admin(access.AdminArea, s.adminDeleteIP))
 	mux.HandleFunc("POST "+AdminPath+"/ips/check", s.admin(access.AdminArea, s.adminCheckProxy))
+	mux.HandleFunc("POST "+AdminPath+"/ips/probe", s.admin(access.AdminArea, s.adminProbeProxy))
+	mux.HandleFunc("POST "+AdminPath+"/ips/batch", s.admin(access.AdminArea, s.adminBatchIPs))
+	mux.HandleFunc("POST "+AdminPath+"/ips/reread", s.admin(access.AdminArea, s.adminRereadIPs))
 	mux.HandleFunc("POST "+AdminPath+"/accounts/proxy", s.admin(access.AdminArea, s.adminAccountProxy))
 
 	mux.HandleFunc("GET "+AdminPath+"/catalog", s.admin(access.AdminConsole, s.adminCatalog))

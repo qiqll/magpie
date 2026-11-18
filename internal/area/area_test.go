@@ -228,3 +228,43 @@ func TestAreaClaimUpToHoldsSideBySide(t *testing.T) {
 		t.Fatal("Claim has no most:", err)
 	}
 }
+
+// TestAreaMoveProxyMovesOnlyThatProxy (T-214): a proxy moved to another IP
+// takes the area's accounts on it along, by its IP and id alike; another
+// proxy, a direct, and another area's account stay.
+func TestAreaMoveProxyMovesOnlyThatProxy(t *testing.T) {
+	sandbox(t)
+	old := `{"version":1,"areas":[` +
+		`{"id":"ar_a","note":"A","created":"2026-11-01T00:00:00Z","accounts":[` +
+		`{"ref":"plan/k1","added":"2026-11-01T00:00:00Z","proxy":{"ip":"203.0.113.50","id":"px_1","key":"k1"}},` +
+		`{"ref":"plan/k2","added":"2026-11-01T00:00:00Z","proxy":{"ip":"203.0.113.50","id":"px_2","key":"k2"}},` +
+		`{"ref":"plan/k3","added":"2026-11-01T00:00:00Z","proxy":{"ip":"203.0.113.51","id":"px_1","key":"k3"}},` +
+		`{"ref":"plan/k4","added":"2026-11-01T00:00:00Z","proxy":{"key":"k4","direct":true}}]},` +
+		`{"id":"ar_b","note":"B","created":"2026-11-01T00:00:00Z","accounts":[` +
+		`{"ref":"plan/k5","added":"2026-11-01T00:00:00Z","proxy":{"ip":"203.0.113.50","id":"px_1","key":"k5"}}]}]}`
+	if err := os.MkdirAll(filepath.Dir(Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := MoveProxy("ar_a", "203.0.113.50", "px_1", "203.0.113.7"); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := Get("ar_a")
+	want := []string{"203.0.113.7", "203.0.113.50", "203.0.113.51", ""}
+	for i, c := range a.Accounts {
+		if c.Proxy.IP != want[i] {
+			t.Errorf("%s: %+v, want IP %q", c.Ref, c.Proxy, want[i])
+		}
+	}
+	if !a.Accounts[3].Proxy.Direct || a.Accounts[0].Proxy.ID != "px_1" || a.Accounts[0].Proxy.Key != "k1" {
+		t.Errorf("the records: %+v", a.Accounts)
+	}
+	if b, _ := Get("ar_b"); b.Accounts[0].Proxy.IP != "203.0.113.50" {
+		t.Errorf("another area's account moved: %+v", b.Accounts[0].Proxy)
+	}
+	if err := MoveProxy("ar_none", "203.0.113.50", "px_1", "203.0.113.7"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("no such area: %v", err)
+	}
+}
