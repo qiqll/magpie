@@ -79,6 +79,7 @@ var adminRoutes = map[string]map[string]bool{
 		"POST " + AdminPath + "/ips/batch":            true,
 		"POST " + AdminPath + "/ips/reread":           true,
 		"POST " + AdminPath + "/accounts/proxy":       true,
+		"POST " + AdminPath + "/accounts/import":      true,
 	},
 	access.AdminConsole: {
 		"GET " + AdminPath + "/me":                        true,
@@ -135,6 +136,7 @@ func (s *Server) adminRoutesOn(mux *routeMux) {
 	mux.HandleFunc("POST "+AdminPath+"/ips/batch", s.admin(access.AdminArea, s.adminBatchIPs))
 	mux.HandleFunc("POST "+AdminPath+"/ips/reread", s.admin(access.AdminArea, s.adminRereadIPs))
 	mux.HandleFunc("POST "+AdminPath+"/accounts/proxy", s.admin(access.AdminArea, s.adminAccountProxy))
+	mux.HandleFunc("POST "+AdminPath+"/accounts/import", s.adminUpTo(access.AdminArea, adminImportMost, s.adminImport))
 
 	mux.HandleFunc("GET "+AdminPath+"/catalog", s.admin(access.AdminConsole, s.adminCatalog))
 	mux.HandleFunc("GET "+AdminPath+"/areas", s.admin(access.AdminConsole, s.adminAreas))
@@ -160,6 +162,12 @@ type adminCall struct {
 // the admin allow list lets in, with an enabled admin key of role (""
 // for either), and an area admin's area there and on.
 func (s *Server) admin(role string, h func(http.ResponseWriter, *http.Request, adminCall)) http.HandlerFunc {
+	return s.adminUpTo(role, adminBodyMost, h)
+}
+
+// adminUpTo is admin with the body held to most bytes: the import's 8 MB
+// (adminImportMost), every other route's 64 KB.
+func (s *Server) adminUpTo(role string, most int64, h func(http.ResponseWriter, *http.Request, adminCall)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if addr, ok := adminAllowed(r); !ok {
@@ -200,7 +208,7 @@ func (s *Server) admin(role string, h func(http.ResponseWriter, *http.Request, a
 			}
 			c.area = a
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, adminBodyMost)
+		r.Body = http.MaxBytesReader(w, r.Body, most)
 		h(w, r, c)
 	}
 }
@@ -450,16 +458,22 @@ func (s *Server) adminAddKey(w http.ResponseWriter, r *http.Request, c adminCall
 }
 
 func adminClaimErr(w http.ResponseWriter, err error) {
+	_, status, code, msg := claimFailure(err)
+	adminError(w, status, code, msg)
+}
+
+// claimFailure is the answer to a claim that failed with err: the status,
+// code and message, as adminClaimErr writes them.
+func claimFailure(err error) (adminAccount, int, string, string) {
 	switch {
 	case errors.Is(err, area.ErrFull):
-		adminError(w, http.StatusConflict, adminConflict, err.Error())
+		return adminAccount{}, http.StatusConflict, adminConflict, err.Error()
 	case errors.Is(err, area.ErrTaken):
-		adminError(w, http.StatusConflict, adminConflict, "this account is in magpie already")
+		return adminAccount{}, http.StatusConflict, adminConflict, "this account is in magpie already"
 	case errors.Is(err, area.ErrNotFound):
-		adminError(w, http.StatusUnauthorized, adminKeyRequired, "this admin key's area was deleted")
-	default:
-		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
+		return adminAccount{}, http.StatusUnauthorized, adminKeyRequired, "this admin key's area was deleted"
 	}
+	return adminAccount{}, http.StatusServiceUnavailable, adminAreasUnread, err.Error()
 }
 
 // Reseat runs a change that can take a provider's last account or key

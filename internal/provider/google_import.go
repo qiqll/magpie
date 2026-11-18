@@ -32,7 +32,8 @@ type ImportedAccount struct {
 	User string `json:"user"`
 	// Status: "added", "updated" (in magpie already, now with this
 	// sign-in), "exists" (in magpie already with this very sign-in),
-	// "failed".
+	// "failed", or for an area's import "conflict" (ImportOptions.NewOnly:
+	// in magpie already, left as it was, User not told).
 	Status string `json:"status"`
 	Plan   string `json:"plan,omitempty"`
 	Error  string `json:"error,omitempty"`
@@ -176,6 +177,12 @@ func jsonStr(x map[string]any, keys ...string) string {
 // (see above), each file's text one element of files, and says what
 // became of each.
 func ImportGoogleAccounts(ctx context.Context, agent string, files []string) ([]ImportedAccount, error) {
+	return ImportGoogleAccountsWith(ctx, agent, files, ImportOptions{})
+}
+
+// ImportGoogleAccountsWith is ImportGoogleAccounts with o's choices: an
+// area's import brings in new accounts alone (ImportOptions.NewOnly).
+func ImportGoogleAccountsWith(ctx context.Context, agent string, files []string, o ImportOptions) ([]ImportedAccount, error) {
 	if settings.AccountDiscoveryOff() {
 		return nil, errAccountDiscoveryOff
 	}
@@ -226,12 +233,17 @@ func ImportGoogleAccounts(ctx context.Context, agent string, files []string) ([]
 		if name == "" && e.file == 0 {
 			name = fmt.Sprintf("#%d", i+1)
 		}
-		switch {
-		case e.err != "":
+		if e.err != "" {
 			out[i] = ImportedAccount{User: name, File: e.file, Status: "failed", Error: e.err}
 			continue
-		case haveTok[e.refreshToken] != "":
-			out[i] = ImportedAccount{User: haveTok[e.refreshToken], Status: "exists"}
+		}
+		// admitted in the files' order, as ImportLoginsWith's
+		end, ok := o.admit(&out[i], name)
+		if !ok {
+			continue
+		}
+		if haveTok[e.refreshToken] != "" {
+			out[i] = end(o.known(ImportedAccount{User: haveTok[e.refreshToken], Status: "exists"}))
 			continue
 		}
 		wg.Add(1)
@@ -241,7 +253,7 @@ func ImportGoogleAccounts(ctx context.Context, agent string, files []string) ([]
 			defer func() { <-sem }()
 			c, cancel := context.WithTimeout(ctx, 45*time.Second)
 			defer cancel()
-			out[i] = importGoogleAccount(c, app, e, name, haveUser)
+			out[i] = end(importGoogleAccount(c, app, e, name, haveUser, o))
 		}()
 	}
 	wg.Wait()
@@ -258,7 +270,7 @@ func ImportGoogleAccounts(ctx context.Context, agent string, files []string) ([]
 
 // importGoogleAccount checks one account as a sign-in is finished and
 // keeps it.
-func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, name string, haveUser map[string]string) ImportedAccount {
+func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, name string, haveUser map[string]string, o ImportOptions) ImportedAccount {
 	fail := func(msg string) ImportedAccount {
 		return ImportedAccount{User: name, Status: "failed", Error: msg}
 	}
@@ -287,10 +299,16 @@ func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, nam
 	switch {
 	case err == nil:
 		g.user = who
+	case o.NewOnly:
+		// the file's email is its word, not Google's
+		return fail(err.Error())
 	case e.email != "":
 		g.user = e.email // the file says, and the token works
 	default:
 		return fail(err.Error())
+	}
+	if _, ok := haveUser[strings.ToLower(g.user)]; ok && o.NewOnly {
+		return o.known(ImportedAccount{Status: "exists"})
 	}
 	status := "added"
 	if old, ok := haveUser[strings.ToLower(g.user)]; ok {
@@ -307,7 +325,17 @@ func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, nam
 	} else if e.project != "" {
 		g.auth.Project = e.project
 	}
-	if err := addGoogleLogin(app.agent, g.user, plan, g.auth); err != nil {
+	if o.NewOnly {
+		claim, undo := o.claimer(app.agent)
+		auth, _ := json.Marshal(g.auth)
+		err := addSideLoginNew(savedLogin{Agent: app.agent, User: g.user, Plan: plan, Auth: auth, Project: g.auth.Project}, claim)
+		if err != nil && !errors.Is(err, ErrKnownAccount) {
+			undo()
+		}
+		if err != nil {
+			return o.saved(g.user, plan, name, err)
+		}
+	} else if err := addGoogleLogin(app.agent, g.user, plan, g.auth); err != nil {
 		return fail(err.Error())
 	}
 	googleState.Lock()

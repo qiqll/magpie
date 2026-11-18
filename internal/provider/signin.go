@@ -1291,6 +1291,14 @@ func addLogin(l savedLogin) (using bool, err error) {
 // email is told apart by its workspace), which the sign-in says it ended
 // with, so it is that account an area claims and Again is judged of.
 func addLoginOf(l savedLogin, magpieOnly bool) (using bool, saved string, err error) {
+	return addLoginWith(l, magpieOnly, nil)
+}
+
+// addLoginWith is addLoginOf that, with claim set, keeps a new account
+// alone (an area's import, T-220): one magpie has, signed in here or
+// saved, is ErrKnownAccount with nothing written, and claim is asked to
+// take the new one by the name it is kept by before anything is.
+func addLoginWith(l savedLogin, magpieOnly bool, claim func(user string) error) (using bool, saved string, err error) {
 	defer func() { // under the name it is kept by (codexName), once loginsMu is let go
 		if err == nil {
 			StaleAllowance(l.Agent, l.User)
@@ -1312,6 +1320,14 @@ func addLoginOf(l savedLogin, magpieOnly bool) (using bool, saved string, err er
 	live, signedIn := liveLogin(l.Agent)
 	ls := readLogins()
 	l.User = codexName(ls, l)
+	if claim != nil {
+		if signedIn && sameLogin(live, l) || slices.ContainsFunc(ls, func(x savedLogin) bool { return sameLogin(x, l) }) {
+			return false, "", ErrKnownAccount
+		}
+		if err := claim(l.User); err != nil {
+			return false, "", err
+		}
+	}
 	using = !signedIn || sameLogin(live, l)
 	if magpieOnly {
 		using = signedIn && sameLogin(live, l)

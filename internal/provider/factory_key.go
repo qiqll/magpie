@@ -45,6 +45,10 @@ func factoryKeysIn(texts []string) []string {
 	return out
 }
 
+// FactoryKeysIn is factoryKeysIn, for an area's import (T-211), which adds
+// each through the plugin's own key sign-in to a new account only.
+func FactoryKeysIn(texts []string) []string { return factoryKeysIn(texts) }
+
 // ImportFactoryKeys adds Factory accounts by their API keys, found in the
 // pasted texts, each checked with whoami first, and says what became of
 // each.

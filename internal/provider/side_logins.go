@@ -425,6 +425,32 @@ func addSideLogin(l savedLogin, ownUser string, dup func(savedLogin)) (err error
 	return writeLogins(append(ls, l))
 }
 
+// addSideLoginNew is addSideLogin of a new account alone (an area's
+// import, T-220): one of the agent's magpie has by that name is
+// ErrKnownAccount with nothing written, and claim is asked to take the
+// new one before it is.
+func addSideLoginNew(l savedLogin, claim func(user string) error) (err error) {
+	defer func() {
+		if err == nil {
+			StaleAllowance(l.Agent, l.User)
+		}
+	}()
+	loginsMu.Lock()
+	defer loginsMu.Unlock()
+	ls := readLogins()
+	for _, x := range ls {
+		if x.Agent == l.Agent && strings.EqualFold(x.User, l.User) {
+			return ErrKnownAccount
+		}
+	}
+	if err := claim(l.User); err != nil {
+		return err
+	}
+	l.Seen = time.Now().UTC().Truncate(time.Second)
+	l.On = true
+	return writeLogins(append(ls, l))
+}
+
 // sideAgent says an agent's accounts are kept this way, not in the
 // agent's own store as Claude Code's and Codex's are.
 func sideAgent(agent string) bool {

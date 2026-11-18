@@ -108,7 +108,7 @@ agent's (`codex`, `claude`, `copilot`, `gemini`, `antigravity`).
 `/v1/magpie/admin/*`. Area: `me`, `options`, `accounts`, `accounts/key`,
 `accounts/keys`, `accounts/remove`, `usage`, `usage/requests`, `usage/stats`, `signin`, `signin/{id}`, `signin/{id}/callback`,
 `signin/{id}/cancel`, `signin/claude-token`, `ips`, `ips/update`,
-`ips/delete`, `ips/check`, `accounts/proxy`. Console: `me`, `catalog`,
+`ips/delete`, `ips/check`, `accounts/proxy`, `accounts/import`. Console: `me`, `catalog`,
 `areas`, `areas/{id}`, `areas/{id}/accounts`, `areas/{id}/usage`,
 `usage/requests`, `areas/{id}/usage/requests`, `usage/stats`,
 `areas/{id}/usage/stats`,
@@ -463,8 +463,8 @@ device code or the address pasted, Sign in with ChatGPT (`chatgpt-api`)
 by the address pasted, Copilot by device code, Claude by a setup-token or
 `claude auth login`'s code pasted, Gemini and Antigravity by the address
 pasted. A subscription a plugin serves signs in by the methods read to
-be safe for areas ([Plugin sign-ins](#plugin-sign-ins-t-209)); file
-imports are offered to no area yet.
+be safe for areas ([Plugin sign-ins](#plugin-sign-ins-t-209)). Another
+tool's files come in by [Imports](#imports-t-211-t-220).
 
 - Copilot signs in on github.com, or on an enterprise's `<name>.ghe.com`
   when the request has `site` (`copilotSite`, admin_signin.go): lower
@@ -614,6 +614,75 @@ magpie-api.md §11. An area signs in to a subscription a plugin serves at
   unseen (`Asked.Hidden`, or a `password` prompt answered) come back as
   `""`, their keys in `hidden`.
 
+## Imports (T-211, T-220)
+
+[`admin_import.go`](../../internal/gateway/admin_import.go),
+[`import_options.go`](../../internal/provider/import_options.go),
+magpie-api.md §13. `accounts/import` takes the files the window's import
+takes, read by the same readers (`ImportLoginsWith`,
+`ImportGoogleAccountsWith`; `ImportLogins`, `ImportCodexAccessOnly` and
+`ImportGoogleAccounts` are the window's, unchanged and still `updated`
+for an account it has). The window's pasted sign-in address is not
+taken: an area pastes it to `signin/{id}/callback`.
+
+- **Judged before anything is read.** An area held for its conflicts is
+  `429` at the door. The body is 8 MB at most (`adminUpTo`, the import
+  route alone; `413 too_large` past it), with 1 to 50 `files` and at most
+  200 accounts (the readers' `maxGoogleImport`), else `400`. An `agent`
+  not opened to the area is `404`, one that imports nothing (or a
+  built-in a plugin now serves) too; `accessOnly` is codex's alone.
+  `opened` is `400` for Factory's keys and taken by the rest, as `signin`
+  takes it. `proxy` is picked as `signin`'s is (`pickedProxy`, T-212),
+  and the readers' requests go through it, an area-added one held public
+  on every connection (`netproxy.WithPublicOnly`); none picked goes
+  through the subscription's (`provider.Via`). One import runs per area
+  at a time (`areaImports`); a second is `429 too_many_imports` with
+  `Retry-After`. It runs to its end, at most 3 minutes, whether or not
+  the caller is still there.
+- **A new account only** (`ImportOptions.NewOnly`, T-220). An account
+  magpie has, the owner's, another area's or this area's, by its refresh
+  token (or access token, `accessOnly`) or by who it is once its vendor
+  says (`sameLogin` for ChatGPT and Claude, the email for Google), is
+  `conflict`: nothing of it is written or renewed, and the row names no
+  one. A ChatGPT file whose own id_token names an account magpie has is
+  never refreshed, as refreshing would sign the file's own sign-in out.
+  The check and the write are one step under the logins' lock
+  (`addLoginWith`, `addSideLoginNew`), which also claims the account for
+  the area (`ImportOptions.Claim`, `area.ClaimUpTo` of its 500) before
+  anything of it is written; another area's ref is `ErrTaken`, read as a
+  conflict, and a save that fails after the claim lets it go (`Unclaim`).
+  It is kept as an area's sign-in keeps one (`addLoginOf(…, magpieOnly)`):
+  the agent here is not signed in to it.
+- **Named by the vendor, never the file.** A ChatGPT account by the
+  id_token ChatGPT's refresh gives (none given fails), a Google one by
+  Google's userinfo (none fails), a Claude one by Anthropic's answer for
+  its access token (`askClaudeProfile`, `/api/oauth/profile`, the owner's
+  call of 2026-11-18: the window still asks Anthropic nothing). A Claude
+  token that has run out by its own `expiresAt`, or that Anthropic
+  refuses, fails, saying to run Claude Code on it once and export again.
+  A tool's own name for an account (claude-swap's alias) isn't taken.
+- **Factory's keys** (`keyImports`) go through the plugin's own key
+  sign-in to a new account only (`areaPluginKey`, shared with
+  `signin/plugin`'s api-key): the plugin off or not offering its key
+  method is `409 plugin_unavailable`.
+- **Rows.** One row an account, in the files' order: `added` with its account
+  (and the proxy picked, and `opened`, put on as `signin` does),
+  `conflict` ("this account is in magpie already"), or `failed` with why.
+  A whole file of several that can't be read is a row with its `file`; a
+  single file that can't be read is `400`. A reason that says back a run
+  of 12 or more token characters with a digit that is in the files is
+  left out (`heldFrom`), as a vendor's answer may repeat the token.
+- **Limits midway.** Each account is admitted in the files' order before
+  it is judged or its vendor asked (`ImportOptions.Admit`): past the
+  area's 500, or once the area's conflicts reach the line, the rest fail
+  with "an area has at most 500 accounts" or "too many conflicts; try
+  again later". Near the line admission waits for the accounts being
+  read, each of which may be a conflict, so an import tells no more
+  conflicts than the line lets through. Each conflict counts
+  (`countConflict`).
+- **Log:** `admin: area <id> (<note>) imported <agent>: added N,
+  conflict N, failed N`, no name or token.
+
 ## The owner's window
 
 Gateway → Areas ([`plugins/gateway/areas.js`](../../internal/gui/assets/plugins/gateway/areas.js),
@@ -640,7 +709,7 @@ by the owner or another area) is left out: its calls can't be told apart.
 An areas.json from before `previous` reads as it did. One the area couldn't
 be told of lists as `gone`.
 
-## Agreed, not built yet (T-211, T-215)
+## Agreed, not built yet (T-215)
 
 Everything above is what magpie does today. On 2026-11-18 the owner settled
 the next contract (magpie-console's `docs/magpie-api.md` §10–19, T-208):
@@ -653,8 +722,8 @@ opened dates and direct (§15, T-213) in [Routes](#routes),
 proxy routes (§16, T-214: renewal days, probe, batch, reread) in
 [Proxy IPs](#proxy-ips), and a proxy picked for a sign-in, a setup-token
 or a key (§14, T-212) in [Area sign-ins](#area-sign-ins), and plugin
-sign-ins (§11, T-209, T-229) in [Plugin sign-ins](#plugin-sign-ins-t-209);
-an import's `proxy` comes with T-211. The console
+sign-ins (§11, T-209, T-229) in [Plugin sign-ins](#plugin-sign-ins-t-209),
+and credential imports (§13, T-211, T-220) in [Imports](#imports-t-211-t-220). The console
 reaching them through `/areas/{id}/signin` comes with the rest of its
 acting for an area. Each task moves its part into the sections above as
 it lands. What the magpie side
@@ -662,29 +731,21 @@ must hold, beside the contract's bodies and codes:
 
 - **One reader, never a copy.** Sign-ins go through `StartSignInWith` and
   the plugin host's sign-in (`PluginAPIKey` and the paste paths in
-  `pluginsignin_paste.go`); imports through `ImportLogins`,
-  `ImportCodexAccessOnly`, `ImportGoogleAccounts` and `ImportFactoryKeys`;
+  `pluginsignin_paste.go`); imports through `ImportLoginsWith`,
+  `ImportGoogleAccountsWith` and the plugin's key sign-in (built);
   proxies through `settings.CheckProxy` and `netproxy.CheckPublic`;
   renewal through `internal/renewal` (`WarnDays`). The one new parser,
   the batch-proxy one, is built ([Proxy IPs](#proxy-ips)).
 - **Never written over.** An account magpie has (the owner's or another
   area's) is `conflict` on every add path, and its tokens, proxy and name
-  stay as they were. The import readers today renew such an account
-  (`updated`) and name it (`exists`); an area's import needs a mode that
-  does neither (T-220). A plugin's sign-in as the owner's
+  stay as they were. The import readers' new-only mode does neither
+  (built, T-220). A plugin's sign-in as the owner's
   (`plugin.Authorize`, `plugin.APIKey`) replaces an account it has
   (host.js `settle`). An area's goes through `plugin.AuthorizeNew` and
   `plugin.APIKeyNew` (built, T-221): host.js judges the plugin's result
   before anything is written, and a known account is `ErrKnown` with its
   tokens untouched. Which methods that makes safe is in
   [Plugin sign-ins an area can use](#plugin-sign-ins-an-area-can-use-t-221).
-- **Claude imports are checked with Anthropic** (`ClaudeTokenUser`), and
-  named by its answer, never by the file's email.
-- **Secrets stay in.** No key, token, code, pasted address or proxy
-  login an import is given reaches a reply or the log.
-- **Opened dates are a subscription's.** A Factory import with `opened`
-  is `400`, as the key routes and a plugin's `api-key` are already; the
-  other imports take it, as `signin` does.
 - **Limits are the area's, from both keys.** Every add, sign-in, import
   and proxy route the console reaches as `/areas/{id}/…` runs the area's
   own handler and checks: what the area may add, 500 accounts, 50 IPs,
@@ -695,8 +756,6 @@ must hold, beside the contract's bodies and codes:
   looked up. Another area's account, IP or proxy is `404`; a sign-in not
   started by the caller is `404`, and only its starter (area or console)
   reads, pastes into or cancels it.
-- **New codes:** `413 too_large` (the import route's 8 MB body alone),
-  `429 too_many_imports`.
 - **Log:** a console action writes the area, its note, the action and the
   optional `X-Magpie-Actor`, marked `console`; magpie keeps no audit file.
 - Every new route is in `adminRoutes` under its role, so

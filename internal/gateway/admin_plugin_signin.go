@@ -632,10 +632,23 @@ func keepAreaSignIn(c adminCall, id string, box *pickBox) {
 }
 
 // adminPluginKey signs c's area in to pp with a key, as its api method
-// does, to a new account only, and claims the account once it is saved.
-// It runs to its end whether or not the caller is still there: one saved
-// is claimed or signed out again (unclaimed), never left nobody's.
+// does, to a new account only, and claims the account once it is saved
+// (areaPluginKey).
 func (s *Server) adminPluginKey(w http.ResponseWriter, c adminCall, pp plugin.Provider, pm adminPluginMethod, inputs map[string]string, key string, pick *proxyPick, o provider.SignInOptions) {
+	acc, status, code, msg := s.areaPluginKey(c, pp, pm, inputs, key, pick, o)
+	if status != http.StatusCreated {
+		adminError(w, status, code, msg)
+		return
+	}
+	writeJSON(w, http.StatusCreated, acc)
+}
+
+// areaPluginKey is adminPluginKey's work: the account as told and 201,
+// or the status, code and message to answer, each conflict counted. It
+// runs to its end whether or not the caller is still there: one saved is
+// claimed or signed out again (unclaimed), never left nobody's. An
+// import's Factory keys go through it too (T-211).
+func (s *Server) areaPluginKey(c adminCall, pp plugin.Provider, pm adminPluginMethod, inputs map[string]string, key string, pick *proxyPick, o provider.SignInOptions) (adminAccount, int, string, string) {
 	agent := provider.PluginID(pp.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -643,11 +656,9 @@ func (s *Server) adminPluginKey(w http.ResponseWriter, c adminCall, pp plugin.Pr
 	switch {
 	case errors.Is(err, plugin.ErrKnown):
 		s.countConflict(c.area.ID)
-		adminError(w, http.StatusConflict, adminConflict, "this account is in magpie already")
-		return
+		return adminAccount{}, http.StatusConflict, adminConflict, "this account is in magpie already"
 	case err != nil:
-		adminError(w, http.StatusBadRequest, adminBadRequest, pluginGiven(pp.Methods[pm.Method], inputs, key).held(err.Error()))
-		return
+		return adminAccount{}, http.StatusBadRequest, adminBadRequest, pluginGiven(pp.Methods[pm.Method], inputs, key).held(err.Error())
 	}
 	ref := agent + "/" + provider.LoginID(agent, user)
 	switch {
@@ -666,15 +677,13 @@ func (s *Server) adminPluginKey(w http.ResponseWriter, c adminCall, pp plugin.Pr
 		switch {
 		case errors.Is(err, area.ErrTaken):
 			s.countConflict(c.area.ID)
-			adminClaimErr(w, err)
+			return adminAccount{}, http.StatusConflict, adminConflict, "this account is in magpie already"
 		case provider.PluginID(saved.Provider) != agent:
-			adminError(w, http.StatusConflict, adminConflict, provider.ErrPluginWayChanged.Error())
+			return adminAccount{}, http.StatusConflict, adminConflict, provider.ErrPluginWayChanged.Error()
 		case user == "":
-			adminError(w, http.StatusBadRequest, adminBadRequest, plugin.ErrUnnamed.Error())
-		default:
-			adminClaimErr(w, err)
+			return adminAccount{}, http.StatusBadRequest, adminBadRequest, plugin.ErrUnnamed.Error()
 		}
-		return
+		return claimFailure(err)
 	}
 	log.Printf("admin: area %s (%s) signed in to %s with a key", c.area.ID, c.area.Note, agent)
 	if pick != nil {
@@ -685,11 +694,10 @@ func (s *Server) adminPluginKey(w http.ResponseWriter, c adminCall, pp plugin.Pr
 	a, _ := area.Get(c.area.ID)
 	for _, acc := range areaAccounts(a) {
 		if acc.ID == ref {
-			writeJSON(w, http.StatusCreated, acc)
-			return
+			return acc, http.StatusCreated, "", ""
 		}
 	}
-	writeJSON(w, http.StatusCreated, adminAccount{ID: ref, Provider: agent, Kind: "account", Name: user})
+	return adminAccount{ID: ref, Provider: agent, Kind: "account", Name: user}, http.StatusCreated, "", ""
 }
 
 // unclaimed signs out the record a key just saved for c's area alone,

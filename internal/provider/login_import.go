@@ -23,7 +23,9 @@ package provider
 // so the file it came from stops working: the account is magpie's from then
 // on, as a sign-in in magpie would make it. A Claude one is kept as it
 // came, magpie asking Anthropic nothing; Claude Code refreshes it the first
-// time it runs on it. Tokens are never logged or sent back.
+// time it runs on it. An area's import (ImportOptions.NewOnly) asks
+// Anthropic whose it is instead (claude_profile.go). Tokens are never
+// logged or sent back.
 
 import (
 	"cmp"
@@ -31,6 +33,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -336,7 +339,7 @@ func sub2apiEntry(agent string, x, c map[string]any) loginImport {
 // accounts from other tools' files (see above), each file's text one
 // element of files, and says what became of each.
 func ImportLogins(ctx context.Context, agent string, files []string) ([]ImportedAccount, error) {
-	return importLogins(ctx, agent, files, false)
+	return ImportLoginsWith(ctx, agent, files, false, ImportOptions{})
 }
 
 // ImportCodexAccessOnly is ImportLogins for ChatGPT accounts kept access
@@ -344,10 +347,13 @@ func ImportLogins(ctx context.Context, agent string, files []string) ([]Imported
 // the file has, never refreshed, so the sign-in it came from stays signed
 // in. One whose access token has run out isn't taken.
 func ImportCodexAccessOnly(ctx context.Context, files []string) ([]ImportedAccount, error) {
-	return importLogins(ctx, "codex", files, true)
+	return ImportLoginsWith(ctx, "codex", files, true, ImportOptions{})
 }
 
-func importLogins(ctx context.Context, agent string, files []string, accessOnly bool) ([]ImportedAccount, error) {
+// ImportLoginsWith is ImportLogins (ImportCodexAccessOnly with accessOnly)
+// with o's choices: an area's import brings in new accounts alone
+// (ImportOptions.NewOnly), a Claude one named by Anthropic's answer.
+func ImportLoginsWith(ctx context.Context, agent string, files []string, accessOnly bool, o ImportOptions) ([]ImportedAccount, error) {
 	if accessOnly && agent != "codex" {
 		return nil, fmt.Errorf("only ChatGPT accounts can be kept access token only")
 	}
@@ -423,28 +429,34 @@ func importLogins(ctx context.Context, agent string, files []string, accessOnly 
 		if accessOnly {
 			key = e.accessToken
 		}
-		switch {
-		case e.err != "":
+		if e.err != "" {
 			out[i] = ImportedAccount{User: name, File: e.file, Status: "failed", Error: e.err}
 			continue
+		}
+		var r ImportedAccount
+		switch {
 		case accessOnly && e.accessToken == "":
-			out[i] = ImportedAccount{User: name, Status: "failed", Error: "no access_token in it"}
-			continue
+			r = ImportedAccount{User: name, Status: "failed", Error: "no access_token in it"}
 		case accessOnly && haveAccess[e.accessToken] != "":
-			out[i] = ImportedAccount{User: haveAccess[e.accessToken], Status: "exists"}
-			continue
+			r = o.known(ImportedAccount{User: haveAccess[e.accessToken], Status: "exists"})
 		case accessOnly && seen[key]:
-			out[i] = ImportedAccount{User: name, Status: "failed", Error: "in the files twice"}
-			continue
+			r = ImportedAccount{User: name, Status: "failed", Error: "in the files twice"}
 		case accessOnly:
 		case e.refreshToken == "":
-			out[i] = ImportedAccount{User: name, Status: "failed", Error: "no refresh_token in it"}
-			continue
+			r = ImportedAccount{User: name, Status: "failed", Error: "no refresh_token in it"}
 		case have[e.refreshToken] != "":
-			out[i] = ImportedAccount{User: have[e.refreshToken], Status: "exists"}
-			continue
+			r = o.known(ImportedAccount{User: have[e.refreshToken], Status: "exists"})
 		case seen[e.refreshToken]:
-			out[i] = ImportedAccount{User: name, Status: "failed", Error: "in the files twice"}
+			r = ImportedAccount{User: name, Status: "failed", Error: "in the files twice"}
+		}
+		// admitted in the files' order: a line reached midway (the
+		// area's conflicts) fails the rest
+		end, ok := o.admit(&out[i], name)
+		if !ok {
+			continue
+		}
+		if r.Status != "" {
+			out[i] = end(r)
 			continue
 		}
 		seen[key] = true
@@ -456,14 +468,18 @@ func importLogins(ctx context.Context, agent string, files []string, accessOnly 
 			c, cancel := context.WithTimeout(ctx, 45*time.Second)
 			defer cancel()
 			if accessOnly {
-				out[i] = importAccessOnly(e, name, kept)
+				out[i] = end(importAccessOnly(e, name, kept, o))
 				return
 			}
-			out[i] = importLogin(c, agent, e, name, kept)
+			out[i] = end(importLogin(c, agent, e, name, kept, o))
 		}()
 	}
 	wg.Wait()
-	importNames(agent, all, out)
+	if !o.NewOnly {
+		// the tool's own name for an account is the file's word: an area's
+		// import names an account by its vendor alone
+		importNames(agent, all, out)
+	}
 	for _, r := range out {
 		if r.Status == "added" || r.Status == "updated" {
 			_ = ShowAccount(agent)
@@ -530,7 +546,7 @@ func loginAccessToken(l savedLogin) string {
 // importAccessOnly keeps one ChatGPT account access token only, as the
 // file has it: nothing is asked of ChatGPT, whose refresh would rotate
 // the file's sign-in. Its id_token says whose account it is.
-func importAccessOnly(e loginImport, name string, kept []savedLogin) ImportedAccount {
+func importAccessOnly(e loginImport, name string, kept []savedLogin, o ImportOptions) ImportedAccount {
 	fail := func(msg string) ImportedAccount {
 		return ImportedAccount{User: name, Status: "failed", Error: msg}
 	}
@@ -545,6 +561,9 @@ func importAccessOnly(e loginImport, name string, kept []savedLogin) ImportedAcc
 		return fail(err.Error())
 	}
 	l.AccessOnly = true
+	if o.NewOnly {
+		return o.save(l, name)
+	}
 	status := "added"
 	for _, k := range kept {
 		if sameLogin(k, l) {
@@ -592,7 +611,7 @@ func claudeNewerKept(e loginImport, kept []savedLogin, l savedLogin) (savedLogin
 }
 
 // importLogin checks one account as a sign-in is finished and keeps it.
-func importLogin(ctx context.Context, agent string, e loginImport, name string, kept []savedLogin) ImportedAccount {
+func importLogin(ctx context.Context, agent string, e loginImport, name string, kept []savedLogin, o ImportOptions) ImportedAccount {
 	fail := func(msg string) ImportedAccount {
 		return ImportedAccount{User: name, Status: "failed", Error: msg}
 	}
@@ -607,6 +626,13 @@ func importLogin(ctx context.Context, agent string, e loginImport, name string, 
 	var err error
 	switch agent {
 	case "codex":
+		if o.NewOnly && e.idToken != "" {
+			// one the file's own id_token says magpie has is never
+			// refreshed: that would sign the file's sign-in out for nothing
+			if fl, err := codexLogin(e.idToken, "", "", e.accountID); err == nil && slices.ContainsFunc(kept, func(k savedLogin) bool { return sameLogin(k, fl) }) {
+				return o.known(ImportedAccount{Status: "exists"})
+			}
+		}
 		raw := map[string]any{"tokens": map[string]any{"refresh_token": e.refreshToken}}
 		if _, err := codexRefresh(ctx, raw, codexRefreshForced); err != nil {
 			return refused("ChatGPT", err)
@@ -614,6 +640,10 @@ func importLogin(ctx context.Context, agent string, e loginImport, name string, 
 		t := raw["tokens"].(map[string]any)
 		str := func(k string) string { s, _ := t[k].(string); return s }
 		id := str("id_token")
+		if id == "" && o.NewOnly {
+			// the file's own id_token is its word, not ChatGPT's
+			return fail("ChatGPT didn't say whose account this is")
+		}
 		if id == "" {
 			id = e.idToken
 		}
@@ -622,6 +652,14 @@ func importLogin(ctx context.Context, agent string, e loginImport, name string, 
 		scopes := e.scopes
 		if len(scopes) == 0 {
 			scopes = claudeImportScopes
+		}
+		if o.NewOnly {
+			// an area's: Anthropic is asked whose it is (claude_profile.go)
+			l, err := claudeCheckedLogin(ctx, e, scopes)
+			if err != nil {
+				return fail(err.Error())
+			}
+			return o.save(l, name)
 		}
 		// kept as it came, not tried: trying it would ask Anthropic, which
 		// magpie never does with a Claude sign-in. Claude Code refreshes it
@@ -651,6 +689,9 @@ func importLogin(ctx context.Context, agent string, e loginImport, name string, 
 	}
 	if err != nil {
 		return fail(err.Error())
+	}
+	if o.NewOnly {
+		return o.save(l, name)
 	}
 	status := "added"
 	for _, k := range kept {

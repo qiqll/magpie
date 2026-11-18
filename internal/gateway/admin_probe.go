@@ -53,6 +53,13 @@ func (p *conflictProbes) held(id string, now time.Time) time.Duration {
 	return ts[len(ts)-conflictMost].Add(conflictWindow).Sub(now)
 }
 
+// count is how many 409s id has had in the window at now.
+func (p *conflictProbes) count(id string, now time.Time) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.recent(id, now))
+}
+
 // conflicted counts a 409 answered id at now, and is how many it has had
 // in the window.
 func (p *conflictProbes) conflicted(id string, now time.Time) int {
