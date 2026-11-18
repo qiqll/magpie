@@ -96,6 +96,7 @@ var (
 	ErrTaken      = errors.New("the account is already in magpie")
 	ErrNoteInUse  = errors.New("another area has this note")
 	ErrUnreadable = errors.New("areas.json can't be read")
+	ErrFull       = errors.New("an area has at most 500 accounts")
 )
 
 // Path is areas.json, beside settings.json.
@@ -275,11 +276,19 @@ func Delete(id string) error {
 
 // Claim gives ref to the area id. An account any area owns already is
 // ErrTaken, whichever area: who owns it is not said.
-func Claim(id, ref string) error {
+func Claim(id, ref string) error { return ClaimUpTo(id, ref, 0) }
+
+// ClaimUpTo is Claim of an area that owns fewer than most accounts (0:
+// any number), judged under the lock: else ErrFull, so requests side by
+// side never take an area past it.
+func ClaimUpTo(id, ref string, most int) error {
 	return change(func(f *file) error {
 		i := index(f.Areas, id)
 		if i < 0 {
 			return ErrNotFound
+		}
+		if most > 0 && len(f.Areas[i].Accounts) >= most {
+			return ErrFull
 		}
 		for _, a := range f.Areas {
 			if a.Has(ref) {

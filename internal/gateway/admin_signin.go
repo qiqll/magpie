@@ -163,7 +163,7 @@ func claimOnDone(id string) func(provider.SignInState) provider.SignInState {
 			st.State, st.Error = "failed", "no area signs in to "+st.Agent
 			return st
 		}
-		if err := area.Claim(id, ref); err != nil {
+		if err := area.ClaimUpTo(id, ref, adminAccountsLimit); err != nil {
 			st.State = "conflict"
 			st.Error = "signed in, but the account couldn't be made this area's: " + err.Error()
 			if !errors.Is(err, area.ErrTaken) {
@@ -358,7 +358,7 @@ func (s *Server) adminClaudeToken(w http.ResponseWriter, r *http.Request, c admi
 	// it is in magpie, and one magpie has (the owner's, another area's)
 	// is never written over
 	ref := pid + "/" + provider.LoginID("claude", user)
-	if err := area.Claim(c.area.ID, ref); err != nil {
+	if err := area.ClaimUpTo(c.area.ID, ref, adminAccountsLimit); err != nil {
 		adminClaimErr(w, err)
 		return
 	}

@@ -135,7 +135,10 @@ and reply bodies are in magpie-console's `docs/magpie-api.md`.
   `masked` value and never the key: `added` (with its account), `conflict`,
   `duplicate` (sent twice in the request) or `failed` with why. A `name`
   is given ` #2`, ` #3`… by row. Past the area's 500 accounts the rest fail
-  with "an area has at most 500 accounts". Each conflict counts toward the
+  with "an area has at most 500 accounts": the count is judged in the
+  claim's own lock (`area.ClaimUpTo`, which signin and claude-token use
+  too), so requests side by side never take an area past it. A key the
+  owner added between the check and the write is a `conflict`, counted. Each conflict counts toward the
   area's conflict line; at the 20th the rest fail with "too many
   conflicts; try again later", and an area already held is `429` at the
   door (`heldAnswered`, shared with `probeHeld`).
@@ -303,7 +306,9 @@ proxies on its own accounts
   the owner's own value for the account, set before or since, wins
   (`overridden`, `409`); the subscription's and the global proxy don't.
   The account tells `"proxy": {"direct": true, "overridden": …}`.
-  `SweepAreaProxies` leaves a direct alone: it goes through no IP. A
+  `SweepAreaProxies` leaves a direct alone: it goes through no IP, and it
+  takes off only the record it read (`detachIf`), never one the area set
+  since. A
   direct sent with an IP or proxy is `400`. Attaches, directs and
   detaches take `attachMu` first, so two on one account never cross.
 - **No race with a removal.** An attach checks the IP and proxy, records

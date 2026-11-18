@@ -374,3 +374,34 @@ func TestAttachLeavesAnOwnerWriteOfTheSameMoment(t *testing.T) {
 		t.Fatalf("a record kept for a refused attach: %+v", rec)
 	}
 }
+
+// A sweep detaches the record it read alone: a direct the area put on
+// the account since (or any other record) stays, its own value with it.
+func TestAreaSweepLeavesARecordSetSince(t *testing.T) {
+	a, _, keys, _ := areaProxyHome(t)
+	ref := keys[0]
+	if err := AttachAreaProxy(a.ID, ref, "203.0.113.9", renewal.ProxyID(areaProxyA)); err != nil {
+		t.Fatal(err)
+	}
+	read := recordOf(a.ID, ref)
+	if read == nil {
+		t.Fatal("no record")
+	}
+	stale := *read
+	if err := AttachAreaDirect(a.ID, ref); err != nil {
+		t.Fatal(err)
+	}
+	if err := detachIf(a.ID, ref, &stale); err != nil {
+		t.Fatal(err)
+	}
+	if rec := recordOf(a.ID, ref); rec == nil || !rec.Direct {
+		t.Fatalf("the direct set since: %+v", rec)
+	}
+	if v := keyProxy(t, ref); v != "direct" {
+		t.Fatalf("its own value: %q", v)
+	}
+	now := *recordOf(a.ID, ref)
+	if err := detachIf(a.ID, ref, &now); err != nil || recordOf(a.ID, ref) != nil {
+		t.Fatal("the record read now stays:", err)
+	}
+}

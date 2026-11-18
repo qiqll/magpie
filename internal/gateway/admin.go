@@ -429,6 +429,9 @@ func (s *Server) adminAddKey(w http.ResponseWriter, r *http.Request, c adminCall
 	}
 	acc, status, code, msg := addAreaKey(c, p, in.Name, in.Key, proto, plan)
 	if status != http.StatusCreated {
+		if code == adminFull {
+			code = adminConflict
+		}
 		adminError(w, status, code, msg)
 		return
 	}
@@ -438,6 +441,8 @@ func (s *Server) adminAddKey(w http.ResponseWriter, r *http.Request, c adminCall
 
 func adminClaimErr(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, area.ErrFull):
+		adminError(w, http.StatusConflict, adminConflict, err.Error())
 	case errors.Is(err, area.ErrTaken):
 		adminError(w, http.StatusConflict, adminConflict, "this account is in magpie already")
 	case errors.Is(err, area.ErrNotFound):

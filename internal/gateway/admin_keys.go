@@ -98,9 +98,12 @@ func addAreaKey(c adminCall, p provider.Provider, name, key string, proto provid
 	if slices.ContainsFunc(p.KeyList(), func(k provider.KeyInfo) bool { return k.ID == fp }) {
 		return adminAccount{}, http.StatusConflict, adminConflict, "this key is in magpie already"
 	}
-	// owned first, so the key is the area's from the moment it is there
-	if err := area.Claim(c.area.ID, ref); err != nil {
+	// owned first, so the key is the area's from the moment it is there;
+	// the area's 500 judged in the same lock
+	if err := area.ClaimUpTo(c.area.ID, ref, adminAccountsLimit); err != nil {
 		switch {
+		case errors.Is(err, area.ErrFull):
+			return adminAccount{}, http.StatusConflict, adminFull, err.Error()
 		case errors.Is(err, area.ErrTaken):
 			return adminAccount{}, http.StatusConflict, adminConflict, "this account is in magpie already"
 		case errors.Is(err, area.ErrNotFound):
@@ -111,16 +114,28 @@ func addAreaKey(c adminCall, p provider.Provider, name, key string, proto provid
 	}
 	if err := provider.AddKeyOnPlan(p.ID, name, key, proto, plan); err != nil {
 		area.Release(ref)
+		// added by the owner or another area since p was read: a conflict,
+		// counted as one, never a failure that says so
+		if q, ferr := provider.Find(p.ID); ferr == nil && q.HasKey(key) {
+			return adminAccount{}, http.StatusConflict, adminConflict, "this key is in magpie already"
+		}
 		return adminAccount{}, http.StatusBadRequest, adminBadRequest, err.Error()
 	}
-	a, _ := area.Get(c.area.ID)
-	for _, acc := range areaAccounts(a) {
-		if acc.ID == ref {
-			return acc, http.StatusCreated, "", ""
+	acc := adminAccount{ID: ref, Provider: p.ID, ProviderName: p.Name, Kind: "key", Name: fp, Gone: true}
+	if q, err := provider.Find(p.ID); err == nil {
+		describe(&acc, *q, fp)
+	}
+	if a, err := area.Get(c.area.ID); err == nil {
+		if i := slices.IndexFunc(a.Accounts, func(o area.Account) bool { return o.Ref == ref }); i >= 0 {
+			acc.Added = a.Accounts[i].Added
 		}
 	}
-	return adminAccount{ID: ref, Provider: p.ID, ProviderName: p.Name, Kind: "key"}, http.StatusCreated, "", ""
+	return acc, http.StatusCreated, "", ""
 }
+
+// adminFull is addAreaKey's code for an area at its 500 accounts, a 409
+// conflict as the routes answer it.
+const adminFull = adminConflict + ":full"
 
 // keyRow is how one key of an accounts/keys went, in the order sent:
 // never the key itself.
@@ -203,24 +218,27 @@ func (s *Server) adminAddKeys(w http.ResponseWriter, r *http.Request, c adminCal
 		case len(k) > 4096:
 			row.Status, row.Message = keyFailed, "a key is up to 4096 characters"
 		case owned >= adminAccountsLimit:
-			row.Status, row.Message = keyFailed, "an area has at most 500 accounts"
+			row.Status, row.Message = keyFailed, area.ErrFull.Error()
 		default:
 			n := name
 			if n != "" && i > 0 {
 				n += " #" + strconv.Itoa(i+1)
 			}
-			acc, status, _, msg := addAreaKey(c, p, n, k, proto, plan)
-			switch status {
-			case http.StatusCreated:
+			acc, status, code, msg := addAreaKey(c, p, n, k, proto, plan)
+			switch {
+			case code == adminFull:
+				row.Status, row.Message = keyFailed, msg
+				stop = msg
+			case status == http.StatusCreated:
 				row.Status, row.Account = keyAdded, &acc
 				owned++
-			case http.StatusConflict:
+			case status == http.StatusConflict:
 				row.Status, row.Message = keyConflict, msg
 				if s.conflicts.conflicted(c.area.ID, time.Now()) >= conflictMost {
 					log.Printf("admin: area %s had %d conflicts in %s: its add routes answer 429 for now", c.area.ID, conflictMost, conflictWindow)
 					stop = "too many conflicts; try again later"
 				}
-			case http.StatusUnauthorized, http.StatusServiceUnavailable:
+			case status == http.StatusUnauthorized, status == http.StatusServiceUnavailable:
 				row.Status, row.Message = keyFailed, msg
 				stop = msg
 			default:

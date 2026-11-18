@@ -227,10 +227,17 @@ func AttachAreaDirect(areaID, ref string) error {
 // ref: off the provider where it is still the area's, and out of
 // areas.json whatever.
 func DetachAreaProxy(areaID, ref string) error {
+	return detachIf(areaID, ref, nil)
+}
+
+// detachIf is DetachAreaProxy of the record there now when was (nil:
+// whatever) still says it: a sweep that read was before takes off no
+// proxy or direct the area put on the account since.
+func detachIf(areaID, ref string, was *area.AccountProxy) error {
 	attachMu.Lock()
 	defer attachMu.Unlock()
 	rec := recordOf(areaID, ref)
-	if rec == nil {
+	if rec == nil || was != nil && *rec != *was {
 		return nil
 	}
 	pid, _, _ := strings.Cut(ref, "/")
@@ -363,7 +370,7 @@ func SweepAreaProxies() error {
 				return x.IP == c.Proxy.IP && x.Area == a.ID && ok
 			})
 			if !kept {
-				if err := DetachAreaProxy(a.ID, c.Ref); err != nil {
+				if err := detachIf(a.ID, c.Ref, c.Proxy); err != nil {
 					return err
 				}
 			}

@@ -202,3 +202,29 @@ func TestUnreadableAndContested(t *testing.T) {
 func ptr[T any](v T) *T { return &v }
 
 func dirOf() string { p := Path(); return p[:len(p)-len("/areas.json")] }
+
+// ClaimUpTo judges the area's count in the claim's own lock: claims side
+// by side never take an area past most, and one at most is ErrFull.
+func TestAreaClaimUpToHoldsSideBySide(t *testing.T) {
+	sandbox(t)
+	a, _ := Create("A", nil, nil)
+	var wg sync.WaitGroup
+	for i := range 12 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ClaimUpTo(a.ID, "relay/fp_"+string(rune('a'+i)), 5)
+		}()
+	}
+	wg.Wait()
+	got, _ := Get(a.ID)
+	if len(got.Accounts) != 5 {
+		t.Fatal("owns", len(got.Accounts))
+	}
+	if err := ClaimUpTo(a.ID, "relay/fp_more", 5); !errors.Is(err, ErrFull) {
+		t.Fatal("past most:", err)
+	}
+	if err := Claim(a.ID, "relay/fp_more"); err != nil {
+		t.Fatal("Claim has no most:", err)
+	}
+}
