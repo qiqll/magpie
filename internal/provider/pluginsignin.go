@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -34,6 +35,7 @@ func StartPluginSignInWith(id string, method int, inputs map[string]string, o Si
 		return SignInState{}, err
 	}
 	s.secrets = PluginInputSecrets(id, method, inputs)
+	s.pluginWay = o.PluginWay
 	logSignIn(SignInState{ID: s.st.ID, Agent: s.st.Agent, User: strings.TrimSpace(o.User)}, "started", 0, "")
 	// one that couldn't start ends here, logged as failed by finish
 	failed := func(err error) (SignInState, error) {
@@ -48,6 +50,9 @@ func StartPluginSignInWith(id string, method int, inputs map[string]string, o Si
 	}
 	s.st.Proxy = s.proxy
 	cli, install := pluginCLI(id)
+	// an area's sign-in installs nothing on this computer: the methods
+	// offered to it (admin_plugin_signin.go) run no vendor CLI
+	install = install && !s.area
 	var installing context.Context
 	if install {
 		s.st.State, s.st.Installing = "installing", cli.Name
@@ -123,10 +128,20 @@ func InstallPluginCLI(ctx context.Context, id string) error {
 // sign-in to finish there, or for the code the page shows.
 func (s *signInFlow) pluginBegin(id string, method int, inputs map[string]string) error {
 	ctx, cancel := context.WithTimeout(s.via(context.Background()), time.Minute)
-	a, err := plugin.Authorize(ctx, id, method, inputs, plugin.NewAccount)
+	var a plugin.Authorization
+	var err error
+	if s.area {
+		// to a new account only: one magpie has is ErrKnown, untouched
+		a, err = plugin.AuthorizeNew(ctx, id, method, inputs)
+	} else {
+		a, err = plugin.Authorize(ctx, id, method, inputs, plugin.NewAccount)
+	}
 	cancel()
 	if err != nil {
-		return err
+		return s.areaSaid(err)
+	}
+	if s.area && a.Opened {
+		return errPluginHere
 	}
 	wait, stop := context.WithTimeout(context.Background(), signInTimeout)
 	s.mu.Lock()
@@ -149,6 +164,16 @@ func (s *signInFlow) pluginBegin(id string, method int, inputs map[string]string
 		// its page posts where nothing can be pasted: a key made on the
 		// keys page finishes it
 		s.st.PasteKey, s.st.KeysURL, s.pluginKey = true, keys, &pluginKeyWay{id: id, method: m}
+	}
+	if s.pluginWay != "" {
+		if way := PluginWayOf(s.st); way != s.pluginWay {
+			s.mu.Unlock()
+			stop()
+			if way == "" {
+				return errPluginHere
+			}
+			return ErrPluginWayChanged
+		}
 	}
 	s.mu.Unlock()
 	if a.Method == "code" {
@@ -203,6 +228,7 @@ func (s *signInFlow) pluginCode(code string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	saved, err := plugin.FinishThrough(ctx, session, code, through)
+	err = s.areaSaid(err)
 	s.pluginDone(saved, err)
 	return err
 }
@@ -213,13 +239,71 @@ func (s *signInFlow) pluginDone(saved plugin.Saved, err error) {
 		s.finish(SignInState{State: "canceled"})
 	case errors.Is(err, context.DeadlineExceeded):
 		s.finish(SignInState{State: "failed", Error: "the sign-in timed out; start it again"})
+	case errors.Is(err, plugin.ErrKnown):
+		// an area's, to an account magpie has: that one stays as it was
+		st := s.status()
+		logSignIn(SignInState{ID: st.ID, Agent: st.Agent}, "conflict", 0, "")
+		s.finish(SignInState{State: "conflict", Error: plugin.ErrKnown.Error() + ", so it stays where it is"})
 	case err != nil:
-		s.finish(failedWith(err))
+		s.finish(failedWith(s.areaSaid(err)))
 	default:
 		clearPluginLapse(saved)
 		user := pluginUser(saved)
 		s.finish(SignInState{State: "done", User: user, Using: pluginUsing(saved, user)})
 	}
+}
+
+// PluginWayOf is how a plugin's sign-in under way finishes from a browser
+// on another computer, as an area is offered it (T-209): "paste-code"
+// (the code its page shows), "paste-url" (the address its page ends on),
+// "paste-key" (a key made on KeysURL), "device" (the plugin waits for
+// its page by itself), or "" for one with no page at all, which works on
+// this computer.
+func PluginWayOf(st SignInState) string {
+	switch {
+	case st.PasteCode:
+		return "paste-code"
+	case st.PasteCallback:
+		return "paste-url"
+	case st.PasteKey:
+		return "paste-key"
+	case st.URL != "":
+		return "device"
+	}
+	return ""
+}
+
+// ErrPluginWayChanged is an area's plugin sign-in that came out another
+// way than it was offered by: the plugin changed since its methods were
+// listed.
+var ErrPluginWayChanged = errors.New("the plugin's sign-in ways changed; reload options")
+
+// errPluginHere is an area's plugin sign-in that works on this computer
+// (a page the plugin opened here, or none): an area's user can't reach it.
+var errPluginHere = errors.New("this sign-in works on magpie's own computer, which an area can't reach")
+
+// ErrPluginFailed is what an area is told of its plugin sign-in failing
+// for a reason the plugin gave (T-229): the plugin's own words may say
+// back what was typed, or what the vendor said of the host, and go to
+// magpie's log alone.
+var ErrPluginFailed = errors.New("the plugin couldn't finish this sign-in; magpie's owner can read why in magpie's log")
+
+// areaSaid is err as an area's plugin sign-in says it: ErrPluginFailed
+// for any but magpie's own (a known or unnamed account, a cancel, a time
+// out), with the plugin's words logged, what the sign-in was given left
+// out. Any other sign-in's err is as it is.
+func (s *signInFlow) areaSaid(err error) error {
+	if err == nil || !s.area || errors.Is(err, ErrPluginFailed) || errors.Is(err, plugin.ErrKnown) || errors.Is(err, plugin.ErrUnnamed) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	st := s.status()
+	why := err.Error()
+	if st.secrets.heldIn(why) {
+		why = "(left out: it repeats what was entered)"
+	}
+	logSignIn(SignInState{ID: st.ID, Agent: st.Agent}, "plugin failed", httpStatusOf(err), why)
+	return ErrPluginFailed
 }
 
 // PluginInputSecrets are the answers to a plugin's sign-in method (id,
@@ -278,6 +362,55 @@ func PluginAPIKey(ctx context.Context, id string, method int, inputs map[string]
 	at.User = pluginUser(saved)
 	logSignIn(at, "done", 0, "")
 	return id, nil
+}
+
+// PluginAPIKeyNew is PluginAPIKey to a new account only, as an area adds
+// one (T-209): through the proxy o picks (held to public addresses when
+// o says), else the provider's. A key magpie has, or an account the
+// plugin names that magpie has, is plugin.ErrKnown and stays as it was;
+// one the plugin names no account of is plugin.ErrUnnamed. A plugin's
+// own reason is logged, and is ErrPluginFailed to the caller (T-229). It
+// gives where the account was saved, and its name as the accounts list
+// has it.
+func PluginAPIKeyNew(ctx context.Context, id string, method int, inputs map[string]string, key string, o SignInOptions) (plugin.Saved, string, error) {
+	at := SignInState{Agent: PluginID(id)}
+	logSignIn(at, "started", 0, "")
+	if settings.AccountDiscoveryOff() {
+		logSignIn(at, "failed", 0, errAccountDiscoveryOff.Error())
+		return plugin.Saved{}, "", errAccountDiscoveryOff
+	}
+	if strings.TrimSpace(key) == "" {
+		pp, ok := PluginOf(PluginID(id))
+		if !ok || method < 0 || method >= len(pp.Methods) || pp.Methods[method].Type != "api" || !pp.Methods[method].Keyless {
+			err := errors.New("enter the key")
+			logSignIn(at, "failed", 0, err.Error())
+			return plugin.Saved{}, "", err
+		}
+	}
+	if o.Proxy != nil {
+		if o.PublicOnly {
+			ctx = netproxy.WithPublicOnly(ctx)
+		}
+		ctx = netproxy.With(ctx, *o.Proxy)
+	} else {
+		ctx = Via(ctx, PluginID(id))
+	}
+	saved, err := plugin.APIKeyNew(ctx, id, method, inputs, strings.TrimSpace(key))
+	switch {
+	case errors.Is(err, plugin.ErrKnown):
+		logSignIn(at, "conflict", 0, "")
+		return plugin.Saved{}, "", err
+	case errors.Is(err, plugin.ErrUnnamed):
+		logSignIn(at, "failed", 0, err.Error())
+		return plugin.Saved{}, "", err
+	case err != nil:
+		logSignIn(at, "failed", httpStatusOf(err), keyFailure(err, key, inputs))
+		return plugin.Saved{}, "", ErrPluginFailed
+	}
+	PluginSignedIn(saved)
+	at.User = pluginUser(saved)
+	logSignIn(at, "done", 0, "")
+	return saved, at.User, nil
 }
 
 // keyFailure is why a sign-in with key and inputs failed, err, as the log

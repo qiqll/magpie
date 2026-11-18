@@ -60,6 +60,7 @@ var readOnlyRefused = []string{
 	"POST " + AdminPath + "/accounts/key", "POST " + AdminPath + "/accounts/remove", "GET " + AdminPath + "/usage",
 	"POST " + AdminPath + "/signin", "GET " + AdminPath + "/signin/{id}", "POST " + AdminPath + "/signin/{id}/callback",
 	"POST " + AdminPath + "/signin/{id}/cancel", "POST " + AdminPath + "/signin/claude-token",
+	"POST " + AdminPath + "/signin/plugin", "POST " + AdminPath + "/signin/plugin/prompt",
 	"GET " + AdminPath + "/catalog", "GET " + AdminPath + "/areas", "POST " + AdminPath + "/areas",
 	"GET " + AdminPath + "/areas/{id}", "GET " + AdminPath + "/areas/{id}/accounts", "GET " + AdminPath + "/areas/{id}/usage",
 	"GET " + AdminPath + "/usage/requests", "GET " + AdminPath + "/areas/{id}/usage/requests",

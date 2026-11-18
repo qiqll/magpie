@@ -34,6 +34,7 @@ var keySlotFree = []string{
 	"POST " + AdminPath + "/accounts/key", "POST " + AdminPath + "/accounts/remove",
 	"POST " + AdminPath + "/signin", "POST " + AdminPath + "/signin/{id}/callback",
 	"POST " + AdminPath + "/signin/{id}/cancel", "POST " + AdminPath + "/signin/claude-token",
+	"POST " + AdminPath + "/signin/plugin", "POST " + AdminPath + "/signin/plugin/prompt",
 	"POST " + AdminPath + "/areas", "POST " + AdminPath + "/areas/{id}/update",
 	"POST " + AdminPath + "/areas/{id}/rotate-key", "POST " + AdminPath + "/areas/{id}/delete",
 	"POST " + AdminPath + "/ips", "POST " + AdminPath + "/ips/update", "POST " + AdminPath + "/ips/delete",

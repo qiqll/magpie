@@ -179,6 +179,9 @@ type signInFlow struct {
 	// ofPlugin is a plugin's sign-in, whose account its own lapse says
 	// is signed in again (clearPluginLapse)
 	ofPlugin bool
+	// pluginWay is the way an area's plugin sign-in was offered by
+	// (SignInOptions.PluginWay)
+	pluginWay string
 	// secrets are what the user gave the sign-in (a plugin's answers, a
 	// code or address pasted), which its state never says back
 	secrets SignInSecrets
@@ -222,6 +225,10 @@ type SignInOptions struct {
 	// such, and may say it ended otherwise (its account claimed by
 	// another area: "conflict").
 	Done func(SignInState) SignInState
+	// PluginWay is the way an area's plugin sign-in was offered by
+	// (T-209): "device", "paste-url", "paste-code" or "paste-key". One
+	// that comes out another way fails with ErrPluginWayChanged.
+	PluginWay string
 }
 
 // via is ctx for the sign-in's requests: through its proxy, so the vendor

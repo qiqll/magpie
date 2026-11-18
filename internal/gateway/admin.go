@@ -68,6 +68,8 @@ var adminRoutes = map[string]map[string]bool{
 		"POST " + AdminPath + "/signin/{id}/callback": true,
 		"POST " + AdminPath + "/signin/{id}/cancel":   true,
 		"POST " + AdminPath + "/signin/claude-token":  true,
+		"POST " + AdminPath + "/signin/plugin":        true,
+		"POST " + AdminPath + "/signin/plugin/prompt": true,
 		"GET " + AdminPath + "/ips":                   true,
 		"POST " + AdminPath + "/ips":                  true,
 		"POST " + AdminPath + "/ips/update":           true,
@@ -122,6 +124,8 @@ func (s *Server) adminRoutesOn(mux *routeMux) {
 	mux.HandleFunc("POST "+AdminPath+"/signin/{id}/callback", s.admin(access.AdminArea, s.adminSignInCallback))
 	mux.HandleFunc("POST "+AdminPath+"/signin/{id}/cancel", s.admin(access.AdminArea, s.adminSignInCancel))
 	mux.HandleFunc("POST "+AdminPath+"/signin/claude-token", s.admin(access.AdminArea, s.probeHeld(s.adminClaudeToken)))
+	mux.HandleFunc("POST "+AdminPath+"/signin/plugin", s.admin(access.AdminArea, s.probeHeld(s.adminPluginSignIn)))
+	mux.HandleFunc("POST "+AdminPath+"/signin/plugin/prompt", s.admin(access.AdminArea, s.adminPluginPrompt))
 	mux.HandleFunc("GET "+AdminPath+"/ips", s.admin("", s.adminIPs))
 	mux.HandleFunc("POST "+AdminPath+"/ips", s.admin(access.AdminArea, s.probeHeld(s.adminAddIP)))
 	mux.HandleFunc("POST "+AdminPath+"/ips/update", s.admin(access.AdminArea, s.adminUpdateIP))

@@ -218,17 +218,27 @@ func (s *signInFlow) pastedPluginKey(raw string) error {
 	}
 	ctx, cancel := context.WithTimeout(s.via(context.Background()), time.Minute)
 	defer cancel()
-	saved, err := plugin.APIKey(ctx, s.pluginKey.id, s.pluginKey.method, nil, key, plugin.NewAccount)
-	if err != nil {
+	var saved plugin.Saved
+	var err error
+	if s.area {
+		// to a new account only, as the area's sign-in began
+		saved, err = plugin.APIKeyNew(ctx, s.pluginKey.id, s.pluginKey.method, nil, key)
+	} else {
+		saved, err = plugin.APIKey(ctx, s.pluginKey.id, s.pluginKey.method, nil, key, plugin.NewAccount)
+	}
+	known := errors.Is(err, plugin.ErrKnown) || errors.Is(err, plugin.ErrUnnamed)
+	if err != nil && !known {
 		s.mu.Lock()
 		s.claimed = false // the browser's own may still come, or a right key
 		s.mu.Unlock()
-		return err
+		return s.areaSaid(err)
 	}
 	s.mu.Lock()
 	stop := s.stop
 	s.mu.Unlock()
-	s.pluginDone(saved, nil)
+	// a key magpie has ends the sign-in as a conflict, as the page's own
+	// would have
+	s.pluginDone(saved, err)
 	if stop != nil {
 		stop() // the page's own post is waited for no more
 	}

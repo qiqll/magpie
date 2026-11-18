@@ -462,8 +462,9 @@ way finishes with nothing coming back to this computer's ports: Codex by
 device code or the address pasted, Sign in with ChatGPT (`chatgpt-api`)
 by the address pasted, Copilot by device code, Claude by a setup-token or
 `claude auth login`'s code pasted, Gemini and Antigravity by the address
-pasted. A subscription a plugin serves is offered to no area yet, nor are
-file imports.
+pasted. A subscription a plugin serves signs in by the methods read to
+be safe for areas ([Plugin sign-ins](#plugin-sign-ins-t-209)); file
+imports are offered to no area yet.
 
 - Copilot signs in on github.com, or on an enterprise's `<name>.ghe.com`
   when the request has `site` (`copilotSite`, admin_signin.go): lower
@@ -538,6 +539,62 @@ file imports.
   (canceled), is still read for 10 minutes (`areaSignInKept`), so its
   console learns how it ended when another started as it ended.
 
+## Plugin sign-ins (T-209)
+
+[`admin_plugin_signin.go`](../../internal/gateway/admin_plugin_signin.go),
+magpie-api.md §11. An area signs in to a subscription a plugin serves at
+`signin/plugin` (and asks its questions at `signin/plugin/prompt`);
+`signin/{id}`, its callback and cancel are the built-ins'.
+
+- **What is offered.** `areaPlugins` lists, by provider id, the package
+  read and each method an area may use, by its type and label as the
+  plugin lists it, with its way: the rows marked yes or yes by key in
+  [the table below](#plugin-sign-ins-an-area-can-use-t-221), for the 13
+  subscriptions there. A method is offered at whatever index the plugin
+  lists it now, while its label is the same; another package serving the
+  id, or a method renamed or added, is offered nothing until the list is
+  read again. `options`, `catalog` and the window's areas list
+  (`signInWays`) carry each such subscription whose plugin is on, with
+  `plugin: true` and its `methods` (§11.2), so the owner and the console
+  can open it to an area.
+- **Judged before anything starts** (`pluginMethodOf`): a subscription
+  not opened to the area, or not in `areaPlugins`, is `404`; one opened
+  whose plugin is off, not installed or another package's is `409
+  plugin_unavailable`; a method no longer at its index, or whose way isn't
+  the one sent, is `409 conflict` "reload options"; one not offered is
+  `400`. The inputs are held to §11.3's limits (`checkInputs`), `opened`
+  is `400` with a key and taken by the other ways, and `proxy` is picked
+  as `signin`'s is (T-212). The route is `probeHeld`, so its conflicts
+  count to the area's.
+- **A new account only.** A key goes through `provider.PluginAPIKeyNew`
+  (`plugin.APIKeyNew`) and is claimed once it is saved; when the claim
+  fails for a reason but `ErrTaken` (the area deleted), or the account
+  has no name, the record is signed out again. The other ways start
+  `StartPluginSignInWith` with `Area`, which begins with
+  `plugin.AuthorizeNew`, installs no vendor CLI here, and is claimed by
+  `claimOnDone` as a built-in's (`subscriptionOf` gives a plugin's id). A
+  key pasted on the keys page (paste-key) goes through `APIKeyNew` too. An
+  account magpie has, the area's own included, is `conflict` (a key's
+  `409`, a sign-in's `state`) and stays as it was: an area renews no
+  account this way.
+- **The way is checked as it starts** (`SignInOptions.PluginWay`,
+  `provider.PluginWayOf`): a page whose code is pasted is paste-code, one
+  that comes back to a port here paste-url, Command Code's is paste-key,
+  any other page device. One that comes out otherwise is
+  `ErrPluginWayChanged` (`409`); one the plugin opened on this computer
+  (`Authorization.Opened`), or with no page, is `400`.
+- **The plugin's words** (T-229): a reason the plugin gave for failing
+  (its own, or the host's) goes to magpie's log, what the sign-in was
+  given left out (`areaSaid`, `keyFailure`), and the area reads only
+  `ErrPluginFailed`. Magpie's own reasons (a known or unnamed account, a
+  time out) are said as they are. Text a plugin writes that reaches the
+  area (a prompt's `error`, a sign-in's `instructions` and `message`) is
+  withheld whole when it holds the key, a hidden answer, or any answer of
+  4 characters or more (`pluginSaid.held`).
+- **The prompt route** answers one question at a time: `value` is checked
+  against a list's options and the plugin's `validate`, and answers typed
+  unseen (`Asked.Hidden`) come back as `""`, their keys in `hidden`.
+
 ## The owner's window
 
 Gateway → Areas ([`plugins/gateway/areas.js`](../../internal/gui/assets/plugins/gateway/areas.js),
@@ -564,7 +621,7 @@ by the owner or another area) is left out: its calls can't be told apart.
 An areas.json from before `previous` reads as it did. One the area couldn't
 be told of lists as `gone`.
 
-## Agreed, not built yet (T-209, T-211, T-215)
+## Agreed, not built yet (T-211, T-215)
 
 Everything above is what magpie does today. On 2026-11-18 the owner settled
 the next contract (magpie-console's `docs/magpie-api.md` §10–19, T-208):
@@ -576,8 +633,9 @@ opened dates and direct (§15, T-213) in [Routes](#routes),
 [Proxy IPs](#proxy-ips) and [Area sign-ins](#area-sign-ins), and the
 proxy routes (§16, T-214: renewal days, probe, batch, reread) in
 [Proxy IPs](#proxy-ips), and a proxy picked for a sign-in, a setup-token
-or a key (§14, T-212) in [Area sign-ins](#area-sign-ins); the plugin
-sign-in's and an import's `proxy` come with T-209 and T-211. The console
+or a key (§14, T-212) in [Area sign-ins](#area-sign-ins), and plugin
+sign-ins (§11, T-209, T-229) in [Plugin sign-ins](#plugin-sign-ins-t-209);
+an import's `proxy` comes with T-211. The console
 reaching them through `/areas/{id}/signin` comes with the rest of its
 acting for an area. Each task moves its part into the sections above as
 it lands. What the magpie side
@@ -603,18 +661,11 @@ must hold, beside the contract's bodies and codes:
   [Plugin sign-ins an area can use](#plugin-sign-ins-an-area-can-use-t-221).
 - **Claude imports are checked with Anthropic** (`ClaudeTokenUser`), and
   named by its answer, never by the file's email.
-- **Not offered:** a plugin method whose browser opens on this computer
-  (`Authorization.Opened`).
-- **Secrets stay in.** A plugin's password and hidden inputs are not sent
-  back by the prompt route; no key, token, code, pasted address or proxy
-  login reaches a reply or the log. Text a plugin writes (a prompt's
-  `error`, `instructions`, a sign-in's `message`) is withheld whole when
-  it holds the key, a hidden input or any input of 4 characters or more:
-  `keyFailure` cleans the log alone today.
-- **Opened dates are a subscription's.** A plugin's `api-key` and a
-  Factory import with `opened` are `400`, as the key routes are already;
-  a plugin's other methods and the other imports take it, as `signin`
-  does.
+- **Secrets stay in.** No key, token, code, pasted address or proxy
+  login an import is given reaches a reply or the log.
+- **Opened dates are a subscription's.** A Factory import with `opened`
+  is `400`, as the key routes and a plugin's `api-key` are already; the
+  other imports take it, as `signin` does.
 - **Limits are the area's, from both keys.** Every add, sign-in, import
   and proxy route the console reaches as `/areas/{id}/…` runs the area's
   own handler and checks: what the area may add, 500 accounts, 50 IPs,
@@ -625,8 +676,8 @@ must hold, beside the contract's bodies and codes:
   looked up. Another area's account, IP or proxy is `404`; a sign-in not
   started by the caller is `404`, and only its starter (area or console)
   reads, pastes into or cancels it.
-- **New codes:** `409 plugin_unavailable`, `413 too_large` (the import
-  route's 8 MB body alone), `429 too_many_imports`.
+- **New codes:** `413 too_large` (the import route's 8 MB body alone),
+  `429 too_many_imports`.
 - **Log:** a console action writes the area, its note, the action and the
   optional `X-Magpie-Actor`, marked `console`; magpie keeps no audit file.
 - Every new route is in `adminRoutes` under its role, so
@@ -809,7 +860,7 @@ The way column follows §11.1:
 | warp | 1 | refresh token | text prompt | email or sub, else `"warp"` | plugin: fail in place of the constant |
 | zen-free (opencode-zen-free) | 0 | Zen 免费访问 | api-key (keyless, single) | constant `public` | not offered: nothing an area owns |
 
-**What this leaves T-209.**
+**What this left T-209** (built as [Plugin sign-ins](#plugin-sign-ins-t-209)).
 
 - **The 13 subscriptions an area can sign in to today:**
   - Cursor: browser, key.
@@ -854,11 +905,11 @@ The way column follows §11.1:
   - `ErrTaken` can't follow a fresh save: an account an area owns is in
     plugin-auth.json, so it was known, and its key was reserved while it
     signed in.
-- **The owner's side.** The owner's sign-in still folds into any
-  account of the same name (`settle`), an area's included. With names
-  from the plugin alone and constants refused, that is a sign-in to the
-  area's own account; T-209 should still make the owner's `pluginDone`
-  refuse (sign out again) a save that lands on a key an area owns.
+- **The owner's side** (not built, T-228). The owner's sign-in still
+  folds into any account of the same name (`settle`), an area's included.
+  With names from the plugin alone and constants refused, that is a
+  sign-in to the area's own account; the owner's `pluginDone` should
+  still refuse (sign out again) a save that lands on a key an area owns.
 
 
 ## Verification
@@ -871,6 +922,7 @@ The way column follows §11.1:
 `go test ./internal/provider -run TestAreaSweepBesideARereadMove`;
 `go test ./internal/gateway -run 'TestAdmin(SignInThroughAreaProxy|SignInCallbackPicksAreaProxy|DeviceSignInProxyFixed|KeyAndTokenTakeAreaProxy|SignInHoldsItsProxyPublic|SignInRefusedPasteKeepsItsPick)'`;
 `go test ./internal/plugin -run 'TestSignInNew|TestAPIKeyNew'`;
+`go test ./internal/gateway -run TestAdminPlugin`;
 `node --test internal/gui/tests/proxy-ips-batch-lines.test.cjs`;
 `go test ./internal/gui -run TestIPAreaRoute`; `go test ./internal/gui -run
 TestAreasRoutes`. `TestAdminKeyEveryRoute` fails

@@ -30,6 +30,10 @@ type adminSignInWay struct {
 	// Sites are where it signs in, for one with more than one: "ghe.com"
 	// is an enterprise's <name>.ghe.com, sent as the sign-in's site
 	Sites []string `json:"sites,omitempty"`
+	// Plugin is a subscription a plugin serves (T-209), signed in to at
+	// signin/plugin by one of Methods
+	Plugin  bool                `json:"plugin,omitempty"`
+	Methods []adminPluginMethod `json:"methods,omitempty"`
 }
 
 // The ways a sign-in finishes.
@@ -50,8 +54,9 @@ var adminSignIns = []adminSignInWay{
 	{Agent: "antigravity", Name: "Antigravity", Ways: []string{wayPasteURL}},
 }
 
-// signInWays are adminSignIns whose sign-in magpie has: one a plugin
-// serves now signs in there, which no area can yet.
+// signInWays are the subscriptions an area may sign in to now:
+// adminSignIns whose sign-in magpie has, and those plugins serve
+// (pluginSignInWays).
 func signInWays() []adminSignInWay {
 	out := []adminSignInWay{}
 	for _, w := range adminSignIns {
@@ -59,7 +64,7 @@ func signInWays() []adminSignInWay {
 			out = append(out, w)
 		}
 	}
-	return out
+	return append(out, pluginSignInWays()...)
 }
 
 // copilotSite is the <name>.ghe.com an area's Copilot sign-in was sent,
@@ -89,6 +94,10 @@ var startAreaSignIn = provider.StartSignInWith
 // agent no area signs in to.
 func subscriptionOf(agent string) string {
 	if slices.ContainsFunc(adminSignIns, func(w adminSignInWay) bool { return w.Agent == agent }) {
+		return agent
+	}
+	// a plugin's: its accounts are under its provider id
+	if _, ok := areaPlugins[agent]; ok {
 		return agent
 	}
 	return ""
@@ -131,16 +140,38 @@ type adminSignInState struct {
 	State   string        `json:"state"`
 	URL     string        `json:"url,omitempty"`
 	Code    string        `json:"code,omitempty"`
-	Paste   string        `json:"paste"` // "url", "code" or ""
+	Paste   string        `json:"paste"` // "url", "code", "key" or ""
 	Account *adminAccount `json:"account,omitempty"`
 	Message string        `json:"message,omitempty"`
+	// KeysURL is where a key is made, for paste "key"; Instructions a
+	// plugin's words for its page (T-209)
+	KeysURL      string `json:"keysUrl,omitempty"`
+	Instructions string `json:"instructions,omitempty"`
 }
 
 func signInStateOf(c adminCall, st provider.SignInState) adminSignInState {
 	st = st.Said()
 	out := adminSignInState{ID: st.ID, Agent: st.Agent, State: st.State, URL: st.URL, Code: st.Code, Message: st.Error}
+	_, ofPlugin := areaPlugins[st.Agent]
+	if ofPlugin {
+		// a plugin's words never say back what it was given (§11.3)
+		said := pluginSaidOf(st.ID)
+		out.Message, out.Instructions = said.held(out.Message), said.held(st.Instructions)
+		if st.PasteKey {
+			out.KeysURL = st.KeysURL
+		}
+	}
 	switch {
 	case st.State != "waiting":
+	case ofPlugin:
+		switch provider.PluginWayOf(st) {
+		case wayPasteCode:
+			out.Paste = "code"
+		case wayPasteURL:
+			out.Paste = "url"
+		case wayPasteKey:
+			out.Paste = "key"
+		}
 	case st.PasteCode || st.Agent == "claude":
 		out.Paste = "code"
 	case st.PasteCallback || st.Code == "":
@@ -254,6 +285,10 @@ func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall
 		return
 	}
 	way := signInWays()[i]
+	if way.Plugin {
+		adminError(w, http.StatusBadRequest, adminBadRequest, way.Name+" is a plugin's: sign in to it at "+AdminPath+"/signin/plugin")
+		return
+	}
 	if in.Way == "" {
 		in.Way = way.Ways[0]
 	}
@@ -321,18 +356,7 @@ func (s *Server) adminSignIn(w http.ResponseWriter, r *http.Request, c adminCall
 		adminError(w, http.StatusBadRequest, adminBadRequest, err.Error())
 		return
 	}
-	areaSignIns.Lock()
-	if areaSignIns.m == nil {
-		areaSignIns.m = map[string]areaSignIn{}
-	}
-	// those magpie no longer has: not kept till it quits
-	for sid := range areaSignIns.m {
-		if _, ok := provider.SignInStatus(sid); !ok {
-			delete(areaSignIns.m, sid)
-		}
-	}
-	areaSignIns.m[st.ID] = areaSignIn{area: c.area.ID, pick: box}
-	areaSignIns.Unlock()
+	keepAreaSignIn(c, st.ID, box)
 	writeJSON(w, http.StatusOK, signInStateOf(c, st))
 }
 
@@ -349,8 +373,8 @@ func (s *Server) adminSignInState(w http.ResponseWriter, r *http.Request, c admi
 func (s *Server) adminSignInCallback(w http.ResponseWriter, r *http.Request, c adminCall) {
 	id := r.PathValue("id")
 	var in struct {
-		URL, Code string
-		Proxy     *proxyPick
+		URL, Code, Key string
+		Proxy          *proxyPick
 	}
 	if !decodeAdmin(w, r, &in) {
 		return
@@ -365,7 +389,11 @@ func (s *Server) adminSignInCallback(w http.ResponseWriter, r *http.Request, c a
 		raw = strings.TrimSpace(in.Code)
 	}
 	if raw == "" {
-		adminError(w, http.StatusBadRequest, adminBadRequest, "send the address the vendor's page ended on as url, or the code it showed as code")
+		// a key made on a plugin's keys page (paste "key")
+		raw = strings.TrimSpace(in.Key)
+	}
+	if raw == "" {
+		adminError(w, http.StatusBadRequest, adminBadRequest, "send the address the vendor's page ended on as url, the code it showed as code, or the key made as key")
 		return
 	}
 	// a proxy picked as it is pasted (T-212): the address is traded for
