@@ -553,7 +553,8 @@ magpie-api.md §11. An area signs in to a subscription a plugin serves at
   subscriptions there. A method is offered at whatever index the plugin
   lists it now, while its label is the same; another package serving the
   id, or a method renamed or added, is offered nothing until the list is
-  read again. `options`, `catalog` and the window's areas list
+  read again. A paste-key method is offered only while the key method
+  its pasted key goes through is offered too. `options`, `catalog` and the window's areas list
   (`signInWays`) carry each such subscription whose plugin is on, with
   `plugin: true` and its `methods` (§11.2), so the owner and the console
   can open it to an area.
@@ -564,15 +565,28 @@ magpie-api.md §11. An area signs in to a subscription a plugin serves at
   the one sent, is `409 conflict` "reload options"; one not offered is
   `400`. The inputs are held to §11.3's limits (`checkInputs`), `opened`
   is `400` with a key and taken by the other ways, and `proxy` is picked
-  as `signin`'s is (T-212). The route is `probeHeld`, so its conflicts
-  count to the area's.
+  as `signin`'s is (T-212). The answers are walked as the prompt route
+  takes them (`pluginAnswers`): each question the method asks, in its
+  order, answered by one of its options and passing the plugin's
+  `validate`, and nothing it doesn't ask; else `400` and nothing starts.
+- **Conflicts count where they are decided.** An area held for its
+  conflicts is `429` at the door. A key's `ErrKnown` (or a claim
+  `ErrTaken`) counts at once; a sign-in that ends in `conflict`, as its
+  pasted code, address or key finds an account magpie has, counts as it
+  ends (`SignInOptions.Conflicted`, `conflictOnDone`). The busy `409` of
+  another sign-in to the same agent, and a changed way's, count nothing:
+  a wait on another area is no probe of what magpie has.
 - **A new account only.** A key goes through `provider.PluginAPIKeyNew`
   (`plugin.APIKeyNew`) and is claimed once it is saved; when the claim
   fails for a reason but `ErrTaken` (the area deleted), or the account
   has no name, the record is signed out again. The other ways start
   `StartPluginSignInWith` with `Area`, which begins with
   `plugin.AuthorizeNew`, installs no vendor CLI here, and is claimed by
-  `claimOnDone` as a built-in's (`subscriptionOf` gives a plugin's id). A
+  `claimOnDone` as a built-in's (`subscriptionOf` gives a plugin's id).
+  An account the plugin kept as another provider's than the one asked
+  (one package serves Qoder and Qoder CN) is signed out again, and so is
+  a key's that can't be claimed, by its own record (`unclaimed`). A key
+  runs to its end whether or not the caller is still there. A
   key pasted on the keys page (paste-key) goes through `APIKeyNew` too. An
   account magpie has, the area's own included, is `conflict` (a key's
   `409`, a sign-in's `state`) and stays as it was: an area renews no
@@ -582,7 +596,8 @@ magpie-api.md §11. An area signs in to a subscription a plugin serves at
   that comes back to a port here paste-url, Command Code's is paste-key,
   any other page device. One that comes out otherwise is
   `ErrPluginWayChanged` (`409`); one the plugin opened on this computer
-  (`Authorization.Opened`), or with no page, is `400`.
+  (`Authorization.Opened`), or with no page, is `400`. Either way the
+  host's session, and the key it reserved, are let go (`plugin.Abandon`).
 - **The plugin's words** (T-229): a reason the plugin gave for failing
   (its own, or the host's) goes to magpie's log, what the sign-in was
   given left out (`areaSaid`, `keyFailure`), and the area reads only
@@ -590,10 +605,14 @@ magpie-api.md §11. An area signs in to a subscription a plugin serves at
   time out) are said as they are. Text a plugin writes that reaches the
   area (a prompt's `error`, a sign-in's `instructions` and `message`) is
   withheld whole when it holds the key, a hidden answer, or any answer of
-  4 characters or more (`pluginSaid.held`).
+  4 characters or more, as it is, escaped, quoted or cut short
+  (`pluginSaid.held`, `provider.SaysBack`); a device code drawn from such
+  words is left out. The prompt and start routes log the host's failure
+  the same way (`pluginSaid.logged`).
 - **The prompt route** answers one question at a time: `value` is checked
   against a list's options and the plugin's `validate`, and answers typed
-  unseen (`Asked.Hidden`) come back as `""`, their keys in `hidden`.
+  unseen (`Asked.Hidden`, or a `password` prompt answered) come back as
+  `""`, their keys in `hidden`.
 
 ## The owner's window
 

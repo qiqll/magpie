@@ -97,7 +97,7 @@ func subscriptionOf(agent string) string {
 		return agent
 	}
 	// a plugin's: its accounts are under its provider id
-	if _, ok := areaPlugins[agent]; ok {
+	if _, ok := areaPluginFor(agent); ok {
 		return agent
 	}
 	return ""
@@ -152,11 +152,15 @@ type adminSignInState struct {
 func signInStateOf(c adminCall, st provider.SignInState) adminSignInState {
 	st = st.Said()
 	out := adminSignInState{ID: st.ID, Agent: st.Agent, State: st.State, URL: st.URL, Code: st.Code, Message: st.Error}
-	_, ofPlugin := areaPlugins[st.Agent]
+	_, ofPlugin := areaPluginFor(st.Agent)
 	if ofPlugin {
 		// a plugin's words never say back what it was given (§11.3)
 		said := pluginSaidOf(st.ID)
 		out.Message, out.Instructions = said.held(out.Message), said.held(st.Instructions)
+		if said.with(pluginSaid{Any: said.Long}).says(out.Code) {
+			// a code drawn from words that say back an answer
+			out.Code = ""
+		}
 		if st.PasteKey {
 			out.KeysURL = st.KeysURL
 		}

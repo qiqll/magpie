@@ -182,6 +182,8 @@ type signInFlow struct {
 	// pluginWay is the way an area's plugin sign-in was offered by
 	// (SignInOptions.PluginWay)
 	pluginWay string
+	// conflicted is SignInOptions.Conflicted
+	conflicted func()
 	// secrets are what the user gave the sign-in (a plugin's answers, a
 	// code or address pasted), which its state never says back
 	secrets SignInSecrets
@@ -229,6 +231,10 @@ type SignInOptions struct {
 	// (T-209): "device", "paste-url", "paste-code" or "paste-key". One
 	// that comes out another way fails with ErrPluginWayChanged.
 	PluginWay string
+	// Conflicted, when set, is told of an area's plugin sign-in that ended
+	// on an account magpie has (plugin.ErrKnown), as it ends: the area's
+	// conflicts are counted where they are decided, not by a reply's 409
+	Conflicted func()
 }
 
 // via is ctx for the sign-in's requests: through its proxy, so the vendor

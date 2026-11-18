@@ -28,6 +28,13 @@ import (
 // built-in's did (startCommandCodeSignIn's PasteKey, #2468).
 var pluginPostsCallback = map[string]string{"commandcode-plan": cmdKeysURL}
 
+// PluginPostsCallbackForTest has the plugin id's page post its callback,
+// its keys made on keys, for a test; it gives what undoes it.
+func PluginPostsCallbackForTest(id, keys string) func() {
+	pluginPostsCallback[id] = keys
+	return func() { delete(pluginPostsCallback, id) }
+}
+
 // pastedPluginWait is how long a pasted address is given to finish the
 // sign-in before magpie says it didn't.
 var pastedPluginWait = 30 * time.Second
@@ -147,7 +154,9 @@ func (s *signInFlow) pluginCallback(raw string) error {
 		return errors.New("that address didn't finish the sign-in: paste the whole address its browser tab ended on, or start it again")
 	}
 	switch st := s.status(); st.State {
-	case "done":
+	case "done", "conflict":
+		// a conflict (an area's, to an account magpie has) is told by
+		// the sign-in's state, as a pasted code's is
 		return nil
 	case "failed":
 		return errors.New(st.Error)

@@ -150,6 +150,10 @@ func saysBack(why, v string) bool {
 	return false
 }
 
+// SaysBack is saysBack, for the admin routes' check of a plugin's words
+// (T-209).
+func SaysBack(why, v string) bool { return saysBack(why, v) }
+
 // PastedSecrets are what a pasted code or address may hold: the text
 // itself, each part of it between #s (Claude's code#state), and each value
 // of its query and fragment.

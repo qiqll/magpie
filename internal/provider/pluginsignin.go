@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"log"
 	"maps"
 	"regexp"
 	"slices"
@@ -35,7 +36,7 @@ func StartPluginSignInWith(id string, method int, inputs map[string]string, o Si
 		return SignInState{}, err
 	}
 	s.secrets = PluginInputSecrets(id, method, inputs)
-	s.pluginWay = o.PluginWay
+	s.pluginWay, s.conflicted = o.PluginWay, o.Conflicted
 	logSignIn(SignInState{ID: s.st.ID, Agent: s.st.Agent, User: strings.TrimSpace(o.User)}, "started", 0, "")
 	// one that couldn't start ends here, logged as failed by finish
 	failed := func(err error) (SignInState, error) {
@@ -141,6 +142,7 @@ func (s *signInFlow) pluginBegin(id string, method int, inputs map[string]string
 		return s.areaSaid(err)
 	}
 	if s.area && a.Opened {
+		plugin.Abandon(a.Session)
 		return errPluginHere
 	}
 	wait, stop := context.WithTimeout(context.Background(), signInTimeout)
@@ -169,6 +171,7 @@ func (s *signInFlow) pluginBegin(id string, method int, inputs map[string]string
 		if way := PluginWayOf(s.st); way != s.pluginWay {
 			s.mu.Unlock()
 			stop()
+			plugin.Abandon(a.Session)
 			if way == "" {
 				return errPluginHere
 			}
@@ -243,9 +246,19 @@ func (s *signInFlow) pluginDone(saved plugin.Saved, err error) {
 		// an area's, to an account magpie has: that one stays as it was
 		st := s.status()
 		logSignIn(SignInState{ID: st.ID, Agent: st.Agent}, "conflict", 0, "")
-		s.finish(SignInState{State: "conflict", Error: plugin.ErrKnown.Error() + ", so it stays where it is"})
+		if s.finish(SignInState{State: "conflict", Error: plugin.ErrKnown.Error() + ", so it stays where it is"}) && s.conflicted != nil {
+			s.conflicted()
+		}
 	case err != nil:
 		s.finish(failedWith(s.areaSaid(err)))
+	case s.area && PluginID(saved.Provider) != s.st.Agent:
+		// the plugin kept it as another provider's (one package serves
+		// Qoder and Qoder CN): no account of the agent the area claims, so
+		// what was kept is signed out again rather than left nobody's
+		if serr := plugin.SignOut(context.Background(), saved.Provider, saved.Account); serr != nil {
+			log.Printf("sign-in %s (%s): kept as %s's, not signed out again: %v", s.st.Agent, s.st.ID, saved.Provider, serr)
+		}
+		s.finish(failedWith(ErrPluginWayChanged))
 	default:
 		clearPluginLapse(saved)
 		user := pluginUser(saved)

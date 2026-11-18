@@ -124,7 +124,7 @@ func (s *Server) adminRoutesOn(mux *routeMux) {
 	mux.HandleFunc("POST "+AdminPath+"/signin/{id}/callback", s.admin(access.AdminArea, s.adminSignInCallback))
 	mux.HandleFunc("POST "+AdminPath+"/signin/{id}/cancel", s.admin(access.AdminArea, s.adminSignInCancel))
 	mux.HandleFunc("POST "+AdminPath+"/signin/claude-token", s.admin(access.AdminArea, s.probeHeld(s.adminClaudeToken)))
-	mux.HandleFunc("POST "+AdminPath+"/signin/plugin", s.admin(access.AdminArea, s.probeHeld(s.adminPluginSignIn)))
+	mux.HandleFunc("POST "+AdminPath+"/signin/plugin", s.admin(access.AdminArea, s.adminPluginSignIn))
 	mux.HandleFunc("POST "+AdminPath+"/signin/plugin/prompt", s.admin(access.AdminArea, s.adminPluginPrompt))
 	mux.HandleFunc("GET "+AdminPath+"/ips", s.admin("", s.adminIPs))
 	mux.HandleFunc("POST "+AdminPath+"/ips", s.admin(access.AdminArea, s.probeHeld(s.adminAddIP)))

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -37,11 +38,27 @@ func pluginArea(t *testing.T, browserWay string) (do adminDo, console, id, key, 
 	if _, err := plugin.Providers(ctx); err != nil {
 		t.Fatal(err)
 	}
-	areaPlugins["fakeco"] = areaPlugin{spec, []areaPluginMethod{{"api", "API key", wayAPIKey}, {"oauth", "Browser", browserWay}}}
-	t.Cleanup(func() { delete(areaPlugins, "fakeco") })
+	offerPlugin(t, areaPlugin{spec, []areaPluginMethod{{"api", "API key", wayAPIKey}, {"oauth", "Browser", browserWay}}})
 	id, key = makeArea(t, do, console, "A")
 	openSignIns(t, do, console, id, "fakeco")
 	return do, console, id, key, spec
+}
+
+// offerPlugin has fakeco offered to areas as ap says, under the lock
+// sign-ins read it by, until the test ends.
+func offerPlugin(t *testing.T, ap areaPlugin) {
+	t.Helper()
+	areaPluginsMu.Lock()
+	_, had := areaPlugins["fakeco"]
+	areaPlugins["fakeco"] = ap
+	areaPluginsMu.Unlock()
+	if !had {
+		t.Cleanup(func() {
+			areaPluginsMu.Lock()
+			delete(areaPlugins, "fakeco")
+			areaPluginsMu.Unlock()
+		})
+	}
 }
 
 // logsOf has the log written to a buffer for the test, read by the func.
@@ -66,14 +83,13 @@ func logsOf(t *testing.T) func() string {
 // waitSignIn is the area's sign-in id once it no longer waits.
 func waitSignIn(t *testing.T, do adminDo, key, id string) adminSignInState {
 	t.Helper()
-	for range 200 {
+	for end := time.Now().Add(30 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
 		c, body := do("GET", AdminPath+"/signin/"+id, lanPeer, key, "")
 		var st adminSignInState
 		json.Unmarshal([]byte(body), &st)
 		if c != http.StatusOK || st.State != "waiting" {
 			return st
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("the sign-in is still waiting")
 	return adminSignInState{}
@@ -117,15 +133,15 @@ func TestAdminPluginSignInOffered(t *testing.T) {
 	if c, body := do("POST", AdminPath+"/signin/plugin", lanPeer, key, `{"agent":"fakeco","method":7,"way":"device"}`); c != http.StatusBadRequest {
 		t.Fatal("a method not offered:", c, body)
 	}
-	areaPlugins["fakeco"] = areaPlugin{spec, []areaPluginMethod{{"api", "API key", wayAPIKey}}}
+	offerPlugin(t, areaPlugin{spec, []areaPluginMethod{{"api", "API key", wayAPIKey}}})
 	if c, body := do("POST", AdminPath+"/signin/plugin", lanPeer, key, `{"agent":"fakeco","method":1,"way":"paste-code"}`); c != http.StatusBadRequest {
 		t.Fatal("a method an area isn't offered:", c, body)
 	}
-	areaPlugins["fakeco"] = areaPlugin{"@someone/else", []areaPluginMethod{{"api", "API key", wayAPIKey}}}
+	offerPlugin(t, areaPlugin{"@someone/else", []areaPluginMethod{{"api", "API key", wayAPIKey}}})
 	if c, body := do("POST", AdminPath+"/signin/plugin", lanPeer, key, `{"agent":"fakeco","method":0,"way":"api-key","key":"k-a"}`); c != http.StatusConflict || !strings.Contains(body, adminPluginUnavailable) {
 		t.Fatal("another package serving fakeco:", c, body)
 	}
-	areaPlugins["fakeco"] = areaPlugin{spec, []areaPluginMethod{{"api", "API key", wayAPIKey}}}
+	offerPlugin(t, areaPlugin{spec, []areaPluginMethod{{"api", "API key", wayAPIKey}}})
 	if err := plugin.SetOff(spec, true); err != nil {
 		t.Fatal(err)
 	}
@@ -294,11 +310,143 @@ func TestAdminPluginSignInByAddress(t *testing.T) {
 		t.Fatalf("signed in: %+v", done)
 	}
 
-	areaPlugins["fakeco"] = areaPlugin{spec, []areaPluginMethod{{"oauth", "Browser", wayPasteCode}}}
+	offerPlugin(t, areaPlugin{spec, []areaPluginMethod{{"oauth", "Browser", wayPasteCode}}})
 	if c, body := do("POST", AdminPath+"/signin/plugin", lanPeer, key, `{"agent":"fakeco","method":1,"way":"paste-code","inputs":{"where":"work","team":"violet"}}`); c != http.StatusConflict || !strings.Contains(body, "reload options") {
 		t.Fatal("a method that comes out another way:", c, body)
 	}
 	if a, _ := area.Get(id); len(a.Accounts) != 1 {
 		t.Fatalf("the area has %d accounts", len(a.Accounts))
+	}
+}
+
+// A code sign-in an area makes to an account the owner signed in to is a
+// conflict, and the owner's record keeps its tokens.
+func TestAdminPluginSignInLeavesTheOwners(t *testing.T) {
+	do, _, id, key, _ := pluginArea(t, wayPasteCode)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	a, err := plugin.Authorize(ctx, "fakeco", 1, map[string]string{"where": "work", "team": "owner"}, plugin.NewAccount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Finish(ctx, a.Session, "good"); err != nil {
+		t.Fatal(err)
+	}
+	refreshOf := func() string {
+		for _, pp := range plugin.Cached() {
+			for _, acc := range pp.Accounts {
+				if pp.ID == "fakeco" && acc.AccountID == "owner@fake" {
+					return acc.Key
+				}
+			}
+		}
+		return ""
+	}
+	ownerKey := refreshOf()
+	c, body := do("POST", AdminPath+"/signin/plugin", lanPeer, key, `{"agent":"fakeco","method":1,"way":"paste-code","inputs":{"where":"work","team":"owner"}}`)
+	var st adminSignInState
+	json.Unmarshal([]byte(body), &st)
+	if c != http.StatusOK {
+		t.Fatal("start:", c, body)
+	}
+	t.Cleanup(func() { provider.CancelSignIn(st.ID) })
+	do("POST", AdminPath+"/signin/"+st.ID+"/callback", lanPeer, key, `{"code":"good"}`)
+	if ended := waitSignIn(t, do, key, st.ID); ended.State != "conflict" || ended.Account != nil || strings.Contains(ended.Message, "owner@fake") {
+		t.Fatalf("a sign-in to the owner's account: %+v", ended)
+	}
+	if a, _ := area.Get(id); len(a.Accounts) != 0 {
+		t.Fatalf("the area has %d accounts", len(a.Accounts))
+	}
+	b, err := os.ReadFile(plugin.AuthPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]map[string]any
+	json.Unmarshal(b, &saved)
+	if len(saved) != 1 || ownerKey == "" || saved[ownerKey]["refresh"] != "r-owner" {
+		t.Fatalf("plugin-auth.json after: %s", b)
+	}
+}
+
+// A sign-in starts only with the answers the method asks, each one it
+// takes: one left out, one it never asks, or one off its list is 400,
+// and nothing starts.
+func TestAdminPluginStartChecksAnswers(t *testing.T) {
+	do, _, _, key, _ := pluginArea(t, wayPasteCode)
+	for _, in := range []string{`{"where":"work"}`, `{"where":"work","team":"blue","extra":"x"}`, `{"where":"moon"}`, `{"where":"work","team":"echo-1234"}`} {
+		c, body := do("POST", AdminPath+"/signin/plugin", lanPeer, key, `{"agent":"fakeco","method":1,"way":"paste-code","inputs":`+in+`}`)
+		if c != http.StatusBadRequest || strings.Contains(body, `"id"`) || strings.Contains(body, "echo-1234") {
+			t.Fatal(in, c, body)
+		}
+	}
+}
+
+// Command Code's page posts its key, so its sign-in is finished by a key
+// pasted, which goes through the key way to a new account only: a key
+// the owner has is a conflict that leaves it as it was, and each such
+// conflict is counted to the area, which is 429 once it has had 20.
+func TestAdminPluginSignInByPastedKey(t *testing.T) {
+	t.Setenv("FAKE_LOOPBACK", "1")
+	t.Cleanup(provider.PluginPostsCallbackForTest("fakeco", "https://fake.invalid/keys"))
+	do, _, id, key, _ := pluginArea(t, wayPasteKey)
+	if _, err := plugin.APIKey(context.Background(), "fakeco", 0, nil, "k-owner", plugin.NewAccount); err != nil {
+		t.Fatal(err)
+	}
+	start := func() (int, adminSignInState) {
+		t.Helper()
+		c, body := do("POST", AdminPath+"/signin/plugin", lanPeer, key, `{"agent":"fakeco","method":1,"way":"paste-key","inputs":{"where":"work","team":"blue"}}`)
+		var st adminSignInState
+		json.Unmarshal([]byte(body), &st)
+		if c == http.StatusOK {
+			t.Cleanup(func() { provider.CancelSignIn(st.ID) })
+			if st.Paste != "key" || st.KeysURL != "https://fake.invalid/keys" {
+				t.Fatal("start:", body)
+			}
+		}
+		return c, st
+	}
+	c, st := start()
+	if c != http.StatusOK {
+		t.Fatal("start:", c)
+	}
+	if c, body := do("POST", AdminPath+"/signin/"+st.ID+"/callback", lanPeer, key, `{"key":"k-area"}`); c != http.StatusNoContent {
+		t.Fatal("the key:", c, body)
+	}
+	if done := waitSignIn(t, do, key, st.ID); done.State != "done" || done.Account == nil {
+		t.Fatalf("signed in: %+v", done)
+	}
+	// the owner's record is never written: not even the same bytes again
+	before, err := os.Stat(plugin.AuthPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond) // a write after this has a later time
+	conflicts := 0
+	for range 25 {
+		c, st := start()
+		if c == http.StatusTooManyRequests {
+			break
+		}
+		if c != http.StatusOK {
+			t.Fatal("start:", c)
+		}
+		do("POST", AdminPath+"/signin/"+st.ID+"/callback", lanPeer, key, `{"key":"k-owner"}`)
+		if ended := waitSignIn(t, do, key, st.ID); ended.State != "conflict" {
+			t.Fatalf("the owner's key: %+v", ended)
+		}
+		conflicts++
+	}
+	if after, err := os.Stat(plugin.AuthPath()); err != nil || !after.ModTime().Equal(before.ModTime()) {
+		t.Fatalf("plugin-auth.json was written by a conflict: %v → %v (%v)", before.ModTime(), after.ModTime(), err)
+	}
+	if conflicts != conflictMost {
+		t.Fatalf("held after %d conflicts, not %d", conflicts, conflictMost)
+	}
+	if a, _ := area.Get(id); len(a.Accounts) != 1 {
+		t.Fatalf("the area has %d accounts", len(a.Accounts))
+	}
+	p, _ := provider.Find("fakeco")
+	if n := len(p.AccountIDs()); n != 2 {
+		t.Fatalf("fakeco has %d accounts, not the owner's and the area's", n)
 	}
 }

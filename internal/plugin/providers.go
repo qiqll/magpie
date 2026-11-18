@@ -1030,6 +1030,17 @@ func authorize(ctx context.Context, provider string, method int, inputs map[stri
 	return r.Authorization, nil
 }
 
+// Abandon ends an OAuth sign-in begun (Authorize) that won't be finished:
+// the host lets its session and the key it reserved go, and the plugin's
+// wait is aborted. It returns at once.
+func Abandon(session string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = Call(ctx, "callback", map[string]any{"session": session, "code": ""}, nil)
+	}()
+}
+
 // Saved is where a sign-in was kept: the provider (a plugin may sign in
 // to another than asked) and the account's key.
 type Saved struct {
