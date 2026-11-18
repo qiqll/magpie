@@ -435,23 +435,41 @@ must hold, beside the contract's bodies and codes:
   area's) is `conflict` on every add path, and its tokens, proxy and name
   stay as they were. The import readers today renew such an account
   (`updated`) and name it (`exists`); an area's import needs a mode that
-  does neither (T-220). A plugin's API-key sign-in replaces an account it
-  has; it is offered to areas only for a plugin that can refuse instead
-  (T-221).
+  does neither (T-220). A plugin's sign-in, by any method, replaces an
+  account it has, and magpie learns whose it is only after the plugin
+  saved it (`pluginDone` after `plugin.Saved`). A plugin method is
+  offered to areas only when the plugin tells the account first and saves
+  it after magpie claimed it, so a known account fails with its tokens
+  untouched (T-221, every method, not just API keys).
 - **Claude imports are checked with Anthropic** (`ClaudeTokenUser`), and
   named by its answer, never by the file's email.
 - **Not offered:** a plugin method whose browser opens on this computer
   (`Authorization.Opened`).
 - **Secrets stay in.** A plugin's password and hidden inputs are not sent
   back by the prompt route; no key, token, code, pasted address or proxy
-  login reaches a reply or the log.
+  login reaches a reply or the log. Text a plugin writes (a prompt's
+  `error`, `instructions`, a sign-in's `message`) is withheld whole when
+  it holds the key, a hidden input or any input of 4 characters or more:
+  `keyFailure` cleans the log alone today.
+- **Opened dates are a subscription's.** A request that makes a key
+  (`accounts/key(s)`, a plugin's `api-key`, a Factory import) with
+  `opened` is `400`.
+- **Many keys keep what was added**: `accounts/keys` claims and writes one
+  at a time and rolls none back.
+- **Direct is an area attachment** (`{"direct": true}` in `areas.json`),
+  told apart from no attachment. The owner's own value for the account
+  wins over it; a subscription's or the global proxy doesn't.
 - **Limits are the area's, from both keys.** Every add, sign-in, import
   and proxy route the console reaches as `/areas/{id}/…` runs the area's
   own handler and checks: what the area may add, 500 accounts, 50 IPs,
   `conflictProbes`, `proxyChecks` (probe, a batch's host-name lines and
-  reread share it) and one import at a time. A route of another area's,
-  IP or proxy is `404`. A sign-in is read, pasted into and cancelled only
-  by whoever started it (area or console).
+  reread share it) and one import at a time. The console also has totals
+  of its own across areas (40 conflicts, 20 checks in 10 minutes), so
+  more areas don't buy more probes. The role is judged before `{id}` is
+  looked up. Another area's account, IP or proxy is `404`; a sign-in not
+  started by the caller is `404`, and only its starter (area or console)
+  reads, pastes into or cancels it. A batch's `dryRun` resolves no name
+  and judges no owner, so it tells nothing of other IPs.
 - **New codes:** `409 plugin_unavailable`, `413 too_large` (the import
   route's 8 MB body alone), `429 too_many_imports`.
 - **Log:** a console action writes the area, its note, the action and the
