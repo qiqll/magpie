@@ -142,6 +142,80 @@ func TestAdminImportClaude(t *testing.T) {
 	}
 }
 
+// fakeGoogleSignIns answers Google's refresh of "1//<who>[-n]" with access token
+// "at-<who>[-n]", and userinfo for it as who@example.com's.
+func fakeGoogleSignIns(t *testing.T) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/token":
+			r.ParseForm()
+			rt := r.Form.Get("refresh_token")
+			if !strings.HasPrefix(rt, "1//") || strings.HasPrefix(rt, "1//dead") {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"error":"invalid_grant","error_description":"Bad token ` + rt + `"}`))
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"access_token": "at-" + strings.TrimPrefix(rt, "1//"), "expires_in": 3600})
+		case r.URL.Path == "/userinfo":
+			at := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer at-")
+			who, _, _ := strings.Cut(at, "-")
+			json.NewEncoder(w).Encode(map[string]string{"email": who + "@example.com"})
+		case strings.HasSuffix(r.URL.Path, ":loadCodeAssist"):
+			w.Write([]byte(`{"cloudaicompanionProject":"found-proj","currentTier":{"id":"standard-tier","name":"Gemini Code Assist Standard"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(provider.GoogleForTest(srv.URL))
+}
+
+// An area imports Gemini CLI's sign-ins as the window's reader reads them
+// (T-232): each is named by Google's userinfo, never the file's email, and
+// is the area's; one magpie has, the owner's by Google's answer or its
+// refresh token, is a conflict that names no one and writes no token.
+func TestAdminImportGemini(t *testing.T) {
+	do, console, _ := adminWorld(t)
+	logs := logsOf(t)
+	fakeGoogleSignIns(t)
+	aID, a := makeArea(t, do, console, "A")
+	openSignIns(t, do, console, aID, "gemini")
+	// the owner's, by the window's import
+	if rs, err := provider.ImportGoogleAccounts(context.Background(), "gemini", []string{"1//owner"}); err != nil || len(rs) != 1 || rs[0].Status != "added" {
+		t.Fatal("the owner's:", rs, err)
+	}
+	logins := filepath.Join(filepath.Dir(provider.Path()), "logins.json")
+
+	cpa := `{"type":"gemini","email":"file-says@example.com","project_id":"file-proj","token":{"access_token":"ya29.x","refresh_token":"1//ann"}}`
+	c, out, body := importOf(t, do, a, map[string]any{"agent": "gemini", "files": []string{
+		cpa,
+		`{"access_token":"ya29.y","refresh_token":"1//owner-2","token_type":"Bearer","expiry_date":1}`,
+		"1//owner\n1//dead",
+	}})
+	if c != http.StatusOK || importStatuses(out) != "1:added,2:conflict,3:conflict,4:failed" || out.Added != 1 || out.Conflict != 2 || out.Failed != 1 {
+		t.Fatal("A's import:", c, body)
+	}
+	if acc := out.Results[0].Account; acc == nil || acc.Name != "ann@example.com" || acc.Provider != "gemini" || acc.Kind != "account" {
+		t.Fatal("ann's account:", body)
+	}
+	if ar, _ := area.Get(aID); len(ar.Accounts) != 1 || !ownsRef(ar, out.Results[0].Account.ID) {
+		t.Fatalf("A's accounts: %+v", ar.Accounts)
+	}
+	for _, s := range []string{"owner@", "file-says", "1//", "at-", "ya29"} {
+		if strings.Contains(body, s) || strings.Contains(logs(), s) {
+			t.Errorf("%q in the answer or the log: %s\n%s", s, body, logs())
+		}
+	}
+	if !strings.Contains(logs(), "imported gemini: added 1, conflict 2, failed 1") {
+		t.Error("the log:", logs())
+	}
+	after, _ := os.ReadFile(logins)
+	if strings.Contains(string(after), "1//owner-2") || !strings.Contains(string(after), `"1//owner"`) || strings.Contains(string(after), "file-says") {
+		t.Fatalf("the owner's account was written over, or the file's name kept: %s", after)
+	}
+}
+
 // importIDToken is a ChatGPT id_token naming who@example.com.
 func importIDToken(who string) string {
 	b, _ := json.Marshal(map[string]any{"email": who + "@example.com", "https://api.openai.com/auth": map[string]any{"chatgpt_plan_type": "plus", "chatgpt_account_id": "acct-" + who}})

@@ -659,8 +659,8 @@ taken: an area pastes it to `signin/{id}/callback`.
   id_token ChatGPT's refresh gives (none given fails); one kept access
   token only (`accessOnly`, never refreshed) only once its access token's
   own claims name the id_token's email, workspace and plan and ChatGPT
-  answers `/wham/usage` with it (`codexAccessChecked`); a Google one by
-  Google's userinfo (none fails), a Claude one by Anthropic's answer for
+  answers `/wham/usage` with it (`codexAccessChecked`); a Google one,
+  Antigravity's or Gemini CLI's (T-232), by Google's userinfo (none fails), a Claude one by Anthropic's answer for
   its access token (`askClaudeProfile`, `/api/oauth/profile`, the owner's
   call of 2026-11-18: the window still asks Anthropic nothing). A Claude
   token that has run out by its own `expiresAt`, or that Anthropic

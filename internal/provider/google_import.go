@@ -7,7 +7,12 @@ package provider
 // CLIProxyAPI as {type: "antigravity", email, refresh_token, project_id, …},
 // and Cockpit also takes bare refresh tokens, one a line. They all sign in
 // with Antigravity's own OAuth client, the one magpie uses, so a refresh
-// token from any of them works here. Each is checked the way a sign-in is
+// token from any of them works here. Gemini CLI's accounts come the same
+// ways (T-232): its own oauth_creds.json, CLIProxyAPI's {type: "gemini",
+// email, token: {refresh_token, …}, project_id}, or bare refresh tokens,
+// each refreshed with Gemini CLI's client; a sign-in another app's client
+// made fails there. A Gemini CLI account is named by Google alone, never
+// by the file. Each is checked the way a sign-in is
 // finished: the token refreshed with Google, whose account it is asked,
 // the Code Assist project found; only then is it kept, as a signed-in
 // account is. Tokens are never logged or sent back.
@@ -187,7 +192,7 @@ func ImportGoogleAccountsWith(ctx context.Context, agent string, files []string,
 		return nil, errAccountDiscoveryOff
 	}
 	app, ok := googleAppOf(agent)
-	if !ok || agent != "antigravity" {
+	if !ok {
 		return nil, fmt.Errorf("accounts can't be imported for %s", agent)
 	}
 	var all []googleImport
@@ -224,6 +229,14 @@ func ImportGoogleAccountsWith(ctx context.Context, agent string, files []string,
 		}
 	}
 	loginsMu.Unlock()
+	// Gemini CLI's own sign-in is in magpie too, read from its file, its
+	// row (if listed yet) holding no token: never imported over
+	ownUser := ""
+	if own, ok := geminiOwnLogin(); ok && agent == "gemini" {
+		haveTok[own.auth.RefreshToken] = own.user
+		haveUser[strings.ToLower(own.user)] = own.auth.RefreshToken
+		ownUser = own.user
+	}
 
 	out := make([]ImportedAccount, len(all))
 	var wg sync.WaitGroup
@@ -253,7 +266,7 @@ func ImportGoogleAccountsWith(ctx context.Context, agent string, files []string,
 			defer func() { <-sem }()
 			c, cancel := context.WithTimeout(ctx, 45*time.Second)
 			defer cancel()
-			out[i] = end(importGoogleAccount(c, app, e, name, haveUser, o))
+			out[i] = end(importGoogleAccount(c, app, e, name, haveUser, ownUser, o))
 		}()
 	}
 	wg.Wait()
@@ -269,8 +282,8 @@ func ImportGoogleAccountsWith(ctx context.Context, agent string, files []string,
 }
 
 // importGoogleAccount checks one account as a sign-in is finished and
-// keeps it.
-func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, name string, haveUser map[string]string, o ImportOptions) ImportedAccount {
+// keeps it. ownUser is Gemini CLI's own account, "" for none.
+func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, name string, haveUser map[string]string, ownUser string, o ImportOptions) ImportedAccount {
 	fail := func(msg string) ImportedAccount {
 		return ImportedAccount{User: name, Status: "failed", Error: msg}
 	}
@@ -306,13 +319,17 @@ func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, nam
 	case o.NewOnly:
 		// the file's email is its word, not Google's
 		return fail(vendorRefused("Google", err))
-	case e.email != "":
+	case e.email != "" && app.agent == "antigravity":
 		g.user = e.email // the file says, and the token works
 	default:
 		return fail(err.Error())
 	}
 	if _, ok := haveUser[strings.ToLower(g.user)]; ok && o.NewOnly {
 		return o.known(ImportedAccount{Status: "exists"})
+	}
+	if ownUser != "" && strings.EqualFold(g.user, ownUser) {
+		// Gemini CLI's own: its file is Gemini CLI's to write, not magpie's
+		return ImportedAccount{User: g.user, Status: "exists"}
 	}
 	status := "added"
 	if old, ok := haveUser[strings.ToLower(g.user)]; ok {
@@ -346,4 +363,13 @@ func importGoogleAccount(ctx context.Context, app googleApp, e googleImport, nam
 	googleState.tokens[e.refreshToken] = g.auth
 	googleState.Unlock()
 	return ImportedAccount{User: g.user, Status: status, Plan: plan}
+}
+
+// GoogleForTest points Google's token and userinfo endpoints and Code
+// Assist at root's /token, /userinfo and itself, for another package's
+// tests of an import; the func it returns puts them back.
+func GoogleForTest(root string) func() {
+	oldT, oldW, oldP, oldD := googleTokenURL, googleUserInfoURL, codeAssistProd, codeAssistDaily
+	googleTokenURL, googleUserInfoURL, codeAssistProd, codeAssistDaily = root+"/token", root+"/userinfo", root, root
+	return func() { googleTokenURL, googleUserInfoURL, codeAssistProd, codeAssistDaily = oldT, oldW, oldP, oldD }
 }

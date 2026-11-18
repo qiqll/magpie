@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -214,9 +215,10 @@ func TestImportGoogleAccounts(t *testing.T) {
 		t.Errorf("bad request = %+v, %v", res, err)
 	}
 
-	// only Antigravity's; a file of nothing says so
-	if _, err := ImportGoogleAccounts(context.Background(), "gemini", []string{cockpit}); err == nil {
-		t.Error("imported into Gemini CLI")
+	// only Google's apps (Gemini CLI's in TestImportGeminiAccounts); a
+	// file of nothing says so
+	if _, err := ImportGoogleAccounts(context.Background(), "codex", []string{cockpit}); err == nil {
+		t.Error("imported into Codex")
 	}
 	if _, err := ImportGoogleAccounts(context.Background(), "antigravity", []string{"{broken"}); err == nil {
 		t.Error("broken JSON imported")
@@ -226,5 +228,109 @@ func TestImportGoogleAccounts(t *testing.T) {
 	res, err = ImportGoogleAccounts(context.Background(), "antigravity", []string{cockpit, "{broken"})
 	if err != nil || len(res) != 4 || res[3].File != 2 || res[3].User != "" || res[3].Status != "failed" || res[3].Error == "" {
 		t.Errorf("a broken file among several = %+v, %v", res, err)
+	}
+}
+
+// Gemini CLI's accounts are imported as Antigravity's are (T-232): its
+// own oauth_creds.json, CLIProxyAPI's gemini file and bare refresh tokens,
+// each refreshed with Gemini CLI's client and named by Google alone, never
+// by the file. Gemini CLI's own sign-in is never imported over, and an
+// area's import (NewOnly) of an account magpie has is a conflict that
+// writes nothing.
+func TestImportGeminiAccounts(t *testing.T) {
+	googleSandbox(t, &fakeGoogle{})
+	f := &fakeGoogleImport{users: map[string]string{"1//g": "g@x.com", "1//g2": "g@x.com", "1//h": "h@x.com",
+		"1//n": "nouser", "1//own": "own@x.com", "1//own2": "own@x.com", "1//k": "k@x.com"}}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	oldToken, oldProd, oldDaily, oldWho := googleTokenURL, codeAssistProd, codeAssistDaily, googleUserInfoURL
+	googleTokenURL, codeAssistProd, codeAssistDaily, googleUserInfoURL = srv.URL+"/token", srv.URL+"/prod", srv.URL+"/daily", srv.URL+"/userinfo"
+	t.Cleanup(func() {
+		googleTokenURL, codeAssistProd, codeAssistDaily, googleUserInfoURL = oldToken, oldProd, oldDaily, oldWho
+	})
+	// Gemini CLI signed in here as own@x.com
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".gemini")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ownCreds := `{"access_token":"ya29.own","refresh_token":"1//own","token_type":"Bearer","expiry_date":1}`
+	os.WriteFile(filepath.Join(dir, "oauth_creds.json"), []byte(ownCreds), 0o600)
+	os.WriteFile(filepath.Join(dir, "google_accounts.json"), []byte(`{"active":"own@x.com"}`), 0o600)
+
+	oauthCreds := `{"access_token":"ya29.g","refresh_token":"1//g","scope":"https://www.googleapis.com/auth/cloud-platform","token_type":"Bearer","expiry_date":1790000000000}`
+	cpa := `{"type":"gemini","email":"says-h@x.com","project_id":"file-proj","token":{"access_token":"ya29.h","refresh_token":"1//h","token_uri":"https://oauth2.googleapis.com/token"}}`
+	noUser := `{"type":"gemini","email":"liar@x.com","token":{"refresh_token":"1//n"}}`
+	ag := `{"type":"antigravity","email":"ag@x.com","refresh_token":"1//ag"}`
+	res, err := ImportGoogleAccounts(context.Background(), "gemini", []string{oauthCreds, cpa, noUser, ag, "1//own\n1//own2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := []string{}
+	for _, r := range res {
+		st = append(st, r.User+":"+r.Status)
+	}
+	if strings.Join(st, " ") != "g@x.com:added h@x.com:added liar@x.com:failed ag@x.com:failed own@x.com:exists own@x.com:exists" {
+		t.Fatalf("results = %v (%+v)", st, res)
+	}
+	if !strings.Contains(res[3].Error, "not Gemini CLI's") {
+		t.Errorf("an Antigravity file says %q", res[3].Error)
+	}
+	out, _ := json.Marshal(res)
+	for _, tok := range []string{"1//", "at-", "ya29"} {
+		if strings.Contains(string(out), tok) {
+			t.Errorf("results carry a token: %s", out)
+		}
+	}
+	// refreshed with Gemini CLI's own client; its own sign-in wasn't
+	f.mu.Lock()
+	for _, c := range f.clients {
+		if c != geminiApp.clientID {
+			t.Errorf("refreshed with client %q", c)
+		}
+	}
+	for _, rt := range f.refreshed {
+		if rt == "1//own" || rt == "1//ag" {
+			t.Errorf("%s was refreshed", rt)
+		}
+	}
+	f.mu.Unlock()
+	// kept by Google's names, with Code Assist's project; Gemini CLI's own
+	// file left as it was
+	users := map[string]string{}
+	for _, l := range googleLogins("gemini") {
+		users[l.User] = l.acct.auth.RefreshToken
+	}
+	if len(users) != 3 || users["g@x.com"] != "1//g" || users["h@x.com"] != "1//h" || users["own@x.com"] != "1//own" {
+		t.Errorf("logins = %v", users)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "oauth_creds.json")); string(b) != ownCreds {
+		t.Errorf("Gemini CLI's own sign-in written over: %s", b)
+	}
+	b, _ := os.ReadFile(loginsPath())
+	for _, s := range []string{"says-h@", "liar@", "1//own2"} {
+		if strings.Contains(string(b), s) {
+			t.Errorf("%q kept in logins.json", s)
+		}
+	}
+
+	// an area's import: a new account is added, Google naming it; one
+	// magpie has, by its refresh token or Google's answer, is a conflict
+	// that names no one and writes nothing
+	before, _ := os.ReadFile(loginsPath())
+	res, err = ImportGoogleAccountsWith(context.Background(), "gemini", []string{"1//g\n1//g2\n1//own2\n1//k"}, ImportOptions{NewOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st = st[:0]
+	for _, r := range res {
+		st = append(st, r.User+":"+r.Status)
+	}
+	if strings.Join(st, " ") != ":conflict :conflict :conflict k@x.com:added" {
+		t.Fatalf("new-only = %v (%+v)", st, res)
+	}
+	after, _ := os.ReadFile(loginsPath())
+	if strings.Contains(string(after), "1//g2") || strings.Contains(string(after), "1//own2") || !strings.Contains(string(after), `"1//k"`) {
+		t.Errorf("a conflict was written, or the new one wasn't:\nbefore %s\nafter %s", before, after)
 	}
 }
