@@ -200,8 +200,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 // the accounts the import reads, as /api/providers says them: Claude's
 // alice through a proxy at a listed IP, bob through the saved Tokyo line,
 // carol (to sign in again) through her subscription's proxy, which
-// doesn't answer; Codex's ops goes direct, qa (banned) through Tokyo too
-const prov = (id, name, agent, logins, extra = {}) => ({ id, name, icon: id + "-color", chat: "", responses: "", anthropic: "", catalog: "", models: [], agents: [], fallback: [], headers: {}, keyList: [], account: { agent, agentName: name, user: logins[0]?.user, plan: logins[0]?.plan, logins }, proxy: "", ...extra });
+// doesn't answer; Codex's ops goes direct, qa (banned) through Tokyo too.
+// Each has the key the server always sends (providers.go): the Providers
+// list is drawn from them too when it is in before the IPs (T-267), and a
+// provider of keys without one threw there, so its IPs named no account
+const prov = (id, name, agent, logins, extra = {}) => ({ id, name, icon: id + "-color", chat: "", responses: "", anthropic: "", catalog: "", models: [], agents: [], fallback: [], headers: {}, key: { set: false, masked: "", optional: false }, keyList: [], account: { agent, agentName: name, user: logins[0]?.user, plan: logins[0]?.plan, logins }, proxy: "", ...extra });
 const TOKYO = "http://me:pw@tokyo.example:3128", AT_IP = "socks5://u:s3cret@203.0.113.7:1080", HK = "http://hk:pw@hk.example:8080";
 const accountProviders = () => [
   prov("claude", "Claude", "claude", [
@@ -215,7 +218,7 @@ const accountProviders = () => [
   ], { proxy: TOKYO, accountProxies: { "ops@example.com": "direct" } }),
   // a provider of keys (review H1): Main through Tokyo by its id, the
   // other on the global proxy, so through none
-  { id: "relay", name: "Relay", icon: "generic", models: [], agents: [], fallback: [], headers: {}, chat: "https://relay.example/v1", responses: "", anthropic: "", catalog: "", proxy: "",
+  { id: "relay", name: "Relay", icon: "generic", models: [], agents: [], fallback: [], headers: {}, chat: "https://relay.example/v1", responses: "", anthropic: "", catalog: "", proxy: "", key: { set: true, masked: "sk-…a1", optional: false },
     keyList: [{ id: "k1", name: "Main", masked: "sk-…a1", on: true, active: true }, { id: "k2", masked: "sk-…b2", on: false }], accountProxies: { k1: TOKYO } },
 ];
 
