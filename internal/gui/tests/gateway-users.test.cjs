@@ -7,7 +7,8 @@
 // account and spares in order, each with its state, provider and gateway
 // key; an account no longer on its provider said so; how the gateway
 // binds said, by user with each tier's most accounts and how many share
-// an account, and when a seat is let go, and bound by
+// an account, a provider's own shares from Settings and one tier to an
+// account (T-246), and when a seat is let go, and bound by
 // session the bindings kept and shown as they are; each user's tier, the
 // default for one bound before tiers; each user's last use, none said for
 // one bound before it was kept; a search that asks again and keeps its focus and the accounts'
@@ -114,7 +115,7 @@ function serve(lang, users) {
       const hit = users.all.filter((u) => words.every((w) => hay(u).includes(w)));
       // a search leaves the accounts and the mode out, as the server does
       const out = { total: users.all.length, matched: hit.length + (users.more || 0), users: hit.map(withKeys) };
-      if (!url.searchParams.get("q")) Object.assign(out, { accounts: users.all.length ? accounts : [], mode: users.mode, tiers: users.tiers, idleHours: users.idleHours });
+      if (!url.searchParams.get("q")) Object.assign(out, { accounts: users.all.length ? accounts : [], mode: users.mode, tiers: users.tiers, idleHours: users.idleHours, providerShares: users.providerShares, sharesUnknown: users.sharesUnknown, oneTier: users.oneTier });
       return json(out);
     }
     if (url.pathname.startsWith("/api/")) return json({});
@@ -129,30 +130,35 @@ const words = {
     underEach: "Under each of its gateway keys: ", unbindSpare: "Its first account stays its first, and its other spares stay.", unbind: "Unbind", unbindTitle: "Unbind a@x.com from 1?", unbindOthers: "Its other accounts stay, the next one its first, and take its requests.", unbindOnly: "It is the user's only account of ChatGPT: its next request binds it afresh.", unbound: "1 let go of a@x.com", unbindCant: "user-accounts.json can't be changed: it doesn't read",
     head: "User bindings", two: "2 users", gone: "no longer on its provider", provGone: "no longer in magpie", none: "without a gateway key", removed: "a removed gateway key", keyID: "gateway key 01234567", bound: "bound", match: "No users match “nobody”", more: "Showing 6 of 300", unread: "user-accounts.json can't be read: unexpected end",
     out: "out · quota used up · back in 3h", can: "can answer", unknown: "status unknown", model: "out · rate limited for m-1", spareNote: "2 users, 1 as a spare", first: "first", spare: "spare",
+    shares: "ChatGPT, from Settings › Growth policy: free: each shared by up to 10 · team: each its own alone.", oneTier: "An account is shared only by users of one tier.", sharesUnknown: "Settings' users per account by provider can't be read, so a provider may hold to other shares than these.",
     byUser: "Bound by user: accounts of each provider each user may have, by its tier: free (1) up to 2, each shared by up to 2 (default) · pro (4, P) up to 4, each its own alone · team up to 6, shared by any number. A user that sends a provider nothing for 60 hours lets go of its accounts there.", byUserNoIdle: "Bound by user: accounts of each provider each user may have, by its tier: free (1) up to 2, each shared by up to 2 (default) · pro (4, P) up to 4, each its own alone · team up to 6, shared by any number.", empty: "No user is bound yet", lastUsed: "last used 2 hours ago", tierPro: "tier pro", tierFree: "tier free", tiersUnknown: "Bound by user; the tiers in user-tiers.json are unknown.", off: "Binding by user is off (start option --bind=user)",
   },
   zh: {
     underEach: "该用户的每个网关密钥下都解绑：", unbindSpare: "它的主账号仍是主账号，其他备用账号也保留。", unbind: "解绑", unbindTitle: "为 1 解绑 a@x.com？", unbindOthers: "它的其他账号保留，下一个成为主账号，承接它的请求。", unbindOnly: "这是该用户在 ChatGPT 下唯一的账号：它的下一次请求会重新绑定。", unbound: "1 已解绑 a@x.com", unbindCant: "无法修改 user-accounts.json：it doesn't read",
     head: "用户绑定", two: "2 个用户", gone: "已不在该供应商下", provGone: "已不在 magpie 中", none: "未使用网关密钥", removed: "已删除的网关密钥", keyID: "网关密钥 01234567", bound: "绑定", match: "没有和“nobody”匹配的用户", more: "显示 300 个中的 6 个", unread: "无法读取 user-accounts.json：unexpected end",
     out: "暂不可用 · 额度用尽 · 3 小时后恢复", can: "可用", unknown: "状态未知", model: "暂不可用 · m-1 限流", spareNote: "2 个用户，其中 1 个作为备用", first: "主账号", spare: "备用",
+    shares: "ChatGPT，按设置 › 成长策略：free：每个号最多 10 人共用 · team：每个号独占。", oneTier: "一个账号只由同一等级的用户共用。", sharesUnknown: "设置中按供应商的每个账号用户数读不了，某个供应商实际用的共用人数可能与上面不同。",
     byUser: "按用户绑定：每个用户在每个供应商下的账号上限按等级：free (1) 最多 2 个，每个号最多 2 人共用（默认） · pro (4, P) 最多 4 个，每个号独占 · team 最多 6 个，共用人数不限。 用户 60 小时没有向某个供应商发请求，会让出在那里的账号。", byUserNoIdle: "按用户绑定：每个用户在每个供应商下的账号上限按等级：free (1) 最多 2 个，每个号最多 2 人共用（默认） · pro (4, P) 最多 4 个，每个号独占 · team 最多 6 个，共用人数不限。", empty: "还没有用户被绑定", lastUsed: "最后使用 2小时前", tierPro: "等级 pro", tierFree: "等级 free", tiersUnknown: "按用户绑定；user-tiers.json 中的等级未知。", off: "按用户绑定未开启（启动参数 --bind=user）",
   },
   "zh-TW": {
     underEach: "該使用者的每個閘道金鑰下都解除綁定：", unbindSpare: "它的主帳號仍是主帳號，其他備用帳號也保留。", unbind: "解綁", unbindTitle: "為 1 解除綁定 a@x.com？", unbindOthers: "它的其他帳號保留，下一個成為主帳號，承接它的請求。", unbindOnly: "這是該使用者在 ChatGPT 下唯一的帳號：它的下一次請求會重新綁定。", unbound: "1 已解除綁定 a@x.com", unbindCant: "無法修改 user-accounts.json：it doesn't read",
     head: "使用者綁定", two: "2 位使用者", gone: "已不在該供應商下", provGone: "已不在 magpie 中", none: "未使用閘道金鑰", removed: "已刪除的閘道金鑰", keyID: "閘道金鑰 01234567", bound: "綁定", match: "沒有和「nobody」匹配的使用者", more: "顯示 300 位中的 6 位", unread: "無法讀取 user-accounts.json：unexpected end",
     out: "暫不可用 · 額度用盡 · 3 小時後恢復", can: "可用", unknown: "狀態未知", model: "暫不可用 · m-1 限流", spareNote: "2 位使用者，其中 1 位作為備用", first: "主帳號", spare: "備用",
+    shares: "ChatGPT，依設定 › 成長策略：free：每個帳號最多 10 人共用 · team：每個帳號獨占。", oneTier: "一個帳號只由同一等級的使用者共用。", sharesUnknown: "設定中依供應商的每個帳號使用者數無法讀取，某個供應商實際採用的共用人數可能與上面不同。",
     byUser: "依使用者綁定：每位使用者在每個供應商下的帳號上限依等級：free (1) 最多 2 個，每個帳號最多 2 人共用（預設） · pro (4, P) 最多 4 個，每個帳號獨占 · team 最多 6 個，共用人數不限。 使用者 60 小時沒有向某個供應商發送請求，會讓出在那裡的帳號。", byUserNoIdle: "依使用者綁定：每位使用者在每個供應商下的帳號上限依等級：free (1) 最多 2 個，每個帳號最多 2 人共用（預設） · pro (4, P) 最多 4 個，每個帳號獨占 · team 最多 6 個，共用人數不限。", empty: "還沒有使用者被綁定", lastUsed: "最後使用 2小時前", tierPro: "等級 pro", tierFree: "等級 free", tiersUnknown: "依使用者綁定；user-tiers.json 中的等級未知。", off: "依使用者綁定未開啟（啟動參數 --bind=user）",
   },
   ja: {
     underEach: "このユーザーのすべてのゲートウェイキーで解除します：", unbindSpare: "最初のアカウントはそのまま最初のアカウントで、ほかの予備も残ります。", unbind: "解除", unbindTitle: "1 から a@x.com の割り当てを解除しますか？", unbindOthers: "ほかのアカウントは残り、次のものが最初のアカウントになってリクエストを受けます。", unbindOnly: "このユーザーの ChatGPT での唯一のアカウントです：次のリクエストで改めて割り当てられます。", unbound: "1 から a@x.com の割り当てを解除しました", unbindCant: "user-accounts.json を変更できません：it doesn't read",
     head: "ユーザーの割り当て", two: "2 ユーザー", gone: "プロバイダにもうありません", provGone: "magpie にもうありません", none: "ゲートウェイキーなし", removed: "削除されたゲートウェイキー", keyID: "ゲートウェイキー 01234567", bound: "割り当て", match: "「nobody」に一致するユーザーはいません", more: "300 件中 6 件を表示中", unread: "user-accounts.json を読み込めません：unexpected end",
     out: "利用不可 · クォータ切れ · 3 時間後に復帰", can: "利用可能", unknown: "状態は不明", model: "利用不可 · m-1 でレート制限", spareNote: "2 ユーザー（うち 1 は予備）", first: "最初", spare: "予備",
+    shares: "ChatGPT（設定 › 成長ポリシー）：free：各アカウントを最大 10 人で共有 · team：各アカウントを専有。", oneTier: "1 つのアカウントを共有するのは同じティアのユーザーだけです。", sharesUnknown: "設定のプロバイダー別アカウントあたりユーザー数を読み込めないため、プロバイダーによっては上記と異なる共有人数が使われている可能性があります。",
     byUser: "ユーザーごとに割り当て：各ユーザーのプロバイダごとのアカウント上限はティアで決まります：free (1) 最大 2、各アカウントを最大 2 人で共有（デフォルト） · pro (4, P) 最大 4、各アカウントを専有 · team 最大 6、共有人数は無制限。 60 時間プロバイダにリクエストを送らなかったユーザーは、そのアカウントを手放します。", byUserNoIdle: "ユーザーごとに割り当て：各ユーザーのプロバイダごとのアカウント上限はティアで決まります：free (1) 最大 2、各アカウントを最大 2 人で共有（デフォルト） · pro (4, P) 最大 4、各アカウントを専有 · team 最大 6、共有人数は無制限。", empty: "まだ割り当てられたユーザーはいません", lastUsed: "最終利用 2 時間前", tierPro: "ティア pro", tierFree: "ティア free", tiersUnknown: "ユーザーごとに割り当て。user-tiers.json のティアは不明です。", off: "ユーザーごとの割り当てはオフです（起動オプション --bind=user）",
   },
   de: {
     underEach: "Unter jedem seiner Zugangsschlüssel: ", unbindSpare: "Sein erstes Konto bleibt sein erstes, und seine anderen Ersatzkonten bleiben.", unbind: "Lösen", unbindTitle: "a@x.com von 1 lösen?", unbindOthers: "Seine anderen Konten bleiben; das nächste wird sein erstes und übernimmt seine Anfragen.", unbindOnly: "Es ist das einzige Konto des Nutzers bei ChatGPT: seine nächste Anfrage bindet ihn neu.", unbound: "a@x.com von 1 gelöst", unbindCant: "user-accounts.json kann nicht geändert werden: it doesn't read",
     head: "Nutzerbindungen", two: "2 Nutzer", gone: "nicht mehr beim Anbieter", provGone: "nicht mehr in magpie", none: "ohne Zugangsschlüssel", removed: "ein entfernter Zugangsschlüssel", keyID: "Zugangsschlüssel 01234567", bound: "gebunden", match: "Keine Nutzer passen zu „nobody“", more: "6 von 300 angezeigt", unread: "user-accounts.json kann nicht gelesen werden: unexpected end",
     out: "nicht verfügbar · Kontingent aufgebraucht · zurück in 3 Std.", can: "verfügbar", unknown: "Status unbekannt", model: "nicht verfügbar · Rate-Limit für m-1", spareNote: "2 Nutzer, 1 als Ersatz", first: "erstes", spare: "Ersatz",
+    shares: "ChatGPT, aus Einstellungen › Wachstumsregel: free: jedes von bis zu 10 Nutzern geteilt · team: jedes Konto nur für einen Nutzer.", oneTier: "Ein Konto wird nur von Nutzern derselben Stufe geteilt.", sharesUnknown: "Die Nutzer pro Konto nach Anbieter in den Einstellungen sind nicht lesbar, daher kann ein Anbieter andere Teilungen nutzen als diese.",
     byUser: "Nach Nutzer gebunden: Konten je Anbieter für jeden Nutzer nach seiner Stufe: free (1) bis zu 2, jedes von bis zu 2 Nutzern geteilt (Standard) · pro (4, P) bis zu 4, jedes Konto nur für einen Nutzer · team bis zu 6, von beliebig vielen Nutzern geteilt. Ein Nutzer, der einem Anbieter 60 Stunden lang nichts sendet, gibt seine Konten dort frei.", byUserNoIdle: "Nach Nutzer gebunden: Konten je Anbieter für jeden Nutzer nach seiner Stufe: free (1) bis zu 2, jedes von bis zu 2 Nutzern geteilt (Standard) · pro (4, P) bis zu 4, jedes Konto nur für einen Nutzer · team bis zu 6, von beliebig vielen Nutzern geteilt.", empty: "Noch kein Nutzer gebunden", lastUsed: "zuletzt genutzt vor 2 Stunden", tierPro: "Stufe pro", tierFree: "Stufe free", tiersUnknown: "Nach Nutzer gebunden; die Stufen in user-tiers.json sind unbekannt.", off: "Bindung nach Nutzer ist aus (Startoption --bind=user)",
   },
 };
@@ -429,6 +435,23 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.locator("#userBinds .user-bind").first().waitFor();
         assert.equal(await text(page.locator("#userBindsMode")), w.byUserNoIdle, "no idle claimed for a magpie that doesn't say");
         users.idleHours = 60;
+        // a provider with shares of its own (Settings › Growth policy) is
+        // said with each tier it names, in the tiers' order, after the
+        // file's; one tier to an account once the serving magpie says so;
+        // shares that can't be read said so (T-246)
+        users.providerShares = [{ provider: "codex", providerName: "ChatGPT", shares: { team: 1, free: 10 } }];
+        users.oneTier = true;
+        await page.reload();
+        await page.locator("#userBinds .user-bind").first().waitFor();
+        const idle = w.byUser.slice(w.byUserNoIdle.length).trim();
+        assert.equal(await text(page.locator("#userBindsMode")), `${w.byUserNoIdle} ${w.shares} ${w.oneTier} ${idle}`);
+        users.providerShares = undefined;
+        users.sharesUnknown = true;
+        await page.reload();
+        await page.locator("#userBinds .user-bind").first().waitFor();
+        assert.equal(await text(page.locator("#userBindsMode")), `${w.byUserNoIdle} ${w.sharesUnknown} ${w.oneTier} ${idle}`);
+        users.sharesUnknown = undefined;
+        users.oneTier = undefined;
         // an older magpie that doesn't say how it binds: nothing said
         users.mode = undefined;
         await page.reload();

@@ -370,6 +370,14 @@ type Served struct {
 	// Tiers: the user tiers it holds to, bound by user; nil when it
 	// doesn't say (bound by session, its user-tiers.json unread)
 	Tiers *Tiers
+	// ProviderShares: bound by user, each provider's own shares by tier
+	// in place of Tiers' (TierShares); nil for none or when it doesn't
+	// say. SharesUnknown: it says they can't be read.
+	ProviderShares map[string]map[string]int
+	SharesUnknown  bool
+	// OneTier: bound by user, an account is shared by users of one tier
+	// alone; false from one that doesn't say (a magpie before T-243)
+	OneTier bool
 	// IdleHours: bound by user, how long a user sends nothing before its
 	// accounts are let go; 0 from one that doesn't say (lets nobody go)
 	IdleHours int
@@ -390,19 +398,23 @@ func ServedBy() Served {
 	defer res.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
 	var info struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
-		Window  bool   `json:"window"`
-		Pid     int    `json:"pid"`
-		Serves  string `json:"serves"`
-		Bind    string `json:"bind"`
-		Tiers   *Tiers `json:"tiers"`
-		Idle    int    `json:"idle_hours"`
+		Name    string                    `json:"name"`
+		Version string                    `json:"version"`
+		Window  bool                      `json:"window"`
+		Pid     int                       `json:"pid"`
+		Serves  string                    `json:"serves"`
+		Bind    string                    `json:"bind"`
+		Tiers   *Tiers                    `json:"tiers"`
+		Idle    int                       `json:"idle_hours"`
+		Shares  map[string]map[string]int `json:"provider_shares"`
+		Unknown bool                      `json:"provider_shares_unknown"`
+		OneTier bool                      `json:"one_tier"`
 	}
 	if decodeJSON(b, &info) != nil || info.Name != "magpie" {
 		return Served{Running: bytes.Contains(b, []byte(`"magpie"`)), Window: bytes.Contains(b, []byte(`"window":true`))}
 	}
-	return Served{Running: true, Window: info.Window, Version: info.Version, Pid: info.Pid, Serves: info.Serves, Bind: info.Bind, Tiers: info.Tiers, IdleHours: info.Idle}
+	return Served{Running: true, Window: info.Window, Version: info.Version, Pid: info.Pid, Serves: info.Serves, Bind: info.Bind, Tiers: info.Tiers, IdleHours: info.Idle,
+		ProviderShares: info.Shares, SharesUnknown: info.Unknown, OneTier: info.OneTier}
 }
 
 // ServedBusy is what the magpie serving the gateway has in flight, as its
@@ -1231,7 +1243,17 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 		if s.bind.byUser() {
 			if t, err := loadTiers(); err == nil {
 				out["tiers"] = t
+				// each provider's own shares by tier, Settings', in place
+				// of the file's (T-243); unknown said so, never as none
+				if shares, err := TierShares(t); err != nil {
+					out["provider_shares_unknown"] = true
+				} else if shares != nil {
+					out["provider_shares"] = shares
+				}
 			}
+			// an account is shared by users of one tier alone (T-243);
+			// a magpie before that doesn't say
+			out["one_tier"] = true
 			// how long a user may send nothing before its accounts are let
 			// go; an older magpie, which lets nobody go, doesn't say
 			out["idle_hours"] = BindIdleHours()

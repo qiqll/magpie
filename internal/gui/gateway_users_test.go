@@ -15,6 +15,7 @@ import (
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 type gatewayUsersOut struct {
@@ -25,6 +26,11 @@ type gatewayUsersOut struct {
 	Error    string            `json:"error"`
 	Mode     *string           `json:"mode"`
 	Tiers    *gateway.Tiers    `json:"tiers"`
+	// each provider's own shares by tier, unknown, one tier to an
+	// account (T-246)
+	ProviderShares []providerSharesJSON `json:"providerShares"`
+	SharesUnknown  bool                 `json:"sharesUnknown"`
+	OneTier        bool                 `json:"oneTier"`
 }
 
 // servingAt puts what answers at the gateway's address in h's hands, so
@@ -562,5 +568,67 @@ func TestGatewayUsersOfKeysThatDontShareApart(t *testing.T) {
 	}
 	if _, out = gatewayUsers(t, ""); len(out.Users) != 1 || len(out.Users[0].Keys) != 2 {
 		t.Fatalf("shared, one row: %+v", out.Users)
+	}
+}
+
+// The Gateway page is told, bound by user, each provider's own shares by
+// tier with its name, in the order of their names, whether they can't be
+// read, and that an account takes users of one tier: as the magpie
+// serving says, nothing of it from one that doesn't (an older one), and,
+// with no gateway running, as one started here would read Settings
+// (T-246).
+func TestGatewayUsersTierSharesByProvider(t *testing.T) {
+	sandboxHome(t)
+	if err := provider.Save(provider.Provider{ID: "relay", Name: "Relay", Chat: "http://127.0.0.1:1/v1", Key: "sk-1"}); err != nil {
+		t.Fatal(err)
+	}
+	tiers := &gateway.Tiers{Default: "free", Tiers: []gateway.Tier{{Name: "free", MaxAccounts: 2, Share: 2}, {Name: "plus", MaxAccounts: 3, Share: 1}}}
+	says := map[string]any{"name": "magpie", "version": "test", "bind": "user", "tiers": tiers,
+		"provider_shares": map[string]map[string]int{"relay": {"free": 10}, "gone": {"plus": 2}}, "one_tier": true}
+	servingAt(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			writeJSON(w, says)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	_, out := gatewayUsers(t, "")
+	want := []providerSharesJSON{{"relay", "Relay", map[string]int{"free": 10}}, {"gone", "gone", map[string]int{"plus": 2}}}
+	if !out.OneTier || out.SharesUnknown || fmt.Sprint(out.ProviderShares) != fmt.Sprint(want) {
+		t.Fatalf("as the serving magpie says: %+v", out)
+	}
+	says["provider_shares_unknown"] = true
+	delete(says, "provider_shares")
+	if _, out := gatewayUsers(t, ""); !out.SharesUnknown || out.ProviderShares != nil {
+		t.Fatalf("unknown: %+v", out)
+	}
+	// an older magpie says none of it
+	delete(says, "provider_shares_unknown")
+	delete(says, "one_tier")
+	if _, out := gatewayUsers(t, ""); out.OneTier || out.SharesUnknown || out.ProviderShares != nil || out.Tiers == nil {
+		t.Fatalf("an older magpie: %+v", out)
+	}
+	// bound by session it says them, the page doesn't
+	says["bind"], says["provider_shares"], says["one_tier"] = "session", map[string]map[string]int{"relay": {"free": 10}}, true
+	if _, out := gatewayUsers(t, ""); out.OneTier || out.ProviderShares != nil {
+		t.Fatalf("by session: %+v", out)
+	}
+
+	// no gateway running, bound by user: Settings' own, as one started here reads them
+	noGateway(t)
+	t.Setenv(gateway.BindEnv, "user")
+	s := settings.Load()
+	s.ProviderShares = map[string]map[string]int{"relay": {"PLUS": 0, "nope": 3}}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	_, out = gatewayUsers(t, "")
+	want = []providerSharesJSON{{"relay", "Relay", map[string]int{"plus": 0}}}
+	if !out.OneTier || out.SharesUnknown || fmt.Sprint(out.ProviderShares) != fmt.Sprint(want) {
+		t.Fatalf("no gateway, by user: %+v", out)
+	}
+	t.Setenv(gateway.BindEnv, "")
+	if _, out := gatewayUsers(t, ""); out.OneTier || out.ProviderShares != nil {
+		t.Fatalf("no gateway, by session: %+v", out)
 	}
 }

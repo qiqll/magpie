@@ -49,7 +49,7 @@ async function loadUserBinds() {
   userShownFor = q;
   if (out?.accounts) {
     userAccounts = out.accounts;
-    userBindMode = { mode: out.mode || "", tiers: out.tiers || null, idleHours: out.idleHours || 0 };
+    userBindMode = { mode: out.mode || "", tiers: out.tiers || null, idleHours: out.idleHours || 0, providerShares: out.providerShares || [], sharesUnknown: !!out.sharesUnknown, oneTier: !!out.oneTier };
   }
   renderUserBinds();
 }
@@ -164,7 +164,18 @@ function userModeSays(m) {
     };
     const each = tiers.map((x) => t(x.name === m.tiers.default ? "{tier} up to {n}, {share} (default)" : "{tier} up to {n}, {share}", { tier: named(x), n: x.max_accounts, share: userShareSays(x) }));
     says = t("Bound by user: accounts of each provider each user may have, by its tier: {tiers}.", { tiers: each.join(" · ") });
+    // a provider with shares of its own (Settings › Growth policy,
+    // T-243): each tier it names, in the tiers' order, in place of the
+    // file's share there
+    for (const p of m.providerShares || []) {
+      const own = tiers.filter((x) => Object.hasOwn(p.shares || {}, x.name)).map((x) => t("{label}: {value}", { label: x.name, value: userShareSays({ share: p.shares[x.name] }) }));
+      if (own.length) says += " " + t("{provider}, from Settings › Growth policy: {tiers}.", { provider: p.providerName || p.provider, tiers: own.join(" · ") });
+    }
+    if (m.sharesUnknown) says += " " + t("Settings' users per account by provider can't be read, so a provider may hold to other shares than these.");
   }
+  // an account is shared by users of one tier alone (T-243); a magpie
+  // before that doesn't say
+  if (m.oneTier) says += " " + t("An account is shared only by users of one tier.");
   if (m.idleHours > 0) {
     const days = m.idleHours / 24;
     says += " " + (Number.isInteger(days)

@@ -2885,8 +2885,19 @@ and with none read before, a user not bound yet is a 503 (users already
 bound are served). For example, with the
 built-in tiers, codex free 10 and plus, pro and max 2 lets ten free
 users share a Codex account and two plus users another, while Claude's
-accounts keep plus, pro and max alone and free two to one. The Gateway
-page's tiers still show the file's shares.
+accounts keep plus, pro and max alone and free two to one.
+
+The Gateway page's User bindings says the file's tiers, then each
+provider with shares of its own, "from Settings › Growth policy", with
+each tier it names and its share there, that Settings' shares can't be
+read when settings.json doesn't read, and that an account is shared only
+by users of one tier (T-246). The gateway's `/`, asked from this
+computer and bound by user, says them beside `tiers`: `provider_shares`
+(provider id → the tier's name in user-tiers.json → share, a provider
+naming none of the file's tiers left out; absent with none),
+`provider_shares_unknown` (true when settings.json doesn't read and
+none were read before) and `one_tier` (true). A magpie before them says
+none, and the page then says neither.
 
 `by_use` (left out: off) binds a shared account by what its users use
 too, for a tier with `share` 2 or more:

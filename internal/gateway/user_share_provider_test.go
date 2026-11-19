@@ -1,8 +1,12 @@
 package gateway
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -310,5 +314,70 @@ func TestTierSharesUnread(t *testing.T) {
 	asked(true)
 	if _, b := seatsIn(t, "codex")["carol"]; b {
 		t.Fatal("carol bound")
+	}
+}
+
+// The gateway's / tells this computer, bound by user, each provider's own
+// shares by tier as Settings gives them, by the tiers' own names (an
+// alias or another case its tier's, a tier named twice the fewer users),
+// a provider naming none of the tiers left out; that they can't be read
+// when settings.json doesn't read, never none; and that an account takes
+// users of one tier (T-246). With none of its own, the tiers alone, as
+// before; by session, none of it.
+func TestInfoSaysTierSharesByProvider(t *testing.T) {
+	codexSignedIn(t)
+	info := func(s *Server) map[string]json.RawMessage {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = "127.0.0.1:50000"
+		s.Handler().ServeHTTP(rec, req)
+		var out map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		}
+		return out
+	}
+	writeTiers(t, noShareTiers)
+	providerShares(t, nil)
+	out := info(byUser(New()))
+	if out["tiers"] == nil || out["provider_shares"] != nil || out["provider_shares_unknown"] != nil || string(out["one_tier"]) != "true" {
+		t.Fatalf("none of their own: %s", mustJSON(out))
+	}
+	providerShares(t, map[string]map[string]int{
+		"codex":  {"FREE": 10, "1": 3, "plus": 0, "nope": 2},
+		"claude": {"nope": 1},
+		"kimi":   {"plus": 1},
+	})
+	out = info(byUser(New()))
+	var shares map[string]map[string]int
+	if err := json.Unmarshal(out["provider_shares"], &shares); err != nil || len(shares) != 2 || !maps.Equal(shares["codex"], map[string]int{"free": 3, "plus": 0}) || !maps.Equal(shares["kimi"], map[string]int{"plus": 1}) {
+		t.Fatalf("their own: %s", mustJSON(out))
+	}
+	// the shares never read and settings.json not reading: unknown
+	was := allProviderShares
+	allProviderShares = func() (map[string]map[string]int, error) { return nil, errors.New("could not read settings") }
+	t.Cleanup(func() { allProviderShares = was })
+	out = info(byUser(New()))
+	if string(out["provider_shares_unknown"]) != "true" || out["provider_shares"] != nil || out["tiers"] == nil {
+		t.Fatalf("unread: %s", mustJSON(out))
+	}
+	allProviderShares = was
+	if out := info(New()); out["provider_shares"] != nil || out["provider_shares_unknown"] != nil || out["one_tier"] != nil {
+		t.Fatalf("by session: %s", mustJSON(out))
+	}
+}
+
+// ServedBy reads what the serving magpie says of its shares by provider
+// and one tier to an account, for another magpie's Gateway page (T-246).
+func TestServedByTellsTierSharesByProvider(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"name":"magpie","version":"t","bind":"user","tiers":{"default":"free","tiers":[{"name":"free","max_accounts":2,"share":2}]},"provider_shares":{"codex":{"free":10}},"provider_shares_unknown":true,"one_tier":true}`))
+	}))
+	defer srv.Close()
+	t.Setenv("MAGPIE_ADDR", strings.TrimPrefix(srv.URL, "http://"))
+	o := ServedBy()
+	if !o.Running || o.Tiers == nil || o.ProviderShares["codex"]["free"] != 10 || !o.SharesUnknown || !o.OneTier {
+		t.Fatalf("%+v", o)
 	}
 }

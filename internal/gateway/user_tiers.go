@@ -207,16 +207,80 @@ var providerSharesOf = func(pid string) (map[string]int, error) {
 
 // sharesFrom is providerSharesOf of settings read as s, or err.
 func sharesFrom(s settings.Settings, err error, pid string) (map[string]int, error) {
+	all, err := allSharesFrom(s, err)
+	if err != nil {
+		return nil, err
+	}
+	return all[pid], nil
+}
+
+// allSharesFrom is every provider's shares (settings.ProviderShares) of
+// settings read as s, or err: the shares read before when it doesn't
+// read, the error with none read before. Not to be written.
+func allSharesFrom(s settings.Settings, err error) (map[string]map[string]int, error) {
 	sharesRead.Lock()
 	defer sharesRead.Unlock()
 	if err != nil {
 		if !sharesRead.ok {
 			return nil, err
 		}
-		return sharesRead.m[pid], nil
+		return sharesRead.m, nil
 	}
 	sharesRead.m, sharesRead.ok = s.ProviderShares, true
-	return s.ProviderShares[pid], nil
+	return s.ProviderShares, nil
+}
+
+// allProviderShares is every provider's shares as Settings gives them,
+// read as providerSharesOf reads them. A test's to set.
+var allProviderShares = func() (map[string]map[string]int, error) {
+	s, err := settings.SharedChecked()
+	return allSharesFrom(s, err)
+}
+
+// ownShares is the tiers own names (a provider's own shares, Settings'),
+// each by its name in t, with the share forProvider gives it for that
+// provider: a tier named twice the share it takes, a name of no tier or
+// a share below 0 left out. nil when own names none of t's tiers.
+func (t Tiers) ownShares(own map[string]int) map[string]int {
+	held := t.forProvider(own)
+	var out map[string]int
+	for name, share := range own {
+		x, ok := t.find(name)
+		if !ok || share < 0 {
+			continue
+		}
+		if y, ok := held.find(x.Name); ok {
+			if out == nil {
+				out = map[string]int{}
+			}
+			out[x.Name] = y.Share
+		}
+	}
+	return out
+}
+
+// TierShares is how many users an account of each provider with shares
+// of its own in Settings (settings.ProviderShares, T-243) may be bound
+// to, by the tiers of t that it names, each in place of t's share for
+// that provider: provider id → tier name → share (1 alone, 0 any
+// number). A provider whose shares name none of t's tiers is left out;
+// nil for none. An error when settings.json doesn't read and was never
+// read in this process: unknown, never "none".
+func TierShares(t Tiers) (map[string]map[string]int, error) {
+	all, err := allProviderShares()
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]map[string]int
+	for pid, own := range all {
+		if m := t.ownShares(own); m != nil {
+			if out == nil {
+				out = map[string]map[string]int{}
+			}
+			out[pid] = m
+		}
+	}
+	return out, nil
 }
 
 // sharesRead is settings.ProviderShares as last read whole.

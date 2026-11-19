@@ -445,6 +445,15 @@ func gatewayUserRoutes(mux *http.ServeMux) {
 			if bind.idleHours > 0 {
 				out["idleHours"] = bind.idleHours
 			}
+			if bind.oneTier {
+				out["oneTier"] = true
+			}
+			if bind.sharesUnknown {
+				out["sharesUnknown"] = true
+			}
+			if len(bind.shares) > 0 {
+				out["providerShares"] = providerSharesShown(bind.shares, nameOf)
+			}
 			accounts := userAccounts(merged, byID, seats, bind.rests, nameOf, providerGone, keyNames, keyGone)
 			for i := range accounts {
 				if d := today.seats[accounts[i].Seat]; d != nil {
@@ -605,6 +614,49 @@ type gatewayBinding struct {
 	// accounts are let go; 0 when the magpie serving doesn't say (an
 	// older one, which lets nobody go)
 	idleHours int
+	// shares: bound by user, each provider's own shares by tier in place
+	// of tiers' (Settings', gateway.TierShares, T-243); nil for none or
+	// not known. sharesUnknown: they can't be read.
+	shares        map[string]map[string]int
+	sharesUnknown bool
+	// oneTier: bound by user, an account is shared by users of one tier
+	// alone; false when the magpie serving doesn't say (an older one)
+	oneTier bool
+}
+
+// providerSharesJSON is one provider's own shares by tier, as the
+// Gateway page says them: tier name → share (1 alone, 0 any number).
+type providerSharesJSON struct {
+	Provider     string         `json:"provider"`
+	ProviderName string         `json:"providerName"`
+	Shares       map[string]int `json:"shares"`
+}
+
+// providerSharesShown is shares in the order of their providers' names.
+func providerSharesShown(shares map[string]map[string]int, nameOf func(string) providerShown) []providerSharesJSON {
+	out := make([]providerSharesJSON, 0, len(shares))
+	for id, m := range shares {
+		out = append(out, providerSharesJSON{id, nameOf(id).name, m})
+	}
+	slices.SortFunc(out, func(a, b providerSharesJSON) int {
+		return cmp.Or(strings.Compare(a.ProviderName, b.ProviderName), strings.Compare(a.Provider, b.Provider))
+	})
+	return out
+}
+
+// ownBinding is the gatewayBinding of b as this process reads it, rests
+// as given: by user, its tiers, each provider's own shares by tier, one
+// tier to an account and its idle hours.
+func ownBinding(b gateway.Binding, rests map[string]gateway.Rest) gatewayBinding {
+	g := gatewayBinding{mode: b.Mode, tiers: tiersOf(b), rests: rests, idleHours: idleOf(b.Mode), oneTier: b.Mode == gateway.BindUser}
+	if g.tiers != nil {
+		if shares, err := gateway.TierShares(*g.tiers); err != nil {
+			g.sharesUnknown = true
+		} else {
+			g.shares = shares
+		}
+	}
+	return g
 }
 
 // tiersOf is the tiers user-tiers.json holds as this process reads it,
@@ -637,7 +689,7 @@ func idleOf(mode string) int {
 func servingBinding() gatewayBinding {
 	if gw := served.Load(); gw != nil {
 		b := gw.Binding()
-		return gatewayBinding{b.Mode, tiersOf(b), gateway.Rests(), idleOf(b.Mode)}
+		return ownBinding(b, gateway.Rests())
 	}
 	if o := gateway.ServedBy(); o.Running {
 		rests, _ := gateway.OwnerRests()
@@ -645,11 +697,15 @@ func servingBinding() gatewayBinding {
 		if o.Bind == gateway.BindUser {
 			idle = o.IdleHours
 		}
-		return gatewayBinding{o.Bind, o.Tiers, rests, idle}
+		g := gatewayBinding{mode: o.Bind, tiers: o.Tiers, rests: rests, idleHours: idle}
+		if o.Bind == gateway.BindUser {
+			g.shares, g.sharesUnknown, g.oneTier = o.ProviderShares, o.SharesUnknown, o.OneTier
+		}
+		return g
 	}
 	if gateway.Taken() {
 		return gatewayBinding{}
 	}
 	b, _ := gateway.BindingFromEnv()
-	return gatewayBinding{b.Mode, tiersOf(b), map[string]gateway.Rest{}, idleOf(b.Mode)}
+	return ownBinding(b, map[string]gateway.Rest{})
 }
