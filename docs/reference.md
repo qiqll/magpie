@@ -2893,7 +2893,8 @@ each tier it names and its share there, that Settings' shares can't be
 read when settings.json doesn't read, and that an account is shared only
 by users of one tier (T-246). The gateway's `/`, asked from this
 computer and bound by user, says them beside `tiers`: `provider_shares`
-(provider id → the tier's name in user-tiers.json → share, a provider
+(provider id → the tier's name in user-tiers.json → share, an alias
+or another case in Settings said as its tier's name, a provider
 naming none of the file's tiers left out; absent with none),
 `provider_shares_unknown` (true when settings.json doesn't read and
 none were read before) and `one_tier` (true). A magpie before them says

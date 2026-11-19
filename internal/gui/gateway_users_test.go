@@ -631,4 +631,14 @@ func TestGatewayUsersTierSharesByProvider(t *testing.T) {
 	if _, out := gatewayUsers(t, ""); out.OneTier || out.ProviderShares != nil {
 		t.Fatalf("no gateway, by session: %+v", out)
 	}
+
+	// a real gateway bound by user serving: the page reads what its /
+	// says, under the names it says them (review L2)
+	t.Setenv(gateway.BindEnv, "user")
+	gw := gateway.New()
+	t.Setenv(gateway.BindEnv, "")
+	servingAt(t, gw.Handler().ServeHTTP)
+	if _, out := gatewayUsers(t, ""); out.Mode == nil || *out.Mode != "user" || !out.OneTier || out.SharesUnknown || fmt.Sprint(out.ProviderShares) != fmt.Sprint(want) {
+		t.Fatalf("a real gateway serving: %+v", out)
+	}
 }
