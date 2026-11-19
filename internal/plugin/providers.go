@@ -1015,14 +1015,20 @@ func authorize(ctx context.Context, provider string, method int, inputs map[stri
 	var r struct {
 		OK    bool   `json:"ok"`
 		Error string `json:"error"`
+		Area  bool   `json:"area"`
 		Authorization
 	}
 	params := map[string]any{"provider": provider, "method": method, "inputs": inputs, "account": account, "proxy": proxyOf(ctx)}
 	if fresh {
 		params["fresh"] = true
+	} else {
+		keepAreas(params)
 	}
 	if err := Call(ctx, "authorize", params, &r); err != nil {
 		return Authorization{}, err
+	}
+	if r.Area {
+		return Authorization{}, ErrAreaOwned
 	}
 	if !r.OK {
 		return Authorization{}, failure(r.Error)
@@ -1060,12 +1066,41 @@ var ErrKnown = errors.New("this account is in magpie already")
 // was saved.
 var ErrUnnamed = errors.New("the plugin didn't say which account this is")
 
+// ErrAreaOwned is the owner's sign-in (not to a new account only) to an
+// account an area owns (T-228): the area's record stays as it was, and
+// what the sign-in saved is signed out again.
+var ErrAreaOwned = errors.New("an area owns this account in magpie, so it stays the area's")
+
+// AreaOwned is the plugin-auth.json keys of the accounts an area owns,
+// ok false when that can't be told (areas.json unread). internal/provider
+// sets it. The owner's sign-in never lands on one: the host's settle
+// doesn't fold it into one (it would take the area's tokens), the plugin's
+// own writes while it signs in leave them alone, and a plugin that keeps
+// one account (single) whose one is an area's is refused at the start.
+var AreaOwned func() (keys []string, ok bool)
+
+// keepAreas adds AreaOwned to a sign-in step's params, as "keep": the
+// keys, or true for every account when they can't be told.
+func keepAreas(params map[string]any) {
+	if AreaOwned == nil {
+		return
+	}
+	keys, ok := AreaOwned()
+	switch {
+	case !ok:
+		params["keep"] = true
+	case len(keys) > 0:
+		params["keep"] = keys
+	}
+}
+
 // signedIn is a sign-in step's answer: where it was saved, or why not.
 type signedIn struct {
 	OK      bool   `json:"ok"`
 	Error   string `json:"error"`
 	Known   bool   `json:"known"`
 	Unnamed bool   `json:"unnamed"`
+	Area    bool   `json:"area"`
 	Saved
 }
 
@@ -1077,6 +1112,8 @@ func (r signedIn) result() (Saved, error) {
 		return Saved{}, ErrKnown
 	case r.Unnamed:
 		return Saved{}, ErrUnnamed
+	case r.Area:
+		return Saved{}, ErrAreaOwned
 	}
 	return Saved{}, failure(r.Error)
 }
@@ -1102,6 +1139,10 @@ func Finish(ctx context.Context, session, code string) (Saved, error) {
 func FinishThrough(ctx context.Context, session, code string, proxy *string) (Saved, error) {
 	var r signedIn
 	params := map[string]any{"session": session, "code": code}
+	// read as Finish is called (a code's as it is traded), so an area's
+	// claim since Authorize counts; one made while an "auto" sign-in waits
+	// doesn't
+	keepAreas(params)
 	if proxy != nil {
 		params["proxy"] = forHost(*proxy)
 	}
@@ -1129,6 +1170,8 @@ func apiKey(ctx context.Context, provider string, method int, inputs map[string]
 	params := map[string]any{"provider": provider, "method": method, "inputs": inputs, "key": key, "account": account, "proxy": proxyOf(ctx)}
 	if fresh {
 		params["fresh"] = true
+	} else {
+		keepAreas(params)
 	}
 	if err := Call(ctx, "apiKey", params, &r); err != nil {
 		return Saved{}, err

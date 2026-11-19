@@ -235,7 +235,7 @@ func (s *signInFlow) pastedPluginKey(raw string) error {
 	} else {
 		saved, err = plugin.APIKey(ctx, s.pluginKey.id, s.pluginKey.method, nil, key, plugin.NewAccount)
 	}
-	known := errors.Is(err, plugin.ErrKnown) || errors.Is(err, plugin.ErrUnnamed)
+	known := errors.Is(err, plugin.ErrKnown) || errors.Is(err, plugin.ErrUnnamed) || errors.Is(err, plugin.ErrAreaOwned)
 	if err != nil && !known {
 		s.mu.Lock()
 		s.claimed = false // the browser's own may still come, or a right key

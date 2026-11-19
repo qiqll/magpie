@@ -903,13 +903,14 @@ changes (a display name, a fingerprint of this sign-in's token, a name
 the user types) gets a second record of an account magpie has. Those
 methods need a plugin change. A name that falls back to a constant
 (`"Zed account"`) is safe: a second such account reads as known and
-fails. The other way round it is not safe: the owner's later sign-in to
-another account that falls back to the same constant is folded into the
-area's account by `settle`, the owner's path, which knows nothing of
-areas. A name the plugin takes from what the user typed (Gumloop's
-email, Agnes Code's username) is unsafe the same way. Both are marked
-plugin below: the plugin should fail rather than fall back, or look the
-account up.
+fails. The other way round the owner's later sign-in to another account
+that falls back to the same constant reads as the area's account: since
+T-228 it fails (`ErrAreaOwned`, [The owner's side](#the-owners-side-t-228))
+rather than being folded into it by `settle`, but the owner can't sign
+in to that other account either. A name the plugin takes from what the
+user typed (Gumloop's email, Agnes Code's username) is unsafe the same
+way. Both are marked plugin below: the plugin should fail rather than
+fall back, or look the account up.
 
 **Legend:**
 - **yes**: safe through `AuthorizeNew`/`APIKeyNew` now. A name the
@@ -1067,11 +1068,54 @@ The way column follows §11.1:
   - `ErrTaken` can't follow a fresh save: an account an area owns is in
     plugin-auth.json, so it was known, and its key was reserved while it
     signed in.
-- **The owner's side** (not built, T-228). The owner's sign-in still
-  folds into any account of the same name (`settle`), an area's included.
-  With names from the plugin alone and constants refused, that is a
-  sign-in to the area's own account; the owner's `pluginDone` should
-  still refuse (sign out again) a save that lands on a key an area owns.
+- **The owner's side** is built as
+  [The owner's side](#the-owners-side-t-228) (T-228).
+
+### The owner's side (T-228)
+
+The owner's sign-in (`plugin.Authorize`, `plugin.APIKey`, not to a new
+account only) folds into any account of the same name (`settle`). Before
+T-228 an area's account was included: the area's tokens were replaced by
+the owner's, and the owner's sign-in was the area's admin's from then on.
+
+- `plugin.AreaOwned` (set by `internal/provider/plugin_area_keep.go`,
+  `areaPluginKeys`) is the plugin-auth.json keys of the accounts an area
+  owns, found as the area's claim was made:
+  `<PluginID>/<LoginID of the name pluginNames gives>`. When areas.json
+  can't be read (`area.ErrUnreadable`), every account is kept.
+- `authorize`, `apiKey` and `callback` pass it to the host as `keep`;
+  the area's own sign-ins (`fresh`) ignore it, since `saveNew` never
+  folds.
+- host.js `settle` with `keep`: when any account the sign-in is the same
+  as (`sameAccount`) is kept, what was just saved at the sign-in's key
+  is deleted again in the same `changeAuth`, and the answer is
+  `{ ok: false, area: true }`, `plugin.ErrAreaOwned` in Go. The area's
+  record is never written.
+- A `single` plugin's sign-in goes to its one account's key: when that
+  key is kept, `authorize` and `apiKey` answer the same before any step
+  runs, and `save` checks it again.
+- The plugin's own `client.auth.set` and `auth.remove` while the owner
+  signs in leave a kept key alone (the CodeArts plugin writes its
+  account's record by its id).
+- `pluginDone` finishes such a sign-in as `failed` with
+  `ErrAreaOwned`'s words (the owner's window shows a failure's reason;
+  it has no conflict view), logged as `conflict`. `PluginAPIKey` returns
+  the error, logged as `conflict`; the paste-key path ends the sign-in
+  with it, as it does a known account.
+
+Not covered:
+
+- `keep` is read when `plugin.Finish` is called. A browser sign-in that
+  finishes by itself ("auto") calls it as it begins, so an area's claim
+  made while it waits is not seen. Such a claim is the area's own sign-in
+  to the same vendor account in those minutes.
+- `import` (a mover's or Factory's key carried onto the plugin) still
+  settles without `keep`.
+
+Tests: `TestSignInOwner*` in `internal/plugin/plugin_area_owned_test.go`
+and `TestSignInOwnerOfAnAreasPluginAccountFails` in
+`internal/provider/plugin_area_keep_test.go`; each is red with `kept`
+answering false or the hook unset.
 
 
 ## Verification
@@ -1084,6 +1128,7 @@ The way column follows §11.1:
 `go test ./internal/provider -run TestAreaSweepBesideARereadMove`;
 `go test ./internal/gateway -run 'TestAdmin(SignInThroughAreaProxy|SignInCallbackPicksAreaProxy|DeviceSignInProxyFixed|KeyAndTokenTakeAreaProxy|SignInHoldsItsProxyPublic|SignInRefusedPasteKeepsItsPick)'`;
 `go test ./internal/plugin -run 'TestSignInNew|TestAPIKeyNew'`;
+`go test ./internal/plugin ./internal/provider -run TestSignInOwner`;
 `go test ./internal/gateway -run TestAdminPlugin`;
 `node --test internal/gui/tests/proxy-ips-batch-lines.test.cjs`;
 `go test ./internal/gui -run TestIPAreaRoute`; `go test ./internal/gui -run

@@ -242,6 +242,13 @@ func (s *signInFlow) pluginDone(saved plugin.Saved, err error) {
 		s.finish(SignInState{State: "canceled"})
 	case errors.Is(err, context.DeadlineExceeded):
 		s.finish(SignInState{State: "failed", Error: "the sign-in timed out; start it again"})
+	case errors.Is(err, plugin.ErrAreaOwned):
+		// the owner's, to an account an area owns (T-228): the area's
+		// stays as it was, and what was saved of it was signed out again.
+		// A failure with why, as the window and command line show one.
+		st := s.status()
+		logSignIn(SignInState{ID: st.ID, Agent: st.Agent}, "conflict", 0, "")
+		s.finish(SignInState{State: "failed", Error: plugin.ErrAreaOwned.Error()})
 	case errors.Is(err, plugin.ErrKnown):
 		// an area's, to an account magpie has: that one stays as it was
 		st := s.status()
@@ -367,6 +374,11 @@ func PluginAPIKey(ctx context.Context, id string, method int, inputs map[string]
 	}
 	// through the proxy the provider's requests go through (#1663)
 	saved, err := plugin.APIKey(Via(ctx, PluginID(id)), id, method, inputs, strings.TrimSpace(key), plugin.NewAccount)
+	if errors.Is(err, plugin.ErrAreaOwned) {
+		// an area owns the account the key is (T-228): it stays the area's
+		logSignIn(at, "conflict", 0, "")
+		return "", err
+	}
 	if err != nil {
 		logSignIn(at, "failed", httpStatusOf(err), keyFailure(err, key, inputs))
 		return "", err
