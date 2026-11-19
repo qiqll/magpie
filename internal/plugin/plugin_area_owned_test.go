@@ -154,7 +154,7 @@ func TestSignInOwnerGuardEndsWithTheSignIn(t *testing.T) {
 // The owner's imported key (Factory's, ImportOwner) of the same account
 // as one an area owns is ErrAreaOwned, the area's record as it was;
 // Import, a mover's, is as it was.
-func TestImportOwnerLeavesAnAreasAccount(t *testing.T) {
+func TestSignInOwnerImportLeavesAnAreasAccount(t *testing.T) {
 	ctx, saved := newSignInSandbox(t)
 	area, err := Import(ctx, "fakeco", map[string]any{"type": "api", "key": "fk-area", "metadata": map[string]any{"email": "e@fake"}})
 	if err != nil {

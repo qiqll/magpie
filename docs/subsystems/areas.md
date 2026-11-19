@@ -1125,10 +1125,10 @@ Not covered:
   record, so it can only be as right as those names; a mark written
   by `saveNew` and read in `settle`'s lock would not depend on them.
 
-Tests: `TestSignInOwner*` and `TestImportOwnerLeavesAnAreasAccount` in
+Tests: `TestSignInOwner*` and `TestSignInOwnerImportLeavesAnAreasAccount` in
 `internal/plugin/plugin_area_owned_test.go`,
 `TestSignInOwnerOfAnAreasPluginAccountFails` and
-`TestAreaPluginKeysUnmappedKeepsThePlugin` in
+`TestSignInOwnerUnmappedAreaRefKeepsThePlugin` in
 `internal/provider/plugin_area_keep_test.go`; each is red with its
 check taken out (`kept` false, the hook unset, the guard never off,
 `import` without keep, an unmapped ref not widened).
@@ -1144,7 +1144,7 @@ check taken out (`kept` false, the hook unset, the guard never off,
 `go test ./internal/provider -run TestAreaSweepBesideARereadMove`;
 `go test ./internal/gateway -run 'TestAdmin(SignInThroughAreaProxy|SignInCallbackPicksAreaProxy|DeviceSignInProxyFixed|KeyAndTokenTakeAreaProxy|SignInHoldsItsProxyPublic|SignInRefusedPasteKeepsItsPick)'`;
 `go test ./internal/plugin -run 'TestSignInNew|TestAPIKeyNew'`;
-`go test ./internal/plugin ./internal/provider -run 'TestSignInOwner|TestImportOwner|TestAreaPluginKeys'`;
+`go test ./internal/plugin ./internal/provider -run TestSignInOwner`;
 `go test ./internal/gateway -run TestAdminPlugin`;
 `node --test internal/gui/tests/proxy-ips-batch-lines.test.cjs`;
 `go test ./internal/gui -run TestIPAreaRoute`; `go test ./internal/gui -run

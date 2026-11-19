@@ -97,7 +97,7 @@ func TestSignInOwnerOfAnAreasPluginAccountFails(t *testing.T) {
 // An area's ref of a plugin's that no account's name gives now (its
 // name changed by a duplicate's " (slot)") keeps every account of that
 // plugin, never none; with no plugins read, every account is kept.
-func TestAreaPluginKeysUnmappedKeepsThePlugin(t *testing.T) {
+func TestSignInOwnerUnmappedAreaRefKeepsThePlugin(t *testing.T) {
 	t.Setenv("MAGPIE_BUN", testenv.Bun(t))
 	claudeHome(t)
 	t.Cleanup(plugin.Settle)
