@@ -5025,6 +5025,10 @@ const I18N = {
     "Copy Report": "复制报告",
     "This report is no longer kept: magpie keeps the last 5.": "这份报告已经不在了：magpie 只保留最近 5 份。",
     "Growth policy": "成长策略",
+    "No host and port found in it": "没找到主机和端口",
+    "The same proxy as a line above": "与上面某行是同一个代理",
+    "Too many parts: write it as username:password@host:port": "段数太多：请写成 账号:密码@主机:端口",
+    "Read either way: write it as username:password@host:port": "两种读法都成立：请写成 账号:密码@主机:端口",
   },
   "zh-TW": {
     "magpie couldn't read its areas": "magpie 無法讀取區域",
@@ -10033,6 +10037,10 @@ const I18N = {
     "Copy Report": "複製報告",
     "This report is no longer kept: magpie keeps the last 5.": "這份報告已經不在了：magpie 只保留最近 5 份。",
     "Growth policy": "成長策略",
+    "No host and port found in it": "沒找到主機和連接埠",
+    "The same proxy as a line above": "與上面某行是同一個代理",
+    "Too many parts: write it as username:password@host:port": "段數太多：請寫成 帳號:密碼@主機:連接埠",
+    "Read either way: write it as username:password@host:port": "兩種讀法都成立：請寫成 帳號:密碼@主機:連接埠",
   },
   ja: {
     "magpie couldn't read its areas": "magpie はエリアを読み込めませんでした",
@@ -15043,6 +15051,10 @@ const I18N = {
     "Copy Report": "レポートをコピー",
     "This report is no longer kept: magpie keeps the last 5.": "このレポートはもう残っていません。magpie は最新の 5 件だけを保存します。",
     "Growth policy": "成長ポリシー",
+    "No host and port found in it": "ホストとポートが見つかりません",
+    "The same proxy as a line above": "上の行と同じプロキシです",
+    "Too many parts: write it as username:password@host:port": "区切りが多すぎます：ユーザー名:パスワード@ホスト:ポート の形で書いてください",
+    "Read either way: write it as username:password@host:port": "どちらの形にも読めます：ユーザー名:パスワード@ホスト:ポート の形で書いてください",
   },
   de: {
     "magpie couldn't read its areas": "magpie konnte seine Bereiche nicht lesen",
@@ -20053,6 +20065,10 @@ const I18N = {
     "Copy Report": "Bericht kopieren",
     "This report is no longer kept: magpie keeps the last 5.": "Dieser Bericht ist nicht mehr da: magpie behält nur die letzten 5.",
     "Growth policy": "Wachstumsregel",
+    "No host and port found in it": "Kein Host und Port darin gefunden",
+    "The same proxy as a line above": "Derselbe Proxy wie in einer Zeile darüber",
+    "Too many parts: write it as username:password@host:port": "Zu viele Teile: als Benutzername:Passwort@Host:Port schreiben",
+    "Read either way: write it as username:password@host:port": "Auf beide Arten lesbar: als Benutzername:Passwort@Host:Port schreiben",
   },
 };
 
