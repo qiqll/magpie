@@ -710,16 +710,20 @@ taken: an area pastes it to `signin/{id}/callback`.
   conflicts than the line lets through. Each conflict counts
   (`countConflict`).
 - **Failures have a line too** (T-233, `importFailed`, admin_probe.go).
-  Each account asks its vendor, through the owner's exit when no proxy is
-  picked, and a failure counts against no conflict line, so each admitted
-  account that fails (a vendor's refusal, a token run out, a plugin's key
-  refused) counts to the area's 20 in 10 minutes, and the console's to its
-  40 across areas too (`budgets`, as T-222's conflicts). Past the line the
-  import's rest, and every next import's, fail with "too many accounts
-  failed; try again later" before their vendor is asked, until the window
-  lets go of its oldest; admission waits near it as it does for
-  conflicts. Other add routes aren't held by it. Reaching it is logged
-  with the count alone.
+  Most accounts ask their vendor, through the owner's exit when no proxy
+  is picked, and a failure counts against no conflict line, so each
+  admitted account that fails counts to the area's 20 in 10 minutes, and
+  the console's to its 40 across areas too (`budgets`, as T-222's
+  conflicts). That is a vendor's refusal, a plugin's key refused, and
+  also a failure found before any vendor is asked (a Claude token run
+  out by its `expiresAt`, a save that fails): gateway can't tell them
+  apart. Past the line the import's rest, and every next import's, fail
+  with "too many accounts failed; try again later" before their vendor
+  is asked, until the window lets go of its oldest; admission waits near
+  it as it does for conflicts. The import route still answers `200` with
+  those rows (no `429` at the door), and other add routes
+  (`accounts/key`, `signin/claude-token`) aren't held by it. Reaching it
+  is logged with the count alone.
 - **Log:** `admin: area <id> (<note>) imported <agent>: added N,
   conflict N, failed N`, no name or token.
 

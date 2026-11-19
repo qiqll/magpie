@@ -235,9 +235,10 @@ func TestAdminImportCodexLimits(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&in)
 		mu.Lock()
 		asked++
+		n := asked
 		mu.Unlock()
 		who := strings.TrimPrefix(in["refresh_token"], "r-")
-		json.NewEncoder(w).Encode(map[string]any{"id_token": importIDToken(who), "access_token": "a-" + who, "refresh_token": "n-" + who + strconv.Itoa(asked)})
+		json.NewEncoder(w).Encode(map[string]any{"id_token": importIDToken(who), "access_token": "a-" + who, "refresh_token": "n-" + who + strconv.Itoa(n)})
 	}))
 	t.Cleanup(srv.Close)
 	t.Cleanup(provider.CodexTokenURLForTest(srv.URL))
@@ -488,6 +489,8 @@ func TestAdminImportFailLinePluginKeys(t *testing.T) {
 	t.Cleanup(func() {
 		if was == nil {
 			delete(keyImports, "fakeco")
+		} else {
+			keyImports["fakeco"] = was
 		}
 	})
 	var keys []string
