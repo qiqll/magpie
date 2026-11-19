@@ -74,6 +74,10 @@ GitHub 从 2021 年起不再接受账号密码，填登录密码会报
 `Password authentication is not supported for Git operations`。Password 一栏
 要填 token，或者改用下面任一种方式。三选一：
 
+- A 谁都能用，只要这个 GitHub 账号能看到仓库（owner 或被邀请的协作者）。
+- B 和 C 由仓库 owner（qiqll）在 GitHub 上操作：fine-grained token 只能选
+  token 主人名下的仓库，deploy key 只有仓库管理员能加。协作者选 A。
+
 ### 方式 A：gh 登录（最省事）
 
 ```sh
@@ -81,7 +85,10 @@ gh auth login            # GitHub.com → HTTPS → 让 gh 配置 git 凭据 →
 gh repo clone qiqll/magpie-console
 ```
 
-`gh auth login` 用的是你自己的账号，权限比只读宽；服务器是多人共用的就选 B 或 C。
+`gh auth login` 用的是你自己的账号，权限比只读宽：服务器上通常没有 keyring，
+gh 的 token 明文存在 `~/.config/gh/hosts.yml`，能读写你所有的仓库。服务器是
+多人共用的就选 B 或 C；clone 完不再需要时 `gh auth logout`（之后 `git pull`
+也要重新登录）。
 服务器没装 gh 时见 <https://github.com/cli/cli/blob/trunk/docs/install_linux.md>。
 
 ### 方式 B：只读 fine-grained token
@@ -89,8 +96,8 @@ gh repo clone qiqll/magpie-console
 1. GitHub 网页：**Settings → Developer settings → Personal access tokens →
    Fine-grained tokens → Generate new token**。
 2. **Repository access** 选 *Only select repositories*，只勾
-   `qiqll/magpie-console`；**Permissions → Repository permissions → Contents**
-   设为 *Read-only*（Metadata 会自动是只读），其他都不给。设一个过期时间。
+   `qiqll/magpie-console`；在 **Permissions** 里加 **Contents: Read-only**
+   （Metadata 会自动是只读），其他都不给。设一个过期时间。
 3. 服务器上：
 
    ```sh
@@ -99,22 +106,27 @@ gh repo clone qiqll/magpie-console
    # Password: 粘贴上一步的 token（不是登录密码；输入时不回显）
    ```
 
-以后每次 `git pull` 都会再问。想让它记住：
+以后每次 `git pull` 都会再问。想让它记住，clone 时就带上 `store`：
 
 ```sh
-git -C magpie-console config credential.helper store
+git clone -c credential.helper=store https://github.com/qiqll/magpie-console.git
 ```
 
-`store` 把 token **明文**写进 `~/.git-credentials`（权限 600），能读你家目录的
-人都能拿到它。只给了这一个仓库的只读权限，泄露了也只能读这份源码；到期或
-不用了在 GitHub 上 revoke，并删掉 `~/.git-credentials` 里那一行。
-不想落盘就用 `git config credential.helper 'cache --timeout=3600'`（只在内存里存一小时）。
+（已经 clone 过的，`git -C magpie-console config credential.helper store`，
+下一次 `git pull` 再输一次 token 后就记住了。）
+
+`store` 把 token **明文**写进 `~/.git-credentials`（权限 600，本用户和 root
+可读）。只给了这一个仓库的只读权限，泄露了也只能读这份源码；到期或不用了在
+GitHub 上 revoke，并删掉 `~/.git-credentials` 里那一行。不想落盘就用
+`git -C magpie-console config credential.helper 'cache --timeout=3600'`
+（只在内存里存一小时）。
 
 ### 方式 C：只读 deploy key（SSH）
 
 服务器上生成一把只给这个仓库用的钥匙：
 
 ```sh
+mkdir -p -m 700 ~/.ssh
 ssh-keygen -t ed25519 -f ~/.ssh/magpie-console-deploy -N "" -C "magpie-console deploy"
 cat ~/.ssh/magpie-console-deploy.pub
 ```
@@ -130,12 +142,18 @@ Host github-magpie-console
     IdentitiesOnly yes
 ```
 
+`~/.ssh/config` 不能让别人可写，否则 ssh 拒绝读它：`chmod 600 ~/.ssh/config`。
 用别名 clone：
 
 ```sh
-ssh -T github-magpie-console      # 首次确认 github.com 的指纹；看到 "successfully authenticated" 即可
+ssh -T github-magpie-console      # 首次会问是否信任 github.com 的 host key，见下
 git clone github-magpie-console:qiqll/magpie-console.git
 ```
+
+`ssh -T` 首次打印的 ED25519 指纹应是
+`SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU`（以 GitHub 的
+[SSH key fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints)
+页面为准），对上了再输 `yes`；之后看到 "successfully authenticated" 即可。
 
 deploy key 只对这一个仓库有效、只读，`git pull` 不再问密码。
 
@@ -186,19 +204,22 @@ Linux 版本再拷过去。console 用纯 Go 的 sqlite，`CGO_ENABLED=0` 编出
 ```sh
 cd <Mac 上的 magpie-console 目录>
 git pull
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o magpie-console-linux-amd64 .
-# ARM 服务器：CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o magpie-console-linux-arm64 .
-scp magpie-console-linux-amd64 op@<服务器>:/tmp/magpie-console
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o magpie-console-linux .
+#   ARM 服务器把 GOARCH=amd64 换成 GOARCH=arm64，其余不变
+scp magpie-console-linux op@<服务器>:~/magpie-console.new
 ```
 
-服务器上：
+拷到自己家目录而不是 `/tmp`：`/tmp` 人人可写，多人服务器上别人可以抢先建好
+同名文件，在 `sudo install` 之前换掉内容。服务器上：
 
 ```sh
-sudo install -m 0755 /tmp/magpie-console /usr/local/bin/magpie-console
+sudo install -m 0755 ~/magpie-console.new /usr/local/bin/magpie-console      # 首次安装
+sudo install -m 0755 ~/magpie-console.new "$(command -v magpie-console)"     # 更新：和服务的 ExecStart 同一路径
+rm ~/magpie-console.new
 ```
 
-首次安装接着跑上面的 `init`、`set-key`、`install-service`；更新时跳到下面的
-`restart`。
+首次安装接着跑上面的 `init`、`set-key`、`install-service`；更新时接着
+`systemctl --user restart magpie-console`。
 
 ### 更新 console
 
@@ -206,7 +227,8 @@ sudo install -m 0755 /tmp/magpie-console /usr/local/bin/magpie-console
 
 ```sh
 cd <console 源码目录>
-git pull                                   # 方式 B 没存凭据时会再问一次，Password 栏粘贴 token
+git checkout main                          # 回退过的话先回到分支上
+git pull --ff-only                         # 只快进；方式 B 没存凭据时会再问，Password 栏粘贴 token
 git log --oneline -1                       # 确认是刚推送的那个提交
 CGO_ENABLED=0 go build -o magpie-console .
 sudo install -m 0755 magpie-console "$(command -v magpie-console)"   # 和服务的 ExecStart 同一路径
@@ -217,8 +239,8 @@ journalctl --user -u magpie-console -n 30 --no-pager
 - `"$(command -v magpie-console)"` 要和 `systemctl --user cat magpie-console`
   里 `ExecStart` 的路径一致，否则重启后还是旧版本。
 - 在 Mac 上编译的，按上一节交叉编译、`scp`、`install`，再 `restart`。
-- 回退：`git checkout <上一个提交>`，再编译、`install`、`restart`。数据目录
-  不随版本变，更新前可以先 `magpie-console backup` 一份（见第 6 节）。
+- 回退：`git checkout <上一个提交>`，再编译、`install`、`restart`；下次更新
+  先 `git checkout main`（上面第一行）。数据目录不随版本变，更新前可以先 `magpie-console backup` 一份（见第 6 节）。
 
 ## 5. 安全
 
