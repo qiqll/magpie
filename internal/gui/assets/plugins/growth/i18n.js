@@ -89,6 +89,10 @@ magpie.strings({
     "magpie can't read {path}, so what it holds is unknown: {why}": "magpie 读不了 {path}，不知道里面有什么：{why}",
     "{subs} picked the policy {policy}: pick another in its editor, or on its account's row, before deleting this one": "{subs} 选用了策略「{policy}」：删除前请先在其编辑器或账号行里改选别的策略",
     "magpie can't read which subscriptions picked a policy, so none is deleted: {why}": "magpie 读不了哪些订阅选用了策略，所以没有删除任何策略：{why}",
+    "Let go of an idle user's accounts after": "空闲用户解绑时间",
+    "With the gateway bound by user, a user that sends a provider nothing this long lets go of its accounts there, for other users to take, and is bound afresh on its next request. Empty is {n} hours. An account can have a time of its own on its card in Models › Accounts, which comes first.": "网关按用户绑定时，用户对某个供应商这么久没有请求，就解开它在那里绑定的账号，让给其他用户；它下次请求时重新绑定。留空为 {n} 小时。每个账号可在 模型 › 账号 的卡片上单独设置，单独设置优先。",
+    "Hours before an idle user's accounts are let go": "空闲用户解绑前的小时数",
+    "An idle user's accounts are let go after 1 to {n} hours": "空闲用户解绑时间为 1 到 {n} 小时",
   },
   "zh-TW": {
     "{name} is the default: a subscription that picked no policy follows it": "預設策略是「{name}」：沒選策略的訂閱都跟隨它",
@@ -178,6 +182,10 @@ magpie.strings({
     "magpie can't read {path}, so what it holds is unknown: {why}": "magpie 讀不了 {path}，不知道裡面有什麼：{why}",
     "{subs} picked the policy {policy}: pick another in its editor, or on its account's row, before deleting this one": "{subs} 選用了策略「{policy}」：刪除前請先在其編輯器或帳號列裡改選別的策略",
     "magpie can't read which subscriptions picked a policy, so none is deleted: {why}": "magpie 讀不了哪些訂閱選用了策略，所以沒有刪除任何策略：{why}",
+    "Let go of an idle user's accounts after": "閒置使用者解綁時間",
+    "With the gateway bound by user, a user that sends a provider nothing this long lets go of its accounts there, for other users to take, and is bound afresh on its next request. Empty is {n} hours. An account can have a time of its own on its card in Models › Accounts, which comes first.": "閘道依使用者綁定時，使用者對某個供應商這麼久沒有請求，就解開它在那裡綁定的帳號，讓給其他使用者；它下次請求時重新綁定。留空為 {n} 小時。每個帳號可在 模型 › 帳號 的卡片上單獨設定，單獨設定優先。",
+    "Hours before an idle user's accounts are let go": "閒置使用者解綁前的小時數",
+    "An idle user's accounts are let go after 1 to {n} hours": "閒置使用者解綁時間為 1 到 {n} 小時",
   },
   ja: {
     "{name} is the default: a subscription that picked no policy follows it": "既定は「{name}」：ポリシーを選んでいないサブスクリプションはこれに従います",
@@ -267,6 +275,10 @@ magpie.strings({
     "magpie can't read {path}, so what it holds is unknown: {why}": "magpie は {path} を読めないため、中身がわかりません：{why}",
     "{subs} picked the policy {policy}: pick another in its editor, or on its account's row, before deleting this one": "{subs} がポリシー「{policy}」を選んでいます：削除する前に、そのエディタかアカウントの行で別のポリシーを選んでください",
     "magpie can't read which subscriptions picked a policy, so none is deleted: {why}": "magpie はどのサブスクリプションがポリシーを選んだか読めないため、何も削除しませんでした：{why}",
+    "Let go of an idle user's accounts after": "アイドルユーザーの割り当て解除まで",
+    "With the gateway bound by user, a user that sends a provider nothing this long lets go of its accounts there, for other users to take, and is bound afresh on its next request. Empty is {n} hours. An account can have a time of its own on its card in Models › Accounts, which comes first.": "ゲートウェイがユーザー単位で割り当てているとき、あるプロバイダーにこの時間リクエストを送らなかったユーザーは、そこで割り当てられたアカウントを解除され、ほかのユーザーが使えるようになります。次のリクエストで改めて割り当てられます。空欄は {n} 時間です。アカウントごとに モデル › アカウント のカードで個別に設定でき、そちらが優先されます。",
+    "Hours before an idle user's accounts are let go": "アイドルユーザーの割り当てを解除するまでの時間",
+    "An idle user's accounts are let go after 1 to {n} hours": "割り当て解除までの時間は 1〜{n} 時間です",
   },
   de: {
     "{name} is the default: a subscription that picked no policy follows it": "{name} ist der Standard: ein Abo ohne gewählte Regel folgt ihm",
@@ -356,5 +368,9 @@ magpie.strings({
     "magpie can't read {path}, so what it holds is unknown: {why}": "magpie kann {path} nicht lesen, daher ist unbekannt, was darin steht: {why}",
     "{subs} picked the policy {policy}: pick another in its editor, or on its account's row, before deleting this one": "Die Regel {policy} ist gewählt von {subs}: wähle dort im Editor oder in der Zeile des Kontos eine andere, bevor du diese löschst",
     "magpie can't read which subscriptions picked a policy, so none is deleted: {why}": "magpie kann nicht lesen, welche Abos eine Regel gewählt haben, daher wird keine gelöscht: {why}",
+    "Let go of an idle user's accounts after": "Konten eines untätigen Nutzers freigeben nach",
+    "With the gateway bound by user, a user that sends a provider nothing this long lets go of its accounts there, for other users to take, and is bound afresh on its next request. Empty is {n} hours. An account can have a time of its own on its card in Models › Accounts, which comes first.": "Bindet das Gateway nach Nutzer, gibt ein Nutzer, der einem Anbieter so lange nichts sendet, seine Konten dort für andere Nutzer frei und wird bei seiner nächsten Anfrage neu gebunden. Leer sind es {n} Stunden. Ein Konto kann auf seiner Karte unter Modelle › Konten eine eigene Zeit haben, die vorgeht.",
+    "Hours before an idle user's accounts are let go": "Stunden, bevor die Konten eines untätigen Nutzers freigegeben werden",
+    "An idle user's accounts are let go after 1 to {n} hours": "Die Konten eines untätigen Nutzers werden nach 1 bis {n} Stunden freigegeben",
   },
 });

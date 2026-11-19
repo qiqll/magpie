@@ -2736,12 +2736,23 @@ sends a provider nothing for 60 hours (3 days before 2026-11-02: on the
 upgrade, a binding idle 60 to 72 hours already is let go by the next
 request to its provider) lets go of its accounts there too, so
 another can take them: the release is made by the next user's request to
-that provider, its own never (`sweepIdle`, `userIdle`), and a binding kept
+that provider, its own never (`sweepIdle`, `userIdle`). The 60 hours is
+the default: Settings › Growth policy sets another, 1 to 720 hours
+(`bindIdleHours` in settings.json, `POST /api/settings/bind-idle`, null
+for the default), and an account's card in Models › Accounts sets one of
+the account's own (`accountBindIdle` in providers.json,
+`POST /api/provider/accountbindidle`, 0 to follow Settings', T-242). Each
+of the user's accounts goes after its own time, else Settings', still
+counted from the user's last request to the provider: an account whose
+time has passed is let go alone, the user keeping its others (its first
+spare its first), and a user left with none is let go whole. A time made
+shorter lets go on the next sweep, a request of another user to that
+provider. A binding kept
 before magpie noted a last use (no `used`) is stamped then, never let go
 at once. A user waiting out a rest magpie told it of (`X-Magpie-User-Until`)
 is in use until that rest ends. When no user sent the provider anything
 for 12 hours or more (the gateway was down, or nobody came), that time
-doesn't count toward anyone's 60 hours. Requests served while
+doesn't count toward anyone's idle time. Requests served while
 `user-accounts.json` doesn't read count too, once it reads again. An account goes from a
 user only when it is no longer on the provider (signed out, switched off,
 removed) or its vendor turns it away for good (a sign-in revoked that a

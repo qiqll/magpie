@@ -68,7 +68,9 @@ const growthPrefs = () => (prefs?.growthPolicyList ? prefs : growthListRead);
 function growthListLoad(again) {
   if (prefs?.growthPolicyList || growthListRead && !again) return Promise.resolve();
   return api("settings").then((s) => {
-    if (Array.isArray(s?.growthPolicyList)) growthListRead = { growthPolicyList: s.growthPolicyList, growthInEffect: s.growthInEffect };
+    // and Settings' idle time of a bound user, which an account's own
+    // follows when it has none (T-242)
+    if (Array.isArray(s?.growthPolicyList)) growthListRead = { growthPolicyList: s.growthPolicyList, growthInEffect: s.growthInEffect, bindIdleHours: s.bindIdleHours, bindIdleDefault: s.bindIdleDefault };
   }, () => {});
 }
 

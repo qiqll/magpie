@@ -566,6 +566,38 @@ function acxGrowthFact(r) {
   return b;
 }
 
+// the hours offered for an account's own idle time of a bound user (T-242)
+const ACX_IDLE_HOURS = [1, 6, 12, 24, 48, 72, 168, 336, 720];
+
+// acxIdleFact: a card's idle time of a user bound to the account, with the
+// gateway bound by user (T-242): its own, or Settings' (Settings › Growth
+// policy) followed. Picked here, saved with accountbindidle; Follow
+// Settings takes its own off.
+function acxIdleFact(r) {
+  const { p, l } = r;
+  const own = p.accountBindIdle?.[acxLow(l.user)] || 0;
+  const hours = (n) => t(n === 1 ? "1 hour" : "{n} hours", { n });
+  const b = el("button", "acx-idle", own ? hours(own) : t("Follows Settings"));
+  b.type = "button";
+  b.title = t("With the gateway bound by user, a user bound to this account that sends its provider nothing this long lets go of it, for another user to take");
+  b.setAttribute("aria-haspopup", "menu");
+  b.onclick = async (e) => {
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    await growthListLoad();
+    const s = growthPrefs();
+    const def = s?.bindIdleHours ?? s?.bindIdleDefault ?? 60;
+    const opts = [{ v: "0", name: t("Follow Settings ({hours})", { hours: hours(def) }), note: "" }]
+      .concat([...new Set([...ACX_IDLE_HOURS, own].filter(Boolean))].sort((x, y) => x - y).map((n) => ({ v: String(n), name: hours(n), note: "" })));
+    for (const o of opts) o.literalName = true;
+    openProtoMenu(b, opts, String(own), (v) => {
+      b.classList.add("busy");
+      accountAction("provider/accountbindidle", { id: p.id, account: l.user, hours: Number(v) }, t("Saved")).then(() => acxDraw());
+    }, "Let go of an idle user after");
+  };
+  return b;
+}
+
 // acxWho: an account's name or alias, its state's badge and its ramp-up
 function acxWho(r) {
   const { p, l } = r;
@@ -755,6 +787,8 @@ function acxCard(r) {
   else if (r.added && p.firstUsedKnown) fact("First used", "acx-used", el("span", "acx-unknown", t("Never used")));
   // its growth policy, picked here for it alone (T-133), once the policies are read
   if (r.added && growthAccountOpts(p).length) fact("Growth policy", "acx-gpf", acxGrowthFact(r));
+  // how long a user bound to it may be idle, its own or Settings' (T-242)
+  fact("Idle user let go after", "acx-idlef", acxIdleFact(r));
   if (l.until) fact("Plan ends", "acx-until", acxDay(l.until));
   const proxy = acxProxyOf(p, l.user);
   if (proxy) fact("Proxy", "acx-proxy", proxyName(proxy));

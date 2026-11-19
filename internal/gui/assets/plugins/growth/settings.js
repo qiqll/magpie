@@ -151,7 +151,7 @@ function renderGrowth(s) {
     el("div", "sub" + (growthErr ? " err" : ""), growthErr || t(GROWTH_SAYS)));
   head.append(who);
   box.append(head);
-  if (!cur) return;
+  if (!cur) return box.append(growthIdleRow(s));
   // the saved policies' chart is asked again on each draw: its accounts'
   // days move on while the page stays open (review L4)
   if (!growthDraft) growthChart.key = "";
@@ -230,7 +230,45 @@ function renderGrowth(s) {
   discard.onclick = () => { growthDraft = null; growthErr = ""; redraw(); };
   fv.append(save, discard);
   foot.append(fw, fv);
-  box.append(foot);
+  box.append(foot, growthIdleRow(s));
+}
+
+// growthIdleRow is how long a user bound to a provider's accounts (the
+// gateway bound by user) may send it nothing before they are let go of it
+// (T-242), saved at once (settings/bind-idle) apart from the policies'
+// draft: empty for the default. An account can have its own time, on its
+// card in Models › Accounts (accountbindidle), which comes first.
+function growthIdleRow(s) {
+  const def = s.bindIdleDefault || 60, most = s.bindIdleMost || 720;
+  const row = el("div", "row pref growth-idle");
+  const who = el("div", "who");
+  who.append(el("div", "name", t("Let go of an idle user's accounts after")),
+    el("div", "sub", t("With the gateway bound by user, a user that sends a provider nothing this long lets go of its accounts there, for other users to take, and is bound afresh on its next request. Empty is {n} hours. An account can have a time of its own on its card in Models › Accounts, which comes first.", { n: def })));
+  const val = el("div", "val");
+  const hours = input(s.bindIdleHours == null ? "" : String(s.bindIdleHours), String(def), "number");
+  hours.classList.add("growth-idle-hours");
+  hours.min = "1";
+  hours.max = String(most);
+  hours.step = "1";
+  hours.setAttribute("aria-label", t("Hours before an idle user's accounts are let go"));
+  // what was last sent, saved or on its way, for a refused time to put
+  // back: a save not yet answered is the field's value already
+  let sent = hours.value;
+  hours.onchange = () => {
+    const v = hours.value.trim();
+    if (v !== "" && (!/^\d+$/.test(v) || +v < 1 || +v > most)) {
+      status(t("An idle user's accounts are let go after 1 to {n} hours", { n: most }), "err");
+      hours.value = sent;
+      return;
+    }
+    const was = sent;
+    sent = v;
+    writingPrefs(api("settings/bind-idle", { hours: v === "" ? null : +v }))
+      .then((ns) => { prefs = state.settings = ns; status(t("Saved"), "ok", 1500); }, (e) => { if (sent === v) sent = was; statusErr(e); });
+  };
+  val.append(hours, el("span", "growth-idle-unit", t("hours")));
+  row.append(who, val);
+  return row;
 }
 
 // growthEditor is the policy p's name, kind and numbers, read only for

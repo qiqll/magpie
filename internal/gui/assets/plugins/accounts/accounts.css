@@ -18,9 +18,9 @@
 .row.acx .who { flex: 1 1 200px; }
 .row.acx .name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 3px; }
 /* its ramp-up (acxGrowth): a pill beside the state, which opens Skip ramp-up */
-.acx-grow { flex: 0 1 auto; min-width: 0; max-width: 100%; padding: 1px 7px; border: 0; border-radius: 9px; font: inherit; font-size: 11px; font-weight: 500; color: var(--accent); background: var(--pill); cursor: pointer; text-align: left; white-space: normal; overflow-wrap: anywhere; }
-.acx-grow:hover, .acx-grow.open { background: var(--line); }
-.acx-grow.busy { opacity: .6; }
+.acx-grow, .acx-idle { flex: 0 1 auto; min-width: 0; max-width: 100%; padding: 1px 7px; border: 0; border-radius: 9px; font: inherit; font-size: 11px; font-weight: 500; color: var(--accent); background: var(--pill); cursor: pointer; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.acx-grow:hover, .acx-grow.open, .acx-idle:hover, .acx-idle.open { background: var(--line); }
+.acx-grow.busy, .acx-idle.busy { opacity: .6; }
 .acx-grad, .acx-grad:hover { cursor: default; background: var(--pill); }
 .acx-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* a state's badge: grey words, its colour in the dot alone */

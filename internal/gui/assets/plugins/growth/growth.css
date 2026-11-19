@@ -75,3 +75,6 @@
 .growth-pick .growth-pill { max-width: 100%; }
 .growth-pick .growth-pill > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .growth-pick .growth-gone { color: var(--warn, var(--fg-2)); overflow-wrap: anywhere; }
+/* how long a bound user may be idle (T-242): a short number and its unit */
+.growth-idle .val { display: flex; align-items: center; gap: 6px; }
+.growth-idle .growth-idle-hours { width: 6em; }
