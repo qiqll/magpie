@@ -254,7 +254,14 @@ func (s *Server) adminAddIP(w http.ResponseWriter, r *http.Request, c adminCall)
 	if !decodeAdmin(w, r, &in) {
 		return
 	}
-	if _, ok := readIPs(w); !ok {
+	ips, ok := readIPs(w)
+	if !ok {
+		return
+	}
+	// told before a check is spent; the area's own count tells nothing
+	// of other IPs
+	if n := len(slices.DeleteFunc(ips, func(x renewal.IP) bool { return x.Area != c.area.ID })); n >= renewal.MaxAreaIPs {
+		ipWriteErr(w, renewal.ErrAreaFull)
 		return
 	}
 	addr := net.ParseIP(strings.TrimSpace(in.IP))
@@ -303,10 +310,11 @@ func newProxies(proxies, had []string) []string {
 // each, or answers why not (T-225: an area's proxy is kept only under
 // the IP it leaves from, so an area can't hold an address it has no
 // proxy at, nor put a proxy that leaves from elsewhere under its own).
-// It holds the area's checks and spends one a proxy, all at once: 429
-// too_many_checks while they can't all be spent, nothing connected to;
-// 400 proxy_exit with the check of the first that doesn't leave from
-// ip, its login left out. None is no check.
+// It holds the area's checks and spends one a proxy as it checks it,
+// stopping at the first that doesn't leave from ip: 429
+// too_many_checks, nothing connected to, while they can't all be spent;
+// 400 proxy_exit with the check of that first, its login left out. None
+// is no check.
 func (s *Server) confirmExits(w http.ResponseWriter, r *http.Request, c adminCall, ip string, proxies []string) bool {
 	if len(proxies) == 0 {
 		return true
@@ -322,11 +330,17 @@ func (s *Server) confirmExits(w http.ResponseWriter, r *http.Request, c adminCal
 		return false
 	}
 	defer s.proxyChecks.end(c.area.ID)
-	if wait, console, ok := s.proxyChecks.take(budgets(c), len(proxies), now); !ok {
+	if wait, console, ok := s.proxyChecks.room(budgets(c), len(proxies), now); !ok {
 		checksHeld(w, wait, console)
 		return false
 	}
 	for _, p := range proxies {
+		// the console's total is another area's to spend meanwhile
+		if !s.proxyChecks.spend(budgets(c), time.Now()) {
+			wait, console, _ := s.proxyChecks.room(budgets(c), 1, time.Now())
+			checksHeld(w, wait, console)
+			return false
+		}
 		out := checkAreaProxy(r.Context(), p, ip)
 		if out.OK && out.Matches {
 			continue
@@ -384,6 +398,11 @@ func (s *Server) adminUpdateIP(w http.ResponseWriter, r *http.Request, c adminCa
 			return
 		}
 	}
+	// told before a check is spent
+	if len(x.Proxies)-len(in.RemoveProxies)+len(adds) > renewal.MaxIPProxies {
+		adminError(w, http.StatusBadRequest, adminBadRequest, "an IP has at most 20 proxies")
+		return
+	}
 	if !s.confirmExits(w, r, c, x.IP, adds) {
 		return
 	}
@@ -402,7 +421,12 @@ func (s *Server) adminUpdateIP(w http.ResponseWriter, r *http.Request, c adminCa
 			y.Opened = *in.Opened
 		}
 		y.Proxies = slices.DeleteFunc(y.Proxies, func(p string) bool { return slices.Contains(in.RemoveProxies, renewal.ProxyID(p)) })
-		y.Proxies = append(y.Proxies, in.AddProxies...)
+		// the checked alone: one it had when read is never added unchecked
+		for _, p := range adds {
+			if !slices.Contains(y.Proxies, p) {
+				y.Proxies = append(y.Proxies, p)
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -597,32 +621,30 @@ func (p *proxyChecks) spend(ids []string, now time.Time) bool {
 	return true
 }
 
-// take spends n checks of each of ids at now for a request that holds
-// them, all or none: when one hasn't n left in the window, none, false,
-// and how long until it has and whether the console's total is the
-// longer wait. n is at most checksMost.
-func (p *proxyChecks) take(ids []string, n int, now time.Time) (wait time.Duration, console, ok bool) {
+// room says whether each of ids has n checks left in the window at now,
+// spending none, or how long until it has and whether the console's
+// total is the longer wait. More than an id may ever have is never room.
+func (p *proxyChecks) room(ids []string, n int, now time.Time) (wait time.Duration, console, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	ok = true
 	for _, id := range ids {
 		ts, most := p.recent(id, now), checksLimit(id)
-		if k := len(ts) + n - most; k > 0 {
-			ok = false
-			if w := ts[k-1].Add(checksWindow).Sub(now); w > wait {
-				wait, console = w, id == consoleBudget
-			}
+		w := time.Duration(0)
+		switch k := len(ts) + n - most; {
+		case n > most:
+			w = checksWindow
+		case k > 0:
+			w = ts[k-1].Add(checksWindow).Sub(now)
+		default:
+			continue
+		}
+		ok = false
+		if w > wait {
+			wait, console = w, id == consoleBudget
 		}
 	}
-	if !ok {
-		return wait, console, false
-	}
-	for _, id := range ids {
-		for range n {
-			p.started[id] = append(p.started[id], now)
-		}
-	}
-	return 0, false, true
+	return wait, console, ok
 }
 
 // free says whether ids may start a check at now, the area's (ids[0])

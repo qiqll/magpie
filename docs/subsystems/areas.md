@@ -301,14 +301,27 @@ proxies on its own accounts
   leaves from elsewhere (the owner's, letting magpie in by its source
   address) under an IP of its own and on its accounts. So `POST /ips`
   needs a proxy (`400`), and each new proxy of a request spends one of
-  `proxyChecks`, all at once (`proxyChecks.take`): `429
-  too_many_checks` while they can't all be, connecting nowhere; `400`
-  past 10 proxies in one request; `400 proxy_exit` with the `check`
-  (login left out) for the first that doesn't leave from the IP or
-  doesn't answer, nothing written. The IP is judged taken (`409`) only
+  `proxyChecks` as it is checked: `429 too_many_checks` while they
+  can't all be (`proxyChecks.room`), connecting nowhere; `400` past 10
+  proxies in one request, and a full area or IP is told before any
+  check; `400 proxy_exit` with the `check` (login left out) for the
+  first that doesn't leave from the IP or doesn't answer, the ones after
+  it unchecked and nothing written. The IP is judged taken (`409`) only
   after, so a conflict needs a proxy that leaves from the address too.
   Only the add is slower; requests through the proxy afterwards aren't
   checked again. A proxy an update has already isn't checked.
+  - What it doesn't hold (open, the owner to decide): the check goes
+    out from magpie's own address, so a proxy of the owner's that lets
+    magpie in by its source address passes it under its real exit when
+    that exit isn't in `ips.json` yet; that exit is then the area's,
+    and the owner's later add of it is `409`. A proxy written by a name
+    is checked once, and every dial resolves the name again, so a name
+    pointed at another public proxy after the add goes through that
+    one. A proxy with more than one exit (dual-stack, a rotating pool)
+    passes under whichever the check met.
+  - IPs and proxies an area added before T-225 are kept as they were,
+    unchecked, an IP with no proxy too; `ips/reread` reads those on an
+    account alone.
 - **Proxies are named** `px_` + 10 hex of SHA-256 (`renewal.ProxyID`), and
   told with their login left out (`netproxy.Redact`).
 - **On an account** (`POST /accounts/proxy`, `provider.AttachAreaProxy`):

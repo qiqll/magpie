@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/renewal"
 )
@@ -143,8 +144,16 @@ func TestAdminIPUpdateAddsOnlyItsExit(t *testing.T) {
 	if c, body := w.post(t, w.a, "/accounts/proxy", map[string]any{"id": w.aKey, "ip": "203.0.113.7", "proxy": renewal.ProxyID(stolen)}); c != http.StatusNotFound {
 		t.Fatalf("the owner's proxy on A's account: %d %s", c, body)
 	}
+	// the first that doesn't leave from the IP stops it: the one after
+	// is neither checked nor spent
+	later := startTraceProxy(t, "203.0.113.7")
+	c, body = w.post(t, w.a, "/ips/update", map[string]any{"ip": "203.0.113.7", "addProxies": []string{stolen, "http://" + proxyHost("203.0.113.7") + ":" + later.port()}})
+	exitRefused(t, c, body, true, "")
+	if later.conns.Load() != 0 {
+		t.Fatal("a proxy after the refused one was checked")
+	}
 	// one that leaves from the IP is added; one it has is no check
-	mine := "http://" + proxyHost("203.0.113.7") + ":" + startTraceProxy(t, "203.0.113.7").port()
+	mine := "http://" + proxyHost("203.0.113.7") + ":" + later.port()
 	before := w.proxy.conns.Load()
 	c, body = w.post(t, w.a, "/ips/update", map[string]any{"ip": "203.0.113.7", "addProxies": []string{mine, w.proxyOf(t, "203.0.113.7")}})
 	if c != http.StatusOK || len(ipsOf(t, "["+body+"]")[0].Proxies) != 2 || w.proxy.conns.Load() != before {
@@ -196,5 +205,42 @@ func TestAdminBatchIPLinesNeedTheirExit(t *testing.T) {
 	c, body = w.post(t, w.console, "/areas/"+w.bID+"/ips/batch", map[string]any{"text": pubIP + "63:" + w.proxy.port(), "type": "http"})
 	if c != 200 || !strings.Contains(body, "not this IP") || len(areaIPs(t, w.bID)) != 0 {
 		t.Fatalf("the console's batch for B: %d %s", c, body)
+	}
+}
+
+// TestAdminProxyChecksRoom: room says whether each budget has n checks
+// left, spending none, with how long until the oldest it needs let go
+// and whether the console's total is the longer wait; more than a budget
+// may ever have is never room.
+func TestAdminProxyChecksRoom(t *testing.T) {
+	var p proxyChecks
+	now := time.Now()
+	ids := []string{"ar_x", consoleBudget}
+	for i := range checksMost - 2 {
+		if !p.spend(ids, now.Add(time.Duration(i)*time.Second)) {
+			t.Fatal("spend", i)
+		}
+	}
+	if _, _, ok := p.room(ids, 2, now); !ok {
+		t.Fatal("2 of the 2 left")
+	}
+	wait, console, ok := p.room(ids, 3, now)
+	if ok || console || wait != checksWindow {
+		t.Fatalf("3 of 2 left: %v %v %v, want the oldest's %v", wait, console, ok, checksWindow)
+	}
+	if !p.spend(ids, now) {
+		t.Fatal("room spent")
+	}
+	if _, _, ok := p.room([]string{"ar_n"}, checksMost+1, now); ok {
+		t.Fatal("room for more than an area ever has")
+	}
+	// the console's total: other areas spent the rest of it
+	for i := range consoleChecksMost - checksMost + 1 {
+		if !p.spend([]string{"ar_y" + strconv.Itoa(i/checksMost), consoleBudget}, now) {
+			t.Fatal("the console's", i)
+		}
+	}
+	if wait, console, ok := p.room([]string{"ar_z", consoleBudget}, 1, now); ok || !console || wait <= 0 {
+		t.Fatalf("past the console's total: %v %v %v", wait, console, ok)
 	}
 }
