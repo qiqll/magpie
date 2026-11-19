@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -213,5 +214,101 @@ func TestTiersForProvider(t *testing.T) {
 	}
 	if got.nameOf("1") != "free" || got.nameOf("gold") != "free" || (Tiers{}).nameOf("free") != "" {
 		t.Fatalf("names: %q %q", got.nameOf("1"), got.nameOf("gold"))
+	}
+	// a tier named twice by hand takes the fewer users, whatever the
+	// map's order, 0 (any number) the most
+	for range 20 {
+		got = defaultTiers.forProvider(map[string]int{"free": 3, "FREE": 2, "1": 5, "plus": 0, "2": 4})
+		if got.shareOf("free") != 2 || got.shareOf("plus") != 4 {
+			t.Fatalf("named twice: free %d, plus %d", got.shareOf("free"), got.shareOf("plus"))
+		}
+	}
+}
+
+// A user that keeps another tier under each gateway key of its group (its
+// last request under each named one) is of either: a user of one of
+// them joins its account, though the user's other tier is another.
+func TestUserOfTwoTiersUnderTwoKeysTakesEither(t *testing.T) {
+	_, ask, _ := sharedAcrossKeys(t, noShareTiers,
+		map[string]map[string][]string{"other": {"x": {"kaAAw@post.com"}}, "qmcloud": {"x": {"kaAAw@post.com"}}},
+		map[string]string{"other/x": "plus", "qmcloud/x": "free"})
+	usersUpstream(t, nil)
+	if rec := ask("y"); rec.Code != 200 {
+		t.Fatalf("y, free, beside x: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A user bound to an account that names another tier keeps the account
+// (as users of two tiers bound to one before T-243 do): free alice and
+// carol share me@, alice comes back as plus and is served there; the
+// account, now of two tiers, takes no new free user.
+func TestTierChangedKeepsItsAccount(t *testing.T) {
+	codexSignedIn(t)
+	asked, _ := usersUpstream(t, nil)
+	writeTiers(t, noShareTiers)
+	s := byUser(New())
+	for _, u := range []string{"alice", "carol"} {
+		if rec := tierPost(s, u, "free", "hi"); rec.Code != 200 {
+			t.Fatalf("%s: %d %s", u, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := tierPost(s, "alice", "plus", "again"); rec.Code != 200 {
+		t.Fatalf("alice as plus: %d %s", rec.Code, rec.Body.String())
+	}
+	if tiers := tierIn(t, "codex"); tiers["alice"] != "plus" || tiers["carol"] != "free" {
+		t.Fatalf("tiers kept: %v", tiers)
+	}
+	if rec := tierPost(s, "dave", "free", "hi"); rec.Code != 429 {
+		t.Fatalf("dave: %d %s", rec.Code, rec.Body.String())
+	}
+	asked(true)
+	if seats := seatsIn(t, "codex"); !slices.Equal(seats["alice"], []string{"me@example.com"}) || len(seats["dave"]) != 0 {
+		t.Fatalf("seats: %v", seats)
+	}
+}
+
+// A settings.json that doesn't read is unknown, never "no shares of the
+// provider's own": the shares read before hold (sharesFrom), and with
+// none read before, a new user isn't bound (503) while one bound is still
+// served.
+func TestProviderSharesUnread(t *testing.T) {
+	forget := func() {
+		sharesRead.Lock()
+		sharesRead.m, sharesRead.ok = nil, false
+		sharesRead.Unlock()
+	}
+	forget()
+	t.Cleanup(forget)
+	bad := errors.New("could not read settings")
+	if m, err := sharesFrom(settings.Settings{}, bad, "codex"); err == nil || m != nil {
+		t.Fatalf("never read: %v %v", m, err)
+	}
+	if m, err := sharesFrom(settings.Settings{ProviderShares: map[string]map[string]int{"codex": {"free": 1}}}, nil, "codex"); err != nil || m["free"] != 1 {
+		t.Fatalf("read: %v %v", m, err)
+	}
+	if m, err := sharesFrom(settings.Settings{}, bad, "codex"); err != nil || m["free"] != 1 {
+		t.Fatalf("read before: %v %v", m, err)
+	}
+	if m, err := sharesFrom(settings.Settings{}, nil, "codex"); err != nil || m != nil {
+		t.Fatalf("read again, none: %v %v", m, err)
+	}
+
+	codexSignedIn(t)
+	asked, _ := usersUpstream(t, nil)
+	was := providerSharesOf
+	providerSharesOf = func(string) (map[string]int, error) { return nil, bad }
+	t.Cleanup(func() { providerSharesOf = was })
+	s := byUser(New())
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob": bound("me@example.com", "free", ago(time.Minute))}}})
+	if rec := tierPost(s, "carol", "free", "hi"); rec.Code != 503 || !strings.Contains(rec.Body.String(), "settings.json can") {
+		t.Fatalf("carol: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := tierPost(s, "bob", "free", "hi"); rec.Code != 200 {
+		t.Fatalf("bob: %d %s", rec.Code, rec.Body.String())
+	}
+	asked(true)
+	if _, b := seatsIn(t, "codex")["carol"]; b {
+		t.Fatal("carol bound")
 	}
 }

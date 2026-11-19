@@ -2864,9 +2864,12 @@ An account is shared by users of one tier only (T-243): a user joins no
 account a user of another tier is on, whatever both tiers' `share`, the
 alias a binding keeps counted as its tier and a tier gone from the file
 as the default. Users of several tiers bound to one account before
-2026-11-19 keep it and are served; nobody new joins them. With no account
-of its tier's with a seat, the request is the 429 above, its message
-adding "or are shared by users of another tier".
+2026-11-19 keep it and are served, and so does a user whose requests
+name another tier than when it was bound (it isn't moved); nobody new
+joins such an account. A user that keeps another tier under each gateway
+key of its group is of either. With no account of its tier's with a
+seat, the request is the 429 above, its message adding "or are shared by
+users of another tier".
 
 Each provider can have shares of its own, in place of the file's
 (T-243): Settings › Growth policy's "Users per account, by provider" has
@@ -2876,7 +2879,10 @@ kept in settings.json (`providerShares`: provider id → tier name →
 share, `POST /api/settings/provider-shares` with `{"provider": id,
 "shares": {tier: n}}`, null or none to follow the file); user-tiers.json
 is never written. A tier the row leaves empty, a provider with no row,
-and a tier the file no longer has keep the file's. For example, with the
+and a tier the file no longer has keep the file's. A settings.json that
+doesn't read is unknown, not "none": the shares read before still hold,
+and with none read before, a user not bound yet is a 503 (users already
+bound are served). For example, with the
 built-in tiers, codex free 10 and plus, pro and max 2 lets ten free
 users share a Codex account and two plus users another, while Claude's
 accounts keep plus, pro and max alone and free two to one. The Gateway

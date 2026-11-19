@@ -7,7 +7,7 @@
 // - a share typed is saved at once (settings/provider-shares) with the
 //   row's others;
 // - a provider is added from a menu of those without shares, and Remove
-//   sends none for it, the row gone;
+//   sends none for it, the row gone, one saved since it was drawn too;
 // - a share out of 0 to 1000 is said and not sent;
 // - nothing is wider than the window.
 // Every language, at a narrow and a wide window; no backend, the API is
@@ -145,23 +145,24 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await until(() => seen.posts.length === 2);
         assert.deepEqual(seen.posts[1], { provider: "claude", shares: { free: 3 } });
 
-        // Remove sends none for it, and its row goes
-        const remove = page.locator("#growthList .growth-shares-grid .gs-remove").nth(1);
+        // Remove sends none for it, and its row goes: Claude's, saved once
+        // since its row was drawn
+        const remove = page.locator("#growthList .growth-shares-grid .gs-remove").first();
         await reach(page, remove);
         await remove.click();
         await until(() => seen.posts.length === 3);
-        assert.deepEqual(seen.posts[2], { provider: "codex", shares: null });
+        assert.deepEqual(seen.posts[2], { provider: "claude", shares: null });
         await page.waitForFunction(() => document.querySelectorAll("#growthList .growth-shares-grid .gs-name").length === 1);
-        assert.deepEqual(await rows(page), ["Claude free=3 plus=(1) pro=(1) max=(1)"]);
-        // one out of range is said, not sent, and put back (last: a long
-        // refusal floats over the page's foot)
-        const left = page.locator('#growthList .growth-shares-grid .gs-share[data-tier="free"]').first();
+        assert.deepEqual(await rows(page), ["Codex free=10 plus=2 pro=(1) max=(1)"]);
+        // one out of range, or words, is said, not sent, and put back
+        // (last: a long refusal floats over the page's foot)
+        const left = page.locator('#growthList .growth-shares-grid .gs-share[data-tier="plus"]').first();
         await reach(page, left);
         await left.fill("1001");
         await left.press("Enter");
         await page.waitForFunction(() => document.querySelector("#status.err"));
         assert.equal((await page.locator("#status").textContent()).trim(), x("An account is shared by 1 to {n} users, or 0 for any number", { n: 1000 }));
-        assert.equal(await left.inputValue(), "3");
+        assert.equal(await left.inputValue(), "2");
         assert.equal(seen.posts.length, 3);
         assert.deepEqual(errors, []);
       });

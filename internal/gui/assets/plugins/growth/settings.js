@@ -302,16 +302,22 @@ function growthSharesRow(s) {
   const cell = (cls, text) => { const c = el("div", cls, text); c.setAttribute("role", "cell"); return c; };
   grid.append(cell("gs-head", t("Provider")), ...tiers.map((x) => { const c = cell("gs-head gs-tier", x.name); c.title = x.aliases?.length ? `${x.name} (${x.aliases.join(", ")})` : x.name; return c; }), cell("gs-head", ""));
   const redraw = () => row.replaceWith(growthSharesRow(prefs || s));
-  // send is the provider's shares as its inputs hold them, null with none
-  const send = (id, inputs) => {
+  // send is the provider's shares as its inputs hold them, null with none,
+  // each after the one before it of the row (chain): two cells changed in
+  // turn never race, the later sent last with both
+  const send = (id, inputs, chain) => {
     const out = {};
     tiers.forEach((x, i) => { const v = inputs[i].value.trim(); if (v !== "") out[x.name] = +v; });
     const none = !Object.keys(out).length;
-    return writingPrefs(api("settings/provider-shares", { provider: id, shares: none ? null : out }))
+    const go = () => writingPrefs(api("settings/provider-shares", { provider: id, shares: none ? null : out }))
       .then((ns) => { prefs = state.settings = ns; if (none) growthSharesRow.added = (growthSharesRow.added || []).filter((x) => x !== id); status(t("Saved"), "ok", 1500); if (none) redraw(); });
+    const p = chain.at.then(go, go);
+    chain.at = p.catch(() => {});
+    return p;
   };
   for (const id of ids) {
     const own = s.providerShares?.[id] || {};
+    const chain = { at: Promise.resolve() };
     const name = cell("gs-name", names.get(id) || id);
     name.title = names.has(id) ? id : t("{id} is no longer in Providers", { id });
     if (!names.has(id)) name.classList.add("gone");
@@ -327,14 +333,15 @@ function growthSharesRow(s) {
       let sent = i.value;
       i.onchange = () => {
         const v = i.value.trim();
-        if (v !== "" && (!/^\d+$/.test(v) || +v > most)) {
+        // a number field holding words reads as empty: said, not cleared
+        if (i.validity.badInput || v !== "" && (!/^\d+$/.test(v) || +v > most)) {
           status(t("An account is shared by 1 to {n} users, or 0 for any number", { n: most }), "err");
           i.value = sent;
           return;
         }
         const was = sent;
         sent = v;
-        send(id, inputs).catch((e) => { if (sent === v) { sent = was; i.value = was; } statusErr(e); });
+        send(id, inputs, chain).catch((e) => { if (sent === v) { sent = was; i.value = was; } statusErr(e); });
       };
       const c = cell("gs-cell");
       c.append(i);
@@ -344,10 +351,13 @@ function growthSharesRow(s) {
     const rm = el("button", "text gs-remove", t("Remove"));
     rm.type = "button";
     rm.setAttribute("aria-label", t("Follow user-tiers.json for {provider}", { provider: names.get(id) || id }));
+    // saved since the row was drawn too (a provider just added): its
+    // shares as the settings now say
     rm.onclick = () => {
-      if (!Object.keys(own).length) { growthSharesRow.added = (growthSharesRow.added || []).filter((x) => x !== id); return redraw(); }
+      if (!Object.keys((prefs || s).providerShares?.[id] || {}).length) { growthSharesRow.added = (growthSharesRow.added || []).filter((x) => x !== id); return redraw(); }
+      const was = inputs.map((i) => i.value);
       inputs.forEach((i) => { i.value = ""; });
-      send(id, inputs).catch(statusErr);
+      send(id, inputs, chain).catch((e) => { inputs.forEach((i, n) => { i.value = was[n]; }); statusErr(e); });
     };
     const c = cell("gs-cell");
     c.append(rm);

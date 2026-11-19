@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -169,36 +170,74 @@ func (t Tiers) nameOf(name string) string {
 // forProvider is t with each tier own names (by its name or an alias,
 // whatever the case) sharing an account as own says in place of the
 // file's: a provider's own shares, Settings' (settings.ProviderShares,
-// T-243). t without own; t's slices are never written.
+// T-243). A tier named twice (by hand: "free" and "FREE", or an alias)
+// takes the fewer users, 0 (any number) the most. t without own; t's
+// slices are never written.
 func (t Tiers) forProvider(own map[string]int) Tiers {
 	if len(own) == 0 {
 		return t
 	}
 	t.Tiers = slices.Clone(t.Tiers)
-	for name, share := range own {
+	set := map[string]bool{}
+	for _, name := range slices.Sorted(maps.Keys(own)) {
 		x, ok := t.find(name)
+		share := own[name]
 		if !ok || share < 0 {
 			continue
 		}
-		t.Tiers[slices.IndexFunc(t.Tiers, func(y Tier) bool { return y.Name == x.Name })].Share = share
+		i := slices.IndexFunc(t.Tiers, func(y Tier) bool { return y.Name == x.Name })
+		if was := t.Tiers[i].Share; set[x.Name] && (share == 0 || was != 0 && was < share) {
+			continue
+		}
+		t.Tiers[i].Share, set[x.Name] = share, true
 	}
 	return t
 }
 
 // providerSharesOf is the shares by tier Settings gives provider pid's
 // accounts (settings.ProviderShares, T-243), nil for none: read before
-// userBinds is taken, as settings.json is never read under it. A test's to
-// set.
-var providerSharesOf = func(pid string) map[string]int { return settings.Shared().ProviderShares[pid] }
+// userBinds is taken, as settings.json is never read under it. A
+// settings.json that doesn't read is unknown, never "none": the shares
+// read before in this process still hold, and with none read before it
+// is the error. A test's to set.
+var providerSharesOf = func(pid string) (map[string]int, error) {
+	s, err := settings.SharedChecked()
+	return sharesFrom(s, err, pid)
+}
+
+// sharesFrom is providerSharesOf of settings read as s, or err.
+func sharesFrom(s settings.Settings, err error, pid string) (map[string]int, error) {
+	sharesRead.Lock()
+	defer sharesRead.Unlock()
+	if err != nil {
+		if !sharesRead.ok {
+			return nil, err
+		}
+		return sharesRead.m[pid], nil
+	}
+	sharesRead.m, sharesRead.ok = s.ProviderShares, true
+	return s.ProviderShares[pid], nil
+}
+
+// sharesRead is settings.ProviderShares as last read whole.
+var sharesRead struct {
+	sync.Mutex
+	m  map[string]map[string]int
+	ok bool
+}
 
 // tiersFor is tiers with provider pid's own shares (providerSharesOf),
-// and tier as they say it.
-func tiersFor(tiers Tiers, tier Tier, pid string) (Tiers, Tier) {
-	tiers = tiers.forProvider(providerSharesOf(pid))
+// and tier as they say it; err that they aren't known.
+func tiersFor(tiers Tiers, tier Tier, pid string) (Tiers, Tier, error) {
+	own, err := providerSharesOf(pid)
+	if err != nil {
+		return tiers, tier, err
+	}
+	tiers = tiers.forProvider(own)
 	if x, ok := tiers.find(tier.Name); ok {
 		tier.Share = x.Share
 	}
-	return tiers, tier
+	return tiers, tier, nil
 }
 
 // idBad is why v, a user's or a tier's name sent in or read for name,

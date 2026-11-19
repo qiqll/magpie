@@ -265,8 +265,10 @@ func TestParseByUse(t *testing.T) {
 }
 
 // A user of a tier with no limit (share 0) on an account, with no use of
-// its own yet, counts nothing toward it rather than a whole account: a
-// free user still shares it.
+// its own yet, counted nothing toward it rather than a whole account, and
+// a free user shared it. Since T-243 only users of one tier share an
+// account, so the free user isn't put on it by use or otherwise: told
+// the account is another tier's (a 429, seats), and nothing is asked.
 func TestByUseUnlimitedTierCountsByUseOnly(t *testing.T) {
 	codexSignedIn(t)
 	asked, _ := usersUpstream(t, nil)
@@ -277,11 +279,14 @@ func TestByUseUnlimitedTierCountsByUseOnly(t *testing.T) {
 	// me@ holds 2M, routed for nobody's user; alice ~11% of it
 	usedLately(t, spread("", "me@example.com", 1_200_000, 6.5), spread("alice", "z@example.com", 200_000, 6.5))
 	s := byUser(New())
-	if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
-		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
+	rec := tierPost(s, "alice", "free", "hi")
+	if limit, _ := limitOf(t, rec); rec.Code != 429 || limit != "seats" || !strings.Contains(refusedWhy(s), "shared by users of another tier") {
+		t.Fatalf("alice: %d %q %s", rec.Code, limit, refusedWhy(s))
 	}
-	asked(true)
-	if seats := seatsIn(t, "codex"); len(seats["alice"]) != 1 {
+	if got := asked(true); len(got) != 0 {
+		t.Fatalf("asked: %v", got)
+	}
+	if seats := seatsIn(t, "codex"); len(seats["alice"]) != 0 {
 		t.Fatalf("seats %v", seats)
 	}
 }

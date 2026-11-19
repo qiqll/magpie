@@ -11,7 +11,8 @@ package gateway
 // a provider's own share for a tier, Settings', in its place, T-243),
 // so a user of a tier with its account alone is bound to one nobody
 // else is, and only users of one tier share an account (T-243: a
-// binding made before, of several tiers, is kept, and takes nobody new);
+// binding made before, of several tiers, is kept, as is one whose user
+// names another tier since, and takes nobody new);
 // with no account of the provider that has one, the user's request is a
 // 429. A spare is added, up to
 // its tier's max_accounts (user_tiers.go), only when each account it has
@@ -1102,7 +1103,7 @@ func leftIs(w Weighed, pid, who string) bool {
 func bindUser(keyID, user string, tier Tier, named bool, p provider.Provider, cands []candidate, pl planned) ([]candidate, planned, *UserBound, userRefusal) {
 	tiers, _ := loadTiers() // read already by tierOf: what it said
 	// with the provider's own shares, Settings', read before the lock
-	tiers, tier = tiersFor(tiers, tier, p.ID)
+	tiers, tier, sharesErr := tiersFor(tiers, tier, p.ID)
 	// which of p's accounts have to be signed in again, read before the
 	// lock: logins.json isn't read while userBinds is held
 	lapsedWho := lapsedOf(p.ID, cands, pl)
@@ -1201,6 +1202,9 @@ func bindUser(keyID, user string, tier Tier, named bool, p provider.Provider, ca
 	if len(kept) == 0 {
 		if userBinds.stale {
 			return nil, pl, ub, userRefusal{status: http.StatusServiceUnavailable, msg: fmt.Sprintf("%s: user-accounts.json can't be read, so %q isn't bound to an account now; nothing was sent. magpie's log says why", UserHeader, user)}
+		}
+		if sharesErr != nil {
+			return nil, pl, ub, userRefusal{status: http.StatusServiceUnavailable, unknown: true, msg: fmt.Sprintf("%s: settings.json can't be read, so how many users an account of the provider takes isn't known, and %q isn't bound to one now; nothing was sent. magpie's log says why", UserHeader, user)}
 		}
 		uses := seatUsesBy(keyID, p.ID, tiers, user, budget, tier.Share)
 		pick := firstOf(p.ID, cands, pl, tier, uses, lapsedWho)
@@ -1353,12 +1357,13 @@ func setSeats(keyID, pid, user string, seats []userSeat) {
 // asking, bound under any gateway key (the asking key's included), as a
 // first or a spare, one name under several keys of a group counted once
 // (userGroup), the least share of their tiers share (0 for no limit),
-// their tiers' names tiers (Tiers.nameOf); own says the user asking is
-// on it too, under any key of its group.
+// each user's tiers' names tiers (Tiers.nameOf: a user under several
+// keys of its group may keep a tier under each); own says the user
+// asking is on it too, under any key of its group.
 type seatUse struct {
 	n, share int
 	own      bool
-	tiers    map[string]bool
+	tiers    map[userName]map[string]bool
 	// over: why the account has no room by its users' use for the one
 	// asking (by_use, useBudget.over), shared by others already
 	over string
@@ -1389,11 +1394,11 @@ func (u seatUse) seated(share int) bool {
 	return (share == 0 || n <= share) && (u.share == 0 || n <= u.share)
 }
 
-// otherTier says a user of another tier than name is on the account: one
-// of name doesn't join it (T-243).
+// otherTier says a user of another tier than name is on the account, of
+// none of the tiers its keys keep: one of name doesn't join it (T-243).
 func (u seatUse) otherTier(name string) bool {
-	for x := range u.tiers {
-		if x != name {
+	for _, of := range u.tiers {
+		if !of[name] {
 			return true
 		}
 	}
@@ -1454,9 +1459,12 @@ func seatUsesBy(keyID, pid string, tiers Tiers, user string, budget *useBudget, 
 					on[who] = map[userName]int{}
 				}
 				if u.tiers == nil {
-					u.tiers = map[string]bool{}
+					u.tiers = map[userName]map[string]bool{}
 				}
-				u.tiers[tierName] = true
+				if u.tiers[name] == nil {
+					u.tiers[name] = map[string]bool{}
+				}
+				u.tiers[name][tierName] = true
 				if was, seen := on[who][name]; !seen {
 					on[who][name] = share
 					u.n++
@@ -1731,7 +1739,12 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 		return refuse(u.atTier(mine), limitAccounts)
 	}
 	tiers, _ := loadTiers()
-	tiers, _ = tiersFor(tiers, u.tier, u.pid)         // the provider's own shares, Settings', as bindUser's
+	// the provider's own shares, Settings', as bindUser's; unknown, no
+	// spare is added
+	tiers, _, err := tiersFor(tiers, u.tier, u.pid)
+	if err != nil {
+		return refuse("settings.json can't be read, so how many users an account of the provider takes isn't known", "")
+	}
 	budget := byUseOf(u.pid, pool, tiers, time.Now()) // before the lock, as bindUser's
 	userBinds.Lock()
 	defer userBinds.Unlock()
