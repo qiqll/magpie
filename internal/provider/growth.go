@@ -1916,6 +1916,8 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount, left
 		grad, wasGrad := f.Providers[i].AccountGraduated[old.user]
 		opened, wasOpened := f.Providers[i].AccountOpened[old.user]
 		idle, hadIdle := f.Providers[i].AccountBindIdle[old.user]
+		pol, hadPol := f.Providers[i].AccountGrowthPolicy[old.user]
+		skip, wasSkipped := f.Providers[i].AccountGrowthSkipped[old.user]
 		delete(entry(old.id).AccountAdded, old.user)
 		entry(now.id).AccountAdded[now.user] = t
 		if wasUsed {
@@ -1977,6 +1979,36 @@ func noteAdded(added []loginAccount, renamed map[loginAccount]loginAccount, left
 				n.AccountBindIdle = map[string]int{}
 			}
 			n.AccountBindIdle[now.user] = idle
+		}
+		if hadPol {
+			// and the growth policy it picked (T-133, T-244)
+			o := entry(old.id)
+			o.AccountGrowthPolicy = maps.Clone(o.AccountGrowthPolicy)
+			delete(o.AccountGrowthPolicy, old.user)
+			if len(o.AccountGrowthPolicy) == 0 {
+				o.AccountGrowthPolicy = nil
+			}
+			n := entry(now.id)
+			n.AccountGrowthPolicy = maps.Clone(n.AccountGrowthPolicy)
+			if n.AccountGrowthPolicy == nil {
+				n.AccountGrowthPolicy = map[string]string{}
+			}
+			n.AccountGrowthPolicy[now.user] = pol
+		}
+		if wasSkipped {
+			// and its ramp-up skipped (T-140, T-244)
+			o := entry(old.id)
+			o.AccountGrowthSkipped = maps.Clone(o.AccountGrowthSkipped)
+			delete(o.AccountGrowthSkipped, old.user)
+			if len(o.AccountGrowthSkipped) == 0 {
+				o.AccountGrowthSkipped = nil
+			}
+			n := entry(now.id)
+			n.AccountGrowthSkipped = maps.Clone(n.AccountGrowthSkipped)
+			if n.AccountGrowthSkipped == nil {
+				n.AccountGrowthSkipped = map[string]time.Time{}
+			}
+			n.AccountGrowthSkipped[now.user] = skip
 		}
 		changed = true
 	}

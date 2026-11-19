@@ -486,3 +486,37 @@ func TestGrowthUsesListAKeyedProvidersPick(t *testing.T) {
 		t.Fatalf("the clear changed the relay: %v %v", p, err)
 	}
 }
+
+// A login renamed as logins.json is written (noteAdded) takes the growth
+// policy it picked and its ramp-up skipped to its new name, leaving no key
+// under the old one (T-244), as it does its day added; the user's removal
+// of it under the new name drops both.
+func TestAccountGrowthMovesWithARenamedLogin(t *testing.T) {
+	firstUsedFixture(t, time.Hour)
+	if err := SetAccountGrowthPolicy("codex", "new@example.com", settings.GrowthCautious); err != nil {
+		t.Fatal(err)
+	}
+	if err := SkipGrowth("codex", "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := storedPicks("codex")
+	skipped := s.AccountGrowthSkipped["new@example.com"]
+	if skipped.IsZero() {
+		t.Fatalf("no skip before the rename: %v", s.AccountGrowthSkipped)
+	}
+	noteAdded(nil, map[loginAccount]loginAccount{{"codex", "new@example.com"}: {"codex", "renamed@example.com"}}, nil)
+	s, _ = storedPicks("codex")
+	if len(s.AccountGrowthPolicy) != 1 || s.AccountGrowthPolicy["renamed@example.com"] != settings.GrowthCautious {
+		t.Fatalf("policy after the rename: %v", s.AccountGrowthPolicy)
+	}
+	if len(s.AccountGrowthSkipped) != 1 || !s.AccountGrowthSkipped["renamed@example.com"].Equal(skipped) {
+		t.Fatalf("skip after the rename: %v", s.AccountGrowthSkipped)
+	}
+	if got := growthPolicyFor("codex", "renamed@example.com"); got.ID != settings.GrowthCautious {
+		t.Fatalf("the renamed account is held by %q", got.ID)
+	}
+	forgetAdded("codex", "renamed@example.com")
+	if s, _ := storedPicks("codex"); s.AccountGrowthPolicy != nil || s.AccountGrowthSkipped != nil {
+		t.Fatalf("removed under its new name, kept %v %v", s.AccountGrowthPolicy, s.AccountGrowthSkipped)
+	}
+}

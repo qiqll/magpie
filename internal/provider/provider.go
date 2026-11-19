@@ -540,8 +540,8 @@ type Provider struct {
 	// as does one whose pick no policy has. Set on its own, with
 	// accountgrowthpolicy (SetAccountGrowthPolicy); the editor's Save keeps
 	// what the file has. It moves with an account renamed
-	// (moveAccountSettings) and goes when the user removes the account
-	// (forgetAdded).
+	// (moveAccountSettings, noteAdded) and goes when the user removes the
+	// account (forgetAdded).
 	AccountGrowthPolicy map[string]string `json:"accountGrowthPolicy,omitempty"`
 	// AccountGrowthSkipped is, for a subscription, when the user skipped
 	// each account's ramp-up (T-140, SkipGrowth), by its name in lower
@@ -550,8 +550,8 @@ type Provider struct {
 	// them. Kept apart from AccountWindowCaps, so a skip is no window's
 	// own 100. Set on its own (provider/skipgrowth); the editor's Save
 	// keeps what the file has. It moves with an account renamed
-	// (moveAccountSettings) and goes when the user removes the account
-	// (forgetAdded).
+	// (moveAccountSettings, noteAdded) and goes when the user removes the
+	// account (forgetAdded).
 	AccountGrowthSkipped map[string]time.Time `json:"accountGrowthSkipped,omitempty"`
 	// AccountGraduated is, for a subscription, when magpie found each
 	// account's ramp-up done (T-150), by its name in lower case: written
