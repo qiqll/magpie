@@ -92,3 +92,45 @@ func TestAreasRoutes(t *testing.T) {
 		t.Fatal("the deleted area's admin key is left")
 	}
 }
+
+// The console's key rotated, turned off or removed from the window
+// cancels the sign-ins its old secret started (T-261); copied or turned
+// on, it cancels nothing, and one that failed cancels nothing either.
+func TestAreasConsoleKeyChangeCancelsItsSignIns(t *testing.T) {
+	sandboxHome(t)
+	mux := http.NewServeMux()
+	areaRoutes(mux)
+	calls := 0
+	was := cancelConsoleSignIns
+	cancelConsoleSignIns = func() { calls++ }
+	t.Cleanup(func() { cancelConsoleSignIns = was })
+	do := func(action string) int {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/areas/"+action, strings.NewReader("{}")))
+		return w.Code
+	}
+	if c := do("console-rotate"); c == 200 || calls != 0 {
+		t.Fatal("with no console key:", c, calls)
+	}
+	if c := do("console-add"); c != 200 {
+		t.Fatal("console-add:", c)
+	}
+	for _, step := range []struct {
+		action string
+		cancel bool
+	}{
+		{"console-copy", false},
+		{"console-rotate", true},
+		{"console-off", true},
+		{"console-on", false},
+		{"console-remove", true},
+	} {
+		before := calls
+		if c := do(step.action); c != 200 {
+			t.Fatal(step.action, c)
+		}
+		if got := calls > before; got != step.cancel {
+			t.Fatal(step.action, "cancelled the console's sign-ins:", got)
+		}
+	}
+}

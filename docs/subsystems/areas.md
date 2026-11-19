@@ -838,8 +838,16 @@ console, so `TestAdminKeyEveryRoute` covers it.
   the read and the claim, a window of one file write: `ClaimUpTo` reads
   neither the key nor the area's `off`.
 
-  Not covered: the console's sign-ins and imports go on through a change
-  of the console's own key (T-261).
+  The console's own key is held the same way (T-261). Rotating, turning
+  off or removing it from the window (`console-rotate`, `console-off`,
+  `console-remove`) cancels every sign-in it started, for every area
+  (`CancelConsoleSignIns`); the areas' own keys' go on. One its old
+  secret records after is let go by `keepAreaSignIn`, one that ends
+  after a change that cancels nothing (`magpie gateway-key`) claims
+  nothing (`claimDone`), and its imports, batches of keys and plugin
+  key sign-ins claim nothing after (`stillActs` reads `access.Current`
+  for the console's key too, though not the area's `off`, which the
+  console acts through). The new secret's go on.
 - **Log.** Each action's line is `admin: console for area <id> (<note>)
   <action> actor=<X-Magpie-Actor or ->` (`adminCall.logf`, the same line
   an area's key writes as `admin: area <id> (<note>) <action>`). A write

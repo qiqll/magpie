@@ -640,6 +640,8 @@ func (s *Server) adminPluginSignIn(w http.ResponseWriter, r *http.Request, c adm
 // came before it saw it is made here instead. So is a key's whose
 // secret was rotated (or the key removed or turned off) while it
 // started (T-236), this one alone: one the new secret started goes on.
+// The console's own key is read the same way (T-261), so one its
+// rotate, off or removal (CancelConsoleSignIns) came before is let go.
 func keepAreaSignIn(c adminCall, id string, box *pickBox) {
 	recordAreaSignIn(c, id, box)
 	a, err := area.Get(c.area.ID)
@@ -647,7 +649,7 @@ func keepAreaSignIn(c adminCall, id string, box *pickBox) {
 		cancelSignIns(c.area.ID, errors.Is(err, area.ErrNotFound))
 		return
 	}
-	if !c.console && !access.Current(c.who) {
+	if (!c.console || c.who.KeyID != "") && !access.Current(c.who) {
 		cancelSignIn(id)
 	}
 }

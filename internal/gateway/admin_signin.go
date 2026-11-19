@@ -231,11 +231,12 @@ func claimDone(c adminCall) func(provider.SignInState) provider.SignInState {
 			st.State, st.Error = "failed", "no area signs in to "+st.Agent
 			return st
 		}
-		if !c.console && c.who.KeyID != "" && !access.Current(c.who) {
-			// the key that started it was rotated, turned off or removed
-			// while it waited (T-236), by a way that cancels nothing (the
-			// CLI's gateway-key, the window's key list): its account is
-			// taken out again, never the area's
+		if c.who.KeyID != "" && !access.Current(c.who) {
+			// the key that started it, the area's (T-236) or the
+			// console's (T-261), was rotated, turned off or removed while
+			// it waited, by a way that cancels nothing (the CLI's
+			// gateway-key, the window's key list): its account is taken
+			// out again, never the area's
 			st.State, st.Error = "failed", "the admin key that started this sign-in was changed, so the account isn't the area's"
 			if ferr := provider.ForgetLogin(st.Agent, st.User); ferr != nil {
 				log.Printf("admin: area %s's %s account, its key changed, not removed either: %v", id, st.Agent, ferr)
@@ -564,13 +565,28 @@ func CancelAreaSignIns(id string) { cancelSignIns(id, true) }
 // it still (magpie-api.md §17), its sign-ins too.
 func CancelAreaKeySignIns(id string) { cancelSignIns(id, false) }
 
+// CancelConsoleSignIns cancels the sign-ins the console started, for
+// every area: its key rotated, turned off or removed adds no account
+// from its old secret (T-261), as an area's key's rotate (RotateAreaKey)
+// does for that area's. The areas' own keys' sign-ins go on. One the old
+// secret records after this is let go by keepAreaSignIn, and one that
+// ends after a change that cancels nothing claims nothing (claimDone).
+func CancelConsoleSignIns() {
+	cancelSignInsWhere(func(a areaSignIn) bool { return a.console })
+}
+
 // cancelSignIns cancels the sign-ins area id's key started, and the
 // console's for it too when console.
 func cancelSignIns(id string, console bool) {
+	cancelSignInsWhere(func(a areaSignIn) bool { return a.area == id && (console || !a.console) })
+}
+
+// cancelSignInsWhere cancels every area sign-in that is.
+func cancelSignInsWhere(is func(areaSignIn) bool) {
 	var ids []string
 	areaSignIns.Lock()
 	for sid, a := range areaSignIns.m {
-		if a.area == id && (console || !a.console) {
+		if is(a) {
 			ids = append(ids, sid)
 			delete(areaSignIns.m, sid)
 		}

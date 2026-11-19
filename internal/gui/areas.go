@@ -88,6 +88,10 @@ func areaRoutes(mux *http.ServeMux) {
 	})
 }
 
+// cancelConsoleSignIns cancels the console's sign-ins once its key is
+// rotated, turned off or removed (T-261); a test counts the calls.
+var cancelConsoleSignIns = gateway.CancelConsoleSignIns
+
 func areaAction(r *http.Request, action, id, note, ref string, off *bool, providers, signIns *[]string, ips []string) (string, error) {
 	areaKey := func() (access.Key, error) {
 		k, ok, err := access.AreaKey(id)
@@ -166,7 +170,12 @@ func areaAction(r *http.Request, action, id, note, ref string, off *bool, provid
 			return "", err
 		}
 		a := map[string]string{"console-rotate": "rotate-key", "console-copy": "copy-key", "console-remove": "remove-key", "console-on": "on-key", "console-off": "off-key"}[action]
-		return access.Update(a, access.Change{Key: k.ID})
+		secret, err := access.Update(a, access.Change{Key: k.ID})
+		if err == nil && (action == "console-rotate" || action == "console-remove" || action == "console-off") {
+			// the old secret's sign-ins add no account (T-261)
+			cancelConsoleSignIns()
+		}
+		return secret, err
 	case "allow-ips":
 		if _, env := gateway.AdminAllowIPs(); env {
 			return "", fmt.Errorf("%s sets the admin allow list; change it there", gateway.AdminAllowIPsEnv)

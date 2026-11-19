@@ -607,15 +607,20 @@ var (
 // be rotated, turned off or removed (by the console, the window or the
 // CLI), or the area turned off or deleted, while it does. Nothing of the
 // account is the area's then. An areas.json it can't read is no answer
-// either. The console acts for an area whatever its own key's change
-// (T-261) and for one turned off, as keepAreaSignIn lets it; a call with
-// no key (the window's claimOnDone) is the owner's.
+// either. The console's key is read again the same way (T-261): one
+// rotated, turned off or removed while its call ran claims nothing
+// either. The console acts for an area turned off still, as
+// keepAreaSignIn lets it; a call with no key (the window's claimOnDone)
+// is the owner's.
 func stillActs(c adminCall) error {
-	if c.console || c.who.KeyID == "" {
+	if c.who.KeyID == "" {
 		return nil
 	}
 	if !access.Current(c.who) {
 		return errKeyChanged
+	}
+	if c.console {
+		return nil
 	}
 	a, err := area.Get(c.area.ID)
 	switch {
