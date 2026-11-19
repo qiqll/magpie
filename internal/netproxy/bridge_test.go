@@ -3,7 +3,7 @@ package netproxy
 import (
 	"bufio"
 	"encoding/binary"
-	"fmt"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -342,25 +343,46 @@ func TestEnvForBunWithBridgesTheProvidersSOCKS(t *testing.T) {
 	}
 }
 
+// openConns closes, when the test ends, each connection given to it.
+type openConns struct {
+	mu sync.Mutex
+	cs []net.Conn
+}
+
+func (o *openConns) add(c net.Conn) {
+	o.mu.Lock()
+	o.cs = append(o.cs, c)
+	o.mu.Unlock()
+}
+
+func (o *openConns) closeAll() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, c := range o.cs {
+		c.Close()
+	}
+}
+
 // halfCloseSOCKS is a SOCKS5 proxy that, like some, doesn't pass a
-// half-close on: a client's end of writing never reaches the host, so the
-// host never ends the connection. conns is each connection it took from
-// the bridge.
+// client's half-close on: the client's end of writing never reaches the
+// host, so a host waiting for it never ends the connection. The host's
+// end is passed on. conns is each connection it took from the bridge.
 func halfCloseSOCKS(t *testing.T, host string) (*url.URL, chan net.Conn) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	var open openConns
+	t.Cleanup(func() { ln.Close(); open.closeAll() })
 	conns := make(chan net.Conn, 16)
-	t.Cleanup(func() { ln.Close() })
 	go func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			t.Cleanup(func() { c.Close() })
+			open.add(c)
 			go func(c net.Conn) {
 				var h [2]byte
 				io.ReadFull(c, h[:])
@@ -380,103 +402,186 @@ func halfCloseSOCKS(t *testing.T, host string) (*url.URL, chan net.Conn) {
 					c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
 					return
 				}
-				t.Cleanup(func() { up.Close() })
+				open.add(up)
 				c.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 0})
 				conns <- c
 				go io.Copy(up, c) // the client's end isn't passed on
 				io.Copy(c, up)
+				c.(*net.TCPConn).CloseWrite()
 			}(c)
 		}
 	}()
 	return &url.URL{Scheme: "socks5", Host: ln.Addr().String()}, conns
 }
 
-// T-238: a CONNECT tunnel whose client has ended writing, through a SOCKS
-// proxy that doesn't pass that on, waited for the host to end it, which
-// never came, so each such connection to the proxy stayed open and used
-// up its limit. The host's reply after the half-close still reaches the
-// client; then, with nothing more coming for tunnelLinger, the bridge
-// ends both sides, and the proxy finds every connection closed.
-func TestBridgeEndsAHalfClosedTunnel(t *testing.T) {
-	old := tunnelLinger.Swap(int64(time.Second))
-	t.Cleanup(func() { tunnelLinger.Store(old) })
-	host, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { host.Close() })
-	go func() {
-		for {
-			c, err := host.Accept()
-			if err != nil {
-				return
-			}
-			t.Cleanup(func() { c.Close() })
-			go func(c net.Conn) {
-				// answers "ping" and holds the connection: it never reads
-				// the client's end, which the proxy doesn't pass on
-				var b [4]byte
-				if _, err := io.ReadFull(c, b[:]); err == nil {
-					c.Write([]byte("pong"))
-				}
-			}(c)
+// closedByPeer waits for c's other end to be closed: a write to it fails
+// once that end has reset it.
+func closedByPeer(t *testing.T, c net.Conn, what string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := c.Write([]byte{0}); err != nil {
+			return
 		}
-	}()
-	socks, conns := halfCloseSOCKS(t, host.Addr().String())
-	b, err := Bridge(socks)
-	if err != nil {
-		t.Fatal(err)
+		if time.Now().After(deadline) {
+			t.Fatalf("the bridge still holds %s open", what)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// T-238: a CONNECT tunnel one way of which had ended, through a SOCKS
+// proxy that doesn't pass a client's half-close on, waited for the other
+// way to end, which never came, so each such connection to the proxy
+// stayed open and used up its limit. Now, with nothing more coming for
+// tunnelLinger, the bridge ends both sides and the proxy finds every
+// connection closed; what still comes the other way, each part within
+// tunnelLinger of the last, keeps the tunnel open and reaches the end.
+func TestBridgeEndsAHalfClosedTunnel(t *testing.T) {
+	const linger = time.Second
+	old := tunnelLinger.Swap(int64(linger))
+	t.Cleanup(func() { tunnelLinger.Store(old) })
+	// gap between parts: 0.6s short of linger, and 5 of them 1s past it
+	const gap, parts = 400 * time.Millisecond, 5
 	const n = 3
-	type got struct {
-		body string
-		err  error
-	}
-	results := make(chan got, n)
-	for range n {
+	connect := func(t *testing.T, b, host string) (net.Conn, *bufio.Reader) {
 		c, err := net.Dial("tcp", strings.TrimPrefix(b, "http://"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { c.Close() })
-		io.WriteString(c, "CONNECT "+host.Addr().String()+" HTTP/1.1\r\nHost: "+host.Addr().String()+"\r\n\r\n")
+		_ = c.SetDeadline(time.Now().Add(20 * time.Second))
+		io.WriteString(c, "CONNECT "+host+" HTTP/1.1\r\nHost: "+host+"\r\n\r\n")
+		br := bufio.NewReader(c)
+		res, err := http.ReadResponse(br, nil)
+		if err != nil || res.StatusCode != 200 {
+			t.Errorf("CONNECT: %v %v", res, err)
+			return nil, nil
+		}
+		return c, br
+	}
+	hostServing := func(t *testing.T, serve func(net.Conn)) net.Listener {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var open openConns
+		t.Cleanup(func() { ln.Close(); open.closeAll() })
 		go func() {
-			_ = c.SetReadDeadline(time.Now().Add(20 * time.Second))
-			br := bufio.NewReader(c)
-			res, err := http.ReadResponse(br, nil)
-			if err != nil {
-				results <- got{err: err}
-				return
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				open.add(c)
+				go serve(c)
 			}
-			if res.StatusCode != 200 {
-				results <- got{err: fmt.Errorf("CONNECT: %s", res.Status)}
-				return
-			}
-			io.WriteString(c, "ping")
-			c.(*net.TCPConn).CloseWrite()
-			body, err := io.ReadAll(br) // ends only when the bridge ends the tunnel
-			results <- got{string(body), err}
 		}()
+		return ln
 	}
-	for range n {
-		r := <-results
-		if r.err != nil || r.body != "pong" {
-			t.Fatalf("the client read %q, %v; want pong and the tunnel ended", r.body, r.err)
-		}
-	}
-	// each connection the proxy took from the bridge is closed: a write
-	// to it fails once the bridge's end has reset it
-	for range n {
-		c := <-conns
-		deadline := time.Now().Add(10 * time.Second)
-		for {
-			if _, err := c.Write([]byte{0}); err != nil {
-				break
+
+	// the client ends writing; the host, never told, answers in parts
+	// and holds the connection
+	t.Run("client ends first", func(t *testing.T) {
+		host := hostServing(t, func(c net.Conn) {
+			var b [4]byte
+			if _, err := io.ReadFull(c, b[:]); err != nil {
+				return
 			}
-			if time.Now().After(deadline) {
-				t.Fatal("the bridge still holds a connection to the proxy open")
+			for i := range parts {
+				if i > 0 {
+					time.Sleep(gap)
+				}
+				c.Write([]byte{'a' + byte(i)})
 			}
-			time.Sleep(10 * time.Millisecond)
+		})
+		socks, conns := halfCloseSOCKS(t, host.Addr().String())
+		b, err := Bridge(socks)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
+		type got struct {
+			body string
+			err  error
+		}
+		results := make(chan got, n)
+		for range n {
+			go func() {
+				c, br := connect(t, b, host.Addr().String())
+				if c == nil {
+					results <- got{err: errors.New("no tunnel")}
+					return
+				}
+				io.WriteString(c, "ping")
+				c.(*net.TCPConn).CloseWrite()
+				body, err := io.ReadAll(br) // ends only when the bridge ends the tunnel
+				results <- got{string(body), err}
+			}()
+		}
+		for range n {
+			if r := <-results; r.err != nil || r.body != "abcde" {
+				t.Fatalf("the client read %q, %v; want abcde and the tunnel ended", r.body, r.err)
+			}
+		}
+		for range n {
+			closedByPeer(t, <-conns, "a connection to the proxy")
+		}
+	})
+
+	// the host ends first; the client goes on sending in parts, then
+	// stops without closing, and the tunnel ends tunnelLinger after
+	t.Run("host ends first", func(t *testing.T) {
+		got := make(chan string, n)
+		host := hostServing(t, func(c net.Conn) {
+			c.Write([]byte("x"))
+			c.(*net.TCPConn).CloseWrite()
+			// the proxy passes no end on, so a tunnel cut short
+			// reads short only at this bound
+			_ = c.SetReadDeadline(time.Now().Add(20 * time.Second))
+			b := make([]byte, parts)
+			k, _ := io.ReadFull(c, b)
+			got <- string(b[:k])
+		})
+		socks, conns := halfCloseSOCKS(t, host.Addr().String())
+		b, err := Bridge(socks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clients := make(chan net.Conn, n)
+		for range n {
+			go func() {
+				c, br := connect(t, b, host.Addr().String())
+				if c == nil {
+					clients <- nil
+					return
+				}
+				if body, err := io.ReadAll(br); err != nil || string(body) != "x" {
+					t.Errorf("the client read %q, %v; want x and the host's end", body, err)
+				}
+				for i := range parts {
+					if i > 0 {
+						time.Sleep(gap)
+					}
+					c.Write([]byte{'a' + byte(i)})
+				}
+				clients <- c
+			}()
+		}
+		for range n {
+			if s := <-got; s != "abcde" {
+				t.Fatalf("the host read %q, want abcde", s)
+			}
+		}
+		for range n {
+			if <-clients == nil {
+				t.Fatal("no tunnel")
+			}
+		}
+		// a client writing to see whether its tunnel is closed would be
+		// what keeps it open; the proxy's side is the one the bridge no
+		// longer reads
+		for range n {
+			closedByPeer(t, <-conns, "a connection to the proxy")
+		}
+	})
 }
