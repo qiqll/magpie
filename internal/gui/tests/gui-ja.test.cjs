@@ -56,7 +56,7 @@ for (const [name, engine] of [["webkit", webkit], ["chromium", chromium]]) {
         await page.waitForFunction(() => typeof locale === "string" && document.documentElement.lang);
         const got = await page.evaluate(() => ({
           locale, lang: document.documentElement.lang,
-          nav: ["agents", "sessions", "library", "providers", "accounts", "routing", "groups"].map((v) => document.querySelector(`button[data-view="${v}"]`)?.textContent.trim() ?? `no ${v} tab`),
+          nav: ["agents", "sessions", "library", "providers", "accounts", "routing", "groups"].map((v) => document.querySelector(`#nav button[data-view="${v}"]`)?.textContent.trim() ?? `no ${v} tab`),
           offered: LOCALES.map(([v, l]) => v + ":" + l),
         }));
         assert.equal(got.locale, want, `${lang} on ${sys}`);
