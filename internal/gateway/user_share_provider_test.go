@@ -32,7 +32,7 @@ const noShareTiers = `{"default":"free","tiers":{"free":{"max_accounts":2,"alias
 // B: plus shares one two to an account, free ten; a third plus user and an
 // eleventh free one are refused, and neither tier joins the other's
 // account.
-func TestProviderSharesStandInForTheFiles(t *testing.T) {
+func TestTierSharesOfAProviderStandInForTheFiles(t *testing.T) {
 	t.Run("A", func(t *testing.T) {
 		codexSignedIn(t, "b@example.com", "c@example.com")
 		asked, _ := usersUpstream(t, nil)
@@ -99,7 +99,7 @@ func TestProviderSharesStandInForTheFiles(t *testing.T) {
 // A provider's shares are its own: Settings naming another provider
 // leaves codex at the file's tiers, free two to an account, and so does a
 // tier user-tiers.json doesn't have.
-func TestProviderSharesOfAnotherProvider(t *testing.T) {
+func TestTierSharesOfAnotherProvider(t *testing.T) {
 	codexSignedIn(t)
 	asked, _ := usersUpstream(t, nil)
 	providerShares(t, map[string]map[string]int{"claude": {"free": 10}, "codex": {"gold": 10}})
@@ -271,7 +271,7 @@ func TestTierChangedKeepsItsAccount(t *testing.T) {
 // provider's own": the shares read before hold (sharesFrom), and with
 // none read before, a new user isn't bound (503) while one bound is still
 // served.
-func TestProviderSharesUnread(t *testing.T) {
+func TestTierSharesUnread(t *testing.T) {
 	forget := func() {
 		sharesRead.Lock()
 		sharesRead.m, sharesRead.ok = nil, false

@@ -18,7 +18,7 @@ import (
 // of range or a provider not in Providers, writing nothing; none clears
 // the provider, and the page is told the tiers, their shares and the
 // providers.
-func TestProviderSharesSaved(t *testing.T) {
+func TestTierSharesByProviderSaved(t *testing.T) {
 	sandboxHome(t)
 	if _, err := provider.Add(provider.Provider{ID: "own", Name: "Own", Chat: "http://127.0.0.1:1/v1", Key: "sk-own", Models: []string{"m1"}}); err != nil {
 		t.Fatal(err)
