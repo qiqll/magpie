@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/area"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
@@ -613,12 +614,29 @@ func (s *Server) adminPluginSignIn(w http.ResponseWriter, r *http.Request, c adm
 // its proxy picks; those magpie no longer has are dropped, not kept till
 // it quits. An area deleted, or turned off for its key's, while it
 // started is read after it is recorded, so a cancel (cancelSignIns) that
-// came before it saw it is made here instead.
+// came before it saw it is made here instead. So is a key's whose
+// secret was rotated (or the key removed or turned off) while it
+// started (T-236), this one alone: one the new secret started goes on.
 func keepAreaSignIn(c adminCall, id string, box *pickBox) {
 	recordAreaSignIn(c, id, box)
 	a, err := area.Get(c.area.ID)
 	if errors.Is(err, area.ErrNotFound) || err == nil && a.Off && !c.console {
 		cancelSignIns(c.area.ID, errors.Is(err, area.ErrNotFound))
+		return
+	}
+	if !c.console && !access.Current(c.who) {
+		cancelSignIn(id)
+	}
+}
+
+// cancelSignIn cancels the area sign-in id alone.
+func cancelSignIn(id string) {
+	areaSignIns.Lock()
+	_, ok := areaSignIns.m[id]
+	delete(areaSignIns.m, id)
+	areaSignIns.Unlock()
+	if ok {
+		provider.CancelSignIn(id)
 	}
 }
 

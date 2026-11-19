@@ -792,8 +792,12 @@ console, so `TestAdminKeyEveryRoute` covers it.
   under way is still `409` to both. Turning an area off cancels the
   sign-ins its key started (`CancelAreaKeySignIns`, the window's too);
   the console's go on. Deleting it cancels both (`CancelAreaSignIns`).
-  A sign-in recorded after either (`keepAreaSignIn` reads the area again
-  once it is recorded) is cancelled there.
+  Rotating its key (`rotate-key` or the window's, both
+  `RotateAreaKey`) cancels its key's as turning it off does (T-236): the
+  old secret adds no account. A sign-in recorded after any of these
+  (`keepAreaSignIn` reads the area again once it is recorded, and for
+  the key's, whether its secret is still `access.Current`) is cancelled
+  there; a key's whose secret was rotated meanwhile is cancelled alone.
 - **Log.** Each action's line is `admin: console for area <id> (<note>)
   <action> actor=<X-Magpie-Actor or ->` (`adminCall.logf`, the same line
   an area's key writes as `admin: area <id> (<note>) <action>`). A write

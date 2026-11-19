@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/area"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/renewal"
@@ -352,6 +353,124 @@ func TestAdminSignInKeptAfterOffIsLetGo(t *testing.T) {
 	keepAreaSignIn(adminCall{area: a, console: true}, "si-console-2", nil)
 	if kept("si-console-2") {
 		t.Fatal("deleted: the console's kept")
+	}
+}
+
+// Rotating an area's key cancels the sign-ins its old secret started
+// (T-236), from the console's route and the owner's window
+// (RotateAreaKey) both: the old secret adds no account. The console's
+// for the area goes on, and one the new secret starts is not cancelled
+// by the rotate that made it.
+func TestAdminSignInRotatedKeyIsCancelled(t *testing.T) {
+	do, console, _ := adminWorld(t)
+	id, key := makeArea(t, do, console, "A")
+	openSignIns(t, do, console, id, provider.ChatGPTAPIID, "codex")
+	vendor := httptest.NewServer(http.NotFoundHandler()) // a paste-url start asks it nothing
+	t.Cleanup(vendor.Close)
+	t.Cleanup(provider.SIWCForTest(vendor.URL, vendor.URL+"/v1"))
+	start := func(path, secret string) string {
+		t.Helper()
+		c, body := do("POST", path, lanPeer, secret, `{"agent":"chatgpt-api","way":"paste-url"}`)
+		var st adminSignInState
+		json.Unmarshal([]byte(body), &st)
+		if c != http.StatusOK || st.ID == "" || st.State != "waiting" {
+			t.Fatal("start:", c, body)
+		}
+		t.Cleanup(func() { provider.CancelSignIn(st.ID) })
+		return st.ID
+	}
+	waiting := func(sid string) bool {
+		got, ok := provider.SignInStatus(sid)
+		return ok && got.State == "waiting"
+	}
+	old := start(AdminPath+"/signin", key)
+	c, body := do("POST", AdminPath+"/areas/"+id+"/rotate-key", lanPeer, console, "")
+	var out struct{ AdminKey string }
+	json.Unmarshal([]byte(body), &out)
+	if c != http.StatusOK || out.AdminKey == "" || out.AdminKey == key {
+		t.Fatal("rotate:", c, body)
+	}
+	if waiting(old) {
+		t.Fatal("the old secret's sign-in after the rotate")
+	}
+	if c, _ := do("POST", AdminPath+"/signin", lanPeer, key, `{"agent":"chatgpt-api","way":"paste-url"}`); c != http.StatusUnauthorized {
+		t.Fatal("the old secret starts one:", c)
+	}
+	// the owner's window rotates through the same call; the console's
+	// sign-in for the area goes on (one to a subscription at a time)
+	rotate := func() string {
+		t.Helper()
+		a, err := area.Get(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		secret, err := RotateAreaKey(a)
+		if err != nil || secret == "" {
+			t.Fatal("RotateAreaKey:", secret, err)
+		}
+		return secret
+	}
+	ofConsole := start(AdminPath+"/areas/"+id+"/signin", console)
+	newest := rotate()
+	if !waiting(ofConsole) {
+		t.Fatal("the console's sign-in after the rotate")
+	}
+	provider.CancelSignIn(ofConsole)
+	// one the new secret starts is the area's until its next rotate
+	fresh := start(AdminPath+"/signin", newest)
+	if !waiting(fresh) {
+		t.Fatal("the new secret's sign-in")
+	}
+	rotate()
+	if waiting(fresh) {
+		t.Fatal("the window's rotate left the earlier secret's sign-in")
+	}
+}
+
+// A sign-in its area's key started is recorded after the key was
+// rotated (or removed) while it started: the rotate's cancel never saw
+// it, so it is let go at once (T-236), that one alone. One the new
+// secret started, and the console's, are kept.
+func TestAdminSignInKeptAfterRotateIsLetGo(t *testing.T) {
+	do, console, _ := adminWorld(t)
+	id, key := makeArea(t, do, console, "A")
+	before, ok := access.Authenticate(key)
+	if !ok {
+		t.Fatal("the area's key")
+	}
+	c, body := do("POST", AdminPath+"/areas/"+id+"/rotate-key", lanPeer, console, "")
+	var out struct{ AdminKey string }
+	json.Unmarshal([]byte(body), &out)
+	if c != http.StatusOK || out.AdminKey == "" {
+		t.Fatal("rotate:", c, body)
+	}
+	after, ok := access.Authenticate(out.AdminKey)
+	if !ok {
+		t.Fatal("the new secret")
+	}
+	kept := func(sid string) bool {
+		areaSignIns.Lock()
+		defer areaSignIns.Unlock()
+		_, ok := areaSignIns.m[sid]
+		return ok
+	}
+	a, _ := area.Get(id)
+	// each read before the next is kept, which drops those magpie hasn't
+	keepAreaSignIn(adminCall{who: after, area: a}, "si-new", nil)
+	if !kept("si-new") {
+		t.Fatal("the new secret's let go")
+	}
+	keepAreaSignIn(adminCall{who: before, area: a}, "si-old", nil)
+	if kept("si-old") {
+		t.Fatal("the old secret's kept")
+	}
+	keepAreaSignIn(adminCall{who: after, area: a}, "si-new-2", nil)
+	if !kept("si-new-2") {
+		t.Fatal("the new secret's let go after the old one's")
+	}
+	keepAreaSignIn(adminCall{area: a, console: true}, "si-console", nil)
+	if !kept("si-console") {
+		t.Fatal("the console's let go")
 	}
 }
 

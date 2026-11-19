@@ -1066,6 +1066,21 @@ func (s *Server) adminRotateArea(w http.ResponseWriter, r *http.Request, c admin
 	if !ok {
 		return
 	}
+	secret, err := RotateAreaKey(a)
+	if err != nil {
+		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"adminKey": secret})
+}
+
+// RotateAreaKey gives area a its admin key's new secret (a new key when
+// it has none) and cancels the sign-ins its key started (T-236): one the
+// old secret started adds no account once the area's admin has a new
+// one. The console's for it go on, as when the area is turned off. One
+// the old secret records after this cancel is let go by keepAreaSignIn.
+// The console's route and the owner's window both rotate through it.
+func RotateAreaKey(a area.Area) (string, error) {
 	var secret string
 	k, has, err := access.AreaKey(a.ID)
 	if err == nil && has {
@@ -1074,10 +1089,10 @@ func (s *Server) adminRotateArea(w http.ResponseWriter, r *http.Request, c admin
 		_, secret, err = access.AddAdmin(access.AdminArea, a.ID, a.Note+" admin")
 	}
 	if err != nil {
-		adminError(w, http.StatusServiceUnavailable, adminAreasUnread, err.Error())
-		return
+		return "", err
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"adminKey": secret})
+	CancelAreaKeySignIns(a.ID)
+	return secret, nil
 }
 
 func (s *Server) adminDeleteArea(w http.ResponseWriter, r *http.Request, c adminCall) {

@@ -142,19 +142,11 @@ func areaAction(r *http.Request, action, id, note, ref string, off *bool, provid
 		gateway.CancelAreaSignIns(id)
 		return "", access.RemoveArea(id)
 	case "rotate":
-		if _, err := areas.Get(id); err != nil {
-			return "", err
-		}
-		k, ok, err := access.AreaKey(id)
+		a, err := areas.Get(id)
 		if err != nil {
 			return "", err
 		}
-		if !ok {
-			a, _ := areas.Get(id)
-			_, secret, err := access.AddAdmin(access.AdminArea, id, a.Note+" admin")
-			return secret, err
-		}
-		return access.Update("rotate-key", access.Change{Key: k.ID})
+		return gateway.RotateAreaKey(a)
 	case "copy":
 		k, err := areaKey()
 		if err != nil {
