@@ -294,8 +294,9 @@ func TestAdminImportCodexLimits(t *testing.T) {
 		t.Fatal("accounts/key over 64 KB:", c)
 	}
 	for name, running := range map[string]map[string]bool{
-		"a second import of the area": {aID: true},
-		"as many as magpie takes":     {"x1": true, "x2": true, "x3": true, "x4": true},
+		// false: the area's own import, not the console's (T-235)
+		"a second import of the area": {aID: false},
+		"as many as magpie takes":     {"x1": false, "x2": false, "x3": false, "x4": false},
 	} {
 		areaImports.Lock()
 		areaImports.m = running
@@ -548,6 +549,14 @@ func TestAdminImportConsoleShare(t *testing.T) {
 		return do("POST", AdminPath+"/areas/"+id+"/accounts/import", lanPeer, console, body)
 	}
 	codes := make(chan string, 2)
+	pending := 2
+	// a failure midway still ends both imports before the test does
+	t.Cleanup(func() {
+		let()
+		for ; pending > 0; pending-- {
+			<-codes
+		}
+	})
 	for _, n := range []string{"a", "b"} {
 		go func() {
 			c, body := byConsole(ids[n], `{"agent":"codex","files":["r-`+n+`"]}`)
@@ -555,8 +564,14 @@ func TestAdminImportConsoleShare(t *testing.T) {
 		}()
 	}
 	seen := map[string]bool{}
-	for range 2 {
-		seen[<-arrived] = true
+	for len(seen) < 2 {
+		select {
+		case who := <-arrived:
+			seen[who] = true
+		case r := <-codes:
+			pending--
+			t.Fatal("an import ended before the vendor was asked:", r)
+		}
 	}
 	if !seen["a"] || !seen["b"] {
 		t.Fatal("the vendor was asked for", seen)
@@ -570,8 +585,10 @@ func TestAdminImportConsoleShare(t *testing.T) {
 		t.Fatal("C's own import, the console's two running:", c, body[:min(len(body), 200)])
 	}
 	let()
-	for range 2 {
-		if r := <-codes; !strings.HasPrefix(r, "200 ") || !strings.Contains(r, `"added":1`) {
+	for pending > 0 {
+		r := <-codes
+		pending--
+		if !strings.HasPrefix(r, "200 ") || !strings.Contains(r, `"added":1`) {
 			t.Fatal("a held import:", r)
 		}
 	}
@@ -583,5 +600,33 @@ func TestAdminImportConsoleShare(t *testing.T) {
 	areaImports.Unlock()
 	if left != 0 {
 		t.Fatal("slots left taken:", left)
+	}
+	// with the console's two and an area's own running, another area's
+	// own takes the fourth; at four, both are told magpie is full
+	for _, x := range []struct {
+		name    string
+		running map[string]bool
+		secret  string
+		code    int
+		says    string
+	}{
+		{"C's own beside the console's two and B's own", map[string]bool{"x1": true, "x2": true, ids["b"]: false}, keys["c"], http.StatusRequestEntityTooLarge, ""},
+		{"the console at four", map[string]bool{"x1": true, "x2": false, "x3": false, "x4": false}, console, http.StatusTooManyRequests, "magpie is running as many"},
+		{"C's own at four", map[string]bool{"x1": true, "x2": true, "x3": false, "x4": false}, keys["c"], http.StatusTooManyRequests, "magpie is running as many"},
+	} {
+		areaImports.Lock()
+		areaImports.m = x.running
+		areaImports.Unlock()
+		path := AdminPath + "/accounts/import"
+		if x.secret == console {
+			path = AdminPath + "/areas/" + ids["c"] + "/accounts/import"
+		}
+		c, body := do("POST", path, lanPeer, x.secret, big)
+		areaImports.Lock()
+		areaImports.m = nil
+		areaImports.Unlock()
+		if c != x.code || !strings.Contains(body, x.says) {
+			t.Errorf("%s: %d %s", x.name, c, body[:min(len(body), 200)])
+		}
 	}
 }

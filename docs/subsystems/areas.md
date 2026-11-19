@@ -660,10 +660,11 @@ taken: an area pastes it to `signin/{id}/callback`.
   and the readers' requests go through it, an area-added one held public
   on every connection (`netproxy.WithPublicOnly`); none picked goes
   through the subscription's (`provider.Via`). One import runs per area
-  at a time, and 4 in all, of which the console's, across the areas
-  it acts for, are 2 at most (`adminConsoleImportsMost`, T-235), so its
-  imports never hold every area's door (`startImport`, taken before the
-  body is read); another is `429 too_many_imports` with `Retry-After`. It runs to its end, at most 3 minutes, whether or not
+  at a time, and 4 in all (`startImport`, taken before the body is
+  read). Of those 4 the console's, across the areas it acts for, are 2
+  at most (`adminConsoleImportsMost`, T-235), so its imports never hold
+  every area's door. Another is `429 too_many_imports` with
+  `Retry-After`. It runs to its end, at most 3 minutes, whether or not
   the caller is still there.
 - **A new account only** (`ImportOptions.NewOnly`, T-220). An account
   magpie has, the owner's, another area's or this area's, by its refresh
