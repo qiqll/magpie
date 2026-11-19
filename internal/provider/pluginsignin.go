@@ -262,14 +262,34 @@ func (s *signInFlow) pluginDone(saved plugin.Saved, err error) {
 		// the plugin kept it as another provider's (one package serves
 		// Qoder and Qoder CN): no account of the agent the area claims, so
 		// what was kept is signed out again rather than left nobody's
-		if serr := plugin.SignOut(context.Background(), saved.Provider, saved.Account); serr != nil {
-			log.Printf("sign-in %s (%s): kept as %s's, not signed out again: %v", s.st.Agent, s.st.ID, saved.Provider, serr)
-		}
+		s.unsave(saved, "saved as another provider's")
 		s.finish(failedWith(ErrPluginWayChanged))
 	default:
 		clearPluginLapse(saved)
 		user := pluginUser(saved)
-		s.finish(SignInState{State: "done", User: user, Using: pluginUsing(saved, user)})
+		if !s.finish(SignInState{State: "done", User: user, Using: pluginUsing(saved, user)}) && s.area {
+			// an area's that ended first (canceled as the plugin saved,
+			// T-262): no area claims what was saved, which would serve the
+			// owner as nobody's. It is to a new account only, so the one
+			// saved is this sign-in's own, never one magpie had
+			s.unsave(saved, "ended before it was saved")
+		}
+	}
+}
+
+// unsave signs out again the account an area's sign-in saved, which
+// stays nobody's (why): one of another provider's, or one saved after the
+// sign-in ended. An empty account would sign out every one of the
+// provider's, so it is left.
+func (s *signInFlow) unsave(saved plugin.Saved, why string) {
+	if saved.Provider == "" || saved.Account == "" {
+		log.Printf("sign-in %s (%s): %s, but the plugin named no account to sign out again", s.st.Agent, s.st.ID, why)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := plugin.SignOut(ctx, saved.Provider, saved.Account); err != nil {
+		log.Printf("sign-in %s (%s): %s, and kept as %s's, not signed out again: %v", s.st.Agent, s.st.ID, why, saved.Provider, err)
 	}
 }
 

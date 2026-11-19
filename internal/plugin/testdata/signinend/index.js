@@ -2,7 +2,7 @@
 // plugins#658): a wait on a file a desktop app writes, one that ignores
 // magpie giving up and one that heeds it, and authorize results that fail
 // with no callback to call.
-import { existsSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
 const home = () => process.env.HOME
@@ -11,7 +11,7 @@ const mark = (name, text = "") => writeFileSync(join(home(), name), text)
 
 // waits for $HOME/go as AStudio's plugin waits for its app's session
 // file, every 50ms, for a minute at most
-async function wait(signal) {
+async function wait(signal, result = { type: "success", key: "tok-late", metadata: { uid: "late" } }) {
   mark("waiting")
   for (let i = 0; i < 1200; i++) {
     if (signal?.aborted) {
@@ -20,7 +20,7 @@ async function wait(signal) {
     }
     if (existsSync(join(home(), "go"))) {
       mark("returned")
-      return { type: "success", key: "tok-late", metadata: { uid: "late" } }
+      return result
     }
     await sleep(50)
   }
@@ -65,6 +65,23 @@ export const SignInEndPlugin = async () => ({
               mark("fetch-aborted", e?.name ?? String(e))
               return { type: "failed", error: String(e) }
             }
+          },
+        }),
+      },
+      // 8: a code sign-in whose callback waits on $HOME/go, deaf to
+      // magpie giving up, and names its account: its key is $HOME/key's
+      // text as the wait ends
+      {
+        type: "oauth",
+        label: "code waits",
+        authorize: async () => ({
+          url: "https://signinend.invalid/",
+          method: "code",
+          callback: async () => {
+            const r = await wait(undefined, { type: "success" })
+            if (r.type !== "success") return r
+            const key = existsSync(join(home(), "key")) ? readFileSync(join(home(), "key"), "utf8") : "tok-code"
+            return { type: "success", key, metadata: { email: key + "@signinend.invalid" } }
           },
         }),
       },
