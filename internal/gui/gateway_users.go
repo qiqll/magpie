@@ -623,7 +623,7 @@ func tiersOf(b gateway.Binding) *gateway.Tiers {
 // idleOf is this magpie's idle hours bound as mode says: none by session.
 func idleOf(mode string) int {
 	if mode == gateway.BindUser {
-		return gateway.UserIdleHours
+		return gateway.BindIdleHours()
 	}
 	return 0
 }

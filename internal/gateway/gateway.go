@@ -1228,7 +1228,7 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 			}
 			// how long a user may send nothing before its accounts are let
 			// go; an older magpie, which lets nobody go, doesn't say
-			out["idle_hours"] = UserIdleHours
+			out["idle_hours"] = BindIdleHours()
 		}
 	}
 	// its MCP router has a server to give, for another magpie that has

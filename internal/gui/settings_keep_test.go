@@ -222,6 +222,8 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 	was.GrowthDefault = "slow"
 	six := 6
 	was.AuthHoldHours = &six // Models › Accounts' auth-holds/hours
+	twelve := 12
+	was.BindIdleHours = &twelve // Settings › Growth policy's settings/bind-idle (T-242)
 	// the Routing groups page's defaults for every group (groups/defaults)
 	was.GroupSink, was.GroupFirstToken, was.GroupPatience = true, 30, 120
 	if err := settings.Save(was); err != nil {

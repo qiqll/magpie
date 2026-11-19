@@ -21,8 +21,11 @@ package gateway
 // sign-in revoked and marked so, an account restricted or to be
 // verified): its first spare is its first then, and a user left with
 // none is bound afresh on its next request. A user that sends nothing to
-// the provider for userIdle lets go of its accounts there too (sweepIdle),
-// for others to take their seats; on its next request it is bound afresh.
+// the provider for Settings' idle time (settings.BindIdle, userIdle by
+// default) lets go of its accounts there too (sweepIdle), for others to
+// take their seats; on its next request it is bound afresh. An account
+// with an idle time of its own (provider.AccountBindIdle, T-242) is let
+// go of the user after that time instead, alone: the user keeps its others.
 //
 // Each gateway key's users are its own, apart from another key's: the same
 // id sent with two keys is two users (userGroup). The keys the owner lets
@@ -57,6 +60,7 @@ import (
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/routes"
+	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/steady"
 )
 
@@ -390,12 +394,26 @@ func putShared(keyID, pid, user string, seats []userSeat, used time.Time, keys .
 }
 
 // userIdle is how long a user sends a provider nothing before it lets go
-// of its accounts there (sweepIdle): 60 hours (the owner's, 2026-11-02;
-// 3 days before), counted from its last request to that provider.
-const userIdle = 60 * time.Hour
+// of its accounts there (sweepIdle) while the user set no other time
+// (settings.BindIdle, T-242): 60 hours (the owner's, 2026-11-02; 3 days
+// before), counted from its last request to that provider.
+const userIdle = settings.DefaultBindIdleHours * time.Hour
 
-// UserIdleHours is userIdle in hours, as the gateway tells the Gateway page.
+// UserIdleHours is userIdle in hours.
 const UserIdleHours = int(userIdle / time.Hour)
+
+// bindIdleOf is how long a user bound to provider pid may send it
+// nothing before its accounts there are let go: Settings' (userIdle while
+// unset), and the time of each account that has its own, by its name in
+// lower case (provider.AccountBindIdles, T-242). Read once a sweep; a
+// test's to set.
+var bindIdleOf = func(pid string) (time.Duration, map[string]time.Duration) {
+	return settings.Shared().BindIdle(), provider.AccountBindIdles(pid)
+}
+
+// BindIdleHours is how long a bound user may be idle by default, in hours
+// (settings.BindIdle), as the gateway tells the Gateway page.
+func BindIdleHours() int { return int(settings.Shared().BindIdle() / time.Hour) }
 
 // userUsedEvery is how stale a binding's Used may get before a request
 // writes it again: the file is written once an hour a user at most, not
@@ -451,7 +469,9 @@ func lastUse(b userBinding, group, pid, user string, now time.Time) time.Time {
 const userGap = 12 * time.Hour
 
 // sweepIdle lets go of every binding to provider pid whose user has sent
-// it nothing for userIdle under any gateway key of its group (lastUse,
+// it nothing for its idle time (bindIdleOf: Settings', or an account's
+// own for that account alone, the user keeping its others, its first
+// spare its first when its first goes) under any gateway key of its group (lastUse,
 // the latest of its keys': one user, sharedOf), under every key of the
 // group at once, but user's of keyID's group, whose request this is; a
 // name under two groups is two users, each judged by its own use. When no
@@ -493,7 +513,7 @@ func sweepIdle(keyID, pid, user string, now time.Time) (changed bool) {
 				}
 			}
 		}
-		log.Printf("user accounts: no user sent %s a request for %s: that time doesn't count toward any user's %s idle", pid, gap.Round(time.Minute), userIdle)
+		log.Printf("user accounts: no user sent %s a request for %s: that time doesn't count toward any user's idle time", pid, gap.Round(time.Minute))
 	}
 	// one with no Used yet under a key is written as it is read, under
 	// every key of its group (putShared), with the latest Used it has
@@ -525,17 +545,42 @@ func sweepIdle(keyID, pid, user string, now time.Time) (changed bool) {
 			}
 		}
 	}
-	gone := 0
-	for u, t := range latest {
-		if now.Sub(t) < userIdle {
-			continue
-		}
-		for k, ps := range userBinds.m {
-			if userGroup(k) == u.group {
-				delete(ps[pid], u.name)
+	// each account goes after its own idle time, else Settings'; a user
+	// left with none is let go of
+	def, own := bindIdleOf(pid)
+	idleFor := func(s userSeat) time.Duration {
+		if a, ok := strings.CutPrefix(strings.ToLower(s.Who), strings.ToLower(pid)+"@"); ok {
+			if d, ok := own[a]; ok {
+				return d
 			}
 		}
-		gone++
+		return def
+	}
+	gone, freed := 0, 0
+	for u, t := range latest {
+		idle := now.Sub(t)
+		let, all := false, false
+		for k, ps := range userBinds.m {
+			b, has := ps[pid][u.name]
+			if !has || userGroup(k) != u.group {
+				continue
+			}
+			seats := b.seats()
+			kept := slices.DeleteFunc(slices.Clone(seats), func(s userSeat) bool { return idle >= idleFor(s) })
+			switch {
+			case len(kept) == 0:
+				delete(ps[pid], u.name)
+				all = true
+			case len(kept) < len(seats):
+				ps[pid][u.name] = b.withSeats(kept)
+				let = true
+			}
+		}
+		if all {
+			gone++
+		} else if let {
+			freed++
+		}
 	}
 	for _, ps := range userBinds.m {
 		if len(ps[pid]) == 0 {
@@ -543,9 +588,12 @@ func sweepIdle(keyID, pid, user string, now time.Time) (changed bool) {
 		}
 	}
 	if gone > 0 {
-		log.Printf("user accounts: %d user(s) of %s sent it nothing for %s: their accounts there are let go, each bound afresh on its next request", gone, pid, userIdle)
+		log.Printf("user accounts: %d user(s) of %s sent it nothing for their idle time: their accounts there are let go, each bound afresh on its next request", gone, pid)
 	}
-	return changed || gone > 0
+	if freed > 0 {
+		log.Printf("user accounts: %d user(s) of %s sent it nothing for an account's own idle time: that account is let go, their others kept", freed, pid)
+	}
+	return changed || gone > 0 || freed > 0
 }
 
 // touchUsed keeps now as when user, under any gateway key of keyID's

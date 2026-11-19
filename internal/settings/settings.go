@@ -441,6 +441,13 @@ type Settings struct {
 	// DefaultAuthHoldHours, 0 holds nobody (the request's other Claude
 	// accounts are still never asked it).
 	AuthHoldHours *int `json:"authHoldHours,omitempty"`
+	// BindIdleHours is how long a user bound to a provider's accounts
+	// (gateway --bind=user) sends it nothing before its accounts there are
+	// let go (gateway/user_accounts.go sweepIdle, T-242): nil is
+	// DefaultBindIdleHours, as before it could be set. An account of a
+	// subscription can have its own (provider.AccountBindIdle). Set on its
+	// own (settings/bind-idle) from Settings › Growth policy.
+	BindIdleHours *int `json:"bindIdleHours,omitempty"`
 	// RefusalRetries is how many more times a request the vendor's safety
 	// filter refused, with nothing said, is asked of another account or
 	// routing group member (#248), unset for every one left. 0 hands the
@@ -2896,6 +2903,26 @@ const (
 	DefaultAuthHoldHours = 12
 	AuthHoldMost         = 24 * 7
 )
+
+// DefaultBindIdleHours is how long a user bound to a provider's accounts
+// sends it nothing before they are let go, when the user set nothing: 60
+// hours (the owner's, 2026-11-02). A user can set BindIdleFewest to
+// BindIdleMost hours (T-242).
+const (
+	DefaultBindIdleHours = 60
+	BindIdleFewest       = 1
+	BindIdleMost         = 24 * 30
+)
+
+// BindIdle is how long a bound user sends a provider nothing before its
+// accounts there are let go: s's own, held to BindIdleFewest to
+// BindIdleMost hours, else DefaultBindIdleHours.
+func (s Settings) BindIdle() time.Duration {
+	if s.BindIdleHours == nil {
+		return DefaultBindIdleHours * time.Hour
+	}
+	return time.Duration(max(BindIdleFewest, min(*s.BindIdleHours, BindIdleMost))) * time.Hour
+}
 
 // AuthHold is how long a caller is held after authentication_failed, 0 for
 // nobody: s's own, else DefaultAuthHoldHours.

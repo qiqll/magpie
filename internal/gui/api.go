@@ -404,6 +404,11 @@ type settingsJSON struct {
 	// and GrowthInEffect the id of the one accounts are held by.
 	GrowthPolicyList []settings.GrowthPolicy `json:"growthPolicyList"`
 	GrowthInEffect   string                  `json:"growthInEffect"`
+	// BindIdleDefault is how long a bound user may be idle when
+	// BindIdleHours is unset, and BindIdleMost the most it can be set
+	// to, in hours (T-242)
+	BindIdleDefault int `json:"bindIdleDefault"`
+	BindIdleMost    int `json:"bindIdleMost"`
 	// Builtins are the built-in plugins: each one's switch, whether it
 	// runs and what of it is in use (builtins.go)
 	Builtins []builtinJSON `json:"builtins"`
@@ -827,6 +832,7 @@ func settingsState() settingsJSON {
 		s.Growth = &s.GrowthStages
 	}
 	s.GrowthPolicyList, s.GrowthInEffect = s.Settings.GrowthPoliciesAll(), g.ID
+	s.BindIdleDefault, s.BindIdleMost = settings.DefaultBindIdleHours, settings.BindIdleMost
 	s.AddrEnv = os.Getenv("MAGPIE_ADDR")
 	s.Log = tilde(applog.Current())
 	s.Builtins = builtinsState()
@@ -1769,6 +1775,33 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 				fail(rw, err)
 				return
 			}
+		}
+		writeJSON(rw, settingsState())
+	})
+	// how long a user bound to a provider's accounts may send it nothing
+	// before they are let go, in hours (T-242), as Settings › Growth
+	// policy sets it: null for the default (settings.DefaultBindIdleHours)
+	mux.HandleFunc("POST /api/settings/bind-idle", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Hours *int `json:"hours"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if in.Hours != nil && (*in.Hours < settings.BindIdleFewest || *in.Hours > settings.BindIdleMost) {
+			fail(rw, fmt.Errorf("an idle user's accounts are let go after %d to %d hours, not %d", settings.BindIdleFewest, settings.BindIdleMost, *in.Hours))
+			return
+		}
+		s, err := settings.LoadChecked()
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		s.BindIdleHours = in.Hours
+		if err := settings.Save(s); err != nil {
+			fail(rw, err)
+			return
 		}
 		writeJSON(rw, settingsState())
 	})

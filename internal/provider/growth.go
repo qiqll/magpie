@@ -2054,6 +2054,15 @@ func forgetAdded(agent string, users ...string) {
 			}
 			changed = true
 		}
+		// and how long its bound users may be idle (T-242)
+		if _, ok := p.AccountBindIdle[accountKey(u)]; ok {
+			p.AccountBindIdle = maps.Clone(p.AccountBindIdle)
+			delete(p.AccountBindIdle, accountKey(u))
+			if len(p.AccountBindIdle) == 0 {
+				p.AccountBindIdle = nil
+			}
+			changed = true
+		}
 		if _, ok := p.AccountAdded[accountKey(u)]; ok {
 			if !cloned {
 				cloned = true
