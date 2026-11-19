@@ -225,7 +225,7 @@ func (s *signInFlow) pastedPluginKey(raw string) error {
 	if !s.claim() {
 		return errors.New("this sign-in is over or already finishing; start it again if it doesn't end")
 	}
-	ctx, cancel := context.WithTimeout(s.via(context.Background()), time.Minute)
+	ctx, cancel := s.trading(s.via(context.Background()), time.Minute)
 	defer cancel()
 	var saved plugin.Saved
 	var err error

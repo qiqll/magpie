@@ -818,11 +818,15 @@ console, so `TestAdminKeyEveryRoute` covers it.
   cancelled alone. One whose key was changed by a way that cancels
   nothing (`magpie gateway-key`, the window's key list) and ends after
   claims nothing: `claimDone` checks `access.Current` too and takes the
-  account out again. A plugin's cancelled as the plugin trades its code
-  or waits for its page saves after the cancel; `pluginDone` signs out
-  again what it saved (`unsave`, T-262). It went to a new account only
-  (`AuthorizeNew`), so that is never the owner's or another area's,
-  which the plugin answers as known and leaves. Not covered: an import or a batch of keys already
+  account out again. A plugin's cancelled as a pasted code or key is
+  traded gives the trade up (`trading`, T-262), so the plugin's host
+  saves nothing of what it answers after; one saved before the cancel
+  came, or by a page's own wait, is signed out again (`pluginDone`,
+  `SignOutSaved`, as `unclaimed` does). It went to a new account only
+  (`AuthorizeNew`, `APIKeyNew`), so that is never the owner's or
+  another area's, which the plugin answers as known and leaves.
+
+  Not covered: an import or a batch of keys already
   under way when the key changes claims till it ends, and the console's
   sign-ins go on through a change of the console's own key.
 - **Log.** Each action's line is `admin: console for area <id> (<note>)

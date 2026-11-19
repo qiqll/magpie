@@ -228,7 +228,7 @@ func (s *signInFlow) pluginCode(code string) error {
 	if session == "" || !waiting {
 		return errors.New("this sign-in is over; start it again")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := s.trading(context.Background(), 2*time.Minute)
 	defer cancel()
 	saved, err := plugin.FinishThrough(ctx, session, code, through)
 	err = s.areaSaid(err)
@@ -265,6 +265,9 @@ func (s *signInFlow) pluginDone(saved plugin.Saved, err error) {
 		s.unsave(saved, "saved as another provider's")
 		s.finish(failedWith(ErrPluginWayChanged))
 	default:
+		if pluginSavedForTest != nil {
+			pluginSavedForTest(s)
+		}
 		clearPluginLapse(saved)
 		user := pluginUser(saved)
 		if !s.finish(SignInState{State: "done", User: user, Using: pluginUsing(saved, user)}) && s.area {
@@ -279,19 +282,31 @@ func (s *signInFlow) pluginDone(saved plugin.Saved, err error) {
 
 // unsave signs out again the account an area's sign-in saved, which
 // stays nobody's (why): one of another provider's, or one saved after the
-// sign-in ended. An empty account would sign out every one of the
-// provider's, so it is left.
+// sign-in ended.
 func (s *signInFlow) unsave(saved plugin.Saved, why string) {
+	st := s.status()
+	if err := SignOutSaved(saved); err != nil {
+		log.Printf("sign-in %s (%s): %s, and kept as %s's, not signed out again: %v", st.Agent, st.ID, why, saved.Provider, err)
+	}
+}
+
+// SignOutSaved signs out again the one account a sign-in to a new account
+// only (plugin.AuthorizeNew, plugin.APIKeyNew) saved and no one claims:
+// it is by its own key, made fresh by that sign-in, so no other account
+// goes with it. One the plugin named no account of is left, since an
+// empty account signs out every one of the provider's.
+func SignOutSaved(saved plugin.Saved) error {
 	if saved.Provider == "" || saved.Account == "" {
-		log.Printf("sign-in %s (%s): %s, but the plugin named no account to sign out again", s.st.Agent, s.st.ID, why)
-		return
+		return errors.New("the plugin named no account to sign out")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := plugin.SignOut(ctx, saved.Provider, saved.Account); err != nil {
-		log.Printf("sign-in %s (%s): %s, and kept as %s's, not signed out again: %v", s.st.Agent, s.st.ID, why, saved.Provider, err)
-	}
+	return plugin.SignOut(ctx, saved.Provider, saved.Account)
 }
+
+// pluginSavedForTest, when set, sees a plugin's sign-in saved, before it
+// is finished: a test cancels it there, after the save.
+var pluginSavedForTest func(*signInFlow)
 
 // PluginWayOf is how a plugin's sign-in under way finishes from a browser
 // on another computer, as an area is offered it (T-209): "paste-code"

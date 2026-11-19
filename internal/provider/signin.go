@@ -151,7 +151,11 @@ type signInFlow struct {
 	finished bool
 	// kept is the account stored (keep): a cancel after it is too late
 	kept bool
-	done chan struct{}
+	// trade gives up on a pasted code or key being traded with a plugin
+	// (trading), once the sign-in ends otherwise: the plugin's host
+	// drops what it answers after, nothing saved (T-262)
+	trade context.CancelFunc
+	done  chan struct{}
 
 	// proxy is the one the sign-in's requests go through, as netproxy.With
 	// takes it: the one the account's will go through once it is signed in
@@ -914,6 +918,22 @@ func (p *pastedReply) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
+// trading is ctx, at most d, for trading a pasted code or key with a
+// plugin: it is given up on as the sign-in ends (finish), so a cancel
+// reaches the plugin's host before it saves. One ended already gives a
+// ctx done.
+func (s *signInFlow) trading(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(ctx, d)
+	s.mu.Lock()
+	if s.finished {
+		cancel()
+	} else {
+		s.trade = cancel
+	}
+	s.mu.Unlock()
+	return ctx, cancel
+}
+
 // claim takes a sign-in's callback for one caller: the browser's own and a
 // pasted address can both arrive, and a code is traded only once.
 func (s *signInFlow) claim() bool {
@@ -1008,7 +1028,7 @@ func (s *signInFlow) finish(out SignInState) bool {
 		out.ProxyUsed = s.used
 	}
 	s.st = out
-	stop, srv, said, user, ofPlugin := s.stop, s.srv, s.said, s.user, s.ofPlugin
+	stop, srv, said, user, ofPlugin, trade := s.stop, s.srv, s.said, s.user, s.ofPlugin, s.trade
 	if out.State == "failed" && s.used != nil {
 		// the proxy the CLI was given, beside how it ended (T-103)
 		if said != "" {
@@ -1052,6 +1072,9 @@ func (s *signInFlow) finish(out SignInState) bool {
 	close(s.done)
 	if stop != nil {
 		stop()
+	}
+	if trade != nil {
+		trade()
 	}
 	if srv == nil {
 		return true

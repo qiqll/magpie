@@ -757,7 +757,7 @@ func (s *Server) areaPluginKey(c adminCall, pp plugin.Provider, pm adminPluginMe
 // (plugin.APIKeyNew), so no one else's account is ever taken with it, as
 // one by its name could be.
 func unclaimed(c adminCall, agent string, saved plugin.Saved) {
-	if err := plugin.SignOut(context.Background(), saved.Provider, saved.Account); err != nil {
+	if err := provider.SignOutSaved(saved); err != nil {
 		log.Printf("admin: area %s's %s key, not claimed, not signed out either: %v", c.area.ID, agent, err)
 	}
 }

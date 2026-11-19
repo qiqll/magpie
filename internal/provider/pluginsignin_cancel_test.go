@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -171,9 +172,37 @@ func TestCancelledPluginSignInLeavesNoAreaAccount(t *testing.T) {
 	if !strings.Contains(saved(), "tok-owner") {
 		t.Fatalf("the owner's account went with an area's cancelled sign-in to it: %s", saved())
 	}
-	// to a new one: what it saved is signed out again
+	// to a new one: the cancel reaches the plugin's host, which saves
+	// nothing of what the plugin answers after
+	var savedAfter atomic.Bool
+	pluginSavedForTest = func(*signInFlow) { savedAfter.Store(true) }
+	t.Cleanup(func() { pluginSavedForTest = nil })
 	areaCancelled("tok-area")
-	if b := saved(); strings.Contains(b, "tok-area") || !strings.Contains(b, "tok-owner") {
+	pluginSavedForTest = nil
+	if b := saved(); savedAfter.Load() || strings.Contains(b, "tok-area") || !strings.Contains(b, "tok-owner") {
+		t.Fatalf("after an area's sign-in cancelled as the plugin traded its code (saved: %v): %s", savedAfter.Load(), b)
+	}
+
+	// cancelled once the host saved it, before the sign-in is finished:
+	// what it saved is signed out again
+	for _, name := range []string{"waiting", "returned"} {
+		_ = os.Remove(filepath.Join(home, name))
+	}
+	put("key", "tok-late-area")
+	put("go", "")
+	pluginSavedForTest = func(s *signInFlow) { CancelSignIn(s.status().ID) }
+	st, err = StartPluginSignInWith("signinend", 8, nil, SignInOptions{Area: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SubmitSignInCallback(st.ID, "the code"); err != nil {
+		t.Fatal(err)
+	}
+	pluginSavedForTest = nil
+	if got, _ := SignInStatus(st.ID); got.State != "canceled" {
+		t.Fatalf("cancelled as it saved: %+v", got)
+	}
+	if b := saved(); strings.Contains(b, "tok-late-area") || !strings.Contains(b, "tok-owner") {
 		t.Fatalf("after an area's sign-in cancelled as it saved: %s", b)
 	}
 }
