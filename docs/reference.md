@@ -2860,6 +2860,28 @@ alone, and may have several of them, up to its `max_accounts`. Nobody
 joins such an account, a `share` 2 (free) user neither, and its user
 joins none another is on: no setting beyond `share` is needed for that.
 
+An account is shared by users of one tier only (T-243): a user joins no
+account a user of another tier is on, whatever both tiers' `share`, the
+alias a binding keeps counted as its tier and a tier gone from the file
+as the default. Users of several tiers bound to one account before
+2026-11-19 keep it and are served; nobody new joins them. With no account
+of its tier's with a seat, the request is the 429 above, its message
+adding "or are shared by users of another tier".
+
+Each provider can have shares of its own, in place of the file's
+(T-243): Settings › Growth policy's "Users per account, by provider" has
+a row a provider, an input a tier, empty for the file's `share` (its
+placeholder), 1 its user's alone, 0 any number, up to 1000. They are
+kept in settings.json (`providerShares`: provider id → tier name →
+share, `POST /api/settings/provider-shares` with `{"provider": id,
+"shares": {tier: n}}`, null or none to follow the file); user-tiers.json
+is never written. A tier the row leaves empty, a provider with no row,
+and a tier the file no longer has keep the file's. For example, with the
+built-in tiers, codex free 10 and plus, pro and max 2 lets ten free
+users share a Codex account and two plus users another, while Claude's
+accounts keep plus, pro and max alone and free two to one. The Gateway
+page's tiers still show the file's shares.
+
 `by_use` (left out: off) binds a shared account by what its users use
 too, for a tier with `share` 2 or more:
 

@@ -72,7 +72,7 @@ func providerShares(pid string, in map[string]int) (map[string]int, error) {
 	}
 	t, err := gateway.UserTiers()
 	if err != nil {
-		return nil, fmt.Errorf("user-tiers.json can't be read, so its tiers aren't known: %v", err)
+		return nil, fmt.Errorf("the tiers aren't known, as user-tiers.json doesn't read: %v", err)
 	}
 	out := map[string]int{}
 	for name, n := range in {

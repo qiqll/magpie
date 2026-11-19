@@ -78,3 +78,14 @@
 /* how long a bound user may be idle (T-242): a short number and its unit */
 .growth-idle .val { display: flex; align-items: center; gap: 6px; }
 .growth-idle .growth-idle-hours { width: 6em; }
+/* each provider's users per account by tier (T-243): a grid whose
+   columns narrow with the window, never a box that scrolls on its own */
+.growth-shares { flex-wrap: wrap; }
+.growth-shares > .who { flex: 1 1 100%; }
+.growth-shares-wrap { flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.growth-shares-grid { display: grid; align-items: center; gap: 4px 6px; max-width: 100%; font-size: 12px; }
+.growth-shares-grid .gs-head { color: var(--muted); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.growth-shares-grid .gs-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+.growth-shares-grid .gs-name.gone { color: var(--muted); text-decoration: line-through; }
+.growth-shares-grid .gs-share { width: 100%; min-width: 0; }
+.growth-shares-unknown { flex: 1 1 100%; }

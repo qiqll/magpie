@@ -151,7 +151,7 @@ function renderGrowth(s) {
     el("div", "sub" + (growthErr ? " err" : ""), growthErr || t(GROWTH_SAYS)));
   head.append(who);
   box.append(head);
-  if (!cur) return box.append(growthIdleRow(s));
+  if (!cur) return box.append(growthIdleRow(s), growthSharesRow(s));
   // the saved policies' chart is asked again on each draw: its accounts'
   // days move on while the page stays open (review L4)
   if (!growthDraft) growthChart.key = "";
@@ -230,7 +230,7 @@ function renderGrowth(s) {
   discard.onclick = () => { growthDraft = null; growthErr = ""; redraw(); };
   fv.append(save, discard);
   foot.append(fw, fv);
-  box.append(foot, growthIdleRow(s));
+  box.append(foot, growthIdleRow(s), growthSharesRow(s));
 }
 
 // growthIdleRow is how long a user bound to a provider's accounts (the
@@ -268,6 +268,111 @@ function growthIdleRow(s) {
   };
   val.append(hours, el("span", "growth-idle-unit", t("hours")));
   row.append(who, val);
+  return row;
+}
+
+// growthSharesRow is how many users an account of a provider may be
+// bound to by the user's tier (T-243), the gateway bound by user: a row a
+// provider with its own shares, an input a tier, empty to follow
+// user-tiers.json's share (its placeholder), each change saved at once
+// (settings/provider-shares) apart from the policies' draft. A provider
+// is added from a menu, and kept off the list again with no share set.
+function growthSharesRow(s) {
+  const row = el("div", "row pref growth-shares");
+  const who = el("div", "who");
+  who.append(el("div", "name", t("Users per account, by provider")),
+    el("div", "sub", t("With the gateway bound by user, how many users one account of a provider may be bound to, by each user's tier. Empty follows user-tiers.json (its number shown); 1 is the user's own alone, 0 any number. An account is shared by users of one tier only; users of several tiers bound to one before keep it.")));
+  row.append(who);
+  const tiers = s.shareTiers || [], most = s.shareMost || 1000;
+  if (!tiers.length) {
+    row.append(el("div", "sub err growth-shares-unknown", t("user-tiers.json can't be read, so its tiers aren't known")));
+    return row;
+  }
+  const names = new Map((s.shareProviders || []).map((p) => [p.id, p.name]));
+  // the providers shown: those with shares saved, and one just added
+  const shown = Object.keys(s.providerShares || {});
+  const added = growthSharesRow.added?.filter((id) => !shown.includes(id) && names.has(id)) || [];
+  growthSharesRow.added = added;
+  const ids = [...shown, ...added].sort((a, b) => (names.get(a) || a).localeCompare(names.get(b) || b));
+  const wrap = el("div", "growth-shares-wrap");
+  const grid = el("div", "growth-shares-grid");
+  grid.style.gridTemplateColumns = `minmax(4em, 12em) repeat(${tiers.length}, minmax(3.2em, 4.5em)) auto`;
+  grid.setAttribute("role", "table");
+  grid.setAttribute("aria-label", t("Users per account, by provider"));
+  const cell = (cls, text) => { const c = el("div", cls, text); c.setAttribute("role", "cell"); return c; };
+  grid.append(cell("gs-head", t("Provider")), ...tiers.map((x) => { const c = cell("gs-head gs-tier", x.name); c.title = x.aliases?.length ? `${x.name} (${x.aliases.join(", ")})` : x.name; return c; }), cell("gs-head", ""));
+  const redraw = () => row.replaceWith(growthSharesRow(prefs || s));
+  // send is the provider's shares as its inputs hold them, null with none
+  const send = (id, inputs) => {
+    const out = {};
+    tiers.forEach((x, i) => { const v = inputs[i].value.trim(); if (v !== "") out[x.name] = +v; });
+    const none = !Object.keys(out).length;
+    return writingPrefs(api("settings/provider-shares", { provider: id, shares: none ? null : out }))
+      .then((ns) => { prefs = state.settings = ns; if (none) growthSharesRow.added = (growthSharesRow.added || []).filter((x) => x !== id); status(t("Saved"), "ok", 1500); if (none) redraw(); });
+  };
+  for (const id of ids) {
+    const own = s.providerShares?.[id] || {};
+    const name = cell("gs-name", names.get(id) || id);
+    name.title = names.has(id) ? id : t("{id} is no longer in Providers", { id });
+    if (!names.has(id)) name.classList.add("gone");
+    grid.append(name);
+    const inputs = tiers.map((x) => {
+      const i = input(own[x.name] == null ? "" : String(own[x.name]), String(x.share), "number");
+      i.className = "gs-share";
+      i.dataset.tier = x.name;
+      i.min = "0";
+      i.max = String(most);
+      i.step = "1";
+      i.setAttribute("aria-label", t("Users per account of {provider} for tier {tier}", { provider: names.get(id) || id, tier: x.name }));
+      let sent = i.value;
+      i.onchange = () => {
+        const v = i.value.trim();
+        if (v !== "" && (!/^\d+$/.test(v) || +v > most)) {
+          status(t("An account is shared by 1 to {n} users, or 0 for any number", { n: most }), "err");
+          i.value = sent;
+          return;
+        }
+        const was = sent;
+        sent = v;
+        send(id, inputs).catch((e) => { if (sent === v) { sent = was; i.value = was; } statusErr(e); });
+      };
+      const c = cell("gs-cell");
+      c.append(i);
+      grid.append(c);
+      return i;
+    });
+    const rm = el("button", "text gs-remove", t("Remove"));
+    rm.type = "button";
+    rm.setAttribute("aria-label", t("Follow user-tiers.json for {provider}", { provider: names.get(id) || id }));
+    rm.onclick = () => {
+      if (!Object.keys(own).length) { growthSharesRow.added = (growthSharesRow.added || []).filter((x) => x !== id); return redraw(); }
+      inputs.forEach((i) => { i.value = ""; });
+      send(id, inputs).catch(statusErr);
+    };
+    const c = cell("gs-cell");
+    c.append(rm);
+    grid.append(c);
+  }
+  if (ids.length) {
+    wrap.append(grid);
+  }
+  const left = [...names].filter(([id]) => !ids.includes(id));
+  const add = el("button", "text gs-add", t("Add a provider"));
+  add.type = "button";
+  add.disabled = !left.length;
+  add.setAttribute("aria-haspopup", "menu");
+  add.setAttribute("aria-expanded", "false");
+  add.onclick = (e) => {
+    e.stopPropagation();
+    if (add.classList.contains("open")) return closeProtoMenu();
+    const opts = left.map(([id, name]) => ({ v: id, name, note: id === name ? "" : id, literalName: true }));
+    openProtoMenu(add, opts, "", (id) => {
+      growthSharesRow.added = [...(growthSharesRow.added || []), id];
+      redraw();
+    }, "A provider with shares of its own", "", "left", false, left.length > 8 ? "Find a provider" : "");
+  };
+  wrap.append(add);
+  row.append(wrap);
   return row;
 }
 
