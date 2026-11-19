@@ -16,7 +16,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { test } = require("node:test");
-const { chromium, webkit } = require("playwright");
+const { TEST_MS, launch, newPage } = require("./browser.cjs");
 const { strings } = require("./strings.cjs");
 
 const assets = path.resolve(__dirname, "../assets");
@@ -85,15 +85,15 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
   for (const lang of LANGS) {
     const x = (s, a) => tr(lang, s, a);
     for (const width of [1000, 380]) {
-      test(`${engine} ${lang} ${width}: proxy IPs are listed, added, edited, renewed and removed`, async (t) => {
+      test(`${engine} ${lang} ${width}: proxy IPs are listed, added, edited, renewed and removed`, { timeout: TEST_MS }, async (t) => {
         const seen = { posts: [], checks: [], rev: 1, ips: [
           { ip: "203.0.113.7", name: "Osaka", opened: "2026-10-17T04:00:00Z" },
           { ip: "203.0.113.8", opened: "2026-10-18T04:00:00Z" },
           { ip: "2001:db8::1", name: "Old", opened: "2026-09-01T00:00:00Z" },
         ] };
-        const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+        const browser = await launch(engine);
         t.after(() => browser.close());
-        const page = await (await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" })).newPage();
+        const page = await newPage(browser, engine, { viewport: { width, height: 800 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" });
         page.setDefaultTimeout(5000);
         page.setDefaultNavigationTimeout(60000);
         const errors = [];
@@ -201,10 +201,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 // alice through a proxy at a listed IP, bob through the saved Tokyo line,
 // carol (to sign in again) through her subscription's proxy, which
 // doesn't answer; Codex's ops goes direct, qa (banned) through Tokyo too.
-// Each has the key the server always sends (providers.go): the Providers
+// Each has the key and ready the server always sends (providers.go): the Providers
 // list is drawn from them too when it is in before the IPs (T-267), and a
 // provider of keys without one threw there, so its IPs named no account
-const prov = (id, name, agent, logins, extra = {}) => ({ id, name, icon: id + "-color", chat: "", responses: "", anthropic: "", catalog: "", models: [], agents: [], fallback: [], headers: {}, key: { set: false, masked: "", optional: false }, keyList: [], account: { agent, agentName: name, user: logins[0]?.user, plan: logins[0]?.plan, logins }, proxy: "", ...extra });
+const prov = (id, name, agent, logins, extra = {}) => ({ id, name, icon: id + "-color", chat: "", responses: "", anthropic: "", catalog: "", models: [], agents: [], fallback: [], headers: {}, key: { set: false, masked: "", optional: true }, ready: true, keyList: [], account: { agent, agentName: name, user: logins[0]?.user, plan: logins[0]?.plan, logins }, proxy: "", ...extra });
 const TOKYO = "http://me:pw@tokyo.example:3128", AT_IP = "socks5://u:s3cret@203.0.113.7:1080", HK = "http://hk:pw@hk.example:8080";
 const accountProviders = () => [
   prov("claude", "Claude", "claude", [
@@ -218,7 +218,7 @@ const accountProviders = () => [
   ], { proxy: TOKYO, accountProxies: { "ops@example.com": "direct" } }),
   // a provider of keys (review H1): Main through Tokyo by its id, the
   // other on the global proxy, so through none
-  { id: "relay", name: "Relay", icon: "generic", models: [], agents: [], fallback: [], headers: {}, chat: "https://relay.example/v1", responses: "", anthropic: "", catalog: "", proxy: "", key: { set: true, masked: "sk-…a1", optional: false },
+  { id: "relay", name: "Relay", icon: "generic", models: [], agents: [], fallback: [], headers: {}, chat: "https://relay.example/v1", responses: "", anthropic: "", catalog: "", proxy: "", key: { set: true, masked: "sk-…a1", optional: false }, ready: true, host: "relay.example",
     keyList: [{ id: "k1", name: "Main", masked: "sk-…a1", on: true, active: true }, { id: "k2", masked: "sk-…b2", on: false }], accountProxies: { k1: TOKYO } },
 ];
 
@@ -229,14 +229,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
   for (const lang of LANGS) {
     const x = (s, a) => tr(lang, s, a);
     for (const width of [1000, 380]) {
-      test(`${engine} ${lang} ${width}: the accounts' proxies are imported, each IP names its accounts and is found by their state`, async (t) => {
+      test(`${engine} ${lang} ${width}: the accounts' proxies are imported, each IP names its accounts and is found by their state`, { timeout: TEST_MS }, async (t) => {
         const seen = { posts: [], checks: [], rev: 1, providers: accountProviders(), exits: { [TOKYO]: "198.51.100.42", [AT_IP]: "203.0.113.7" }, ips: [
           { ip: "203.0.113.7", name: "Osaka", opened: "2026-10-17T04:00:00Z" },
           { ip: "203.0.113.8" },
         ] };
-        const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+        const browser = await launch(engine);
         t.after(() => browser.close());
-        const page = await (await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" })).newPage();
+        const page = await newPage(browser, engine, { viewport: { width, height: 800 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" });
         page.setDefaultTimeout(5000);
         page.setDefaultNavigationTimeout(60000);
         const errors = [];
@@ -410,16 +410,16 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
   for (const lang of LANGS) {
     const x = (s, a) => tr(lang, s, a);
     for (const width of [1000, 380]) {
-      test(`${engine} ${lang} ${width}: proxy IPs are found by a word, their period and their accounts`, async (t) => {
+      test(`${engine} ${lang} ${width}: proxy IPs are found by a word, their period and their accounts`, { timeout: TEST_MS }, async (t) => {
         const seen = { posts: [], checks: [], rev: 1, providers: accountProviders(), ips: [
           { ip: "203.0.113.7", name: "Osaka", opened: "2026-10-17T04:00:00Z" },
           { ip: "203.0.113.8", proxies: [TOKYO] },
           { ip: "2001:db8::1", name: "Old", opened: "2026-09-01T00:00:00Z" },
           { ip: "192.0.2.9", name: "Seoul", opened: "2026-11-01T00:00:00Z" },
         ] };
-        const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+        const browser = await launch(engine);
         t.after(() => browser.close());
-        const page = await (await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" })).newPage();
+        const page = await newPage(browser, engine, { viewport: { width, height: 800 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" });
         page.setDefaultTimeout(5000);
         page.setDefaultNavigationTimeout(60000);
         const errors = [];
@@ -554,7 +554,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
   for (const lang of LANGS) {
     const x = (s, a) => tr(lang, s, a);
     for (const width of [1000, 380]) {
-      test(`${engine} ${lang} ${width}: an import gives an IP its accounts' start date, and keeps one told`, async (t) => {
+      test(`${engine} ${lang} ${width}: an import gives an IP its accounts' start date, and keeps one told`, { timeout: TEST_MS }, async (t) => {
         // alice (at 203.0.113.7) from 10-21 in Shanghai; bob and qa
         // through Tokyo from 11-02 and 10-26, Relay's key with none;
         // carol through HK with none
@@ -566,9 +566,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           { ip: "203.0.113.8", proxies: [TOKYO] },
           { ip: "192.0.2.9", name: "Spare" },
         ] };
-        const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+        const browser = await launch(engine);
         t.after(() => browser.close());
-        const page = await (await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" })).newPage();
+        const page = await newPage(browser, engine, { viewport: { width, height: 800 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" });
         page.setDefaultTimeout(5000);
         page.setDefaultNavigationTimeout(60000);
         const errors = [];

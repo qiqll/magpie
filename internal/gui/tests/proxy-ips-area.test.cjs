@@ -6,7 +6,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { chromium, webkit } = require("playwright");
+const { TEST_MS, launch, newPage } = require("./browser.cjs");
 const { strings } = require("./strings.cjs");
 
 const assets = path.resolve(__dirname, "../assets");
@@ -48,12 +48,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
   for (const lang of LANGS) {
     const x = (s, a) => tr(lang, s, a);
     for (const width of [1000, 380]) {
-      test(`${engine} ${lang} ${width}: an IP is given to an area and taken back`, async (t) => {
+      test(`${engine} ${lang} ${width}: an IP is given to an area and taken back`, { timeout: TEST_MS }, async (t) => {
         const seen = { posts: [], rev: 1, areas: [{ id: "ar_1", note: "学习" }, { id: "ar_2", note: "工作" }],
           ips: [{ ip: "203.0.113.7", name: "Osaka" }, { ip: "203.0.113.8", area: "ar_2" }] };
-        const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+        const browser = await launch(engine);
         t.after(() => browser.close());
-        const page = await (await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: "reduce" })).newPage();
+        const page = await newPage(browser, engine, { viewport: { width, height: 800 }, reducedMotion: "reduce" });
         page.setDefaultTimeout(5000);
         page.setDefaultNavigationTimeout(60000);
         const errors = [];

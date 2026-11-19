@@ -18,7 +18,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { test } = require("node:test");
-const { chromium, webkit } = require("playwright");
+const { TEST_MS, launch, newPage } = require("./browser.cjs");
 const { strings } = require("./strings.cjs");
 // a click on a menu's anchor once it is in view and its scroll has been
 // told: Playwright scrolls an anchor into view as it clicks, and that
@@ -33,9 +33,12 @@ const { I18N } = strings();
 const LANGS = ["en", "zh", "zh-TW", "ja", "de"];
 const tr = (lang, s, args = {}) => Object.entries(args).reduce((a, [k, v]) => a.replaceAll(`{${k}}`, v), lang === "en" ? s : I18N[lang]?.[s] ?? s);
 const OSAKA = "socks5://u:s3cret@203.0.113.7:1080", OSAKA_SHOWN = "socks5://203.0.113.7:1080";
+// with the key and ready the server always sends (providers.go): the
+// Providers list is drawn from it too, and a provider of keys without
+// one threw there (T-267)
 const codex = {
   id: "codex", name: "Codex", icon: "codex-color", chat: "", responses: "", anthropic: "", catalog: "",
-  models: [{ id: "gpt-6", name: "GPT-6", on: true }], agents: [], fallback: [], headers: {}, keyList: [],
+  models: [{ id: "gpt-6", name: "GPT-6", on: true }], agents: [], fallback: [], headers: {}, key: { set: false, masked: "", optional: true }, ready: true, keyList: [],
   account: { agent: "codex", agentName: "Codex", user: "me@example.com", plan: "PLUS", logins: [{ user: "me@example.com", plan: "PLUS", active: true, on: true }] },
   proxy: "",
 };
@@ -93,9 +96,9 @@ function serve(lang, seen) {
 }
 
 async function open(engine, width, lang, seen, at, t) {
-  const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+  const browser = await launch(engine);
   t.after(() => browser.close());
-  const page = await (await browser.newContext({ viewport: { width, height: 800 }, reducedMotion: "reduce" })).newPage();
+  const page = await newPage(browser, engine, { viewport: { width, height: 800 }, reducedMotion: "reduce" });
   page.setDefaultTimeout(5000);
   page.setDefaultNavigationTimeout(60000);
   const errors = [];
@@ -135,7 +138,7 @@ const KEPT = [
   ["198.51.100.42", "socks5://erin:pw6@proxy.example.com:9000"],
 ];
 
-test("each format a batch line is written in is read as the proxy it names", async (t) => {
+test("each format a batch line is written in is read as the proxy it names", { timeout: TEST_MS }, async (t) => {
   const seen = { posts: [], checks: [], pastes: [], rev: 1, ips: [], exits: {} };
   const { page, errors } = await open("chromium", 1000, "en", seen, "?view=ips", t);
   await page.waitForFunction(() => typeof ipsBatchParse === "function");
@@ -189,7 +192,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
   for (const lang of LANGS) {
     const x = (s, a) => tr(lang, s, a);
     for (const width of [1000, 380]) {
-      test(`${engine} ${lang} ${width}: an IP's proxy is offered when an account is added`, async (t) => {
+      test(`${engine} ${lang} ${width}: an IP's proxy is offered when an account is added`, { timeout: TEST_MS }, async (t) => {
         const seen = { posts: [], checks: [], pastes: [], rev: 1, ips: [{ ip: "203.0.113.7", name: "Osaka", proxies: [OSAKA] }], exits: {} };
         const { page, errors } = await open(engine, width, lang, seen, "?view=providers", t);
         await page.locator(".row.provider", { hasText: "Codex" }).first().click();
@@ -236,7 +239,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(errors, []);
       });
 
-      test(`${engine} ${lang} ${width}: proxies pasted in a batch are read, listed and added`, async (t) => {
+      test(`${engine} ${lang} ${width}: proxies pasted in a batch are read, listed and added`, { timeout: TEST_MS }, async (t) => {
         const seen = { posts: [], checks: [], pastes: [], rev: 1, ips: [{ ip: "203.0.113.7", name: "Osaka", proxies: [OSAKA] }],
           exits: { "socks5://erin:pw6@proxy.example.com:9000": "198.51.100.42" } };
         const { page, errors } = await open(engine, width, lang, seen, "?view=ips", t);
@@ -274,7 +277,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(errors, []);
       });
 
-      test(`${engine} ${lang} ${width}: a batch's proxies are checked, kept under their exits, and a type is picked`, async (t) => {
+      test(`${engine} ${lang} ${width}: a batch's proxies are checked, kept under their exits, and a type is picked`, { timeout: TEST_MS }, async (t) => {
         const seen = { posts: [], checks: [], pastes: [], rev: 1, ips: [{ ip: "203.0.113.7", name: "Osaka", proxies: [OSAKA] }],
           exits: { "https://10.0.0.1:3128": "203.0.113.7", "https://10.0.0.2:3128": "198.51.100.9" } };
         const { page, errors } = await open(engine, width, lang, seen, "?view=ips", t);
@@ -306,7 +309,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(errors, []);
       });
 
-      test(`${engine} ${lang} ${width}: a batch past 500 IPs keeps what fits, and rows wait while it is added`, async (t) => {
+      test(`${engine} ${lang} ${width}: a batch past 500 IPs keeps what fits, and rows wait while it is added`, { timeout: TEST_MS }, async (t) => {
         const many = Array.from({ length: 498 }, (_, i) => ({ ip: "10.1." + (i >> 8) + "." + (i & 255) }));
         const seen = { posts: [], checks: [], pastes: [], rev: 1, ips: many, exits: {}, hold: true };
         const { page, errors } = await open(engine, width, lang, seen, "?view=ips", t);
