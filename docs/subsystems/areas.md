@@ -843,11 +843,13 @@ console, so `TestAdminKeyEveryRoute` covers it.
   `console-remove`) cancels every sign-in it started, for every area
   (`CancelConsoleSignIns`); the areas' own keys' go on. One its old
   secret records after is let go by `keepAreaSignIn`, one that ends
-  after a change that cancels nothing (`magpie gateway-key`) claims
-  nothing (`claimDone`), and its imports, batches of keys and plugin
+  after a change that cancels nothing (`magpie gateway-key`, or
+  `/api/caller-keys` by its id) claims nothing (`claimDone`), and its imports, batches of keys and plugin
   key sign-ins claim nothing after (`stillActs` reads `access.Current`
   for the console's key too, though not the area's `off`, which the
-  console acts through). The new secret's go on.
+  console acts through). The new secret's go on. As for an area's key,
+  a change that lands between `claimDone`'s read and its claim, a window
+  of one file write, is not caught.
 - **Log.** Each action's line is `admin: console for area <id> (<note>)
   <action> actor=<X-Magpie-Actor or ->` (`adminCall.logf`, the same line
   an area's key writes as `admin: area <id> (<note>) <action>`). A write

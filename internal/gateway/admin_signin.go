@@ -592,6 +592,11 @@ func cancelSignInsWhere(is func(areaSignIn) bool) {
 		}
 	}
 	areaSignIns.Unlock()
+	areaPluginSaid.Lock()
+	for _, sid := range ids {
+		delete(areaPluginSaid.m, sid)
+	}
+	areaPluginSaid.Unlock()
 	for _, sid := range ids {
 		provider.CancelSignIn(sid)
 	}

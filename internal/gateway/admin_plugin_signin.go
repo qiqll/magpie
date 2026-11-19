@@ -649,6 +649,7 @@ func keepAreaSignIn(c adminCall, id string, box *pickBox) {
 		cancelSignIns(c.area.ID, errors.Is(err, area.ErrNotFound))
 		return
 	}
+	// a console call always has a key; one without is a test's
 	if (!c.console || c.who.KeyID != "") && !access.Current(c.who) {
 		cancelSignIn(id)
 	}
