@@ -118,6 +118,7 @@ func (o *importResult) add(r importRow) {
 // The reasons an import's rows fail for all the rest.
 const (
 	importConflictsHeld = "too many conflicts; try again later"
+	importFailsHeld     = "too many accounts failed; try again later"
 	importRanOut        = "the import ran out of time: import the rest again"
 )
 
@@ -269,12 +270,16 @@ func (im *areaImport) admit() (func(provider.ImportedAccount) provider.ImportedA
 		if im.c.console {
 			consoleLeft -= im.s.conflicts.count(consoleBudget, now)
 		}
+		// each account being read may fail as well (T-233)
+		areaFails, consoleFails := im.s.importFailsLeft(im.c, now)
 		switch {
 		case areaLeft <= 0 || consoleLeft <= 0:
 			return nil, importConflictsHeld
+		case areaFails <= 0 || consoleFails <= 0:
+			return nil, importFailsHeld
 		case im.owned >= adminAccountsLimit && im.reading == 0:
 			return nil, area.ErrFull.Error()
-		case im.reading < areaLeft && (!im.c.console || importReads.console < consoleLeft) && im.owned < adminAccountsLimit:
+		case im.reading < min(areaLeft, areaFails) && (!im.c.console || importReads.console < min(consoleLeft, consoleFails)) && im.owned < adminAccountsLimit:
 			im.owned++
 			im.reading++
 			if im.c.console {
@@ -287,12 +292,17 @@ func (im *areaImport) admit() (func(provider.ImportedAccount) provider.ImportedA
 }
 
 // done is told how an admitted account went: one not added is the area's
-// no more, a conflict is counted, and one added gets its opening date
-// and the proxy picked.
+// no more, a conflict or a failure is counted, and one added gets its
+// opening date and the proxy picked.
 func (im *areaImport) done(r provider.ImportedAccount) provider.ImportedAccount {
-	if r.Status == provider.ImportConflict {
-		// counted before it is no longer being read: admit judges both
+	// counted before it is no longer being read: admit judges both
+	switch r.Status {
+	case provider.ImportConflict:
 		im.s.countConflict(im.c)
+	case keyAdded:
+	default:
+		// any other reads as failed (importResult.add)
+		im.s.importFailed(im.c, time.Now())
 	}
 	im.release(r.Status == keyAdded)
 	switch r.Status {
@@ -429,6 +439,10 @@ func (im *areaImport) pluginKeys(pm adminPluginMethod, keys []string, o provider
 				stop = msg
 			default:
 				row.Status, row.Message = keyFailed, msg
+			}
+			if row.Status == keyFailed {
+				// the plugin asked its vendor (T-233)
+				im.s.importFailed(im.c, time.Now())
 			}
 		}
 		if why == "" {

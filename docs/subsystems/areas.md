@@ -709,6 +709,17 @@ taken: an area pastes it to `signin/{id}/callback`.
   read, each of which may be a conflict, so an import tells no more
   conflicts than the line lets through. Each conflict counts
   (`countConflict`).
+- **Failures have a line too** (T-233, `importFailed`, admin_probe.go).
+  Each account asks its vendor, through the owner's exit when no proxy is
+  picked, and a failure counts against no conflict line, so each admitted
+  account that fails (a vendor's refusal, a token run out, a plugin's key
+  refused) counts to the area's 20 in 10 minutes, and the console's to its
+  40 across areas too (`budgets`, as T-222's conflicts). Past the line the
+  import's rest, and every next import's, fail with "too many accounts
+  failed; try again later" before their vendor is asked, until the window
+  lets go of its oldest; admission waits near it as it does for
+  conflicts. Other add routes aren't held by it. Reaching it is logged
+  with the count alone.
 - **Log:** `admin: area <id> (<note>) imported <agent>: added N,
   conflict N, failed N`, no name or token.
 

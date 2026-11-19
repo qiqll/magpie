@@ -158,3 +158,51 @@ func (s *Server) conflicted(c adminCall, now time.Time) bool {
 	}
 	return held
 }
+
+// An area's import asks a vendor for each account it reads, through the
+// owner's exit when no proxy is picked, and an account that fails counts
+// against no conflict line: an area could have magpie send a vendor 200
+// refused requests an import, one import after another (T-233). So each
+// admitted account that fails counts to its area's importFailMost in
+// conflictWindow, and the console's to its consoleImportFailMost across
+// areas too (budgets): past it the import's rest fail without asking
+// their vendor, and so does every next import's until the window lets go
+// of its oldest.
+const (
+	importFailMost        = 20
+	consoleImportFailMost = 40
+)
+
+// importFailLimit is how many failed imported accounts id may have in
+// the window.
+func importFailLimit(id string) int {
+	if id == consoleBudget {
+		return consoleImportFailMost
+	}
+	return importFailMost
+}
+
+// importFailed counts an imported account that failed for c, to each
+// count c spends. Reaching a line is logged with the count alone.
+func (s *Server) importFailed(c adminCall, now time.Time) {
+	for _, id := range budgets(c) {
+		if n := s.importFails.conflicted(id, now); n == importFailLimit(id) {
+			if id == consoleBudget {
+				log.Printf("admin: the console's imports had %d accounts fail across areas in %s: the rest fail unasked for now", n, conflictWindow)
+			} else {
+				log.Printf("admin: area %s's imports had %d accounts fail in %s: the rest fail unasked for now", id, n, conflictWindow)
+			}
+		}
+	}
+}
+
+// importFailsLeft is how many more of c's imported accounts may fail in
+// the window at now: its area's, and the console's when it acts.
+func (s *Server) importFailsLeft(c adminCall, now time.Time) (area, console int) {
+	area = importFailMost - s.importFails.count(c.area.ID, now)
+	console = consoleImportFailMost
+	if c.console {
+		console -= s.importFails.count(consoleBudget, now)
+	}
+	return area, console
+}

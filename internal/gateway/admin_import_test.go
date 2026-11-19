@@ -393,3 +393,114 @@ func TestAdminImportPluginKeys(t *testing.T) {
 		t.Fatal("the plugin off:", c, body)
 	}
 }
+
+// deadClaude are n Claude Code sign-ins Anthropic refuses, each its own.
+func deadClaude(tag string, n int) []string {
+	var files []string
+	for i := range n {
+		files = append(files, claudeFile("at-dead-"+tag+strconv.Itoa(i), "rt-dead-"+tag+strconv.Itoa(i), time.Now().Add(time.Hour)))
+	}
+	return files
+}
+
+// Accounts that fail count to the area's line (T-233): past it the
+// import's rest fail without their vendor asked, saying why, and so does
+// the next import's, a good account's too. No token reaches the log.
+func TestAdminImportFailLine(t *testing.T) {
+	do, console, _ := adminWorld(t)
+	logs := logsOf(t)
+	asked := fakeAnthropic(t)
+	aID, a := makeArea(t, do, console, "A")
+	openSignIns(t, do, console, aID, "claude")
+
+	c, out, body := importOf(t, do, a, map[string]any{"agent": "claude", "files": deadClaude("a", importFailMost+3)})
+	if c != http.StatusOK || out.Failed != importFailMost+3 || out.Added != 0 {
+		t.Fatal("past the line:", c, body)
+	}
+	if n := asked(); n != importFailMost {
+		t.Fatalf("Anthropic asked %d times, want %d: none past the line", n, importFailMost)
+	}
+	for _, r := range out.Results[importFailMost:] {
+		if r.Message != importFailsHeld {
+			t.Fatal("a row past the line:", body)
+		}
+	}
+	if out.Results[importFailMost-1].Message == importFailsHeld {
+		t.Fatal("the line's own row was held:", body)
+	}
+	c, out, body = importOf(t, do, a, map[string]any{"agent": "claude", "files": []string{claudeFile("at-ann", "rt-ann", time.Now().Add(time.Hour))}})
+	if c != http.StatusOK || importStatuses(out) != "1:failed" || out.Results[0].Message != importFailsHeld {
+		t.Fatal("the next import:", c, body)
+	}
+	if n := asked(); n != importFailMost {
+		t.Fatalf("Anthropic asked %d times after the line", n)
+	}
+	if !strings.Contains(logs(), "imports had 20 accounts fail") || strings.Contains(logs(), "at-dead") {
+		t.Error("the log:", logs())
+	}
+}
+
+// The console's imports for areas spend its own total too (T-233,
+// shared with T-222's): once its failed accounts across areas reach it,
+// a fresh area's import by the console asks no vendor, while that
+// area's own key still may.
+func TestAdminImportConsoleFailTotal(t *testing.T) {
+	do, console, _ := adminWorld(t)
+	asked := fakeAnthropic(t)
+	byConsole := func(id string, files []string) (int, importResult, string) {
+		t.Helper()
+		b, _ := json.Marshal(map[string]any{"agent": "claude", "files": files})
+		c, body := do("POST", AdminPath+"/areas/"+id+"/accounts/import", lanPeer, console, string(b))
+		var out importResult
+		json.Unmarshal([]byte(body), &out)
+		return c, out, body
+	}
+	spent := 0
+	for i := 0; spent < consoleImportFailMost; i++ {
+		id, _ := makeArea(t, do, console, "败"+strconv.Itoa(i))
+		openSignIns(t, do, console, id, "claude")
+		n := min(importFailMost-1, consoleImportFailMost-spent)
+		if c, out, body := byConsole(id, deadClaude(strconv.Itoa(i)+"-", n)); c != http.StatusOK || out.Failed != n || asked() != spent+n {
+			t.Fatal("the console's import:", c, asked(), body)
+		}
+		spent += n
+	}
+	id, key := makeArea(t, do, console, "新")
+	openSignIns(t, do, console, id, "claude")
+	c, out, body := byConsole(id, []string{claudeFile("at-ann", "rt-ann", time.Now().Add(time.Hour))})
+	if c != http.StatusOK || importStatuses(out) != "1:failed" || out.Results[0].Message != importFailsHeld || asked() != spent {
+		t.Fatal("past the console's total:", c, asked(), body)
+	}
+	if c, out, body := importOf(t, do, key, map[string]any{"agent": "claude", "files": []string{claudeFile("at-ann", "rt-ann", time.Now().Add(time.Hour))}}); c != http.StatusOK || importStatuses(out) != "1:added" {
+		t.Fatal("the area's own import:", c, body)
+	}
+}
+
+// A plugin's keys its sign-in refuses count to the same line (T-233):
+// past it the rest fail before areaPluginKey is called. The fake takes
+// any key, so its browser method is offered as the key way: every key
+// sign-in through it fails, as a refused one does.
+func TestAdminImportFailLinePluginKeys(t *testing.T) {
+	do, _, _, key, spec := pluginArea(t, wayPasteCode)
+	offerPlugin(t, areaPlugin{spec, []areaPluginMethod{{"oauth", "Browser", wayAPIKey}}})
+	was := keyImports["fakeco"]
+	keyImports["fakeco"] = func(files []string) []string { return strings.Fields(strings.Join(files, " ")) }
+	t.Cleanup(func() {
+		if was == nil {
+			delete(keyImports, "fakeco")
+		}
+	})
+	var keys []string
+	for i := range importFailMost + 2 {
+		keys = append(keys, "k-bad"+strconv.Itoa(i))
+	}
+	c, out, body := importOf(t, do, key, map[string]any{"agent": "fakeco", "files": []string{strings.Join(keys, " ")}})
+	if c != http.StatusOK || out.Failed != importFailMost+2 {
+		t.Fatal("past the line:", c, body)
+	}
+	for i, r := range out.Results {
+		if held := r.Message == importFailsHeld; held != (i >= importFailMost) {
+			t.Fatalf("row %d: %s", i+1, body)
+		}
+	}
+}

@@ -551,6 +551,9 @@ type Server struct {
 	titlePrompts titlePrompts
 	// conflicts are each area's 409s on its add routes (admin_probe.go)
 	conflicts conflictProbes
+	// importFails are each area's imported accounts that failed, and the
+	// console's across areas (admin_probe.go, T-233)
+	importFails conflictProbes
 	// stats are the usage stats each area and the console have running
 	// (admin_stats.go)
 	stats statsSlots
