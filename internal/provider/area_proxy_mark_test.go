@@ -9,6 +9,12 @@ import (
 	"github.com/yetone/magpie/internal/renewal"
 )
 
+// setOwnProxy is the owner's own write of the account key's proxy in
+// provider pid, as writeOwnProxy writes it: an area's mark on it goes.
+func setOwnProxy(pid, key, url string, allow func(cur string, marked bool) error) error {
+	return writeOwnProxy(pid, key, url, false, allow)
+}
+
 // ownerSets is the owner's Providers editor saving provider pid with the
 // account key's own proxy set to v.
 func ownerSets(t *testing.T, pid, key, v string) {
@@ -163,5 +169,58 @@ func TestAreaRecordBeforeTheMark(t *testing.T) {
 	}
 	if got := keyProxy(t, keys[1]); got != "" {
 		t.Fatalf("a record of before the mark, let go of, still goes through %q", got)
+	}
+}
+
+// The window's editor sends a provider with no AreaProxies (it is
+// magpie's, not the form's): a save of it, another key's proxy changed,
+// leaves the area's value the area's, its mark kept from the record.
+func TestEditorSaveKeepsTheAreasMark(t *testing.T) {
+	a, _, keys, _ := areaProxyHome(t)
+	if err := AttachAreaProxy(a.ID, keys[0], "203.0.113.9", renewal.ProxyID(areaProxyA)); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Find("relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := p.clone()
+	in.AreaProxies = nil // as the GUI's save decodes it
+	in.AccountProxies[KeyID("sk-owner-00000001")] = ownerProxy
+	if err := Save(in); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Edit("relay", func(q *Provider) error { q.AreaProxies = nil; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	rec := recordOf(a.ID, keys[0])
+	if rec == nil || AreaProxyOverridden("relay", *rec) {
+		t.Fatalf("an editor save made the area's value the owner's: %+v", rec)
+	}
+	if err := DetachAreaProxy(a.ID, keys[0]); err != nil || keyProxy(t, keys[0]) != "" {
+		t.Fatalf("the area's own value not taken off: %q %v", keyProxy(t, keys[0]), err)
+	}
+}
+
+// Copilot's account renamed onto a name whose own proxy the owner set
+// (moveAccountSettings): the area's mark stays where its value stays,
+// never on the owner's value, though it is the same.
+func TestCopilotRenameMovesTheMarkWithItsValueAlone(t *testing.T) {
+	areaProxyHome(t)
+	if err := setAreaProxy("copilot", "old", areaProxyA, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := setOwnProxy("copilot", "new", areaProxyA, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := moveAccountSettings("copilot", map[string]string{"old": "new"}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := storedPicks("copilot")
+	if _, marked := accountOwnProxy(p, "new"); marked {
+		t.Fatalf("the mark moved onto the owner's value: %v", p.AreaProxies)
+	}
+	if _, marked := accountOwnProxy(p, "old"); !marked {
+		t.Fatalf("the area's value lost its mark: %v", p.AreaProxies)
 	}
 }

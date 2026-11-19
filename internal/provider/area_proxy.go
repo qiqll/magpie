@@ -326,23 +326,18 @@ func clearAreaProxy(pid string, rec area.AccountProxy) error {
 // errLeftAlone: the value is no longer the area's, and is left as it is.
 var errLeftAlone = errors.New("left alone")
 
-// setOwnProxy writes url ("" for none) as the own proxy of the account
+// setAreaProxy writes url ("" for none) as the own proxy of the account
 // key of provider pid, in providers.json's lock, when allow (nil: always)
 // takes the value there now and whether an area's mark is on it, read in
 // the same lock: a value the owner set a moment before is never written
-// over. errLeftAlone from allow is no error. It is the owner's write: an
-// area's mark on the account goes.
-func setOwnProxy(pid, key, url string, allow func(cur string, marked bool) error) error {
-	return writeOwnProxy(pid, key, url, false, allow)
-}
-
-// setAreaProxy is setOwnProxy for an area's write: url is marked as the
-// area's (AreaProxies), or the mark goes with the value ("").
+// over. errLeftAlone from allow is no error. url is marked as the area's
+// (AreaProxies), or the mark goes with the value ("").
 func setAreaProxy(pid, key, url string, allow func(cur string, marked bool) error) error {
 	return writeOwnProxy(pid, key, url, true, allow)
 }
 
-// writeOwnProxy is setOwnProxy, and setAreaProxy when byArea.
+// writeOwnProxy is setAreaProxy, and with byArea false an owner's write
+// (a test's): an area's mark on the account goes.
 func writeOwnProxy(pid, key, url string, byArea bool, allow func(cur string, marked bool) error) error {
 	if beforeOwnProxyWrite != nil {
 		beforeOwnProxyWrite()
