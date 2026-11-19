@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -30,23 +29,9 @@ import (
 // connection is ever made to it (dialPublicHere).
 const ipsPublic = "93.184.216.34"
 
-// fakePorts are the loopback ports of the fake proxies the running test
-// started (startTraceProxy, vendorBehind's): a public address at one of
-// them reaches it, at any other nothing (T-225: a batch's IP lines are
-// connected to, and never to the network).
-var fakePorts sync.Map
-
-// fakePort has port reach a fake proxy until the test ends.
-func fakePort(t *testing.T, port string) {
-	fakePorts.Store(port, true)
-	t.Cleanup(func() { fakePorts.Delete(port) })
-}
-
 // stubProxyDNS has proxy.example (and every name under .example) answer
 // *answer, and a connection to ipsPublic reach this computer at the same
-// port, where the test's fake proxy listens. One to another public
-// address reaches this computer at a fake proxy's port alone, and is
-// refused at any other.
+// port, where the test's fake proxy listens.
 func stubProxyDNS(t *testing.T, answer *atomic.Value) {
 	t.Helper()
 	lookup, dial := netproxy.LookupIP, netproxy.DialPublicAddr
@@ -58,11 +43,10 @@ func stubProxyDNS(t *testing.T, answer *atomic.Value) {
 		return []netip.Addr{netip.MustParseAddr(answer.Load().(string))}, nil
 	}
 	netproxy.DialPublicAddr = func(ctx context.Context, d netproxy.DialFunc, network, addr string) (net.Conn, error) {
-		host, port, _ := net.SplitHostPort(addr)
-		if _, fake := fakePorts.Load(port); host != ipsPublic && !fake {
-			return nil, &net.OpError{Op: "dial", Net: network, Err: syscall.ECONNREFUSED}
+		if host, port, _ := net.SplitHostPort(addr); host == ipsPublic {
+			addr = net.JoinHostPort("127.0.0.1", port)
 		}
-		return d(ctx, network, net.JoinHostPort("127.0.0.1", port))
+		return d(ctx, network, addr)
 	}
 }
 
@@ -73,7 +57,7 @@ type traceProxy struct {
 	ln     net.Listener
 	conns  atomic.Int32
 	status atomic.Int32
-	exit   atomic.Value // the IP the trace page says
+	exit   string
 	wg     sync.WaitGroup
 	mu     sync.Mutex
 	open   []net.Conn // closed as the test ends: a client keeps them idle
@@ -102,9 +86,7 @@ func startTraceProxy(t *testing.T, exit string) *traceProxy {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &traceProxy{ln: ln}
-	p.exit.Store(exit)
-	fakePort(t, p.port())
+	p := &traceProxy{ln: ln, exit: exit}
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
@@ -132,7 +114,7 @@ func startTraceProxy(t *testing.T, exit string) *traceProxy {
 						fmt.Fprintf(c, "HTTP/1.1 %d Nope\r\nContent-Length: 34\r\n\r\ninternal router page 192.168.1.1!!", s)
 						continue
 					}
-					body := "fl=1\nip=" + p.exit.Load().(string) + "\nloc=JP\n"
+					body := "fl=1\nip=" + p.exit + "\nloc=JP\n"
 					if strings.HasPrefix(req.URL.Path, "/v1/") {
 						body = `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`
 					}
@@ -160,35 +142,12 @@ type ipsWorld struct {
 	aKey, bKey, owner string
 	answer            *atomic.Value
 	proxy             *traceProxy
-	exits             map[string]*traceProxy // proxyAt's
 	reached           *atomic.Int32
-}
-
-// proxyAt is a fake proxy that leaves from ip: w.proxy for 203.0.113.7,
-// else one of its own, started once.
-func (w *ipsWorld) proxyAt(t *testing.T, ip string) *traceProxy {
-	t.Helper()
-	if ip == "203.0.113.7" {
-		return w.proxy
-	}
-	if p, ok := w.exits[ip]; ok {
-		return p
-	}
-	p := startTraceProxy(t, ip)
-	w.exits[ip] = p
-	return p
-}
-
-// proxyOf is the proxy addIP gives ip, at a name of its own and a fake
-// proxy that leaves from ip.
-func (w *ipsWorld) proxyOf(t *testing.T, ip string) string {
-	t.Helper()
-	return "http://user:pw@" + proxyHost(ip) + ":" + w.proxyAt(t, ip).port()
 }
 
 func newIPsWorld(t *testing.T) *ipsWorld {
 	t.Helper()
-	w := &ipsWorld{answer: &atomic.Value{}, exits: map[string]*traceProxy{}}
+	w := &ipsWorld{answer: &atomic.Value{}}
 	w.do, w.console, w.reached = adminWorld(t)
 	w.aID, w.a = makeArea(t, w.do, w.console, "学习", "plan")
 	w.bID, w.b = makeArea(t, w.do, w.console, "工作", "plan")
@@ -219,11 +178,11 @@ func (w *ipsWorld) post(t *testing.T, secret, path string, in any) (int, string)
 	return w.do("POST", AdminPath+path, lanPeer, secret, string(b))
 }
 
-// addIP is an IP the area's admin adds with one proxy that leaves from
-// it (proxyOf), and that proxy's id. It spends one of the area's checks.
+// addIP is an IP the area's admin adds with one proxy at proxy.example,
+// and that proxy's id.
 func (w *ipsWorld) addIP(t *testing.T, secret, ip string) string {
 	t.Helper()
-	proxy := w.proxyOf(t, ip)
+	proxy := "http://user:pw@" + proxyHost(ip) + ":" + w.proxy.port()
 	c, body := w.post(t, secret, "/ips", map[string]any{"ip": ip, "name": "东京", "proxies": []string{proxy}})
 	if c != http.StatusCreated {
 		t.Fatalf("adding %s: %d %s", ip, c, body)
@@ -421,8 +380,7 @@ func TestAdminAreaProxyMustBePublic(t *testing.T) {
 			t.Errorf("%s: %d %s", p, c, body)
 		}
 	}
-	w.answer.Store(ipsPublic)
-	c, body := w.post(t, w.a, "/ips", map[string]any{"ip": "203.0.113.7", "proxies": []string{w.proxyOf(t, "203.0.113.7")}})
+	c, body := w.post(t, w.a, "/ips", map[string]any{"ip": "203.0.113.7", "proxies": []string{}})
 	if c != http.StatusCreated {
 		t.Fatal(c, body)
 	}
@@ -431,13 +389,13 @@ func TestAdminAreaProxyMustBePublic(t *testing.T) {
 	}
 	ips, _, _ := renewal.IPs()
 	for _, x := range ips {
-		if x.Area != "" && len(x.Proxies) != 1 {
+		if x.Area != "" && len(x.Proxies) > 0 {
 			t.Fatalf("kept: %+v", x)
 		}
 	}
 	// 409 that names no owner, counted as the add routes' are
 	for _, ip := range []string{"198.51.100.1", "203.0.113.7"} {
-		if c, body := w.post(t, w.b, "/ips", map[string]any{"ip": ip, "proxies": []string{w.proxyOf(t, ip)}}); c != http.StatusConflict || strings.Contains(body, w.aID) || strings.Contains(body, "owner") {
+		if c, body := w.post(t, w.b, "/ips", map[string]any{"ip": ip, "proxies": []string{}}); c != http.StatusConflict || strings.Contains(body, w.aID) || strings.Contains(body, "owner") {
 			t.Fatalf("B adding %s: %d %s", ip, c, body)
 		}
 	}
@@ -540,8 +498,7 @@ func TestAreaProxyCheckHeld(t *testing.T) {
 	check := func(secret, ip, px string) (int, string) {
 		return w.post(t, secret, "/ips/check", map[string]any{"ip": ip, "proxy": px})
 	}
-	// adding the IP spent the first (T-225)
-	for i := range checksMost - 1 {
+	for i := range checksMost {
 		if c, body := check(w.a, "203.0.113.7", pxA); c != 200 {
 			t.Fatal(i, c, body)
 		}

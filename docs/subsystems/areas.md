@@ -292,36 +292,6 @@ proxies on its own accounts
   written over. At most 50 IPs an area (`MaxAreaIPs`). An address magpie has
   already is `409 conflict` with no owner named, counted with the add
   routes' conflicts (`probeHeld`).
-- **Kept under its exit** (T-225, the owner's choice of 2026-11-18): a
-  proxy the area adds, by `POST /ips`, `ips/update`'s `addProxies` or
-  `ips/batch`, is kept only under the IP a check reads it leaves from
-  (`Server.confirmExits`, `checkAreaProxy`'s `matches`). Otherwise an
-  area could hold a public address it has no proxy at, ahead of the
-  owner adding it (whose add is then refused), or put a proxy that
-  leaves from elsewhere (the owner's, letting magpie in by its source
-  address) under an IP of its own and on its accounts. So `POST /ips`
-  needs a proxy (`400`), and each new proxy of a request spends one of
-  `proxyChecks` as it is checked: `429 too_many_checks` while they
-  can't all be (`proxyChecks.room`), connecting nowhere; `400` past 10
-  proxies in one request, and a full area or IP is told before any
-  check; `400 proxy_exit` with the `check` (login left out) for the
-  first that doesn't leave from the IP or doesn't answer, the ones after
-  it unchecked and nothing written. The IP is judged taken (`409`) only
-  after, so a conflict needs a proxy that leaves from the address too.
-  Only the add is slower; requests through the proxy afterwards aren't
-  checked again. A proxy an update has already isn't checked.
-  - What it doesn't hold (open, the owner to decide): the check goes
-    out from magpie's own address, so a proxy of the owner's that lets
-    magpie in by its source address passes it under its real exit when
-    that exit isn't in `ips.json` yet; that exit is then the area's,
-    and the owner's later add of it is `409`. A proxy written by a name
-    is checked once, and every dial resolves the name again, so a name
-    pointed at another public proxy after the add goes through that
-    one. A proxy with more than one exit (dual-stack, a rotating pool)
-    passes under whichever the check met.
-  - IPs and proxies an area added before T-225 are kept as they were,
-    unchecked, an IP with no proxy too; `ips/reread` reads those on an
-    account alone.
 - **Proxies are named** `px_` + 10 hex of SHA-256 (`renewal.ProxyID`), and
   told with their login left out (`netproxy.Redact`).
 - **On an account** (`POST /accounts/proxy`, `provider.AttachAreaProxy`):
@@ -401,15 +371,11 @@ proxies on its own accounts
   `internal/gui/tests/proxy-ips-batch-lines.test.cjs`; a change to either
   reader regenerates them from `ipsbatch.js`). The text is bounded before
   any line is read (`CheckBatch`: 100 lines, 4096 bytes a line). A line whose host is an IP
-  is judged public by its address, then checked whether or not `check`
-  is sent, and kept under it only when its exit is that IP (T-225; else
-  `failed` "the proxy leaves from <exit>, not this IP", or "the proxy
-  didn't carry the check: <category>"); a host name is kept under its
-  exit, read only with `check:true`. Each such line is one of
-  `proxyChecks` (the batch holds the area's one at a
-  time while it runs; past the budget the lines left are `failed`
-  "check limit reached"), so a batch adds at most 10 proxies in 10
-  minutes. What is left is judged and written at once,
+  is kept under it, judged public by its address and never connected to;
+  a host name is kept under its exit, read only with `check:true`, each
+  such line one of `proxyChecks` (the batch holds the area's one at a
+  time while it runs; past the budget the names left are `failed`
+  "check limit reached"). What is left is judged and written at once,
   under `ipsMu` against `ips.json` read then (`renewal.AddAreaProxies`):
   `added`, `merged` into an IP the area made, `exists`, `conflict` for an
   IP magpie has as no IP the area made (whose not said; each counted in
@@ -419,8 +385,8 @@ proxies on its own accounts
   an IP magpie has or not, so a full area's misses tell nothing of other
   IPs. A whole-list check's error (`CheckIPs`, which can name another's
   IP) is logged, never told. A batch is 429 at the door while the area
-  is held for conflicts, or, with a line whose host is an IP or with
-  `check` and a name in it, while its checks are spent. `dryRun` reads the lines and judges an IP host public
+  is held for conflicts, or, with `check` and a name in it, while its
+  checks are spent. `dryRun` reads the lines and judges an IP host public
   and no more: it resolves no name, connects nowhere, spends nothing and
   judges no owner (`ok`, `invalid`, `not_public` alone), so it tells
   nothing of other IPs.
@@ -454,6 +420,13 @@ area's proxy sees the upstream connections of the area's accounts through
 it (SNI, timing, sizes; an `http://` base URL in full). That is the same
 level as the vendor of an area's account, and is limited to that area's
 accounts, which is why a released account loses it.
+
+An area's proxy needs only a public address. The owner decided on
+2026-11-19 (T-225, reverting the exit check of 11-18) that its exit
+isn't compared with the IP it's added under, and adding one under an IP
+spends no `proxyChecks` (only a batch line by name with `check` reads an
+exit, to learn its IP): a proxy that doesn't leave from its IP only
+fails its own requests.
 
 **Public-only proxies** ([`internal/netproxy/publiconly.go`](../../internal/netproxy/publiconly.go)).
 A proxy an area added is connected to at a public address alone

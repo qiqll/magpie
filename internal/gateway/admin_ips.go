@@ -28,8 +28,7 @@ import (
 // Proxy IPs (T-198, magpie-console's docs/magpie-api.md §9,
 // docs/subsystems/areas.md "Proxy IPs"). An area's admin keeps the proxy
 // exit IPs its area owns (ips.json, renewal.IP.Area), adds proxies to
-// them, at public addresses alone and each kept once a check reads it
-// leaves from the IP (T-225), checks those, and puts them on its
+// them, at public addresses alone, checks those, and puts them on its
 // area's accounts. The owner's IPs are no area's; one the owner gave an
 // area (Models › Proxy IPs) is the area's to put on its accounts, never
 // to check or change the proxies of. The console reads every area's,
@@ -41,8 +40,6 @@ const (
 	adminInUse          = "in_use"
 	adminTooManyChecks  = "too_many_checks"
 	adminIPsUnread      = "ips_unreadable"
-	// adminProxyExit: an added proxy doesn't leave from its IP (T-225)
-	adminProxyExit = "proxy_exit"
 	// checksMost proxy checks an area may start in checksWindow, one at
 	// a time
 	checksMost   = 10
@@ -254,34 +251,14 @@ func (s *Server) adminAddIP(w http.ResponseWriter, r *http.Request, c adminCall)
 	if !decodeAdmin(w, r, &in) {
 		return
 	}
-	ips, ok := readIPs(w)
-	if !ok {
-		return
-	}
-	// told before a check is spent; the area's own count tells nothing
-	// of other IPs
-	if n := len(slices.DeleteFunc(ips, func(x renewal.IP) bool { return x.Area != c.area.ID })); n >= renewal.MaxAreaIPs {
-		ipWriteErr(w, renewal.ErrAreaFull)
-		return
-	}
-	addr := net.ParseIP(strings.TrimSpace(in.IP))
-	if addr == nil {
-		adminError(w, http.StatusBadRequest, adminBadRequest, "ip is an IPv4 or IPv6 address")
-		return
-	}
-	proxies := newProxies(in.Proxies, nil)
-	switch {
-	case len(proxies) == 0:
-		adminError(w, http.StatusBadRequest, adminBadRequest, "an area adds an IP with a proxy that leaves from it")
-		return
-	case len(proxies) > renewal.MaxIPProxies:
+	if len(in.Proxies) > renewal.MaxIPProxies {
 		adminError(w, http.StatusBadRequest, adminBadRequest, "an IP has at most 20 proxies")
 		return
 	}
-	if !checkAreaProxies(w, r, proxies) || !s.confirmExits(w, r, c, addr.String(), proxies) {
+	if !checkAreaProxies(w, r, in.Proxies) {
 		return
 	}
-	x := renewal.IP{IP: addr.String(), Name: in.Name, Proxies: proxies}
+	x := renewal.IP{IP: in.IP, Name: in.Name, Proxies: in.Proxies}
 	if in.Opened != nil {
 		x.Opened = *in.Opened
 	}
@@ -292,68 +269,6 @@ func (s *Server) adminAddIP(w http.ResponseWriter, r *http.Request, c adminCall)
 	}
 	c.logf("added an IP with %d proxies", len(got.Proxies))
 	replyIP(w, c, got, http.StatusCreated)
-}
-
-// newProxies are proxies trimmed, each once, those of had left out: the
-// ones a request adds.
-func newProxies(proxies, had []string) []string {
-	var out []string
-	for _, p := range proxies {
-		if p = strings.TrimSpace(p); !slices.Contains(had, p) && !slices.Contains(out, p) {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// confirmExits says each of proxies leaves from ip, read by a check of
-// each, or answers why not (T-225: an area's proxy is kept only under
-// the IP it leaves from, so an area can't hold an address it has no
-// proxy at, nor put a proxy that leaves from elsewhere under its own).
-// It holds the area's checks and spends one a proxy as it checks it,
-// stopping at the first that doesn't leave from ip: 429
-// too_many_checks, nothing connected to, while they can't all be spent;
-// 400 proxy_exit with the check of that first, its login left out. None
-// is no check.
-func (s *Server) confirmExits(w http.ResponseWriter, r *http.Request, c adminCall, ip string, proxies []string) bool {
-	if len(proxies) == 0 {
-		return true
-	}
-	if len(proxies) > checksMost {
-		adminError(w, http.StatusBadRequest, adminBadRequest, "an area adds at most "+strconv.Itoa(checksMost)+" proxies at once: each is checked")
-		return false
-	}
-	now := time.Now()
-	wait, console, ok := s.proxyChecks.hold(budgets(c), now)
-	if !ok {
-		checksHeld(w, wait, console)
-		return false
-	}
-	defer s.proxyChecks.end(c.area.ID)
-	if wait, console, ok := s.proxyChecks.room(budgets(c), len(proxies), now); !ok {
-		checksHeld(w, wait, console)
-		return false
-	}
-	for _, p := range proxies {
-		// the console's total is another area's to spend meanwhile
-		if !s.proxyChecks.spend(budgets(c), time.Now()) {
-			wait, console, _ := s.proxyChecks.room(budgets(c), 1, time.Now())
-			checksHeld(w, wait, console)
-			return false
-		}
-		out := checkAreaProxy(r.Context(), p, ip)
-		if out.OK && out.Matches {
-			continue
-		}
-		out.Proxy = proxyShown(p)
-		c.logf("an added proxy didn't leave from its IP: ok=%v %s", out.OK, out.Error)
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": map[string]any{"message": "a proxy is added under the IP a check reads it leaves from: this one didn't leave from " + ip, "type": "invalid_request_error", "code": adminProxyExit},
-			"check": out,
-		})
-		return false
-	}
-	return true
 }
 
 // inUse answers 409 in_use, naming the area's accounts on what is
@@ -384,8 +299,7 @@ func (s *Server) adminUpdateIP(w http.ResponseWriter, r *http.Request, c adminCa
 		adminError(w, http.StatusBadRequest, adminBadRequest, "the owner gave this IP: its proxies are the owner's to change")
 		return
 	}
-	adds := newProxies(in.AddProxies, x.Proxies)
-	if !checkAreaProxies(w, r, adds) {
+	if !checkAreaProxies(w, r, in.AddProxies) {
 		return
 	}
 	for _, id := range in.RemoveProxies {
@@ -397,14 +311,6 @@ func (s *Server) adminUpdateIP(w http.ResponseWriter, r *http.Request, c adminCa
 			inUse(w, used)
 			return
 		}
-	}
-	// told before a check is spent
-	if len(x.Proxies)-len(in.RemoveProxies)+len(adds) > renewal.MaxIPProxies {
-		adminError(w, http.StatusBadRequest, adminBadRequest, "an IP has at most 20 proxies")
-		return
-	}
-	if !s.confirmExits(w, r, c, x.IP, adds) {
-		return
 	}
 	got, err := areaIPChange(c.area.ID, x.IP, time.Now(), func(y *renewal.IP) error {
 		// read again under ipsMu: an attach that passed the check above
@@ -421,12 +327,7 @@ func (s *Server) adminUpdateIP(w http.ResponseWriter, r *http.Request, c adminCa
 			y.Opened = *in.Opened
 		}
 		y.Proxies = slices.DeleteFunc(y.Proxies, func(p string) bool { return slices.Contains(in.RemoveProxies, renewal.ProxyID(p)) })
-		// the checked alone: one it had when read is never added unchecked
-		for _, p := range adds {
-			if !slices.Contains(y.Proxies, p) {
-				y.Proxies = append(y.Proxies, p)
-			}
-		}
+		y.Proxies = append(y.Proxies, in.AddProxies...)
 		return nil
 	})
 	if err != nil {
@@ -619,32 +520,6 @@ func (p *proxyChecks) spend(ids []string, now time.Time) bool {
 		p.started[id] = append(p.started[id], now)
 	}
 	return true
-}
-
-// room says whether each of ids has n checks left in the window at now,
-// spending none, or how long until it has and whether the console's
-// total is the longer wait. More than an id may ever have is never room.
-func (p *proxyChecks) room(ids []string, n int, now time.Time) (wait time.Duration, console, ok bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	ok = true
-	for _, id := range ids {
-		ts, most := p.recent(id, now), checksLimit(id)
-		w := time.Duration(0)
-		switch k := len(ts) + n - most; {
-		case n > most:
-			w = checksWindow
-		case k > 0:
-			w = ts[k-1].Add(checksWindow).Sub(now)
-		default:
-			continue
-		}
-		ok = false
-		if w > wait {
-			wait, console = w, id == consoleBudget
-		}
-	}
-	return wait, console, ok
 }
 
 // free says whether ids may start a check at now, the area's (ids[0])

@@ -37,7 +37,7 @@ func TestAdminIPRenewalDays(t *testing.T) {
 		{"203.0.113.31", now.Add(-27*24*time.Hour - 12*time.Hour), "soon", 3, true},
 		{"203.0.113.32", now.Add(-32*24*time.Hour - 12*time.Hour), "ended", -2, true},
 	} {
-		if code, body := w.post(t, w.a, "/ips", map[string]any{"ip": c.ip, "name": "x", "opened": c.opened, "proxies": []string{w.proxyOf(t, c.ip)}}); code != http.StatusCreated {
+		if code, body := w.post(t, w.a, "/ips", map[string]any{"ip": c.ip, "name": "x", "opened": c.opened}); code != http.StatusCreated {
 			t.Fatal(code, body)
 		}
 		_, body := w.do("GET", AdminPath+"/ips", lanPeer, w.a, "")
@@ -101,9 +101,8 @@ func TestAdminProbeProxy(t *testing.T) {
 	if spent != checksMost {
 		t.Fatalf("spent %d, want %d", spent, checksMost)
 	}
-	// held before the IP is looked up: adding one would spend a check
-	// itself (T-225)
-	if c, body := w.post(t, w.a, "/ips/check", map[string]any{"ip": "203.0.113.7", "proxy": "px_0000000000"}); c != http.StatusTooManyRequests || !strings.Contains(body, adminTooManyChecks) {
+	px := w.addIP(t, w.a, "203.0.113.7")
+	if c, body := w.post(t, w.a, "/ips/check", map[string]any{"ip": "203.0.113.7", "proxy": px}); c != http.StatusTooManyRequests || !strings.Contains(body, adminTooManyChecks) {
 		t.Fatalf("a check after %d probes: %d %s", spent, c, body)
 	}
 	if c, body := w.post(t, w.a, "/ips/probe", map[string]any{"proxy": proxy}); c != http.StatusTooManyRequests {
@@ -163,26 +162,22 @@ func statuses(out batchOut) []string {
 // under its IP, its host when that is one and its exit when it is a
 // name; a second proxy of one IP merges into it; the owner's and another
 // area's IPs are conflict, a private one not_public, a line not read
-// invalid. The login is never told. (T-225: a host that is an IP is
-// kept once its exit is that IP, so each such line has a fake proxy that
-// leaves from it.)
+// invalid. The login is never told.
 func TestAdminBatchIPs(t *testing.T) {
 	w := newIPsWorld(t)
 	ownerIPs(t, pubIP+"1", pubIP+"2")
-	at := func(ip string) string { return ip + ":" + w.proxyAt(t, ip).port() }
-	if c, out, body := w.batch(t, w.b, map[string]any{"text": at(pubIP + "200"), "type": "http"}); c != 200 || out.Rows[0].Status != batchAdded {
+	if c, out, body := w.batch(t, w.b, map[string]any{"text": pubIP + "200:1080"}); c != 200 || out.Rows[0].Status != batchAdded {
 		t.Fatalf("B's: %d %s", c, body)
 	}
-	second := startTraceProxy(t, pubIP+"20") // another proxy of the IP
 	name := proxyHost("203.0.113.41") + ":" + w.proxy.port() + ":user:pw3"
 	text := strings.Join([]string{
 		"# A's proxies",
-		at(pubIP+"20") + ":user:pw1",
-		"http://" + pubIP + "20:" + second.port(),
-		at(pubIP+"20") + ":user:pw1",
+		pubIP + "20:1080:user:pw1",
+		"socks5://" + pubIP + "20:1081",
+		pubIP + "20:1080:user:pw1",
 		"http://user:pw2@192.168.1.5:3128",
-		at(pubIP + "1"),
-		at(pubIP + "200"),
+		pubIP + "1:1080",
+		pubIP + "200:1080",
 		name,
 		"ssh://" + pubIP + "21:22",
 		"not a proxy",
@@ -193,7 +188,7 @@ func TestAdminBatchIPs(t *testing.T) {
 	if c != 200 || !slices.Equal(statuses(out), want) || out.Added != 3 {
 		t.Fatalf("%d %v added %d, want %v added 3: %s", c, statuses(out), out.Added, want, body)
 	}
-	if out.Rows[0].Line != 2 || out.Rows[0].IP != pubIP+"20" || out.Rows[0].Proxy.URL != "http://"+at(pubIP+"20") || out.Rows[6].IP != "203.0.113.7" {
+	if out.Rows[0].Line != 2 || out.Rows[0].IP != pubIP+"20" || out.Rows[0].Proxy.URL != "http://"+pubIP+"20:1080" || out.Rows[6].IP != "203.0.113.7" {
 		t.Fatalf("rows: %s", body)
 	}
 	for _, leak := range []string{"pw1", "pw2", "pw3", "user"} {
@@ -206,9 +201,6 @@ func TestAdminBatchIPs(t *testing.T) {
 	}
 	if n := w.proxy.conns.Load(); n != before+1 {
 		t.Fatalf("connections %d, want the name's check alone (%d)", n, before+1)
-	}
-	if n := w.proxyAt(t, pubIP+"20").conns.Load() + second.conns.Load(); n != 2 {
-		t.Fatalf("the IP's two lines were checked %d times, want 2", n)
 	}
 	_, list := w.do("GET", AdminPath+"/ips", lanPeer, w.a, "")
 	ips := ipsOf(t, list)
@@ -223,7 +215,7 @@ func TestAdminBatchIPs(t *testing.T) {
 	}
 
 	// sent again: each is there already, nothing written
-	c, out, body = w.batch(t, w.a, map[string]any{"text": at(pubIP+"20") + ":user:pw1\nhttp://" + pubIP + "20:" + second.port(), "type": "http"})
+	c, out, body = w.batch(t, w.a, map[string]any{"text": pubIP + "20:1080:user:pw1\nsocks5://" + pubIP + "20:1081", "type": "http"})
 	if c != 200 || !slices.Equal(statuses(out), []string{batchExists, batchExists}) || out.Added != 0 {
 		t.Fatalf("again: %d %s", c, body)
 	}
@@ -237,7 +229,7 @@ func TestAdminBatchIPs(t *testing.T) {
 	if err := renewal.GiveIP(pubIP+"2", w.aID); err != nil {
 		t.Fatal(err)
 	}
-	if _, out, body = w.batch(t, w.a, map[string]any{"text": at(pubIP + "2"), "type": "http"}); out.Rows[0].Status != batchFailed || !strings.Contains(out.Rows[0].Message, "owner gave") {
+	if _, out, body = w.batch(t, w.a, map[string]any{"text": pubIP + "2:1080"}); out.Rows[0].Status != batchFailed || !strings.Contains(out.Rows[0].Message, "owner gave") {
 		t.Fatalf("a given IP: %s", body)
 	}
 	// bounds
@@ -289,79 +281,65 @@ func TestAdminBatchDryRun(t *testing.T) {
 	}
 }
 
-// TestAdminBatchBudget (§16.3, §18): each line spends one of the area's
-// checks, a name's and, since T-225, an IP's; past the budget the lines
-// left fail "check limit reached" and the rest are kept. With none left,
-// a batch is 429 at the door, one with IPs alone too (T-225: an IP's
-// line is never kept unchecked), and connects nowhere.
+// TestAdminBatchBudget (§16.3, §18): a name's line spends one of the
+// area's checks, an IP's none; past the budget the names left fail
+// "check limit reached" and the rest are kept. With none left, a batch
+// that would check is 429 at the door, one with IPs alone goes.
 func TestAdminBatchBudget(t *testing.T) {
 	w := newIPsWorld(t)
-	px := w.addIP(t, w.a, "203.0.113.7") // the first check
-	for i := range checksMost - 4 {
+	px := w.addIP(t, w.a, "203.0.113.7")
+	for i := range checksMost - 1 {
 		if c, body := w.post(t, w.a, "/ips/check", map[string]any{"ip": "203.0.113.7", "proxy": px}); c != 200 {
 			t.Fatal(i, c, body)
 		}
 	}
 	port := w.proxy.port()
-	ip := func(n string) string { return pubIP + n + ":" + w.proxyAt(t, pubIP+n).port() }
-	text := proxyHost("203.0.113.42") + ":" + port + "\n" + ip("23") + "\n" + proxyHost("203.0.113.43") + ":" + port + "\n" + ip("25")
+	text := proxyHost("203.0.113.42") + ":" + port + "\n" + proxyHost("203.0.113.43") + ":" + port + "\n" + pubIP + "23:1080"
 	c, out, body := w.batch(t, w.a, map[string]any{"text": text, "type": "http", "check": true})
-	if c != 200 || !slices.Equal(statuses(out), []string{batchMerged, batchAdded, batchMerged, batchFailed}) || out.Rows[3].Message != "check limit reached" {
+	if c != 200 || !slices.Equal(statuses(out), []string{batchMerged, batchFailed, batchAdded}) || out.Rows[1].Message != "check limit reached" {
 		t.Fatalf("%d %v: %s", c, statuses(out), body)
-	}
-	if n := w.proxyAt(t, pubIP+"25").conns.Load(); n != 0 {
-		t.Fatalf("a line past the budget connected: %d", n)
 	}
 	if c, body := w.post(t, w.a, "/ips/batch", map[string]any{"text": proxyHost("203.0.113.44") + ":" + port, "type": "http", "check": true}); c != http.StatusTooManyRequests || !strings.Contains(body, adminTooManyChecks) {
 		t.Fatalf("a check past the budget: %d %s", c, body)
 	}
-	if c, body := w.post(t, w.a, "/ips/batch", map[string]any{"text": ip("24"), "type": "http"}); c != http.StatusTooManyRequests || !strings.Contains(body, adminTooManyChecks) || w.proxyAt(t, pubIP+"24").conns.Load() != 0 {
+	if c, out, body := w.batch(t, w.a, map[string]any{"text": pubIP + "24:1080", "check": true}); c != 200 || out.Rows[0].Status != batchAdded {
 		t.Fatalf("IPs alone past the budget: %d %s", c, body)
 	}
 }
 
 // TestAdminBatchConflicts (§16.3, §18): each line whose IP magpie has is
 // a conflict counted with the add routes'; the one that reaches the line
-// fails the rest, and the area's next batch is 429 at the door. (T-225:
-// each line spends a check, 10 an area, so the area meets its first 17
-// conflicts on accounts/key and the batch the last 3.)
+// fails the rest, and the area's next batch is 429 at the door.
 func TestAdminBatchConflicts(t *testing.T) {
 	w := newIPsWorld(t)
-	const before = conflictMost - 3
-	for i := range before {
-		if c, body := w.post(t, w.a, "/accounts/key", map[string]any{"provider": "plan", "key": "upstream-secret-plan"}); c != http.StatusConflict {
-			t.Fatal(i, c, body)
-		}
-	}
-	at := func(ip string) string { return ip + ":" + w.proxyAt(t, ip).port() }
 	var lines, owned []string
-	for i := range conflictMost - before + 2 {
+	for i := range conflictMost + 2 {
 		ip := fmt.Sprintf(pubIP+"%d", 10+i)
 		owned = append(owned, ip)
-		lines = append(lines, at(ip))
+		lines = append(lines, ip+":1080")
 	}
 	ownerIPs(t, owned...)
-	lines = append(lines, at(pubIP+"250"))
-	c, out, body := w.batch(t, w.a, map[string]any{"text": strings.Join(lines, "\n"), "type": "http"})
-	if c != 200 || len(out.Rows) != len(lines) {
+	lines = append(lines, pubIP+"250:1080")
+	c, out, body := w.batch(t, w.a, map[string]any{"text": strings.Join(lines, "\n")})
+	if c != 200 {
 		t.Fatal(c, body)
 	}
 	for i, r := range out.Rows {
 		want := batchConflict
-		if before+i >= conflictMost {
+		if i >= conflictMost {
 			want = batchFailed
 		}
-		if r.Status != want || before+i >= conflictMost && r.Message != "too many conflicts; try again later" {
+		if r.Status != want || i >= conflictMost && r.Message != "too many conflicts; try again later" {
 			t.Fatalf("row %d: %+v, want %s", i, r, want)
 		}
 	}
-	if c, body := w.post(t, w.a, "/ips/batch", map[string]any{"text": at(pubIP + "251"), "type": "http"}); c != http.StatusTooManyRequests || !strings.Contains(body, adminTooManyConflicts) {
+	if c, body := w.post(t, w.a, "/ips/batch", map[string]any{"text": pubIP + "251:1080"}); c != http.StatusTooManyRequests || !strings.Contains(body, adminTooManyConflicts) {
 		t.Fatalf("after the line: %d %s", c, body)
 	}
 	if c, body := w.post(t, w.a, "/accounts/key", map[string]any{"provider": "plan", "key": "sk-area-9999999999"}); c != http.StatusTooManyRequests {
 		t.Fatalf("the add routes aren't held with it: %d %s", c, body)
 	}
-	if c, out, body := w.batch(t, w.b, map[string]any{"text": at(pubIP + "251"), "type": "http"}); c != 200 || out.Rows[0].Status != batchAdded {
+	if c, out, body := w.batch(t, w.b, map[string]any{"text": pubIP + "251:1080"}); c != 200 || out.Rows[0].Status != batchAdded {
 		t.Fatalf("B held by A: %d %s", c, body)
 	}
 }
@@ -394,9 +372,7 @@ func (w *ipsWorld) accountProxyOf(t *testing.T, secret, ref string) *adminAccoun
 // said. A proxy on no account, and an IP the owner gave, aren't read.
 func TestAdminRereadIPs(t *testing.T) {
 	w := newIPsWorld(t)
-	// each leaves from its IP as it is added (T-225), and from another
-	// once it is
-	mover, other, idle := startTraceProxy(t, "203.0.113.50"), startTraceProxy(t, "203.0.113.51"), startTraceProxy(t, "203.0.113.52")
+	other := startTraceProxy(t, "198.51.100.1")
 	add := func(ip, port string) string {
 		proxy := "http://user:pw@" + proxyHost(ip) + ":" + port
 		if c, body := w.post(t, w.a, "/ips", map[string]any{"ip": ip, "name": "x", "proxies": []string{proxy}}); c != http.StatusCreated {
@@ -404,11 +380,9 @@ func TestAdminRereadIPs(t *testing.T) {
 		}
 		return renewal.ProxyID(proxy)
 	}
-	moving := add("203.0.113.50", mover.port()) // leaves from 203.0.113.7
-	taken := add("203.0.113.51", other.port())  // leaves from the owner's
-	add("203.0.113.52", idle.port())            // on no account
-	mover.exit.Store("203.0.113.7")
-	other.exit.Store("198.51.100.1")
+	moving := add("203.0.113.50", w.proxy.port()) // leaves from 203.0.113.7
+	taken := add("203.0.113.51", other.port())    // leaves from the owner's
+	add("203.0.113.52", w.proxy.port())           // on no account
 	if err := renewal.GiveIP("198.51.100.2", w.aID); err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +396,7 @@ func TestAdminRereadIPs(t *testing.T) {
 			t.Fatal(c, body)
 		}
 	}
-	reads := mover.conns.Load() + other.conns.Load() + idle.conns.Load()
+	reads := w.proxy.conns.Load() + other.conns.Load()
 	c, body := w.post(t, w.a, "/ips/reread", map[string]any{})
 	var out struct {
 		Moved     []rereadMove `json:"moved"`
@@ -433,7 +407,7 @@ func TestAdminRereadIPs(t *testing.T) {
 	if c != 200 || len(out.Moved) != 1 || out.Moved[0] != (rereadMove{Proxy: moving, From: "203.0.113.50", To: "203.0.113.7"}) || !slices.Equal(out.Failed, []string{taken}) || out.Unchanged != 0 {
 		t.Fatalf("a reread: %d %s", c, body)
 	}
-	if n := mover.conns.Load() + other.conns.Load() + idle.conns.Load() - reads; n != 2 {
+	if n := w.proxy.conns.Load() + other.conns.Load() - reads; n != 2 {
 		t.Fatalf("%d proxies read, want the 2 on accounts", n)
 	}
 	for _, leak := range []string{"pw", "user", "198.51.100"} {
@@ -492,11 +466,11 @@ func TestAdminRereadIPs(t *testing.T) {
 // left the reread is 429 at the door.
 func TestAdminRereadBudget(t *testing.T) {
 	w := newIPsWorld(t)
-	px := w.addIP(t, w.a, "203.0.113.7") // the first check (T-225)
+	px := w.addIP(t, w.a, "203.0.113.7")
 	if c, body := w.post(t, w.a, "/accounts/proxy", map[string]any{"id": w.aKey, "ip": "203.0.113.7", "proxy": px}); c != 200 {
 		t.Fatal(c, body)
 	}
-	for i := range checksMost - 2 {
+	for i := range checksMost - 1 {
 		if c, body := w.post(t, w.a, "/ips/check", map[string]any{"ip": "203.0.113.7", "proxy": px}); c != 200 {
 			t.Fatal(i, c, body)
 		}
