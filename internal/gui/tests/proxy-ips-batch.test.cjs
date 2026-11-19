@@ -33,9 +33,8 @@ const { I18N } = strings();
 const LANGS = ["en", "zh", "zh-TW", "ja", "de"];
 const tr = (lang, s, args = {}) => Object.entries(args).reduce((a, [k, v]) => a.replaceAll(`{${k}}`, v), lang === "en" ? s : I18N[lang]?.[s] ?? s);
 const OSAKA = "socks5://u:s3cret@203.0.113.7:1080", OSAKA_SHOWN = "socks5://203.0.113.7:1080";
-// with the key and ready the server always sends (providers.go): the
-// Providers list is drawn from it too, and a provider of keys without
-// one threw there (T-267)
+// with the key and ready the server always sends (providers.go), as
+// proxy-ips-page's fixtures have them (T-267)
 const codex = {
   id: "codex", name: "Codex", icon: "codex-color", chat: "", responses: "", anthropic: "", catalog: "",
   models: [{ id: "gpt-6", name: "GPT-6", on: true }], agents: [], fallback: [], headers: {}, key: { set: false, masked: "", optional: true }, ready: true, keyList: [],
