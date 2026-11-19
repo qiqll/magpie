@@ -516,17 +516,17 @@ func TestAreaProxyCheckHeld(t *testing.T) {
 	}
 	// one at a time
 	var p proxyChecks
-	if _, ok := p.begin("x", time.Now()); !ok {
+	if _, _, ok := p.begin([]string{"x"}, time.Now()); !ok {
 		t.Fatal("first")
 	}
-	if wait, ok := p.begin("x", time.Now()); ok || wait <= 0 {
+	if wait, _, ok := p.begin([]string{"x"}, time.Now()); ok || wait <= 0 {
 		t.Fatal("a second at once ran")
 	}
-	if _, ok := p.begin("y", time.Now()); !ok {
+	if _, _, ok := p.begin([]string{"y"}, time.Now()); !ok {
 		t.Fatal("another area held")
 	}
 	p.end("x")
-	if _, ok := p.begin("x", time.Now()); !ok {
+	if _, _, ok := p.begin([]string{"x"}, time.Now()); !ok {
 		t.Fatal("after the first ended")
 	}
 }

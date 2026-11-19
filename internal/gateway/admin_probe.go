@@ -14,11 +14,39 @@ import (
 // told is there: adminAddKeys): past conflictMost in conflictWindow
 // they answer that area 429 whatever it sends, until the window lets go of
 // its oldest. Other areas are not held.
+//
+// The console acting for an area (forArea) spends that area's count, and
+// a total of its own across every area too (T-222, magpie-console's
+// docs/magpie-api.md §18): past consoleConflictMost in the window its
+// add routes answer 429 for any area, so making more areas lends it no
+// more tries. An area's own key spends its area's count alone.
 const (
 	conflictMost          = 20
+	consoleConflictMost   = 40
 	conflictWindow        = 10 * time.Minute
 	adminTooManyConflicts = "too_many_conflicts"
 )
+
+// consoleBudget is the id the console's total is counted under, in
+// conflictProbes and proxyChecks: never an area's (area ids are ar_…).
+const consoleBudget = "\x00console"
+
+// budgets are the counts a call spends: its area's, then the console's
+// own when the console acts for the area.
+func budgets(c adminCall) []string {
+	if c.console {
+		return []string{c.area.ID, consoleBudget}
+	}
+	return []string{c.area.ID}
+}
+
+// conflictLimit is how many conflicts id may have in the window.
+func conflictLimit(id string) int {
+	if id == consoleBudget {
+		return consoleConflictMost
+	}
+	return conflictMost
+}
 
 type conflictProbes struct {
 	mu   sync.Mutex
@@ -46,11 +74,11 @@ func (p *conflictProbes) recent(id string, now time.Time) []time.Time {
 func (p *conflictProbes) held(id string, now time.Time) time.Duration {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	ts := p.recent(id, now)
-	if len(ts) < conflictMost {
+	ts, most := p.recent(id, now), conflictLimit(id)
+	if len(ts) < most {
 		return 0
 	}
-	return ts[len(ts)-conflictMost].Add(conflictWindow).Sub(now)
+	return ts[len(ts)-most].Add(conflictWindow).Sub(now)
 }
 
 // count is how many 409s id has had in the window at now.
@@ -97,9 +125,46 @@ func (s *Server) probeHeld(h func(http.ResponseWriter, *http.Request, adminCall)
 		sw := &statusOf{ResponseWriter: w}
 		h(sw, r, c)
 		if sw.code == http.StatusConflict {
-			if n := s.conflicts.conflicted(c.area.ID, now); n == conflictMost {
-				log.Printf("admin: area %s had %d conflicts in %s: its add routes answer 429 for now", c.area.ID, n, conflictWindow)
-			}
+			s.conflicted(c, now)
 		}
 	}
+}
+
+// conflictHeld is how long c is still held at now, 0 for not, and
+// whether the console's total is what holds it.
+func (s *Server) conflictHeld(c adminCall, now time.Time) (wait time.Duration, console bool) {
+	for _, id := range budgets(c) {
+		if w := s.conflicts.held(id, now); w > wait {
+			wait, console = w, id == consoleBudget
+		}
+	}
+	return wait, console
+}
+
+// conflicted counts a conflict c was told of at now, to each count c
+// spends, and says whether c is held from now on. Reaching a line is
+// logged with the count, never the key.
+func (s *Server) conflicted(c adminCall, now time.Time) bool {
+	held := false
+	for _, id := range budgets(c) {
+		n, most := s.conflicts.conflicted(id, now), conflictLimit(id)
+		switch {
+		case n == most && id == consoleBudget:
+			log.Printf("admin: the console had %d conflicts across areas in %s: its add routes answer 429 for now", n, conflictWindow)
+		case n == most:
+			log.Printf("admin: area %s had %d conflicts in %s: its add routes answer 429 for now", id, n, conflictWindow)
+		}
+		held = held || n >= most
+	}
+	return held
+}
+
+// conflictsLeft is how many more conflicts c may be told of at now
+// before it is held, the fewest any count it spends has left.
+func (s *Server) conflictsLeft(c adminCall, now time.Time) int {
+	left := conflictMost
+	for _, id := range budgets(c) {
+		left = min(left, conflictLimit(id)-s.conflicts.count(id, now))
+	}
+	return left
 }

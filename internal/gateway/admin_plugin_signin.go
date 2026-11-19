@@ -478,19 +478,17 @@ func pluginSaidOf(id string) pluginSaid {
 
 // countConflict counts a conflict an area was told of, as probeHeld
 // counts a 409: a plugin sign-in's is decided after its reply.
-func (s *Server) countConflict(id string) {
-	if n := s.conflicts.conflicted(id, time.Now()); n == conflictMost {
-		log.Printf("admin: area %s had %d conflicts in %s: its add routes answer 429 for now", id, n, conflictWindow)
-	}
+func (s *Server) countConflict(c adminCall) {
+	s.conflicted(c, time.Now())
 }
 
 // conflictOnDone is done, with a sign-in it says ended in a conflict
-// counted to area id.
-func (s *Server) conflictOnDone(done func(provider.SignInState) provider.SignInState, id string) func(provider.SignInState) provider.SignInState {
+// counted as c's.
+func (s *Server) conflictOnDone(done func(provider.SignInState) provider.SignInState, c adminCall) func(provider.SignInState) provider.SignInState {
 	return func(st provider.SignInState) provider.SignInState {
 		st = done(st)
 		if st.State == "conflict" {
-			s.countConflict(id)
+			s.countConflict(c)
 		}
 		return st
 	}
@@ -589,8 +587,8 @@ func (s *Server) adminPluginSignIn(w http.ResponseWriter, r *http.Request, c adm
 	}
 	areaID := c.area.ID
 	o.Area, o.PluginWay = true, pm.Way
-	o.Done = s.conflictOnDone(openOnDone(mountOnDone(claimDone(c), areaID, box), opened), areaID)
-	o.Conflicted = func() { s.countConflict(areaID) }
+	o.Done = s.conflictOnDone(openOnDone(mountOnDone(claimDone(c), areaID, box), opened), c)
+	o.Conflicted = func() { s.countConflict(c) }
 	st, err := startAreaPluginSignIn(pp.ID, pm.Method, inputs, o)
 	switch {
 	case errors.Is(err, provider.ErrSignInBusy), errors.Is(err, provider.ErrPluginWayChanged):
@@ -665,7 +663,7 @@ func (s *Server) areaPluginKey(c adminCall, pp plugin.Provider, pm adminPluginMe
 	saved, user, err := provider.PluginAPIKeyNew(ctx, pp.ID, pm.Method, inputs, key, o)
 	switch {
 	case errors.Is(err, plugin.ErrKnown):
-		s.countConflict(c.area.ID)
+		s.countConflict(c)
 		return adminAccount{}, http.StatusConflict, adminConflict, "this account is in magpie already"
 	case err != nil:
 		return adminAccount{}, http.StatusBadRequest, adminBadRequest, pluginGiven(pp.Methods[pm.Method], inputs, key).held(err.Error())
@@ -686,7 +684,7 @@ func (s *Server) areaPluginKey(c adminCall, pp plugin.Provider, pm adminPluginMe
 		log.Printf("admin: area %s added a %s key, not claimed: %v", c.area.ID, agent, err)
 		switch {
 		case errors.Is(err, area.ErrTaken):
-			s.countConflict(c.area.ID)
+			s.countConflict(c)
 			return adminAccount{}, http.StatusConflict, adminConflict, "this account is in magpie already"
 		case provider.PluginID(saved.Provider) != agent:
 			return adminAccount{}, http.StatusConflict, adminConflict, provider.ErrPluginWayChanged.Error()

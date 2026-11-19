@@ -44,6 +44,9 @@ const (
 	// a time
 	checksMost   = 10
 	checksWindow = 10 * time.Minute
+	// consoleChecksMost proxy checks the console may start in
+	// checksWindow across every area it acts for (T-222)
+	consoleChecksMost = 20
 )
 
 // The area's writes, variables for the test that the store refuses an
@@ -454,64 +457,94 @@ func attachAnswered(w http.ResponseWriter, err error) bool {
 }
 
 // proxyChecks holds each area's proxy checks to checksMost in
-// checksWindow, one at a time. In memory: a restart clears it. Nothing
-// that waits runs under mu.
+// checksWindow, one at a time, and the console's across every area to
+// consoleChecksMost in the window (T-222), as many at a time as its
+// areas allow. In memory: a restart clears it. Nothing that waits runs
+// under mu. Each call names the counts it spends (budgets), its area's
+// first; the area's is the one held while a check runs.
 type proxyChecks struct {
 	mu      sync.Mutex
 	started map[string][]time.Time
 	running map[string]bool
 }
 
-// begin starts a check of id's at now, or says how long until it may.
-func (p *proxyChecks) begin(id string, now time.Time) (wait time.Duration, ok bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if wait, ok := p.free(id, now); !ok {
-		return wait, false
+// checksLimit is how many checks id may start in the window.
+func checksLimit(id string) int {
+	if id == consoleBudget {
+		return consoleChecksMost
 	}
-	p.started[id] = append(p.started[id], now)
-	p.running[id] = true
-	return 0, true
+	return checksMost
 }
 
-// hold has id's checks for a request that makes many (a batch's host-name
-// lines, a reread), at now: none other runs until end, and each check it
-// makes is spent. False, with how long until it may, while one runs or
-// none is left in the window (T-214: the batch routes share the budget).
-func (p *proxyChecks) hold(id string, now time.Time) (wait time.Duration, ok bool) {
+// begin starts a check of ids' at now, or says how long until it may
+// and whether the console's total is what holds it.
+func (p *proxyChecks) begin(ids []string, now time.Time) (wait time.Duration, console, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if wait, ok := p.free(id, now); !ok {
-		return wait, false
+	if wait, console, ok := p.free(ids, now); !ok {
+		return wait, console, false
 	}
-	p.running[id] = true
-	return 0, true
+	for _, id := range ids {
+		p.started[id] = append(p.started[id], now)
+	}
+	p.running[ids[0]] = true
+	return 0, false, true
 }
 
-// spend takes one of id's checks at now for a request that holds them;
-// false when none is left in the window.
-func (p *proxyChecks) spend(id string, now time.Time) bool {
+// hold has ids' checks for a request that makes many (a batch's
+// host-name lines, a reread), at now: none other of the area's runs
+// until end, and each check it makes is spent. False, with how long
+// until it may, while one runs or none is left in the window (T-214: the
+// batch routes share the budget).
+func (p *proxyChecks) hold(ids []string, now time.Time) (wait time.Duration, console, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.recent(id, now)
-	if len(p.started[id]) >= checksMost {
-		return false
+	if wait, console, ok := p.free(ids, now); !ok {
+		return wait, console, false
 	}
-	p.started[id] = append(p.started[id], now)
+	p.running[ids[0]] = true
+	return 0, false, true
+}
+
+// spend takes one check of each of ids at now for a request that holds
+// them; none, and false, when one has none left in the window.
+func (p *proxyChecks) spend(ids []string, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, id := range ids {
+		if len(p.recent(id, now)) >= checksLimit(id) {
+			return false
+		}
+	}
+	for _, id := range ids {
+		p.started[id] = append(p.started[id], now)
+	}
 	return true
 }
 
-// free says whether id may start a check at now, none running and one
-// left in the window, or how long until it may. Called with p.mu held.
-func (p *proxyChecks) free(id string, now time.Time) (time.Duration, bool) {
-	ts := p.recent(id, now)
-	if p.running[id] {
-		return time.Second, false
+// free says whether ids may start a check at now, the area's (ids[0])
+// not running one and each with one left in the window, or how long
+// until they may and whether the console's total is the longer wait.
+// Called with p.mu held.
+func (p *proxyChecks) free(ids []string, now time.Time) (wait time.Duration, console, ok bool) {
+	ok = true
+	for i, id := range ids {
+		ts, most := p.recent(id, now), checksLimit(id)
+		w := time.Duration(0)
+		switch {
+		case len(ts) >= most:
+			w = ts[len(ts)-most].Add(checksWindow).Sub(now)
+		case i == 0 && p.running[id]:
+			w = time.Second
+		default:
+			continue
+		}
+		ok = false
+		if w > wait {
+			wait, console = w, id == consoleBudget
+		}
 	}
-	if len(ts) >= checksMost {
-		return ts[len(ts)-checksMost].Add(checksWindow).Sub(now), false
-	}
-	return 0, true
+	return wait, console, ok
 }
 
 // recent are id's checks still in the window at now, the older let go
@@ -524,13 +557,22 @@ func (p *proxyChecks) recent(id string, now time.Time) []time.Time {
 	for len(ts) > 0 && now.Sub(ts[0]) >= checksWindow {
 		ts = ts[1:]
 	}
+	if len(ts) == 0 {
+		delete(p.started, id)
+		return nil
+	}
 	p.started[id] = ts
 	return ts
 }
 
-// checksHeld answers 429 too_many_checks, to try again after wait.
-func checksHeld(w http.ResponseWriter, wait time.Duration) {
+// checksHeld answers 429 too_many_checks, to try again after wait: the
+// console's total across areas when console, else the area's.
+func checksHeld(w http.ResponseWriter, wait time.Duration, console bool) {
 	w.Header().Set("Retry-After", strconv.Itoa(max(int((wait+time.Second-1)/time.Second), 1)))
+	if console {
+		adminError(w, http.StatusTooManyRequests, adminTooManyChecks, "the console checks 20 proxies in 10 minutes across areas: try again later")
+		return
+	}
 	adminError(w, http.StatusTooManyRequests, adminTooManyChecks, "this area checks 10 proxies in 10 minutes, one at a time: try again later")
 }
 
@@ -571,9 +613,9 @@ type adminProxyCheck struct {
 }
 
 func (s *Server) adminCheckProxy(w http.ResponseWriter, r *http.Request, c adminCall) {
-	wait, ok := s.proxyChecks.begin(c.area.ID, time.Now())
+	wait, console, ok := s.proxyChecks.begin(budgets(c), time.Now())
 	if !ok {
-		checksHeld(w, wait)
+		checksHeld(w, wait, console)
 		return
 	}
 	defer s.proxyChecks.end(c.area.ID)

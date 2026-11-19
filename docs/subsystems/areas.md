@@ -151,7 +151,8 @@ and reply bodies are in magpie-console's `docs/magpie-api.md`.
   too_many_conflicts` with a `Retry-After`, whatever it sends, until the
   oldest leaves the window. A held request is not run. The 20th is logged
   with the area's id and the count, never the key. Other areas are not
-  held. The count is in memory: a restart clears it.
+  held. The count is in memory: a restart clears it. The console acting
+  for areas has a total of its own besides (T-222, below).
 - Removing goes through `gateway.Reseat` (`agent.Reseat` sets it), as the
   window's removal does, then releases the account. An account the owner
   already removed is only released.
@@ -347,7 +348,8 @@ proxies on its own accounts
   `proxy_auth`, `http_status`, `not_public`, `dns`), never the error's
   text nor magpie's own exit. Each area gets 10 in 10 minutes, one at a
   time (`proxyChecks`, in memory), else `429 too_many_checks` with
-  `Retry-After`; a held check connects nowhere.
+  `Retry-After`; a held check connects nowhere. The console has 20
+  across areas besides (T-222).
 - **Renewal** (T-214): an IP with an opening date tells `renewal`
   `{opened, ends, due, state, daysLeft}` from `renewal.Of`, the window's
   one calculation: `state` is `""`, `soon` (within `WarnDays`) or `ended`,
@@ -763,8 +765,17 @@ console, so `TestAdminKeyEveryRoute` covers it.
   `[A-Za-z0-9._@-]`, sent once, or `400`; magpie neither checks nor keeps
   it, and keeps no audit file: the console's is the audit. Neither line
   holds a secret.
-- **Not built:** the console's own totals across areas (40 conflicts and
-  20 checks in 10 minutes, magpie-api.md §18) wait on T-222.
+- **The console's own totals** (T-222, magpie-api.md §18). Acting for
+  an area spends that area's counts and a total of the console's across
+  every area: 40 conflicts (`consoleConflictMost`) and 20 proxy checks
+  (`consoleChecksMost`) in 10 minutes, kept under `consoleBudget` in
+  `conflictProbes` and `proxyChecks` (`budgets`). Past either, the
+  console is `429 too_many_conflicts` / `too_many_checks` with a
+  `Retry-After` for every area, one with tries left too, and the message
+  names the console. The batch routes stop the rest as they do at an
+  area's line. An area's own key spends its area's counts alone, so its
+  20 and 10 are unchanged, and the console's one-at-a-time is each
+  area's, not one across areas.
 
 ## Plugin sign-ins an area can use (T-221)
 

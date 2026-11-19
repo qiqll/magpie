@@ -178,11 +178,15 @@ const (
 // heldAnswered answers 429 while c's area is held for its conflicts
 // (conflictProbes), and says so.
 func (s *Server) heldAnswered(w http.ResponseWriter, c adminCall, now time.Time) bool {
-	wait := s.conflicts.held(c.area.ID, now)
+	wait, console := s.conflictHeld(c, now)
 	if wait <= 0 {
 		return false
 	}
 	w.Header().Set("Retry-After", strconv.Itoa(max(int((wait+time.Second-1)/time.Second), 1)))
+	if console {
+		adminError(w, http.StatusTooManyRequests, adminTooManyConflicts, "the console was told an account is in magpie already too often across areas: try again later")
+		return true
+	}
 	adminError(w, http.StatusTooManyRequests, adminTooManyConflicts, "this area was told an account is in magpie already too often: try again later")
 	return true
 }
@@ -254,8 +258,7 @@ func (s *Server) adminAddKeys(w http.ResponseWriter, r *http.Request, c adminCal
 				owned++
 			case status == http.StatusConflict:
 				row.Status, row.Message = keyConflict, msg
-				if s.conflicts.conflicted(c.area.ID, time.Now()) >= conflictMost {
-					log.Printf("admin: area %s had %d conflicts in %s: its add routes answer 429 for now", c.area.ID, conflictMost, conflictWindow)
+				if s.conflicted(c, time.Now()) {
 					stop = "too many conflicts; try again later"
 				}
 			case status == http.StatusUnauthorized, status == http.StatusServiceUnavailable:

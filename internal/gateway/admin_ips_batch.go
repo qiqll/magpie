@@ -49,9 +49,9 @@ func proxyShown(p string) string {
 
 func (s *Server) adminProbeProxy(w http.ResponseWriter, r *http.Request, c adminCall) {
 	// spent first, whatever comes of it: judging a name public resolves it
-	wait, ok := s.proxyChecks.begin(c.area.ID, time.Now())
+	wait, console, ok := s.proxyChecks.begin(budgets(c), time.Now())
 	if !ok {
-		checksHeld(w, wait)
+		checksHeld(w, wait, console)
 		return
 	}
 	defer s.proxyChecks.end(c.area.ID)
@@ -183,9 +183,9 @@ func (s *Server) adminBatchIPs(w http.ResponseWriter, r *http.Request, c adminCa
 		return
 	}
 	if in.Check && names > 0 {
-		wait, ok := s.proxyChecks.hold(c.area.ID, now)
+		wait, console, ok := s.proxyChecks.hold(budgets(c), now)
 		if !ok {
-			checksHeld(w, wait)
+			checksHeld(w, wait, console)
 			return
 		}
 		defer s.proxyChecks.end(c.area.ID)
@@ -196,7 +196,7 @@ func (s *Server) adminBatchIPs(w http.ResponseWriter, r *http.Request, c adminCa
 		case !row.name:
 		case !in.Check:
 			row.Status, row.Message = batchFailed, "a host name needs check"
-		case !s.proxyChecks.spend(c.area.ID, time.Now()):
+		case !s.proxyChecks.spend(budgets(c), time.Now()):
 			row.Status, row.Message = batchFailed, "check limit reached"
 		default:
 			got := checkAreaProxy(r.Context(), row.url, "")
@@ -221,7 +221,7 @@ func (s *Server) adminBatchIPs(w http.ResponseWriter, r *http.Request, c adminCa
 	added, merged, conflicts := 0, 0, 0
 	if len(adds) > 0 {
 		got, err := renewal.AddAreaProxies(c.area.ID, adds, time.Now(), func() bool {
-			return s.conflicts.conflicted(c.area.ID, time.Now()) >= conflictMost
+			return s.conflicted(c, time.Now())
 		})
 		if err != nil {
 			batchWriteErr(w, c, err)
@@ -325,16 +325,16 @@ func (s *Server) adminRereadIPs(w http.ResponseWriter, r *http.Request, c adminC
 		Unchanged int          `json:"unchanged"`
 	}{Moved: []rereadMove{}, Failed: []string{}}
 	if len(todo) > 0 {
-		wait, ok := s.proxyChecks.hold(a.ID, now)
+		wait, console, ok := s.proxyChecks.hold(budgets(c), now)
 		if !ok {
-			checksHeld(w, wait)
+			checksHeld(w, wait, console)
 			return
 		}
 		defer s.proxyChecks.end(a.ID)
 	}
 	stop := false
 	for _, x := range todo {
-		if stop || !s.proxyChecks.spend(a.ID, time.Now()) {
+		if stop || !s.proxyChecks.spend(budgets(c), time.Now()) {
 			out.Failed = append(out.Failed, x.id)
 			continue
 		}
@@ -355,7 +355,7 @@ func (s *Server) adminRereadIPs(w http.ResponseWriter, r *http.Request, c adminC
 			out.Moved = append(out.Moved, rereadMove{Proxy: x.id, From: x.ip, To: got.IP})
 		case errors.Is(err, renewal.ErrIPTaken):
 			out.Failed = append(out.Failed, x.id)
-			stop = s.conflicts.conflicted(a.ID, time.Now()) >= conflictMost
+			stop = s.conflicted(c, time.Now())
 		default:
 			log.Printf("admin: area %s's proxy %s not moved: %v", a.ID, x.id, err)
 			out.Failed = append(out.Failed, x.id)

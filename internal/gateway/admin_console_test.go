@@ -117,7 +117,7 @@ func TestAdminConsoleActsForArea(t *testing.T) {
 
 // The console's add routes count toward the area's conflict hold, as
 // the area's do: past 20 409s the area is held, from either key, and
-// another area is not (no limit of its own to go round).
+// another area is not (the console's own total, 40, is not reached).
 func TestAdminConsoleSharesAreaLimits(t *testing.T) {
 	do, console, _ := adminWorld(t)
 	studyID, study := makeArea(t, do, console, "学习", "plan")
@@ -349,5 +349,136 @@ func TestAdminSignInKeptAfterOffIsLetGo(t *testing.T) {
 	keepAreaSignIn(adminCall{area: a, console: true}, "si-console-2", nil)
 	if kept("si-console-2") {
 		t.Fatal("deleted: the console's kept")
+	}
+}
+
+// The console has a total of its own across areas besides each area's
+// (T-222): 40 conflicts in 10 minutes, so more areas lend it no more
+// tries. Past it the console is 429 for any area, one with tries left
+// too, while that area's own key still has its own 20, and an area
+// key's conflicts are not the console's.
+func TestAdminConsoleConflictsTotalAcrossAreas(t *testing.T) {
+	do, console, _ := adminWorld(t)
+	var ids, keys []string
+	for _, note := range []string{"一", "二", "三", "四"} {
+		id, key := makeArea(t, do, console, note, "plan")
+		ids, keys = append(ids, id), append(keys, key)
+	}
+	if err := provider.AddKey("plan", "owner's", "sk-owners-probe-0001", ""); err != nil {
+		t.Fatal(err)
+	}
+	add := func(path, secret string) (int, string) {
+		return do("POST", AdminPath+path, lanPeer, secret, `{"provider":"plan","key":"sk-owners-probe-0001"}`)
+	}
+	// an area's own key spends its area's count alone
+	for i := range 5 {
+		if c, body := add("/accounts/key", keys[3]); c != http.StatusConflict {
+			t.Fatalf("area 4's 409 number %d: %d %s", i+1, c, body)
+		}
+	}
+	// 15 + 15 + 10: no area at its 20, the console at its 40
+	for i := range consoleConflictMost {
+		id := ids[min(i/15, 2)]
+		if c, body := add("/areas/"+id+"/accounts/key", console); c != http.StatusConflict {
+			t.Fatalf("the console's 409 number %d: %d %s", i+1, c, body)
+		}
+	}
+	for _, id := range ids {
+		c, body := add("/areas/"+id+"/accounts/key", console)
+		if c != http.StatusTooManyRequests || !strings.Contains(body, adminTooManyConflicts) || !strings.Contains(body, "the console") {
+			t.Fatalf("the console for %s past its total: %d %s", id, c, body)
+		}
+	}
+	if c, _ := do("POST", AdminPath+"/areas/"+ids[3]+"/signin/claude-token", lanPeer, console, `{"token":"x"}`); c != http.StatusTooManyRequests {
+		t.Fatal("claude-token for another area, the console held:", c)
+	}
+	// each area's own key is held by its own count alone
+	for i, key := range keys[2:] {
+		if c, body := add("/accounts/key", key); c != http.StatusConflict {
+			t.Fatalf("area %d's own key: %d %s", i+3, c, body)
+		}
+	}
+}
+
+// The console's proxy checks across areas are 20 in 10 minutes
+// (T-222): with two areas' 10 each spent, a third area's check from the
+// console is 429 and connects nowhere, and from that area's own key it
+// runs.
+func TestAdminConsoleChecksTotalAcrossAreas(t *testing.T) {
+	w := newIPsWorld(t)
+	cID, cKey := makeArea(t, w.do, w.console, "第三", "plan")
+	pxA := w.addIP(t, w.a, "203.0.113.7")
+	pxB := w.addIP(t, w.b, "203.0.113.8")
+	pxC := w.addIP(t, cKey, "203.0.113.9")
+	check := func(secret, path, ip, px string) (int, string) {
+		return w.post(t, secret, path, map[string]any{"ip": ip, "proxy": px})
+	}
+	for _, x := range []struct{ id, ip, px string }{{w.aID, "203.0.113.7", pxA}, {w.bID, "203.0.113.8", pxB}} {
+		for i := range checksMost {
+			if c, body := check(w.console, "/areas/"+x.id+"/ips/check", x.ip, x.px); c != 200 {
+				t.Fatal(x.id, i, c, body)
+			}
+		}
+	}
+	before := w.proxy.conns.Load()
+	c, body := check(w.console, "/areas/"+cID+"/ips/check", "203.0.113.9", pxC)
+	if c != http.StatusTooManyRequests || !strings.Contains(body, adminTooManyChecks) || !strings.Contains(body, "the console") {
+		t.Fatalf("the console's 21st: %d %s", c, body)
+	}
+	if n := w.proxy.conns.Load(); n != before {
+		t.Fatalf("a held check connected: %d, want %d", n, before)
+	}
+	if c, body := w.post(t, w.console, "/areas/"+cID+"/ips/probe", map[string]any{"proxy": "http://" + proxyHost("203.0.113.9") + ":" + w.proxy.port()}); c != http.StatusTooManyRequests {
+		t.Fatalf("a probe past the console's total: %d %s", c, body)
+	}
+	if c, body := check(cKey, "/ips/check", "203.0.113.9", pxC); c != 200 {
+		t.Fatalf("the area's own key: %d %s", c, body)
+	}
+}
+
+// A console call spends its area's checks and the console's total
+// together, or neither; the area's one-at-a-time is its own, so the
+// console checks two areas at once.
+func TestAdminProxyChecksConsoleBudget(t *testing.T) {
+	var p proxyChecks
+	now := time.Now()
+	on := func(id string) []string { return budgets(adminCall{area: area.Area{ID: id}, console: true}) }
+	if _, _, ok := p.begin(on("ar_a"), now); !ok {
+		t.Fatal("a")
+	}
+	if _, _, ok := p.begin(on("ar_b"), now); !ok {
+		t.Fatal("b beside a")
+	}
+	p.end("ar_a")
+	p.end("ar_b")
+	for range 7 {
+		if !p.spend(on("ar_a"), now) || !p.spend(on("ar_b"), now) {
+			t.Fatal("a and b at 8 each")
+		}
+	}
+	if _, _, ok := p.hold(on("ar_c"), now); !ok {
+		t.Fatal("c held")
+	}
+	spent := 0
+	for p.spend(on("ar_c"), now) {
+		spent++
+	}
+	p.end("ar_c")
+	if spent != consoleChecksMost-16 || len(p.started[consoleBudget]) != consoleChecksMost {
+		t.Fatalf("c spent %d, the console %d", spent, len(p.started[consoleBudget]))
+	}
+	wait, console, ok := p.begin(on("ar_d"), now)
+	if ok || !console || wait <= 0 || wait > checksWindow {
+		t.Fatalf("the console's 21st, area d fresh: %v %v %v", wait, console, ok)
+	}
+	if len(p.started["ar_d"]) != 0 {
+		t.Fatal("a held check spent its area's")
+	}
+	if _, _, ok := p.begin(budgets(adminCall{area: area.Area{ID: "ar_c"}}), now); !ok {
+		t.Fatal("area c's own key held by the console's total")
+	}
+	p.end("ar_c")
+	if _, _, ok := p.begin(on("ar_c"), now.Add(checksWindow)); !ok {
+		t.Fatal("the window let go of none")
 	}
 }

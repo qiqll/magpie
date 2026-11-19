@@ -492,28 +492,29 @@ func TestAdminRereadBudget(t *testing.T) {
 func TestAdminProxyChecksHoldSpend(t *testing.T) {
 	var p proxyChecks
 	now := time.Now()
-	if _, ok := p.hold("x", now); !ok {
+	x := []string{"x"}
+	if _, _, ok := p.hold(x, now); !ok {
 		t.Fatal("hold")
 	}
-	if _, ok := p.begin("x", now); ok {
+	if _, _, ok := p.begin(x, now); ok {
 		t.Fatal("a check ran beside a hold")
 	}
-	if _, ok := p.hold("x", now); ok {
+	if _, _, ok := p.hold(x, now); ok {
 		t.Fatal("two holds")
 	}
 	for i := range checksMost {
-		if !p.spend("x", now) {
+		if !p.spend(x, now) {
 			t.Fatal("spend", i)
 		}
 	}
-	if p.spend("x", now) {
+	if p.spend(x, now) {
 		t.Fatal("an 11th spent")
 	}
 	p.end("x")
-	if wait, ok := p.begin("x", now); ok || wait <= 0 || wait > checksWindow {
+	if wait, _, ok := p.begin(x, now); ok || wait <= 0 || wait > checksWindow {
 		t.Fatalf("a check after the budget: %v %v", wait, ok)
 	}
-	if _, ok := p.begin("x", now.Add(checksWindow)); !ok {
+	if _, _, ok := p.begin(x, now.Add(checksWindow)); !ok {
 		t.Fatal("the window let go of none")
 	}
 }

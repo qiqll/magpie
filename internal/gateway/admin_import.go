@@ -255,13 +255,13 @@ func (im *areaImport) admit() (func(provider.ImportedAccount) provider.ImportedA
 		im.moved = sync.NewCond(&im.mu)
 	}
 	for {
-		n := im.s.conflicts.count(im.c.area.ID, time.Now())
+		left := im.s.conflictsLeft(im.c, time.Now())
 		switch {
-		case n >= conflictMost:
+		case left <= 0:
 			return nil, importConflictsHeld
 		case im.owned >= adminAccountsLimit && im.reading == 0:
 			return nil, area.ErrFull.Error()
-		case n+im.reading < conflictMost && im.owned < adminAccountsLimit:
+		case im.reading < left && im.owned < adminAccountsLimit:
 			im.owned++
 			im.reading++
 			return im.done, ""
@@ -276,7 +276,7 @@ func (im *areaImport) admit() (func(provider.ImportedAccount) provider.ImportedA
 func (im *areaImport) done(r provider.ImportedAccount) provider.ImportedAccount {
 	if r.Status == provider.ImportConflict {
 		// counted before it is no longer being read: admit judges both
-		im.s.countConflict(im.c.area.ID)
+		im.s.countConflict(im.c)
 	}
 	im.release(r.Status == keyAdded)
 	switch r.Status {
