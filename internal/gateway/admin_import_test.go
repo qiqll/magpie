@@ -507,3 +507,81 @@ func TestAdminImportFailLinePluginKeys(t *testing.T) {
 		}
 	}
 }
+
+// The console's imports take adminConsoleImportsMost of magpie's
+// adminImportsMost at most (T-235): with two running for areas A and B,
+// the console's import for C is 429 at the door, its body not read,
+// while C's own key still takes a slot, and once they end the console's
+// next is taken again.
+func TestAdminImportConsoleShare(t *testing.T) {
+	do, console, _ := adminWorld(t)
+	arrived := make(chan string)
+	release := make(chan struct{})
+	var once sync.Once
+	let := func() { once.Do(func() { close(release) }) }
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in map[string]string
+		json.NewDecoder(r.Body).Decode(&in)
+		who := strings.TrimPrefix(in["refresh_token"], "r-")
+		select {
+		case arrived <- who:
+		case <-r.Context().Done():
+			return
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"id_token": importIDToken(who), "access_token": "a-" + who, "refresh_token": "n-" + who})
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(let)
+	t.Cleanup(provider.CodexTokenURLForTest(srv.URL))
+	ids := map[string]string{}
+	keys := map[string]string{}
+	for _, n := range []string{"a", "b", "c"} {
+		ids[n], keys[n] = makeArea(t, do, console, n)
+		openSignIns(t, do, console, ids[n], "codex")
+	}
+	byConsole := func(id, body string) (int, string) {
+		return do("POST", AdminPath+"/areas/"+id+"/accounts/import", lanPeer, console, body)
+	}
+	codes := make(chan string, 2)
+	for _, n := range []string{"a", "b"} {
+		go func() {
+			c, body := byConsole(ids[n], `{"agent":"codex","files":["r-`+n+`"]}`)
+			codes <- strconv.Itoa(c) + " " + body
+		}()
+	}
+	seen := map[string]bool{}
+	for range 2 {
+		seen[<-arrived] = true
+	}
+	if !seen["a"] || !seen["b"] {
+		t.Fatal("the vendor was asked for", seen)
+	}
+	big := `{"agent":"codex","files":["` + strings.Repeat("r", 8<<20) + `"]}`
+	c, body := byConsole(ids["c"], big)
+	if c != http.StatusTooManyRequests || !strings.Contains(body, adminTooManyImports) || !strings.Contains(body, "the console") {
+		t.Fatal("the console's third (its body not read):", c, body[:min(len(body), 200)])
+	}
+	if c, body := do("POST", AdminPath+"/accounts/import", lanPeer, keys["c"], big); c != http.StatusRequestEntityTooLarge {
+		t.Fatal("C's own import, the console's two running:", c, body[:min(len(body), 200)])
+	}
+	let()
+	for range 2 {
+		if r := <-codes; !strings.HasPrefix(r, "200 ") || !strings.Contains(r, `"added":1`) {
+			t.Fatal("a held import:", r)
+		}
+	}
+	if c, body := byConsole(ids["c"], big); c != http.StatusRequestEntityTooLarge {
+		t.Fatal("the console's next, its two ended:", c, body[:min(len(body), 200)])
+	}
+	areaImports.Lock()
+	left := len(areaImports.m)
+	areaImports.Unlock()
+	if left != 0 {
+		t.Fatal("slots left taken:", left)
+	}
+}

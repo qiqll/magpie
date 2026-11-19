@@ -36,9 +36,12 @@ const (
 	adminImportTime = 3 * time.Minute
 	// adminImportsMost is the most imports running at once, every area's:
 	// each holds up to 8 MB of files
-	adminImportsMost    = 4
-	adminTooLarge       = "too_large"
-	adminTooManyImports = "too_many_imports"
+	adminImportsMost = 4
+	// adminConsoleImportsMost is the most of them the console's may be,
+	// across the areas it acts for, so the rest stay the areas' own (T-235)
+	adminConsoleImportsMost = 2
+	adminTooLarge           = "too_large"
+	adminTooManyImports     = "too_many_imports"
 )
 
 // importAgents are the built-in subscriptions whose credentials an area
@@ -50,31 +53,45 @@ var importAgents = []string{"codex", "claude", "antigravity", "gemini"}
 // window's import finds them.
 var keyImports = map[string]func([]string) []string{"factory": provider.FactoryKeysIn}
 
-// areaImports are the areas with an import running: one each at a time,
-// adminImportsMost in all.
+// areaImports are the areas with an import running, each true when the
+// console runs it: one each at a time, adminImportsMost in all, of which
+// adminConsoleImportsMost the console's.
 var areaImports struct {
 	sync.Mutex
 	m map[string]bool
 }
 
-// startImport takes area id's import slot, before its body is read, or
-// answers 429 too_many_imports; the func it gives lets it go.
-func startImport(w http.ResponseWriter, id string) (func(), bool) {
+// startImport takes area id's import slot for c, before its body is read,
+// or answers 429 too_many_imports; the func it gives lets it go.
+func startImport(w http.ResponseWriter, c adminCall) (func(), bool) {
+	id := c.area.ID
 	areaImports.Lock()
 	defer areaImports.Unlock()
-	if areaImports.m[id] || len(areaImports.m) >= adminImportsMost {
-		w.Header().Set("Retry-After", "10")
-		msg := "this area has an import running: try again once it ends"
-		if !areaImports.m[id] {
-			msg = "magpie is running as many imports as it takes at once: try again shortly"
+	consoles := 0
+	for _, console := range areaImports.m {
+		if console {
+			consoles++
 		}
+	}
+	_, running := areaImports.m[id]
+	var msg string
+	switch {
+	case running:
+		msg = "this area has an import running: try again once it ends"
+	case len(areaImports.m) >= adminImportsMost:
+		msg = "magpie is running as many imports as it takes at once: try again shortly"
+	case c.console && consoles >= adminConsoleImportsMost:
+		msg = "the console is running as many imports as magpie takes from it at once: try again shortly"
+	}
+	if msg != "" {
+		w.Header().Set("Retry-After", "10")
 		adminError(w, http.StatusTooManyRequests, adminTooManyImports, msg)
 		return nil, false
 	}
 	if areaImports.m == nil {
 		areaImports.m = map[string]bool{}
 	}
-	areaImports.m[id] = true
+	areaImports.m[id] = c.console
 	return func() {
 		areaImports.Lock()
 		delete(areaImports.m, id)
@@ -126,7 +143,7 @@ func (s *Server) adminImport(w http.ResponseWriter, r *http.Request, c adminCall
 	if s.heldAnswered(w, c, time.Now()) {
 		return
 	}
-	done, ok := startImport(w, c.area.ID)
+	done, ok := startImport(w, c)
 	if !ok {
 		return
 	}

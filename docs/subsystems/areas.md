@@ -660,8 +660,10 @@ taken: an area pastes it to `signin/{id}/callback`.
   and the readers' requests go through it, an area-added one held public
   on every connection (`netproxy.WithPublicOnly`); none picked goes
   through the subscription's (`provider.Via`). One import runs per area
-  at a time, and 4 in all (`startImport`, taken before the body is
-  read); another is `429 too_many_imports` with `Retry-After`. It runs to its end, at most 3 minutes, whether or not
+  at a time, and 4 in all, of which the console's, across the areas
+  it acts for, are 2 at most (`adminConsoleImportsMost`, T-235), so its
+  imports never hold every area's door (`startImport`, taken before the
+  body is read); another is `429 too_many_imports` with `Retry-After`. It runs to its end, at most 3 minutes, whether or not
   the caller is still there.
 - **A new account only** (`ImportOptions.NewOnly`, T-220). An account
   magpie has, the owner's, another area's or this area's, by its refresh
@@ -810,7 +812,8 @@ console, so `TestAdminKeyEveryRoute` covers it.
   names the console. The batch routes stop the rest as they do at an
   area's line. An area's own key spends its area's counts alone, so its
   20 and 10 are unchanged, and the console's one-at-a-time is each
-  area's, not one across areas. The console's imports for different
+  area's, not one across areas; of magpie's 4 imports at once the
+  console's are 2 at most (T-235). The console's imports for different
   areas judge their reads together (`importReads`, one lock for every
   import's admit), so four at once still tell it no more than 40.
 
