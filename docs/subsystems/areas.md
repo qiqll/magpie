@@ -595,6 +595,18 @@ magpie-api.md §11. An area signs in to a subscription a plugin serves at
   takes them (`pluginAnswers`): each question the method asks, in its
   order, answered by one of its options and passing the plugin's
   `validate`, and nothing it doesn't ask; else `400` and nothing starts.
+- **Plugin host calls are held** (T-231,
+  [`admin_plugin_calls.go`](../../internal/gateway/admin_plugin_calls.go)):
+  the prompt route asks the host up to 3 times a call, the start route up
+  to 34 (its answers walked, then the start), and that host serves every
+  plugin subscription's requests. Each area runs one of the two routes
+  at a time and asks the host 200 times in 10 minutes, the console 400
+  across the areas it acts for besides (`budgets`, `pluginCalls`, in
+  memory); past either, or while the area's other call runs, the route
+  is `429 too_many_plugin_calls` with `Retry-After` and asks the host
+  nothing more. A sign-in of 16 questions, each answered at the prompt
+  route and then started, asks 83 times. The sign-in's later steps
+  (`signin/{id}`, its callback, cancel) are not counted.
 - **Conflicts count where they are decided.** An area held for its
   conflicts is `429` at the door. A key's `ErrKnown` (or a claim
   `ErrTaken`) counts at once; a sign-in that ends in `conflict`, as its

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -448,5 +449,91 @@ func TestAdminPluginSignInByPastedKey(t *testing.T) {
 	p, _ := provider.Find("fakeco")
 	if n := len(p.AccountIDs()); n != 2 {
 		t.Fatalf("fakeco has %d accounts, not the owner's and the area's", n)
+	}
+}
+
+// An area's plugin sign-in routes run one at a time (T-231): while a
+// start waits in the plugin host, the area's prompt is 429
+// too_many_plugin_calls and another area's isn't. Each area asks the host
+// pluginCallsMost times in the window, the start route held with the
+// prompt past it, and the console consolePluginCallsMost across the areas
+// it acts for, an area's own calls not among them.
+func TestAdminPluginCallsHeld(t *testing.T) {
+	do, console, _, key, _ := pluginArea(t, wayPasteCode)
+	const ask = `{"agent":"fakeco","method":1}`
+	area := func(note string) (string, string) {
+		t.Helper()
+		id, key := makeArea(t, do, console, note)
+		openSignIns(t, do, console, id, "fakeco")
+		return id, key
+	}
+	held := func(c int, body string) bool {
+		return c == http.StatusTooManyRequests && strings.Contains(body, adminTooManyPluginCalls)
+	}
+
+	was := startAreaPluginSignIn
+	t.Cleanup(func() { startAreaPluginSignIn = was })
+	in, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	startAreaPluginSignIn = func(string, int, map[string]string, provider.SignInOptions) (provider.SignInState, error) {
+		close(in)
+		<-release
+		return provider.SignInState{}, errors.New("stopped by the test")
+	}
+	started := make(chan int, 1)
+	go func() {
+		c, _ := do("POST", AdminPath+"/signin/plugin", lanPeer, key, `{"agent":"fakeco","method":1,"way":"paste-code","inputs":{"where":"home"}}`)
+		started <- c
+	}()
+	<-in
+	if c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, key, ask); !held(c, body) {
+		t.Fatal("the area's prompt while its start runs:", c, body)
+	}
+	_, other := area("B")
+	if c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, other, ask); c != http.StatusOK {
+		t.Fatal("another area's prompt meanwhile:", c, body)
+	}
+	once.Do(func() { close(release) })
+	if c := <-started; c != http.StatusBadRequest {
+		t.Fatal("the start held:", c)
+	}
+	startAreaPluginSignIn = was
+	if c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, key, ask); c != http.StatusOK {
+		t.Fatal("the area's prompt once its start ended:", c, body)
+	}
+
+	_, spent := area("C")
+	for i := range pluginCallsMost {
+		if c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, spent, ask); c != http.StatusOK {
+			t.Fatal("prompt", i, c, body)
+		}
+	}
+	if c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, spent, ask); !held(c, body) {
+		t.Fatal("a prompt past the area's line:", c, body)
+	}
+	if c, body := do("POST", AdminPath+"/signin/plugin", lanPeer, spent, `{"agent":"fakeco","method":0,"way":"api-key","key":"k-c"}`); !held(c, body) {
+		t.Fatal("a start past the area's line:", c, body)
+	}
+	if c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, key, ask); c != http.StatusOK {
+		t.Fatal("another area's prompt once one is held:", c, body)
+	}
+
+	// the console's: the areas' own calls above spent none of it
+	d, _ := area("D")
+	e, _ := area("E")
+	for _, id := range []string{d, e} {
+		for i := range consolePluginCallsMost / 2 {
+			if c, body := do("POST", AdminPath+"/areas/"+id+"/signin/plugin/prompt", lanPeer, console, ask); c != http.StatusOK {
+				t.Fatal("the console's prompt", i, "for", id, c, body)
+			}
+		}
+	}
+	f, fKey := area("F")
+	if c, body := do("POST", AdminPath+"/areas/"+f+"/signin/plugin/prompt", lanPeer, console, ask); !held(c, body) || !strings.Contains(body, "the console") {
+		t.Fatal("the console's prompt past its line:", c, body)
+	}
+	if c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, fKey, ask); c != http.StatusOK {
+		t.Fatal("the area's own prompt once the console is held:", c, body)
 	}
 }

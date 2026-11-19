@@ -317,8 +317,12 @@ func hiddenOf(m plugin.Method, inputs map[string]string, hidden ...string) []str
 }
 
 // pluginFailed is what an area is told of the plugin host failing (T-229),
-// its reason logged with what it was given left out.
+// its reason logged with what it was given left out; a call not made, the
+// area's calls spent, is 429 (T-231).
 func pluginFailed(w http.ResponseWriter, c adminCall, agent, what string, err error, said pluginSaid) {
+	if callsAnswered(w, err) {
+		return
+	}
 	log.Printf("admin: area %s's %s sign-in, %s: %s", c.area.ID, agent, what, said.logged(err.Error()))
 	adminError(w, http.StatusBadRequest, adminBadRequest, provider.ErrPluginFailed.Error())
 }
@@ -334,10 +338,14 @@ func optionOf(p *plugin.Prompt, v string) bool {
 }
 
 // pluginAnswerOf checks v as the answer to p: "" when it is one, else
-// what is wrong with it, said as an area may read it.
-func pluginAnswerOf(ctx context.Context, pp plugin.Provider, method int, p *plugin.Prompt, v string, said pluginSaid) (string, error) {
+// what is wrong with it, said as an area may read it. The plugin's check
+// spends a host call (ask).
+func pluginAnswerOf(ctx context.Context, ask pluginAsk, pp plugin.Provider, method int, p *plugin.Prompt, v string, said pluginSaid) (string, error) {
 	if p.Type == "select" && !optionOf(p, v) {
 		return "pick one of the options", nil
+	}
+	if err := ask(); err != nil {
+		return "", err
 	}
 	why, err := plugin.Validate(ctx, pp.ID, method, p.Key, v)
 	if err != nil || why == "" {
@@ -347,6 +355,11 @@ func pluginAnswerOf(ctx context.Context, pp plugin.Provider, method int, p *plug
 }
 
 func (s *Server) adminPluginPrompt(w http.ResponseWriter, r *http.Request, c adminCall) {
+	ask, end, ok := s.holdPluginCalls(w, c)
+	if !ok {
+		return
+	}
+	defer end()
 	var in struct {
 		Agent  string
 		Method int
@@ -375,7 +388,7 @@ func (s *Server) adminPluginPrompt(w http.ResponseWriter, r *http.Request, c adm
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	p, err := plugin.NextPrompt(ctx, pp.ID, pm.Method, inputs)
+	p, err := nextPrompt(ctx, ask, pp.ID, pm.Method, inputs)
 	if err != nil {
 		pluginFailed(w, c, in.Agent, "its next question", err, said)
 		return
@@ -392,7 +405,7 @@ func (s *Server) adminPluginPrompt(w http.ResponseWriter, r *http.Request, c adm
 			hidden = append(hidden, p.Key)
 			said = said.with(pluginSaid{Any: []string{v}})
 		}
-		why, err := pluginAnswerOf(ctx, pp, pm.Method, p, v, said)
+		why, err := pluginAnswerOf(ctx, ask, pp, pm.Method, p, v, said)
 		if err != nil {
 			pluginFailed(w, c, in.Agent, "checking an answer", err, said)
 			return
@@ -406,7 +419,7 @@ func (s *Server) adminPluginPrompt(w http.ResponseWriter, r *http.Request, c adm
 			adminError(w, http.StatusBadRequest, adminBadRequest, "send at most 16 inputs")
 			return
 		}
-		if p, err = plugin.NextPrompt(ctx, pp.ID, pm.Method, inputs); err != nil {
+		if p, err = nextPrompt(ctx, ask, pp.ID, pm.Method, inputs); err != nil {
 			pluginFailed(w, c, in.Agent, "its next question", err, said)
 			return
 		}
@@ -422,12 +435,12 @@ func (s *Server) adminPluginPrompt(w http.ResponseWriter, r *http.Request, c adm
 // pluginAnswers are the answers a sign-in to pp's method starts with, as
 // the prompt route would have taken them one by one: each question the
 // method asks answered, in its order, by an answer it takes; nothing it
-// doesn't ask. Or false with the answer written (400, or the host's
-// failure).
-func pluginAnswers(ctx context.Context, w http.ResponseWriter, c adminCall, agent string, pp plugin.Provider, method int, inputs map[string]string, said pluginSaid) (map[string]string, bool) {
+// doesn't ask. Or false with the answer written (400, 429 for the host
+// calls ask spends, or the host's failure).
+func pluginAnswers(ctx context.Context, w http.ResponseWriter, c adminCall, ask pluginAsk, agent string, pp plugin.Provider, method int, inputs map[string]string, said pluginSaid) (map[string]string, bool) {
 	taken := map[string]string{}
 	for range 17 {
-		p, err := plugin.NextPrompt(ctx, pp.ID, method, taken)
+		p, err := nextPrompt(ctx, ask, pp.ID, method, taken)
 		if err != nil {
 			pluginFailed(w, c, agent, "its next question", err, said)
 			return nil, false
@@ -440,7 +453,7 @@ func pluginAnswers(ctx context.Context, w http.ResponseWriter, c adminCall, agen
 			adminError(w, http.StatusBadRequest, adminBadRequest, "answer each question the method asks, through "+AdminPath+"/signin/plugin/prompt, before it starts: "+p.Key+" isn't")
 			return nil, false
 		}
-		why, err := pluginAnswerOf(ctx, pp, method, p, v, said)
+		why, err := pluginAnswerOf(ctx, ask, pp, method, p, v, said)
 		if err != nil {
 			pluginFailed(w, c, agent, "checking an answer", err, said)
 			return nil, false
@@ -498,11 +511,17 @@ func (s *Server) conflictOnDone(done func(provider.SignInState) provider.SignInS
 // adminPluginSignIn is held for an area's conflicts at the door, and
 // counts each it is told of, the busy 409 of another's sign-in to the
 // same agent and a changed way's not among them: a wait on another area
-// is no probe of what magpie has.
+// is no probe of what magpie has. It holds the area's plugin calls
+// (pluginCalls) to its end, the start a call too.
 func (s *Server) adminPluginSignIn(w http.ResponseWriter, r *http.Request, c adminCall) {
 	if s.heldAnswered(w, c, time.Now()) {
 		return
 	}
+	ask, end, ok := s.holdPluginCalls(w, c)
+	if !ok {
+		return
+	}
+	defer end()
 	var in struct {
 		Agent, Way, Key, Opened string
 		Method                  int
@@ -545,7 +564,7 @@ func (s *Server) adminPluginSignIn(w http.ResponseWriter, r *http.Request, c adm
 	}
 	said := pluginGiven(m, in.Inputs, key)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	inputs, ok := pluginAnswers(ctx, w, c, in.Agent, pp, pm.Method, in.Inputs, said)
+	inputs, ok := pluginAnswers(ctx, w, c, ask, in.Agent, pp, pm.Method, in.Inputs, said)
 	cancel()
 	if !ok {
 		return
@@ -580,6 +599,10 @@ func (s *Server) adminPluginSignIn(w http.ResponseWriter, r *http.Request, c adm
 	}
 	if len(c.area.Accounts) >= adminAccountsLimit {
 		adminError(w, http.StatusConflict, adminConflict, "an area has at most 500 accounts")
+		return
+	}
+	if err := ask(); err != nil {
+		callsAnswered(w, err)
 		return
 	}
 	if pm.Way == wayAPIKey {

@@ -559,6 +559,9 @@ type Server struct {
 	stats statsSlots
 	// proxyChecks are each area's proxy checks (admin_ips.go)
 	proxyChecks proxyChecks
+	// pluginCalls are each area's plugin host calls on its plugin
+	// sign-in routes (admin_plugin_calls.go, T-231)
+	pluginCalls pluginCalls
 	// compactFails are the summaries each Codex conversation failed to
 	// get in a row, for a compaction that keeps failing to stop being
 	// asked (codex_compact_guard.go, #2274)
