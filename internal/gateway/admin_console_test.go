@@ -416,19 +416,24 @@ func TestAdminConsoleChecksTotalAcrossAreas(t *testing.T) {
 	check := func(secret, path, ip, px string) (int, string) {
 		return w.post(t, secret, path, map[string]any{"ip": ip, "proxy": px})
 	}
-	for _, x := range []struct{ id, ip, px string }{{w.aID, "203.0.113.7", pxA}, {w.bID, "203.0.113.8", pxB}} {
-		for i := range checksMost {
+	// each area's key spent one adding its IP (T-225): the console
+	// spends A's and B's 9 left, and 2 of C's
+	for _, x := range []struct {
+		id, ip, px string
+		n          int
+	}{{w.aID, "203.0.113.7", pxA, checksMost - 1}, {w.bID, "203.0.113.8", pxB, checksMost - 1}, {cID, "203.0.113.9", pxC, 2}} {
+		for i := range x.n {
 			if c, body := check(w.console, "/areas/"+x.id+"/ips/check", x.ip, x.px); c != 200 {
 				t.Fatal(x.id, i, c, body)
 			}
 		}
 	}
-	before := w.proxy.conns.Load()
+	before := w.proxyAt(t, "203.0.113.9").conns.Load()
 	c, body := check(w.console, "/areas/"+cID+"/ips/check", "203.0.113.9", pxC)
 	if c != http.StatusTooManyRequests || !strings.Contains(body, adminTooManyChecks) || !strings.Contains(body, "the console") {
 		t.Fatalf("the console's 21st: %d %s", c, body)
 	}
-	if n := w.proxy.conns.Load(); n != before {
+	if n := w.proxyAt(t, "203.0.113.9").conns.Load(); n != before {
 		t.Fatalf("a held check connected: %d, want %d", n, before)
 	}
 	if c, body := w.post(t, w.console, "/areas/"+cID+"/ips/probe", map[string]any{"proxy": "http://" + proxyHost("203.0.113.9") + ":" + w.proxy.port()}); c != http.StatusTooManyRequests {
@@ -541,7 +546,12 @@ func TestAdminConsoleTotalOnEveryRoute(t *testing.T) {
 		},
 		"ips/batch": func(t *testing.T, w *ipsWorld) {
 			ownerIPs(t, pubIP+"30", pubIP+"31", pubIP+"32")
-			c, body := post(t, w, fresh(t, w, "批量"), "ips/batch", map[string]any{"text": pubIP + "30:1080\n" + pubIP + "31:1080\n" + pubIP + "32:1080"})
+			// each line leaves from its IP (T-225)
+			var lines []string
+			for _, ip := range []string{pubIP + "30", pubIP + "31", pubIP + "32"} {
+				lines = append(lines, ip+":"+w.proxyAt(t, ip).port())
+			}
+			c, body := post(t, w, fresh(t, w, "批量"), "ips/batch", map[string]any{"text": strings.Join(lines, "\n"), "type": "http"})
 			var out batchOut
 			json.Unmarshal([]byte(body), &out)
 			if c != 200 || !slices.Equal(statuses(out), []string{batchConflict, batchFailed, batchFailed}) || out.Rows[2].Message != "too many conflicts; try again later" {
@@ -589,15 +599,21 @@ func TestAdminConsoleTotalOnEveryRoute(t *testing.T) {
 	}
 	t.Run("ips/batch checks", func(t *testing.T) {
 		w := newIPsWorld(t)
-		px := w.addIP(t, w.a, "203.0.113.7")
-		for i := range consoleChecksMost - 1 {
-			id := w.aID
-			if i >= checksMost {
-				id = w.bID
-				if i == checksMost {
-					px = w.addIP(t, w.b, "203.0.113.8")
-				}
+		// the console adds each area's IP, a check of its own and the
+		// area's spent each (T-225), and checks the rest
+		pxs := map[string]string{}
+		for id, ip := range map[string]string{w.aID: "203.0.113.7", w.bID: "203.0.113.8"} {
+			if c, body := post(t, w, id, "ips", map[string]any{"ip": ip, "name": "x", "proxies": []string{w.proxyOf(t, ip)}}); c != http.StatusCreated {
+				t.Fatal(c, body)
 			}
+			pxs[id] = renewal.ProxyID(w.proxyOf(t, ip))
+		}
+		for i := range consoleChecksMost - 1 - 2 {
+			id := w.aID
+			if i >= checksMost-1 {
+				id = w.bID
+			}
+			px := pxs[id]
 			ip := map[string]string{w.aID: "203.0.113.7", w.bID: "203.0.113.8"}[id]
 			if c, body := post(t, w, id, "ips/check", map[string]any{"ip": ip, "proxy": px}); c != 200 {
 				t.Fatal(i, c, body)

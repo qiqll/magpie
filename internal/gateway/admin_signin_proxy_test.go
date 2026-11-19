@@ -30,6 +30,25 @@ type vendorBehind struct {
 	mu    sync.Mutex
 	seen  []string // paths asked through the proxy
 	nonce string   // the nonce a Sign in with ChatGPT's id_token says
+	exits map[string]*httptest.Server
+	serve func(exit string) http.Handler
+}
+
+// at is the proxy that leaves from ip, the vendor too, started once: its
+// trace page says ip (T-225: an area's proxy is added once it does).
+func (v *vendorBehind) at(t *testing.T, ip string) *httptest.Server {
+	t.Helper()
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if s, ok := v.exits[ip]; ok {
+		return s
+	}
+	s := httptest.NewServer(v.serve(ip))
+	t.Cleanup(s.Close)
+	_, port, _ := net.SplitHostPort(s.Listener.Addr().String())
+	fakePort(t, port)
+	v.exits[ip] = s
+	return s
 }
 
 const vendorHost = "auth.openai.invalid"
@@ -48,31 +67,53 @@ func startVendorBehind(t *testing.T) *vendorBehind {
 		base.Proxy, base.DialContext, http.DefaultClient.Transport = proxy, dial, client
 		base.CloseIdleConnections()
 	})
-	v := &vendorBehind{}
-	v.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		v.mu.Lock()
-		v.seen = append(v.seen, r.Host+r.URL.Path)
-		nonce := v.nonce
-		v.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/api/accounts/oauth/token":
-			r.ParseForm()
-			email := r.PostForm.Get("code") + "@example.com"
-			claims, _ := json.Marshal(map[string]any{"iss": "http://" + vendorHost, "aud": r.PostForm.Get("client_id"), "sub": "user-" + email,
-				"email": email, "nonce": nonce, "exp": float64(time.Now().Add(time.Hour).Unix()),
-				"https://api.openai.com/auth": map[string]any{"chatgpt_plan_type": "plus"}})
-			json.NewEncoder(w).Encode(map[string]any{"access_token": "at-1", "refresh_token": "rt-1", "token_type": "Bearer",
-				"expires_in": 3600, "scope": "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct",
-				"id_token": "h." + base64.RawURLEncoding.EncodeToString(claims) + ".sig"})
-		case "/api/accounts/deviceauth/usercode":
-			json.NewEncoder(w).Encode(map[string]any{"device_auth_id": "dev-1", "user_code": "ABCD-1234", "interval": "5"})
-		default:
-			w.WriteHeader(http.StatusForbidden)
-		}
-	}))
+	v := &vendorBehind{exits: map[string]*httptest.Server{}}
+	v.serve = func(exit string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			v.mu.Lock()
+			v.seen = append(v.seen, r.Host+r.URL.Path)
+			nonce := v.nonce
+			v.mu.Unlock()
+			if r.URL.Path == "/cdn-cgi/trace" && exit != "" {
+				w.Write([]byte("fl=1\nip=" + exit + "\nloc=JP\n"))
+				return
+			}
+			v.vendor(w, r, nonce)
+		})
+	}
+	v.srv = httptest.NewServer(v.serve(""))
 	t.Cleanup(v.srv.Close)
 	return v
+}
+
+// closeConns closes the connections made to it so far, at every exit.
+func (v *vendorBehind) closeConns() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.srv.CloseClientConnections()
+	for _, s := range v.exits {
+		s.CloseClientConnections()
+	}
+}
+
+// vendor answers r as the vendor would.
+func (v *vendorBehind) vendor(w http.ResponseWriter, r *http.Request, nonce string) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.URL.Path {
+	case "/api/accounts/oauth/token":
+		r.ParseForm()
+		email := r.PostForm.Get("code") + "@example.com"
+		claims, _ := json.Marshal(map[string]any{"iss": "http://" + vendorHost, "aud": r.PostForm.Get("client_id"), "sub": "user-" + email,
+			"email": email, "nonce": nonce, "exp": float64(time.Now().Add(time.Hour).Unix()),
+			"https://api.openai.com/auth": map[string]any{"chatgpt_plan_type": "plus"}})
+		json.NewEncoder(w).Encode(map[string]any{"access_token": "at-1", "refresh_token": "rt-1", "token_type": "Bearer",
+			"expires_in": 3600, "scope": "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct",
+			"id_token": "h." + base64.RawURLEncoding.EncodeToString(claims) + ".sig"})
+	case "/api/accounts/deviceauth/usercode":
+		json.NewEncoder(w).Encode(map[string]any{"device_auth_id": "dev-1", "user_code": "ABCD-1234", "interval": "5"})
+	default:
+		w.WriteHeader(http.StatusForbidden)
+	}
 }
 
 // asked is how many requests for path came through the proxy.
@@ -99,7 +140,7 @@ func (v *vendorBehind) paths() []string {
 // name that reaches v, and that proxy's id.
 func (w *ipsWorld) addVendorIP(t *testing.T, secret, ip string, v *vendorBehind) string {
 	t.Helper()
-	_, port, _ := net.SplitHostPort(v.srv.Listener.Addr().String())
+	_, port, _ := net.SplitHostPort(v.at(t, ip).Listener.Addr().String())
 	proxy := "http://user:pw@" + proxyHost(ip) + ":" + port
 	if c, body := w.post(t, secret, "/ips", map[string]any{"ip": ip, "name": "东京", "proxies": []string{proxy}}); c != http.StatusCreated {
 		t.Fatalf("adding %s: %d %s", ip, c, body)
@@ -297,7 +338,7 @@ func TestAdminDeviceSignInProxyFixed(t *testing.T) {
 	// its name now answers this computer; a connection made before, to
 	// the public address, is gone
 	w.answer.Store("127.0.0.1")
-	v.srv.CloseClientConnections()
+	v.closeConns()
 	if c, body := w.post(t, w.a, "/signin", map[string]any{"agent": "codex", "way": "device", "proxy": pick}); c != http.StatusBadRequest {
 		t.Fatal("through a proxy that now answers this computer:", c, body)
 	}
@@ -378,7 +419,7 @@ func TestAdminSignInHoldsItsProxyPublic(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.answer.Store("127.0.0.1")
-	v.srv.CloseClientConnections()
+	v.closeConns()
 	c, body := w.paste(t, w.a, st.ID, map[string]any{"url": end})
 	if c != http.StatusBadRequest || !strings.Contains(body, netproxy.ErrNotPublic.Error()) || v.asked("/api/accounts/oauth/token") != 0 {
 		t.Fatalf("traded through a proxy at a home address: %d %s %v", c, body, v.paths())

@@ -109,9 +109,11 @@ type batchRow struct {
 }
 
 // adminBatchIPs adds the proxies of text, one a line in the window's
-// Batch add formats (renewal.ReadBatch), each under its IP: its host when
-// that is an IP, else its exit, read only when check is sent (each such
-// line spends a check). The area's IPs and their proxies are judged and
+// Batch add formats (renewal.ReadBatch), each under the exit a check
+// reads, one spent a line: a host that is an IP only when its exit is
+// that IP (T-225), a name whatever its exit, and a name's line only when
+// check is sent (a host that is an IP is checked whatever check says:
+// it is never kept unread). The area's IPs and their proxies are judged and
 // written at once (renewal.AddAreaProxies). A dry run reads the lines
 // and judges a host that is an IP public, and does no more: it resolves
 // no name, connects nowhere, writes nothing and judges no owner, so it
@@ -143,7 +145,7 @@ func (s *Server) adminBatchIPs(w http.ResponseWriter, r *http.Request, c adminCa
 		return
 	}
 	rows := make([]batchRow, len(lines))
-	names := 0
+	names, literals := 0, 0
 	for i, l := range lines {
 		row := batchRow{Line: l.N}
 		switch p := l.Proxy; {
@@ -165,6 +167,7 @@ func (s *Server) adminBatchIPs(w http.ResponseWriter, r *http.Request, c adminCa
 				row.Status, row.Message = batchInvalid, err.Error()
 			default:
 				row.IP = net.ParseIP(p.IP).String()
+				literals++
 			}
 		}
 		rows[i] = row
@@ -182,7 +185,7 @@ func (s *Server) adminBatchIPs(w http.ResponseWriter, r *http.Request, c adminCa
 	if s.heldAnswered(w, c, now) {
 		return
 	}
-	if in.Check && names > 0 {
+	if literals > 0 || in.Check && names > 0 {
 		wait, console, ok := s.proxyChecks.hold(budgets(c), now)
 		if !ok {
 			checksHeld(w, wait, console)
@@ -193,20 +196,23 @@ func (s *Server) adminBatchIPs(w http.ResponseWriter, r *http.Request, c adminCa
 	for i := range rows {
 		row := &rows[i]
 		switch {
-		case !row.name:
-		case !in.Check:
+		case row.Status != "":
+		case row.name && !in.Check:
 			row.Status, row.Message = batchFailed, "a host name needs check"
 		case !s.proxyChecks.spend(budgets(c), time.Now()):
 			row.Status, row.Message = batchFailed, "check limit reached"
 		default:
-			got := checkAreaProxy(r.Context(), row.url, "")
+			// a name is kept under its exit, an IP only once it is its exit
+			got := checkAreaProxy(r.Context(), row.url, row.IP)
 			switch {
 			case got.Error == "not_public":
 				row.Status, row.Message = batchNotPublic, "an area's proxy is at a public address"
 			case !got.OK:
 				row.Status, row.Message = batchFailed, "the proxy didn't carry the check: "+got.Error
-			default:
+			case row.name:
 				row.IP = got.IP
+			case !got.Matches:
+				row.Status, row.Message = batchFailed, "the proxy leaves from "+got.IP+", not this IP"
 			}
 		}
 	}
