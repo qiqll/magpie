@@ -3,9 +3,9 @@
 An **area** is a note the owner hands out (学习, 工作, 娱乐…) with the provider
 accounts it owns. Its **area admin** adds, lists and removes those accounts
 and reads what they spent, through the gateway's admin routes, from a
-separate console ([magpie-console](../../../magpie-console/README.md), whose
+separate console ([magpie-console](https://github.com/qiqll/magpie-console/blob/main/README.md), whose
 `docs/magpie-api.md` is the contract both sides keep, and whose
-[`docs/operator.md`](../../../magpie-console/docs/operator.md) sets both up on
+[`docs/operator.md`](https://github.com/qiqll/magpie-console/blob/main/docs/operator.md) sets both up on
 a Linux server from zero). The **console key** reads every area and makes,
 changes and deletes them, and does for any area what its admin does
 ([The console acting for an area](#the-console-acting-for-an-area-t-215)).
