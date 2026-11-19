@@ -424,8 +424,8 @@ accounts, which is why a released account loses it.
 An area's proxy needs only a public address. The owner decided on
 2026-11-19 (T-225, reverting the exit check of 11-18) that its exit
 isn't compared with the IP it's added under, and adding one under an IP
-spends no `proxyChecks` (only a batch line by name with `check` reads an
-exit, to learn its IP): a proxy that doesn't leave from its IP only
+spends no `proxyChecks` (of the adds, only a batch line by name with
+`check` reads an exit, to learn its IP): a proxy that doesn't leave from its IP only
 fails its own requests.
 
 **Public-only proxies** ([`internal/netproxy/publiconly.go`](../../internal/netproxy/publiconly.go)).
