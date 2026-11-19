@@ -103,15 +103,16 @@ func quoteEach(ss []string) []string {
 // area's) is 409 and stays as it was. A key added whose pick couldn't be
 // put on stays added, 201 with the message saying so.
 func addAreaKey(c adminCall, p provider.Provider, name, key string, proto provider.Protocol, plan string, pick *proxyPick) (adminAccount, int, string, string) {
+	// the key a batch came with, and its area, read again before each
+	// key (T-260): nothing is written, nor said of the key, once either
+	// changed
+	if err := stillActs(c); err != nil {
+		return claimFailure(err)
+	}
 	fp := provider.KeyID(key)
 	ref := p.ID + "/" + fp
 	if slices.ContainsFunc(p.KeyList(), func(k provider.KeyInfo) bool { return k.ID == fp }) {
 		return adminAccount{}, http.StatusConflict, adminConflict, "this key is in magpie already"
-	}
-	// the key a batch came with, and its area, read again before each
-	// key is claimed (T-260): nothing is written once either changed
-	if err := stillActs(c); err != nil {
-		return claimFailure(err)
 	}
 	// owned first, so the key is the area's from the moment it is there;
 	// the area's 500 judged in the same lock

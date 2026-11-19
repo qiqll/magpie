@@ -832,8 +832,11 @@ console, so `TestAdminKeyEveryRoute` covers it.
   again before each account is admitted and just before it is claimed,
   and the rest fail saying why (`401`'s words, not counted as the area's
   failures). A plugin's key saved meanwhile is signed out again by its
-  own record (`unclaimed`, `SignOutSaved`). An account claimed before the
-  change stays the area's.
+  own record (`unclaimed`, `SignOutSaved`). Once an import is kept out
+  it stays out (`areaImport.acts`). An account claimed before the
+  change stays the area's, and so may one whose change lands between
+  the read and the claim, a window of one file write: `ClaimUpTo` reads
+  neither the key nor the area's `off`.
 
   Not covered: the console's sign-ins and imports go on through a change
   of the console's own key (T-261).

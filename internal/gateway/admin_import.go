@@ -258,11 +258,28 @@ type areaImport struct {
 	opened     time.Time
 	owned      int // the area's accounts, and those being read
 	reading    int // those being read
-	// changed is set once the key the import came with, or its area,
-	// was found changed (stillActs): the accounts refused for it are no
-	// failures the area is counted for
-	changed atomic.Bool
+	// keptOut is why the import makes no more accounts the area's, once
+	// the key it came with, or its area, was found changed (stillActs):
+	// every account after is refused for it too, and those refused, or
+	// failing as it was found, are no failures the area is counted for
+	keptOut atomic.Pointer[error]
 }
+
+// acts is stillActs for the import, kept once it says no.
+func (im *areaImport) acts() error {
+	if err := im.keptOut.Load(); err != nil {
+		return *err
+	}
+	err := stillActs(im.c)
+	if err != nil {
+		im.keptOut.CompareAndSwap(nil, &err)
+		return *im.keptOut.Load()
+	}
+	return nil
+}
+
+// changed is whether the import was kept out (acts).
+func (im *areaImport) changed() bool { return im.keptOut.Load() != nil }
 
 // importReads is every import's admit and release, under one lock: the
 // console's imports for different areas run side by side and share its
@@ -280,43 +297,52 @@ var importReads struct {
 // than the line lets through, nor the console, with its other imports'
 // reads, more than its total.
 func (im *areaImport) admit() (func(provider.ImportedAccount) provider.ImportedAccount, string) {
+	for {
+		// the key and the area read again before each account (T-260),
+		// and after each wait, outside the lock every import shares: it
+		// reads files
+		if err := im.acts(); err != nil {
+			return nil, err.Error()
+		}
+		if done, why, ok := im.admitted(); ok {
+			return done, why
+		}
+	}
+}
+
+// admitted is admit's turn under importReads: the account admitted, or
+// why not, or false after a wait for a read to end, to be judged again.
+func (im *areaImport) admitted() (func(provider.ImportedAccount) provider.ImportedAccount, string, bool) {
 	importReads.Lock()
 	defer importReads.Unlock()
 	if importReads.moved == nil {
 		importReads.moved = sync.NewCond(&importReads.Mutex)
 	}
-	for {
-		// the key and the area read again before each account (T-260),
-		// and after each wait
-		if err := stillActs(im.c); err != nil {
-			im.changed.Store(true)
-			return nil, err.Error()
-		}
-		now := time.Now()
-		areaLeft := conflictMost - im.s.conflicts.count(im.c.area.ID, now)
-		consoleLeft := consoleConflictMost
-		if im.c.console {
-			consoleLeft -= im.s.conflicts.count(consoleBudget, now)
-		}
-		// each account being read may fail as well (T-233)
-		areaFails, consoleFails := im.s.importFailsLeft(im.c, now)
-		switch {
-		case areaLeft <= 0 || consoleLeft <= 0:
-			return nil, importConflictsHeld
-		case areaFails <= 0 || consoleFails <= 0:
-			return nil, importFailsHeld
-		case im.owned >= adminAccountsLimit && im.reading == 0:
-			return nil, area.ErrFull.Error()
-		case im.reading < min(areaLeft, areaFails) && (!im.c.console || importReads.console < min(consoleLeft, consoleFails)) && im.owned < adminAccountsLimit:
-			im.owned++
-			im.reading++
-			if im.c.console {
-				importReads.console++
-			}
-			return im.done, ""
-		}
-		importReads.moved.Wait()
+	now := time.Now()
+	areaLeft := conflictMost - im.s.conflicts.count(im.c.area.ID, now)
+	consoleLeft := consoleConflictMost
+	if im.c.console {
+		consoleLeft -= im.s.conflicts.count(consoleBudget, now)
 	}
+	// each account being read may fail as well (T-233)
+	areaFails, consoleFails := im.s.importFailsLeft(im.c, now)
+	switch {
+	case areaLeft <= 0 || consoleLeft <= 0:
+		return nil, importConflictsHeld, true
+	case areaFails <= 0 || consoleFails <= 0:
+		return nil, importFailsHeld, true
+	case im.owned >= adminAccountsLimit && im.reading == 0:
+		return nil, area.ErrFull.Error(), true
+	case im.reading < min(areaLeft, areaFails) && (!im.c.console || importReads.console < min(consoleLeft, consoleFails)) && im.owned < adminAccountsLimit:
+		im.owned++
+		im.reading++
+		if im.c.console {
+			importReads.console++
+		}
+		return im.done, "", true
+	}
+	importReads.moved.Wait()
+	return nil, "", false
 }
 
 // done is told how an admitted account went: one not added is the area's
@@ -331,7 +357,7 @@ func (im *areaImport) done(r provider.ImportedAccount) provider.ImportedAccount 
 	default:
 		// any other reads as failed (importResult.add), but for one the
 		// changed key kept out
-		if !im.changed.Load() {
+		if !im.changed() {
 			im.s.importFailed(im.c, time.Now())
 		}
 	}
@@ -378,8 +404,7 @@ func (im *areaImport) claim(agent, user string) error {
 	// read again here too: the vendor was asked whose it is since admit,
 	// and nothing of it is written once the key or the area changed
 	// (T-260)
-	if err := stillActs(im.c); err != nil {
-		im.changed.Store(true)
+	if err := im.acts(); err != nil {
 		return err
 	}
 	err := area.ClaimUpTo(im.c.area.ID, im.ref(user), adminAccountsLimit)
@@ -478,11 +503,12 @@ func (im *areaImport) pluginKeys(pm adminPluginMethod, keys []string, o provider
 			default:
 				row.Status, row.Message = keyFailed, msg
 			}
-			if msg == errKeyChanged.Error() || msg == errAreaOff.Error() {
-				// kept out by stillActs (T-260), the rest with it
-				im.changed.Store(true)
+			if status == http.StatusUnauthorized && code == adminKeyRequired {
+				// kept out by stillActs (T-260), or the area deleted:
+				// the rest with it
+				im.acts()
 			}
-			if row.Status == keyFailed && !im.changed.Load() {
+			if row.Status == keyFailed && !im.changed() {
 				// the plugin asked its vendor (T-233)
 				im.s.importFailed(im.c, time.Now())
 			}

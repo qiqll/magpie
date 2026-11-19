@@ -111,27 +111,34 @@ func TestAdminKeysAfterKeyChangedAddNothing(t *testing.T) {
 // after (T-260): the key is read again before each account is admitted
 // and again just before it is claimed, as the vendor was asked whose it
 // is in between. Here the key is rotated as Anthropic is first asked, so
-// that account is kept out at its claim and nothing of it is written;
-// one let in before the rotate and read after asks Anthropic of none.
+// those accounts are kept out at their claim and nothing of them is
+// written; one let in before the rotate and read after asks Anthropic
+// of none. None of them is counted as the area's failures (T-233), so
+// the new secret's import goes on; with the area turned off it adds none
+// either.
 func TestAdminImportAfterKeyChangedClaimsNothing(t *testing.T) {
 	do, console, _ := adminWorld(t)
 	id, key := makeArea(t, do, console, "A")
 	openSignIns(t, do, console, id, "claude")
 	var once sync.Once
 	var mu sync.Mutex
-	asked := 0
+	asked, secret := 0, ""
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// the key rotated as the import waits on the vendor: no sleep,
 		// the ask itself is the moment
 		once.Do(func() {
 			// not rotateKeyOf: t.Fatal is the test's goroutine's alone
 			k, has, err := access.AreaKey(id)
+			var s string
 			if err == nil && has {
-				_, err = access.Update("rotate-key", access.Change{Key: k.ID})
+				s, err = access.Update("rotate-key", access.Change{Key: k.ID})
 			}
 			if err != nil || !has {
 				t.Error("rotating A's key:", has, err)
 			}
+			mu.Lock()
+			secret = s
+			mu.Unlock()
 		})
 		mu.Lock()
 		asked++
@@ -142,13 +149,41 @@ func TestAdminImportAfterKeyChangedClaimsNothing(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	t.Cleanup(provider.ClaudeProfileURLForTest(srv.URL))
+	askedNow := func() int { mu.Lock(); defer mu.Unlock(); return asked }
 	logins := filepath.Join(filepath.Dir(provider.Path()), "logins.json")
+	s := New()
+	imp := func(c adminCall, files ...string) importResult {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", AdminPath+"/accounts/import", strings.NewReader(`{"agent":"claude","files":[`+strings.Join(jsonEach(files...), ",")+`]}`))
+		s.adminImport(w, r, c)
+		var out importResult
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != http.StatusOK {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		return out
+	}
+	callOf := func(id, secret string) adminCall {
+		t.Helper()
+		who, ok := access.Authenticate(secret)
+		if !ok {
+			t.Fatal("the secret")
+		}
+		a, err := area.Get(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return adminCall{who: who, area: a}
+	}
+	failsLeft := func(c adminCall) int {
+		left, _ := s.importFailsLeft(c, time.Now())
+		return left
+	}
 
-	c, out, body := importOf(t, do, key, map[string]any{"agent": "claude", "files": []string{
-		claudeFile("at-mid", "rt-mid", time.Now().Add(time.Hour)),
-	}})
-	if c != http.StatusOK || importStatuses(out) != "1:failed" || out.Results[0].Message != errKeyChanged.Error() {
-		t.Fatal("rotated midway:", c, body)
+	c := callOf(id, key)
+	out := imp(c, claudeFile("at-mid", "rt-mid", time.Now().Add(time.Hour)), claudeFile("at-mid2", "rt-mid2", time.Now().Add(time.Hour)))
+	if importStatuses(out) != "1:failed,2:failed" || out.Results[0].Message != errKeyChanged.Error() || out.Results[1].Message != errKeyChanged.Error() {
+		t.Fatalf("rotated midway: %+v", out)
 	}
 	if a, _ := area.Get(id); len(a.Accounts) != 0 {
 		t.Fatalf("the area's: %+v", a.Accounts)
@@ -156,29 +191,39 @@ func TestAdminImportAfterKeyChangedClaimsNothing(t *testing.T) {
 	if b, _ := os.ReadFile(logins); strings.Contains(string(b), "rt-mid") {
 		t.Fatal("the account was written")
 	}
+	if n := failsLeft(c); n != importFailMost {
+		t.Fatalf("the area may fail %d more, want %d: those kept out were counted", n, importFailMost)
+	}
+	mu.Lock()
+	fresh := secret
+	mu.Unlock()
+	now := callOf(id, fresh)
+	if out := imp(now, claudeFile("at-new", "rt-new", time.Now().Add(time.Hour))); importStatuses(out) != "1:added" {
+		t.Fatalf("the new secret's: %+v", out)
+	}
+
+	// the area turned off: refused at admit, no ask
+	off := true
+	if _, err := area.Update(id, area.Spec{Off: &off}); err != nil {
+		t.Fatal(err)
+	}
+	was := askedNow()
+	if out := imp(now, claudeFile("at-off", "rt-off", time.Now().Add(time.Hour))); importStatuses(out) != "1:failed" || out.Results[0].Message != errAreaOff.Error() {
+		t.Fatalf("the area off: %+v", out)
+	}
+	if n := askedNow() - was; n != 0 {
+		t.Fatalf("Anthropic asked %d times for an area turned off", n)
+	}
 
 	// let in before a rotate, read after: refused at admit, no ask
 	id2, key2 := makeArea(t, do, console, "B")
 	openSignIns(t, do, console, id2, "claude")
 	stale, _ := staleAreaCall(t, id2, key2)
-	mu.Lock()
-	asked = 0
-	mu.Unlock()
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest("POST", AdminPath+"/accounts/import", strings.NewReader(`{"agent":"claude","files":[`+strings.Join(jsonEach(
-		claudeFile("at-late", "rt-late", time.Now().Add(time.Hour)),
-		claudeFile("at-late2", "rt-late2", time.Now().Add(time.Hour)),
-	), ",")+`]}`))
-	New().adminImport(w, r, stale)
-	var got importResult
-	json.Unmarshal(w.Body.Bytes(), &got)
-	if w.Code != http.StatusOK || importStatuses(got) != "1:failed,2:failed" || got.Results[0].Message != errKeyChanged.Error() {
-		t.Fatal("the old secret's:", w.Code, w.Body.String())
+	was = askedNow()
+	if out := imp(stale, claudeFile("at-late", "rt-late", time.Now().Add(time.Hour)), claudeFile("at-late2", "rt-late2", time.Now().Add(time.Hour))); importStatuses(out) != "1:failed,2:failed" || out.Results[0].Message != errKeyChanged.Error() {
+		t.Fatalf("the old secret's: %+v", out)
 	}
-	mu.Lock()
-	n := asked
-	mu.Unlock()
-	if n != 0 {
+	if n := askedNow() - was; n != 0 {
 		t.Fatalf("Anthropic asked %d times for an import its key no longer acts for", n)
 	}
 	if a, _ := area.Get(id2); len(a.Accounts) != 0 {
