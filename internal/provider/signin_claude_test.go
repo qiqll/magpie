@@ -210,6 +210,28 @@ func TestClaudeSignInByPastedAddress(t *testing.T) {
 	}
 }
 
+// A pasted code whose sign-in Done says ended in a conflict (an area's, to
+// an account magpie has) is taken, and the state says how it ended (T-227).
+func TestClaudePasteEndingInConflictIsTaken(t *testing.T) {
+	claudeHome(t)
+	noAnthropic(t)
+	fakeClaudeLogin(t, fakeClaudeAccount{email: "held@example.com", plan: "pro", refresh: "sk-ant-ort01-held"}, "", false)
+
+	st, err := StartSignInWith("claude", SignInOptions{Done: func(st SignInState) SignInState {
+		st.State, st.Error = "conflict", "this account is in magpie already, so it stays where it is"
+		return st
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SubmitSignInCallback(st.ID, "the-code#st"); err != nil {
+		t.Fatal("a sign-in ended in a conflict:", err)
+	}
+	if st = waitDone(t, st.ID); st.State != "conflict" {
+		t.Fatalf("state %+v", st)
+	}
+}
+
 // A saved account in use beside Claude Code's own runs Claude Code in a
 // config directory of its own: its sign-in is put there once, what Claude
 // Code makes of it is read back, and switching to it moves it out again.

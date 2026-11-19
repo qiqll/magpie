@@ -190,3 +190,26 @@ func TestLoopbackSignInsTakePastedAddress(t *testing.T) {
 		}
 	}
 }
+
+// A pasted address whose sign-in Done says ended in a conflict (an area's,
+// to an account magpie has) is taken: how it ended is the sign-in's state,
+// not "the sign-in was canceled" (T-227).
+func TestPastedAddressEndingInConflictIsTaken(t *testing.T) {
+	claudeHome(t)
+	fakeCodexTokens(t, nil)
+
+	st, err := StartSignInWith("codex", SignInOptions{Done: func(st SignInState) SignInState {
+		st.State, st.Error = "conflict", "this account is in magpie already, so it stays where it is"
+		return st
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer CancelSignIn(st.ID)
+	if err := SubmitSignInCallback(st.ID, callbackAddress(t, st, "cx", "")); err != nil {
+		t.Fatal("a sign-in ended in a conflict:", err)
+	}
+	if st, _ = SignInStatus(st.ID); st.State != "conflict" || !strings.Contains(st.Error, "stays where it is") {
+		t.Fatalf("state %+v", st)
+	}
+}

@@ -499,7 +499,9 @@ tool's files come in by [Imports](#imports-t-211-t-220).
   github.com as before. Copilot's entry in `options` and `catalog` has
   `"sites": ["github.com", "ghe.com"]`.
 - A pasted address reaches only the sign-in's own callback
-  (`pastedCallback`): its port, path and state. Another is `400`.
+  (`pastedCallback`): its port, path and state. Another is `400`. One
+  taken whose sign-in ends in `conflict` is `204`, as a plugin's paste
+  is: the sign-in's state says how it ended (T-227; `claudePaste` too).
 - **Opened** (T-213): `signin` and `signin/claude-token` take `opened`,
   `YYYY-MM-DD` in this computer's zone (`areaOpened`), checked by
   `renewal.CheckOpened` before anything starts (`400` else). It is kept

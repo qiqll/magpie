@@ -211,9 +211,11 @@ func TestAdminSignInThroughAreaProxy(t *testing.T) {
 	// B signs in to the same account through its own proxy
 	b, _ = json.Marshal(map[string]any{"agent": provider.ChatGPTAPIID, "proxy": map[string]any{"ip": "203.0.113.8", "id": pxB}})
 	stB, endB := w.startSIWC(t, w.b, string(b), v, "first")
-	// the paste's own answer to a sign-in that ended a conflict is
-	// provider's (400); how it ended is read from the sign-in
-	w.paste(t, w.b, stB.ID, map[string]any{"url": endB})
+	// a paste whose sign-in ended a conflict is taken (204, T-227); how
+	// it ended is read from the sign-in
+	if c, body := w.paste(t, w.b, stB.ID, map[string]any{"url": endB}); c != http.StatusNoContent {
+		t.Fatal("B's paste:", c, body)
+	}
 	if v.asked("/api/accounts/oauth/token") != 2 {
 		t.Fatalf("B's code wasn't traded through B's proxy: %v", v.paths())
 	}

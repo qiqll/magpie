@@ -549,7 +549,9 @@ func (s *signInFlow) claudePaste(raw string) error {
 		return errors.New("the sign-in is still finishing; magpie shows the account when it's done")
 	}
 	switch st := s.status(); st.State {
-	case "done":
+	case "done", "conflict":
+		// a conflict (an area's, to an account magpie has) is told by
+		// the sign-in's state, as a plugin's pasted address is (T-227)
 		return nil
 	case "failed":
 		return errors.New(st.Error)
