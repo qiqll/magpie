@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -110,7 +111,8 @@ func carriesToItself(a net.Addr, socks *url.URL) bool {
 // plain http:// request sent on and answered.
 func bridgeConn(c net.Conn, socks *url.URL) {
 	defer c.Close()
-	br := bufio.NewReader(c)
+	var ended atomic.Bool // one way of a CONNECT tunnel has ended
+	br := bufio.NewReader(lingerReader{c, &ended})
 	_ = c.SetReadDeadline(time.Now().Add(time.Minute))
 	req, err := http.ReadRequest(br)
 	if err != nil {
@@ -129,10 +131,23 @@ func bridgeConn(c net.Conn, socks *url.URL) {
 		if _, err := io.WriteString(c, "HTTP/1.1 200 Connection established\r\n\r\n"); err != nil {
 			return
 		}
+		// One way ended, the other is given tunnelLinger with nothing
+		// coming before both are closed: a SOCKS proxy that doesn't pass
+		// a half-close on leaves the host waiting for the client's end,
+		// and the tunnel, with its connection to the proxy, held for good
+		// (T-238).
 		done := make(chan struct{}, 2)
 		go func() { _, _ = io.Copy(up, br); closeWrite(up); done <- struct{}{} }()
-		go func() { _, _ = io.Copy(c, up); closeWrite(c); done <- struct{}{} }()
+		go func() {
+			_, _ = io.Copy(c, lingerReader{up, &ended})
+			closeWrite(c)
+			done <- struct{}{}
+		}()
 		<-done
+		ended.Store(true)
+		d := time.Now().Add(time.Duration(tunnelLinger.Load()))
+		_ = c.SetReadDeadline(d)
+		_ = up.SetReadDeadline(d)
 		<-done
 		return
 	}
@@ -154,6 +169,25 @@ func bridgeConn(c net.Conn, socks *url.URL) {
 	defer res.Body.Close()
 	res.Close = true
 	_ = res.Write(c)
+}
+
+// tunnelLinger is how long, in nanoseconds, a CONNECT tunnel one way of
+// which has ended waits for anything more the other way before it closes.
+// What still comes, a reply after the client's end, keeps it open.
+var tunnelLinger = func() *atomic.Int64 { var d atomic.Int64; d.Store(int64(time.Minute)); return &d }()
+
+// lingerReader reads c, once ended is set with tunnelLinger to wait for
+// each read.
+type lingerReader struct {
+	c     net.Conn
+	ended *atomic.Bool
+}
+
+func (l lingerReader) Read(p []byte) (int, error) {
+	if l.ended.Load() {
+		_ = l.c.SetReadDeadline(time.Now().Add(time.Duration(tunnelLinger.Load())))
+	}
+	return l.c.Read(p)
 }
 
 func closeWrite(c net.Conn) {

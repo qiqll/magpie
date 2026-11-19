@@ -1,7 +1,9 @@
 package netproxy
 
 import (
+	"bufio"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -337,5 +339,144 @@ func TestEnvForBunWithBridgesTheProvidersSOCKS(t *testing.T) {
 	t.Cleanup(func() { listenLoopback = old })
 	if _, err := EnvForBunWith("socks5://10.0.0.3:1080", []string{"PATH=/bin"}, true); err == nil || !strings.Contains(err.Error(), "didn't start") {
 		t.Fatalf("no bridge: %v", err)
+	}
+}
+
+// halfCloseSOCKS is a SOCKS5 proxy that, like some, doesn't pass a
+// half-close on: a client's end of writing never reaches the host, so the
+// host never ends the connection. conns is each connection it took from
+// the bridge.
+func halfCloseSOCKS(t *testing.T, host string) (*url.URL, chan net.Conn) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conns := make(chan net.Conn, 16)
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { c.Close() })
+			go func(c net.Conn) {
+				var h [2]byte
+				io.ReadFull(c, h[:])
+				io.ReadFull(c, make([]byte, h[1]))
+				c.Write([]byte{5, 0})
+				var r [4]byte
+				io.ReadFull(c, r[:])
+				skip := 4 // IPv4, as the bridge sends 127.0.0.1
+				if r[3] == 3 {
+					var l [1]byte
+					io.ReadFull(c, l[:])
+					skip = int(l[0])
+				}
+				io.ReadFull(c, make([]byte, skip+2))
+				up, err := net.Dial("tcp", host)
+				if err != nil {
+					c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+					return
+				}
+				t.Cleanup(func() { up.Close() })
+				c.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 0})
+				conns <- c
+				go io.Copy(up, c) // the client's end isn't passed on
+				io.Copy(c, up)
+			}(c)
+		}
+	}()
+	return &url.URL{Scheme: "socks5", Host: ln.Addr().String()}, conns
+}
+
+// T-238: a CONNECT tunnel whose client has ended writing, through a SOCKS
+// proxy that doesn't pass that on, waited for the host to end it, which
+// never came, so each such connection to the proxy stayed open and used
+// up its limit. The host's reply after the half-close still reaches the
+// client; then, with nothing more coming for tunnelLinger, the bridge
+// ends both sides, and the proxy finds every connection closed.
+func TestBridgeEndsAHalfClosedTunnel(t *testing.T) {
+	old := tunnelLinger.Swap(int64(time.Second))
+	t.Cleanup(func() { tunnelLinger.Store(old) })
+	host, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { host.Close() })
+	go func() {
+		for {
+			c, err := host.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { c.Close() })
+			go func(c net.Conn) {
+				// answers "ping" and holds the connection: it never reads
+				// the client's end, which the proxy doesn't pass on
+				var b [4]byte
+				if _, err := io.ReadFull(c, b[:]); err == nil {
+					c.Write([]byte("pong"))
+				}
+			}(c)
+		}
+	}()
+	socks, conns := halfCloseSOCKS(t, host.Addr().String())
+	b, err := Bridge(socks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 3
+	type got struct {
+		body string
+		err  error
+	}
+	results := make(chan got, n)
+	for range n {
+		c, err := net.Dial("tcp", strings.TrimPrefix(b, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		io.WriteString(c, "CONNECT "+host.Addr().String()+" HTTP/1.1\r\nHost: "+host.Addr().String()+"\r\n\r\n")
+		go func() {
+			_ = c.SetReadDeadline(time.Now().Add(20 * time.Second))
+			br := bufio.NewReader(c)
+			res, err := http.ReadResponse(br, nil)
+			if err != nil {
+				results <- got{err: err}
+				return
+			}
+			if res.StatusCode != 200 {
+				results <- got{err: fmt.Errorf("CONNECT: %s", res.Status)}
+				return
+			}
+			io.WriteString(c, "ping")
+			c.(*net.TCPConn).CloseWrite()
+			body, err := io.ReadAll(br) // ends only when the bridge ends the tunnel
+			results <- got{string(body), err}
+		}()
+	}
+	for range n {
+		r := <-results
+		if r.err != nil || r.body != "pong" {
+			t.Fatalf("the client read %q, %v; want pong and the tunnel ended", r.body, r.err)
+		}
+	}
+	// each connection the proxy took from the bridge is closed: a write
+	// to it fails once the bridge's end has reset it
+	for range n {
+		c := <-conns
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, err := c.Write([]byte{0}); err != nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the bridge still holds a connection to the proxy open")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 }
