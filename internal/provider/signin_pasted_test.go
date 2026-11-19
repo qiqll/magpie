@@ -78,6 +78,26 @@ func TestImportBoxFinishesAPastedClaudeCode(t *testing.T) {
 	}
 }
 
+// An area's sign-in whose address pasted into the Import box ends in a
+// conflict reads as an account magpie has, not one added (T-227).
+func TestImportBoxSaysAPastedSignInsConflict(t *testing.T) {
+	claudeHome(t)
+	fakeCodexTokens(t, nil)
+
+	st, err := StartSignInWith("codex", SignInOptions{Done: func(st SignInState) SignInState {
+		st.State, st.Error = "conflict", "this account is in magpie already, so it stays where it is"
+		return st
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer CancelSignIn(st.ID)
+	done, rest := PastedSignIns([]string{callbackAddress(t, st, "cx", "")})
+	if len(rest) != 0 || len(done) != 1 || done[0].Status != "exists" || !strings.Contains(done[0].Error, "stays where it is") {
+		t.Fatalf("done %+v rest %q", done, rest)
+	}
+}
+
 // What isn't a sign-in's end is left to import, and an address among
 // refresh tokens is never sent to the vendor as one.
 func TestImportTellsAddressesFromAccounts(t *testing.T) {

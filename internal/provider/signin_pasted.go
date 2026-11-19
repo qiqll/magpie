@@ -107,6 +107,12 @@ func finishPastedSignIn(state, text string) ImportedAccount {
 		return ImportedAccount{Status: "failed", Error: said}
 	}
 	st = s.status()
+	if st.State == "conflict" {
+		// taken, but its account is magpie's already (an area's sign-in,
+		// T-227): nothing was added or updated. "exists" is what the
+		// Import box labels so ("Already in magpie"), the reason beside it
+		return ImportedAccount{User: st.User, Plan: st.Plan, Status: "exists", Error: st.Error}
+	}
 	out := ImportedAccount{User: st.User, Plan: st.Plan, Status: "added"}
 	if st.Again {
 		out.Status = "updated"

@@ -746,7 +746,8 @@ func HoldSignInPublic(id, proxy string) {
 
 // SubmitSignInCallback finishes a browser sign-in whose callback could not
 // reach this machine — the address the browser ended on, pasted — or a
-// plugin's with the code its page showed.
+// plugin's with the code its page showed. nil is the paste taken: how the
+// sign-in ended (done, or an area's conflict) is its SignInStatus.
 func SubmitSignInCallback(id, raw string) error {
 	return SubmitSignInCallbackThrough(id, raw, nil)
 }
