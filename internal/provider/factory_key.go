@@ -112,7 +112,8 @@ func factoryKeyToPlugin(ctx context.Context, user string, c factoryCreds) Import
 	auth := map[string]any{"type": "api", "key": c.Access, "metadata": map[string]any{
 		"email": c.Email, "userId": c.UserID, "region": c.Region, "premBaseHost": c.Prem}}
 	if status != "exists" {
-		if _, err := plugin.Import(ctx, "factory", auth); err != nil {
+		// an area's account of the same email stays the area's (T-228)
+		if _, err := plugin.ImportOwner(ctx, "factory", auth); err != nil {
 			return ImportedAccount{User: user, Status: "failed", Error: err.Error()}
 		}
 	}

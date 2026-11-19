@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // areaOwns has AreaOwned give keys (ok false: can't be told) for the
@@ -125,5 +126,50 @@ func TestSignInOwnerSingleLeavesTheAreas(t *testing.T) {
 	}
 	if m := saved(); len(m) != 1 || m[area.Account]["key"] != "c-area" {
 		t.Fatalf("the area's one account was changed: %v", m)
+	}
+}
+
+// What the owner's sign-in starts (a timer renewing its token) writes
+// once the sign-in has ended, though areas.json couldn't be read as it
+// ran (every account kept): the guard goes with the sign-in.
+func TestSignInOwnerGuardEndsWithTheSignIn(t *testing.T) {
+	ctx, saved := newSignInSandbox(t)
+	areaOwns(t, false)
+	a, err := Authorize(ctx, "fakeco", 1, map[string]string{"where": "work", "team": "write-later"}, NewAccount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Finish(ctx, a.Session, "good")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(20 * time.Second); saved()[s.Account]["refresh"] != "r-later"; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the renewal after the owner's sign-in was dropped: %v", saved())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// The owner's imported key (Factory's, ImportOwner) of the same account
+// as one an area owns is ErrAreaOwned, the area's record as it was;
+// Import, a mover's, is as it was.
+func TestImportOwnerLeavesAnAreasAccount(t *testing.T) {
+	ctx, saved := newSignInSandbox(t)
+	area, err := Import(ctx, "fakeco", map[string]any{"type": "api", "key": "fk-area", "metadata": map[string]any{"email": "e@fake"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	areaOwns(t, true, area)
+	owner := map[string]any{"type": "api", "key": "fk-owner", "metadata": map[string]any{"email": "e@fake"}}
+	if k, err := ImportOwner(ctx, "fakeco", owner); !errors.Is(err, ErrAreaOwned) {
+		t.Fatalf("the owner's import of the area's account: %q %v, not ErrAreaOwned", k, err)
+	}
+	if m := saved(); len(m) != 1 || m[area]["key"] != "fk-area" {
+		t.Fatalf("the area's account was changed: %v", m)
+	}
+	areaOwns(t, true)
+	if k, err := ImportOwner(ctx, "fakeco", owner); err != nil || k != area {
+		t.Fatalf("no area owns it: %q %v, not %q", k, err, area)
 	}
 }

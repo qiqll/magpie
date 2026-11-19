@@ -93,3 +93,38 @@ func TestSignInOwnerOfAnAreasPluginAccountFails(t *testing.T) {
 		t.Fatalf("the owner's sign-in once the area let go left %v", got)
 	}
 }
+
+// An area's ref of a plugin's that no account's name gives now (its
+// name changed by a duplicate's " (slot)") keeps every account of that
+// plugin, never none; with no plugins read, every account is kept.
+func TestAreaPluginKeysUnmappedKeepsThePlugin(t *testing.T) {
+	t.Setenv("MAGPIE_BUN", testenv.Bun(t))
+	claudeHome(t)
+	t.Cleanup(plugin.Settle)
+	step := minuteEach(t)
+	ar, err := area.Create("学习", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := PluginID("fakeco")
+	if err := area.Claim(ar.ID, agent+"/"+LoginID(agent, "gone@fake")); err != nil {
+		t.Fatal(err)
+	}
+	if keys, ok := areaPluginKeys(); ok {
+		t.Fatalf("with no plugins read: %v, ok", keys)
+	}
+	abs, _ := filepath.Abs("../plugin/testdata/fake/index.js")
+	if _, err := plugin.Add(step(), abs); err != nil {
+		t.Fatal(err)
+	}
+	s, err := plugin.APIKey(step(), "fakeco", 0, nil, "sk-owner-one", plugin.NewAccount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Providers(step()); err != nil {
+		t.Fatal(err)
+	}
+	if keys, ok := areaPluginKeys(); !ok || len(keys) != 1 || keys[0] != s.Account {
+		t.Fatalf("an unmapped ref of fakeco's kept %v (%v), not every fakeco account", keys, ok)
+	}
+}

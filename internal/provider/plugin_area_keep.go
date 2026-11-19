@@ -1,6 +1,10 @@
 package provider
 
 import (
+	"maps"
+	"slices"
+	"strings"
+
 	"github.com/yetone/magpie/internal/area"
 	"github.com/yetone/magpie/internal/plugin"
 )
@@ -15,8 +19,11 @@ func init() { plugin.AreaOwned = areaPluginKeys }
 // areaPluginKeys is the plugin-auth.json keys of the accounts an area
 // owns, each found as an area's sign-in claimed it (claimOnDone,
 // areaPluginKey): "<PluginID>/<LoginID of its name in the accounts
-// list>". ok is false when areas.json can't be read: then every account
-// is kept from the owner's sign-in, never none.
+// list>". ok is false when areas.json can't be read, or when an area owns
+// accounts and the plugins can't be read: then every account is kept
+// from the owner's sign-in, never none. A plugin an area owns a ref of
+// that no account's name gives now (a name its duplicate's " (slot)"
+// changed) has every account kept.
 func areaPluginKeys() ([]string, bool) {
 	areas, err := area.List()
 	if err != nil {
@@ -31,14 +38,29 @@ func areaPluginKeys() ([]string, bool) {
 	if len(owned) == 0 {
 		return nil, true
 	}
+	pps := plugin.Cached()
+	if len(pps) == 0 {
+		return nil, false
+	}
 	var keys []string
-	for _, pp := range plugin.Cached() {
+	for _, pp := range pps {
 		agent := PluginID(pp.ID)
-		for k, user := range pluginNames(pp) {
-			if user != "" && owned[agent+"/"+LoginID(agent, user)] {
-				keys = append(keys, k)
+		names := pluginNames(pp)
+		found := map[string]bool{}
+		var mine []string
+		for k, user := range names {
+			if ref := agent + "/" + LoginID(agent, user); user != "" && owned[ref] {
+				mine = append(mine, k)
+				found[ref] = true
 			}
 		}
+		for ref := range owned {
+			if strings.HasPrefix(ref, agent+"/") && !found[ref] {
+				mine = slices.Collect(maps.Keys(names))
+				break
+			}
+		}
+		keys = append(keys, mine...)
 	}
 	return keys, true
 }

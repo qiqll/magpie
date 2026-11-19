@@ -1272,8 +1272,8 @@ function newKey(provider) {
 // while fresh.on: until it is saved, in what it starts too (a timer that
 // renews the token is let through once the account is kept).
 //
-// keep is the keys of accounts an area owns (T-228) that the owner's
-// sign-in leaves alone (kept), for its steps' writes.
+// keep is the owner's sign-in's guard (keepGuard, T-228): its steps'
+// writes leave the accounts an area owns alone while it runs.
 function inScope(provider, key, fn, signIn = false, fresh = false, keep = undefined) {
   let had = false
   if (!signIn) {
@@ -1286,9 +1286,21 @@ function inScope(provider, key, fn, signIn = false, fresh = false, keep = undefi
 
 // kept is whether key is one keep names, magpie's list of the accounts an
 // area owns, given to the owner's sign-in steps (T-228): an array of
-// keys, or true for every account when magpie couldn't tell.
+// keys, or true for every account when magpie couldn't tell. A guard
+// (keepGuard) names them only while its sign-in runs.
 function kept(keep, key) {
+  if (keep && typeof keep === "object" && !Array.isArray(keep)) {
+    if (!keep.on) return false
+    keep = keep.keep
+  }
   return keep === true || (Array.isArray(keep) && keep.includes(key))
+}
+
+// keepGuard is keep for a sign-in's steps, and what they start (a timer
+// that renews the token): once the sign-in ends (on false) its writes
+// go through, as an account's own renewals always have.
+function keepGuard(keep) {
+  return { keep, on: true }
 }
 
 function whoOf(a) {
@@ -1339,14 +1351,17 @@ function sameAccount(now, was) {
 // keep (kept) is the accounts an area owns, given to the owner's sign-in
 // (T-228): one to such an account takes nothing of the area's. What was
 // saved at key is signed out again, and settle gives null.
-async function settle(provider, key, keep) {
+//
+// prior is what was at key before the sign-in saved there, put back then.
+async function settle(provider, key, keep, prior) {
   const area = {}
   const k = await changeAuth((all) => {
     const now = all[key]
     if (!now) return false
     const same = accountsOf(all, provider).filter((k) => k !== key && sameAccount(now, all[k]))
     if (same.some((k) => kept(keep, k))) {
-      delete all[key]
+      if (prior) all[key] = prior
+      else delete all[key]
       return area
     }
     for (const k of same) {
@@ -2795,9 +2810,10 @@ async function save(provider, key, result, inputs, apiKey, fresh, keep) {
   const rec = recordOf(result, inputs, apiKey)
   if (fresh) return saveNew(provider, id, key, rec, fresh.named, fresh.hold)
   // a single plugin's sign-in goes to its one account's place, the area's
-  if (kept(keep, key) && key in readAuth()) return { ok: false, area: true }
+  const prior = readAuth()[key]
+  if (prior && kept(keep, key)) return { ok: false, area: true }
   if (rec) await setAuth(key, rec)
-  const at = await settle(id, key, keep)
+  const at = await settle(id, key, keep, prior)
   return at === null ? { ok: false, area: true } : { ok: true, provider: id, account: at }
 }
 
@@ -2901,17 +2917,17 @@ async function authorize({ provider, method, inputs, account, proxy, fresh, keep
   if (!m) throw new Error(`no sign-in method ${method} for ${provider}`)
   if (m.type !== "oauth") throw new Error("not an oauth method")
   const hold = fresh === true ? { on: true } : false
-  if (hold) keep = undefined
+  const guard = hold ? undefined : keepGuard(keep)
   const key = hold ? newKey(provider) : signInKey(provider, account)
   let begun = false
   try {
-    if (kept(keep, key) && key in readAuth()) return { ok: false, area: true }
+    if (kept(guard, key) && key in readAuth()) return { ok: false, area: true }
     // the inputs go only to a method that asks something, as OpenCode's TUI
     // (/connect) passes them: an object with none is how its CLI (opencode
     // auth login) calls, and a plugin told so asks its questions on the
     // terminal, magpie's stdin here (opencode-antigravity-auth waited on its
     // "Project ID" prompt, the sign-in never starting)
-    const a = await signingIn(signal, proxy ?? "", provider, key, () => m.authorize(m.prompts?.length ? inputs ?? {} : undefined, { signal }), hold, keep)
+    const a = await signingIn(signal, proxy ?? "", provider, key, () => m.authorize(m.prompts?.length ? inputs ?? {} : undefined, { signal }), hold, guard)
     if (signal?.aborted) throw abortedSignIn()
     // a plugin that can't start the sign-in may say why as an api method's
     // authorize does ({ type: "failed", error }) rather than throw; with no
@@ -2921,7 +2937,7 @@ async function authorize({ provider, method, inputs, account, proxy, fresh, keep
     if (a?.type === "failed") return failed(a)
     if (typeof a?.callback !== "function") return { ok: false, error: `${provider}'s sign-in gave nothing to finish it with` }
     const session = String(nextSession++)
-    sessions.set(session, { provider, key, a, inputs, proxy: proxy ?? "", hold })
+    sessions.set(session, { provider, key, a, inputs, proxy: proxy ?? "", hold, guard })
     begun = true
     // opened (not OpenCode's) is a page the plugin's own CLI opened already:
     // Grok Build's `grok login` opens it on macOS and Windows, and magpie's
@@ -2929,7 +2945,10 @@ async function authorize({ provider, method, inputs, account, proxy, fresh, keep
     return { ok: true, session, url: a.url ?? "", instructions: a.instructions ?? "", method: a.method, opened: a.opened === true }
   } finally {
     // the key goes with the sign-in: its callback lets it go
-    if (!begun) signingKeys.delete(key)
+    if (!begun) {
+      signingKeys.delete(key)
+      if (guard) guard.on = false
+    }
   }
 }
 
@@ -2959,15 +2978,17 @@ async function callback({ session, code, proxy, keep }, signal) {
   const s = sessions.get(session)
   if (!s) throw new Error("no such sign-in")
   sessions.delete(session)
-  if (s.hold) keep = undefined
+  // what authorize's steps started reads the accounts as they are now
+  if (s.guard) s.guard.keep = keep
   try {
-    const r = await signingIn(signal, proxy ?? s.proxy, s.provider, s.key, () => (s.a.method === "code" ? s.a.callback(code ?? "", { signal }) : s.a.callback(undefined, { signal })), s.hold, keep)
+    const r = await signingIn(signal, proxy ?? s.proxy, s.provider, s.key, () => (s.a.method === "code" ? s.a.callback(code ?? "", { signal }) : s.a.callback(undefined, { signal })), s.hold, s.guard)
     if (signal?.aborted) throw abortedSignIn()
     if (!r || r.type !== "success") return failed(r)
     // a page's sign-in is named, or it can't be told from one magpie has
-    return { ok: true, ...(await save(s.provider, s.key, r, undefined, undefined, s.hold ? { named: true, hold: s.hold } : undefined, keep)) }
+    return { ok: true, ...(await save(s.provider, s.key, r, undefined, undefined, s.hold ? { named: true, hold: s.hold } : undefined, s.guard?.keep)) }
   } finally {
     signingKeys.delete(s.key)
+    if (s.guard) s.guard.on = false
   }
 }
 
@@ -2977,25 +2998,27 @@ async function apiKey({ provider, method, inputs, key, account, proxy, fresh, ke
   const m = authOf(provider).methods[method]
   if (!m || m.type !== "api") throw new Error("not an API key method")
   const hold = fresh === true ? { on: true } : false
-  if (hold) keep = undefined
+  const guard = hold ? undefined : keepGuard(keep)
   const at = hold ? newKey(provider) : signInKey(provider, account)
   if (hold) inputs = ownInputs(m, inputs)
   try {
-    if (kept(keep, at) && at in readAuth()) return { ok: false, area: true }
+    const prior = readAuth()[at]
+    if (prior && kept(guard, at)) return { ok: false, area: true }
     if (typeof m.authorize !== "function") {
       const md = inputs && Object.keys(inputs).length ? { metadata: inputs } : {}
       // a key is told by itself: the same key is the account magpie has
       if (hold) return await saveNew(provider, provider, at, { type: "api", key, ...md }, false)
       await setAuth(at, { type: "api", key, ...md })
-      const k = await settle(provider, at, keep)
+      const k = await settle(provider, at, guard.keep, prior)
       return k === null ? { ok: false, area: true } : { ok: true, provider, account: k }
     }
-    const r = await signingIn(signal, proxy ?? "", provider, at, () => m.authorize(inputs ?? {}, { signal }), hold, keep)
+    const r = await signingIn(signal, proxy ?? "", provider, at, () => m.authorize(inputs ?? {}, { signal }), hold, guard)
     if (signal?.aborted) throw abortedSignIn()
     if (!r || r.type !== "success") return failed(r)
-    return { ok: true, ...(await save(provider, at, r, inputs, key, hold ? { named: false, hold } : undefined, keep)) }
+    return { ok: true, ...(await save(provider, at, r, inputs, key, hold ? { named: false, hold } : undefined, guard?.keep)) }
   } finally {
     signingKeys.delete(at)
+    if (guard) guard.on = false
   }
 }
 
@@ -3655,7 +3678,9 @@ const handlers = {
   // import keeps a sign-in made elsewhere (a built-in subscription's, moved
   // onto its plugin) as one more account, or as the account it already is
   // import keeps a sign-in made elsewhere as one of provider's accounts;
-  // with a key, as that account again (one taken back)
+  // with a key, as that account again (one taken back). keep, the
+  // owner's (ImportOwner, T-228), is the accounts an area owns: one the
+  // sign-in is the same as is { area: true }, nothing of it taken.
   async import(p) {
     if (p.key && providerOf(p.key) === p.provider) {
       await setAuth(p.key, p.auth)
@@ -3663,7 +3688,8 @@ const handlers = {
     }
     const key = freshKey(p.provider)
     await setAuth(key, p.auth)
-    return { account: await settle(p.provider, key) }
+    const k = await settle(p.provider, key, p.keep)
+    return k === null ? { area: true } : { account: k }
   },
   // take gives the accounts named (else every account of the provider) and
   // forgets them in one step: nothing renews a token between the two

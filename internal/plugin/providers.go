@@ -1276,6 +1276,26 @@ func Import(ctx context.Context, provider string, auth map[string]any) (string, 
 	return r.Account, nil
 }
 
+// ImportOwner is Import as the owner keeps a key of their own (Factory's,
+// T-228): the same account as one an area owns is ErrAreaOwned, the
+// area's record as it was. A mover carrying a built-in's accounts goes
+// through Import.
+func ImportOwner(ctx context.Context, provider string, auth map[string]any) (string, error) {
+	var r struct {
+		Account string `json:"account"`
+		Area    bool   `json:"area"`
+	}
+	params := map[string]any{"provider": provider, "auth": auth}
+	keepAreas(params)
+	if err := Call(ctx, "import", params, &r); err != nil {
+		return "", err
+	}
+	if r.Area {
+		return "", ErrAreaOwned
+	}
+	return r.Account, nil
+}
+
 // Checked is what trying an account gave: the model ids the plugin lists
 // for it, its usage read (nil when the plugin tells none), and why its
 // models hook said the vendor refused the sign-in, if it did.

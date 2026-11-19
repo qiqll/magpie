@@ -1082,7 +1082,10 @@ the owner's, and the owner's sign-in was the area's admin's from then on.
   `areaPluginKeys`) is the plugin-auth.json keys of the accounts an area
   owns, found as the area's claim was made:
   `<PluginID>/<LoginID of the name pluginNames gives>`. When areas.json
-  can't be read (`area.ErrUnreadable`), every account is kept.
+  can't be read (`area.ErrUnreadable`), or an area owns accounts and no
+  plugin can be read, every account is kept. A plugin with an area ref
+  no account's name gives now (a name a duplicate's " (slot)" changed,
+  or an account gone) has every one of its accounts kept.
 - `authorize`, `apiKey` and `callback` pass it to the host as `keep`;
   the area's own sign-ins (`fresh`) ignore it, since `saveNew` never
   folds.
@@ -1096,7 +1099,13 @@ the owner's, and the owner's sign-in was the area's admin's from then on.
   runs, and `save` checks it again.
 - The plugin's own `client.auth.set` and `auth.remove` while the owner
   signs in leave a kept key alone (the CodeArts plugin writes its
-  account's record by its id).
+  account's record by its id). The guard (`keepGuard`) ends with the
+  sign-in, so a timer it started renews its own account after.
+- A sign-in that saved over a record of its own key (one to an account
+  named) puts that record back when it is refused, not deletes it.
+- The owner's Factory key (`factoryKeyToPlugin`) goes through
+  `plugin.ImportOwner`, `import` with `keep`: an area's account of the
+  same email is `ErrAreaOwned` and the key's import fails.
 - `pluginDone` finishes such a sign-in as `failed` with
   `ErrAreaOwned`'s words (the owner's window shows a failure's reason;
   it has no conflict view), logged as `conflict`. `PluginAPIKey` returns
@@ -1109,13 +1118,20 @@ Not covered:
   finishes by itself ("auto") calls it as it begins, so an area's claim
   made while it waits is not seen. Such a claim is the area's own sign-in
   to the same vendor account in those minutes.
-- `import` (a mover's or Factory's key carried onto the plugin) still
-  settles without `keep`.
+- A mover carrying a built-in's accounts (`plugin.Import`) still
+  settles without `keep`: refusing one would fail a move that has no
+  way back.
+- The keep list is made from names (`pluginNames`), not marked on the
+  record, so it can only be as right as those names; a mark written
+  by `saveNew` and read in `settle`'s lock would not depend on them.
 
-Tests: `TestSignInOwner*` in `internal/plugin/plugin_area_owned_test.go`
-and `TestSignInOwnerOfAnAreasPluginAccountFails` in
-`internal/provider/plugin_area_keep_test.go`; each is red with `kept`
-answering false or the hook unset.
+Tests: `TestSignInOwner*` and `TestImportOwnerLeavesAnAreasAccount` in
+`internal/plugin/plugin_area_owned_test.go`,
+`TestSignInOwnerOfAnAreasPluginAccountFails` and
+`TestAreaPluginKeysUnmappedKeepsThePlugin` in
+`internal/provider/plugin_area_keep_test.go`; each is red with its
+check taken out (`kept` false, the hook unset, the guard never off,
+`import` without keep, an unmapped ref not widened).
 
 
 ## Verification
@@ -1128,7 +1144,7 @@ answering false or the hook unset.
 `go test ./internal/provider -run TestAreaSweepBesideARereadMove`;
 `go test ./internal/gateway -run 'TestAdmin(SignInThroughAreaProxy|SignInCallbackPicksAreaProxy|DeviceSignInProxyFixed|KeyAndTokenTakeAreaProxy|SignInHoldsItsProxyPublic|SignInRefusedPasteKeepsItsPick)'`;
 `go test ./internal/plugin -run 'TestSignInNew|TestAPIKeyNew'`;
-`go test ./internal/plugin ./internal/provider -run TestSignInOwner`;
+`go test ./internal/plugin ./internal/provider -run 'TestSignInOwner|TestImportOwner|TestAreaPluginKeys'`;
 `go test ./internal/gateway -run TestAdminPlugin`;
 `node --test internal/gui/tests/proxy-ips-batch-lines.test.cjs`;
 `go test ./internal/gui -run TestIPAreaRoute`; `go test ./internal/gui -run
