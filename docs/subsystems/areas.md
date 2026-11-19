@@ -794,10 +794,16 @@ console, so `TestAdminKeyEveryRoute` covers it.
   the console's go on. Deleting it cancels both (`CancelAreaSignIns`).
   Rotating its key (`rotate-key` or the window's, both
   `RotateAreaKey`) cancels its key's as turning it off does (T-236): the
-  old secret adds no account. A sign-in recorded after any of these
-  (`keepAreaSignIn` reads the area again once it is recorded, and for
-  the key's, whether its secret is still `access.Current`) is cancelled
-  there; a key's whose secret was rotated meanwhile is cancelled alone.
+  old secret's sign-ins add no account. A sign-in recorded after any of
+  these (`keepAreaSignIn` reads the area again once it is recorded, and
+  for the key's, whether its secret is still `access.Current`) is
+  cancelled there; a key's whose secret was rotated meanwhile is
+  cancelled alone. One whose key was changed by a way that cancels
+  nothing (`magpie gateway-key`, the window's key list) and ends after
+  claims nothing: `claimDone` checks `access.Current` too and takes the
+  account out again. Not covered: an import or a batch of keys already
+  under way when the key changes claims till it ends, and the console's
+  sign-ins go on through a change of the console's own key.
 - **Log.** Each action's line is `admin: console for area <id> (<note>)
   <action> actor=<X-Magpie-Actor or ->` (`adminCall.logf`, the same line
   an area's key writes as `admin: area <id> (<note>) <action>`). A write

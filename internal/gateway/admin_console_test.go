@@ -454,7 +454,17 @@ func TestAdminSignInKeptAfterRotateIsLetGo(t *testing.T) {
 		_, ok := areaSignIns.m[sid]
 		return ok
 	}
-	a, _ := area.Get(id)
+	a, err := area.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		areaSignIns.Lock()
+		defer areaSignIns.Unlock()
+		for _, sid := range []string{"si-new", "si-old", "si-new-2", "si-console"} {
+			delete(areaSignIns.m, sid)
+		}
+	})
 	// each read before the next is kept, which drops those magpie hasn't
 	keepAreaSignIn(adminCall{who: after, area: a}, "si-new", nil)
 	if !kept("si-new") {
@@ -471,6 +481,59 @@ func TestAdminSignInKeptAfterRotateIsLetGo(t *testing.T) {
 	keepAreaSignIn(adminCall{area: a, console: true}, "si-console", nil)
 	if !kept("si-console") {
 		t.Fatal("the console's let go")
+	}
+}
+
+// A sign-in its area's key started that ends after the key was rotated
+// by a way that cancels nothing (access.Update, as the CLI's
+// gateway-key rotate does) claims no account for the area, and the
+// account is taken out of magpie again (T-236). The new secret's, and
+// the console's, claim as before.
+func TestAdminSignInDoneAfterRotateClaimsNothing(t *testing.T) {
+	do, console, _ := adminWorld(t)
+	pid := subscriptionOf("codex")
+	if pid == "" {
+		t.Skip("no Codex subscription provider in this build")
+	}
+	id, key := makeArea(t, do, console, "A")
+	before, ok := access.Authenticate(key)
+	if !ok {
+		t.Fatal("the area's key")
+	}
+	k, has, err := access.AreaKey(id)
+	if err != nil || !has {
+		t.Fatal("its key:", has, err)
+	}
+	secret, err := access.Update("rotate-key", access.Change{Key: k.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, ok := access.Authenticate(secret)
+	if !ok {
+		t.Fatal("the new secret")
+	}
+	a, err := area.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := func(user string) string { return pid + "/" + provider.LoginID("codex", user) }
+	done := func(user string) provider.SignInState {
+		return provider.SignInState{Agent: "codex", User: user, State: "done"}
+	}
+	if st := claimDone(adminCall{who: before, area: a})(done("old@example.com")); st.State != "failed" {
+		t.Fatal("the old secret's:", st)
+	}
+	if owner, _, _ := area.Owner(ref("old@example.com")); owner != "" {
+		t.Fatal("the old secret's account is", owner+"'s")
+	}
+	if st := claimDone(adminCall{who: after, area: a})(done("new@example.com")); st.State != "done" {
+		t.Fatal("the new secret's:", st)
+	}
+	if owner, _, _ := area.Owner(ref("new@example.com")); owner != id {
+		t.Fatal("the new secret's account is", owner+"'s")
+	}
+	if st := claimDone(adminCall{area: a, console: true})(done("console@example.com")); st.State != "done" {
+		t.Fatal("the console's:", st)
 	}
 }
 

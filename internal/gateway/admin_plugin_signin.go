@@ -635,6 +635,9 @@ func cancelSignIn(id string) {
 	_, ok := areaSignIns.m[id]
 	delete(areaSignIns.m, id)
 	areaSignIns.Unlock()
+	areaPluginSaid.Lock()
+	delete(areaPluginSaid.m, id)
+	areaPluginSaid.Unlock()
 	if ok {
 		provider.CancelSignIn(id)
 	}

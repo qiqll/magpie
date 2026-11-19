@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/area"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/renewal"
@@ -228,6 +229,18 @@ func claimDone(c adminCall) func(provider.SignInState) provider.SignInState {
 		}
 		if pid == "" {
 			st.State, st.Error = "failed", "no area signs in to "+st.Agent
+			return st
+		}
+		if !c.console && c.who.KeyID != "" && !access.Current(c.who) {
+			// the key that started it was rotated, turned off or removed
+			// while it waited (T-236), by a way that cancels nothing (the
+			// CLI's gateway-key, the window's key list): its account is
+			// taken out again, never the area's
+			st.State, st.Error = "failed", "the admin key that started this sign-in was changed, so the account isn't the area's"
+			if ferr := provider.ForgetLogin(st.Agent, st.User); ferr != nil {
+				log.Printf("admin: area %s's %s account, its key changed, not removed either: %v", id, st.Agent, ferr)
+			}
+			c.logf("signed in to %s, not claimed: its key was changed", st.Agent)
 			return st
 		}
 		if err := area.ClaimUpTo(id, ref, adminAccountsLimit); err != nil {
