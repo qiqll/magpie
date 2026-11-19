@@ -264,7 +264,7 @@ function growthIdleRow(s) {
     const was = sent;
     sent = v;
     writingPrefs(api("settings/bind-idle", { hours: v === "" ? null : +v }))
-      .then((ns) => { prefs = state.settings = ns; status(t("Saved"), "ok", 1500); }, (e) => { if (sent === v) sent = was; statusErr(e); });
+      .then((ns) => { prefs = state.settings = ns; status(t("Saved"), "ok", 1500); }, (e) => { if (sent === v) { sent = was; hours.value = was; } statusErr(e); });
   };
   val.append(hours, el("span", "growth-idle-unit", t("hours")));
   row.append(who, val);

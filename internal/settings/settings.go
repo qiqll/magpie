@@ -444,7 +444,8 @@ type Settings struct {
 	// BindIdleHours is how long a user bound to a provider's accounts
 	// (gateway --bind=user) sends it nothing before its accounts there are
 	// let go (gateway/user_accounts.go sweepIdle, T-242): nil is
-	// DefaultBindIdleHours, as before it could be set. An account of a
+	// DefaultBindIdleHours, as before it could be set, and so is 0 or less
+	// (written by hand). An account of a
 	// subscription can have its own (provider.AccountBindIdle). Set on its
 	// own (settings/bind-idle) from Settings › Growth policy.
 	BindIdleHours *int `json:"bindIdleHours,omitempty"`
@@ -2916,9 +2917,11 @@ const (
 
 // BindIdle is how long a bound user sends a provider nothing before its
 // accounts there are let go: s's own, held to BindIdleFewest to
-// BindIdleMost hours, else DefaultBindIdleHours.
+// BindIdleMost hours, else DefaultBindIdleHours: unset, or 0 or less, as
+// a file edited by hand may hold, which never lets go of every user within
+// the hour.
 func (s Settings) BindIdle() time.Duration {
-	if s.BindIdleHours == nil {
+	if s.BindIdleHours == nil || *s.BindIdleHours <= 0 {
 		return DefaultBindIdleHours * time.Hour
 	}
 	return time.Duration(max(BindIdleFewest, min(*s.BindIdleHours, BindIdleMost))) * time.Hour

@@ -584,7 +584,8 @@ function acxIdleFact(r) {
   b.onclick = async (e) => {
     e.stopPropagation();
     if (b.classList.contains("open")) return closeProtoMenu();
-    await growthListLoad();
+    // read again: Settings' time may have changed since the list was read
+    await growthListLoad(true);
     const s = growthPrefs();
     const def = s?.bindIdleHours ?? s?.bindIdleDefault ?? 60;
     const opts = [{ v: "0", name: t("Follow Settings ({hours})", { hours: hours(def) }), note: "" }]

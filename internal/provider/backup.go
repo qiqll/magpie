@@ -146,6 +146,8 @@ func Mirror(ps []Provider, gs []Group) error {
 			// with none: a magpie from before T-154 drops the field, and
 			// only the user knows the dates (T-154 review M4)
 			p.AccountOpened = keptOpened(h.AccountOpened, p.AccountOpened, p.AccountAdded)
+			// and the idle times set here, as a magpie from before T-242 drops them
+			p.AccountBindIdle = keptOpened(h.AccountBindIdle, p.AccountBindIdle, p.AccountAdded)
 			p.KeepLogin, p.KeepLoginAs, p.SwitchOnly, p.RestartApp = h.KeepLogin, h.KeepLoginAs, h.SwitchOnly, h.RestartApp
 			p.KeepSelf = h.KeepSelf
 		} else {
@@ -287,18 +289,19 @@ func OnlyPicks(p Provider) bool { return !hasEndpoint(normalize(p)) }
 // brought none, those here of the accounts it has (by AccountAdded), as a
 // magpie that doesn't know the field sends none. So clearing every date
 // on one computer leaves another's dates as they are; one date of several
-// cleared goes across.
-func keptOpened(here, came map[string]time.Time, added map[string]time.Time) map[string]time.Time {
+// cleared goes across. Each account's own idle time of a bound user
+// (AccountBindIdle, T-242) is kept the same way.
+func keptOpened[V any](here, came map[string]V, added map[string]time.Time) map[string]V {
 	if len(came) > 0 || len(here) == 0 {
 		return came
 	}
-	var out map[string]time.Time
+	var out map[string]V
 	for k, at := range here {
 		if _, ok := added[k]; !ok {
 			continue
 		}
 		if out == nil {
-			out = map[string]time.Time{}
+			out = map[string]V{}
 		}
 		out[k] = at
 	}

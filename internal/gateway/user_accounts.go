@@ -469,7 +469,7 @@ func lastUse(b userBinding, group, pid, user string, now time.Time) time.Time {
 const userGap = 12 * time.Hour
 
 // sweepIdle lets go of every binding to provider pid whose user has sent
-// it nothing for its idle time (bindIdleOf: Settings', or an account's
+// it nothing for its idle time (def, Settings', or an account's in own
 // own for that account alone, the user keeping its others, its first
 // spare its first when its first goes) under any gateway key of its group (lastUse,
 // the latest of its keys': one user, sharedOf), under every key of the
@@ -481,7 +481,7 @@ const userGap = 12 * time.Hour
 // (bound before it was kept) is stamped now instead, so an upgrade frees
 // nobody at once. changed says a binding was, for the file to be
 // written. Called with userBinds held, never while the file doesn't read.
-func sweepIdle(keyID, pid, user string, now time.Time) (changed bool) {
+func sweepIdle(keyID, pid, user string, now time.Time, def time.Duration, own map[string]time.Duration) (changed bool) {
 	// a user of a group: its name, and a key of the group it is bound
 	// under, for sharedOf and putShared to read and write it by
 	type named struct{ group, name string }
@@ -545,9 +545,9 @@ func sweepIdle(keyID, pid, user string, now time.Time) (changed bool) {
 			}
 		}
 	}
-	// each account goes after its own idle time, else Settings'; a user
-	// left with none is let go of
-	def, own := bindIdleOf(pid)
+	// each account goes after its own idle time (own), else Settings'
+	// (def), both read before the lock (bindIdleOf); a user left with
+	// none is let go of
 	idleFor := func(s userSeat) time.Duration {
 		if a, ok := strings.CutPrefix(strings.ToLower(s.Who), strings.ToLower(pid)+"@"); ok {
 			if d, ok := own[a]; ok {
@@ -568,6 +568,13 @@ func sweepIdle(keyID, pid, user string, now time.Time) (changed bool) {
 			seats := b.seats()
 			kept := slices.DeleteFunc(slices.Clone(seats), func(s userSeat) bool { return idle >= idleFor(s) })
 			switch {
+			case len(seats) == 0:
+				// no account named (edited by hand): Settings' time, as
+				// before an account could have its own
+				if idle >= def {
+					delete(ps[pid], u.name)
+					all = true
+				}
 			case len(kept) == 0:
 				delete(ps[pid], u.name)
 				all = true
@@ -1097,6 +1104,9 @@ func bindUser(keyID, user string, tier Tier, named bool, p provider.Provider, ca
 	// what by_use binds a new seat by, read before the lock too: the
 	// allowances routing keeps, and the usage log as last read
 	budget := byUseOf(p.ID, cands, tiers, time.Now())
+	// and how long its users may be idle: settings.json and
+	// providers.json aren't read while userBinds is held either
+	idleDef, idleOwn := bindIdleOf(p.ID)
 	userBinds.Lock()
 	defer userBinds.Unlock()
 	if loadUsers() != nil {
@@ -1121,7 +1131,7 @@ func bindUser(keyID, user string, tier Tier, named bool, p provider.Provider, ca
 	// all the same
 	now := time.Now().UTC()
 	defer noteSeen(userGroup(keyID), p.ID, user, now)
-	if !userBinds.stale && sweepIdle(keyID, p.ID, user, now) {
+	if !userBinds.stale && sweepIdle(keyID, p.ID, user, now, idleDef, idleOwn) {
 		saveUsersLogged()
 	}
 	// its accounts under every gateway key of its group, as one (sharedOf)
