@@ -259,6 +259,7 @@ var notYet = map[string]string{
 	"POST /api/settings/bare-ids":                S2, // api.go
 	"POST /api/settings/busy-load":               S2, // api.go
 	"POST /api/settings/bind-idle":               S2, // api.go: Settings › Growth policy's idle time of a bound user (T-242)
+	"POST /api/settings/provider-shares":         S2, // api.go: Settings › Growth policy's users per account by provider (T-243)
 	"POST /api/settings/checkin-account":         S2, // api.go
 	"POST /api/settings/claude-cache":            S2, // tune.go
 	"POST /api/settings/codex-agents-v1":         S2, // api.go

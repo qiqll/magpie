@@ -449,6 +449,13 @@ type Settings struct {
 	// subscription can have its own (provider.AccountBindIdle). Set on its
 	// own (settings/bind-idle) from Settings › Growth policy.
 	BindIdleHours *int `json:"bindIdleHours,omitempty"`
+	// ProviderShares is how many users an account of a provider may be
+	// bound to, by the user's tier (gateway --bind=user, T-243): provider
+	// id → tier name → share (1 its user's alone, 0 no
+	// limit), each in place of that tier's share in user-tiers.json for
+	// that provider; a provider or tier not named keeps the file's. Set
+	// on its own (settings/provider-shares) from Settings › Growth policy.
+	ProviderShares map[string]map[string]int `json:"providerShares,omitempty"`
 	// RefusalRetries is how many more times a request the vendor's safety
 	// filter refused, with nothing said, is asked of another account or
 	// routing group member (#248), unset for every one left. 0 hands the
@@ -2926,6 +2933,10 @@ func (s Settings) BindIdle() time.Duration {
 	}
 	return time.Duration(max(BindIdleFewest, min(*s.BindIdleHours, BindIdleMost))) * time.Hour
 }
+
+// ShareMost is the most users a provider's share for a tier
+// (ProviderShares) may name: past it, 0 says no limit.
+const ShareMost = 1000
 
 // AuthHold is how long a caller is held after authentication_failed, 0 for
 // nobody: s's own, else DefaultAuthHoldHours.

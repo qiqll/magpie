@@ -30,6 +30,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // UserTierHeader names the tier of the request's user (UserHeader). It
@@ -78,6 +80,10 @@ func (t Tiers) find(name string) (Tier, bool) {
 	}
 	return t.Tiers[i], true
 }
+
+// Named is the tier named name, or one of its aliases, whatever its
+// case, as the gateway finds it.
+func (t Tiers) Named(name string) (Tier, bool) { return t.find(name) }
 
 // aliasesOf is the aliases of the tier named name, in order.
 func (t Tiers) aliasesOf(name string) []string {
@@ -146,6 +152,53 @@ func (t Tiers) shareOf(name string) int {
 		}
 	}
 	return x.Share
+}
+
+// nameOf is the name of the tier a binding keeps (name) as tiers says it,
+// one of its aliases or another case its name, the default tier's for
+// one gone from the file or kept before tiers: users of one name share an
+// account (seatUse.takes, T-243). "" when not even the default is known.
+func (t Tiers) nameOf(name string) string {
+	x, ok := t.find(name)
+	if !ok {
+		x, _ = t.find(t.Default)
+	}
+	return x.Name
+}
+
+// forProvider is t with each tier own names (by its name or an alias,
+// whatever the case) sharing an account as own says in place of the
+// file's: a provider's own shares, Settings' (settings.ProviderShares,
+// T-243). t without own; t's slices are never written.
+func (t Tiers) forProvider(own map[string]int) Tiers {
+	if len(own) == 0 {
+		return t
+	}
+	t.Tiers = slices.Clone(t.Tiers)
+	for name, share := range own {
+		x, ok := t.find(name)
+		if !ok || share < 0 {
+			continue
+		}
+		t.Tiers[slices.IndexFunc(t.Tiers, func(y Tier) bool { return y.Name == x.Name })].Share = share
+	}
+	return t
+}
+
+// providerSharesOf is the shares by tier Settings gives provider pid's
+// accounts (settings.ProviderShares, T-243), nil for none: read before
+// userBinds is taken, as settings.json is never read under it. A test's to
+// set.
+var providerSharesOf = func(pid string) map[string]int { return settings.Shared().ProviderShares[pid] }
+
+// tiersFor is tiers with provider pid's own shares (providerSharesOf),
+// and tier as they say it.
+func tiersFor(tiers Tiers, tier Tier, pid string) (Tiers, Tier) {
+	tiers = tiers.forProvider(providerSharesOf(pid))
+	if x, ok := tiers.find(tier.Name); ok {
+		tier.Share = x.Share
+	}
+	return tiers, tier
 }
 
 // idBad is why v, a user's or a tier's name sent in or read for name,

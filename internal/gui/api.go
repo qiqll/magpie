@@ -409,6 +409,13 @@ type settingsJSON struct {
 	// to, in hours (T-242)
 	BindIdleDefault int `json:"bindIdleDefault"`
 	BindIdleMost    int `json:"bindIdleMost"`
+	// ShareTiers are the tiers user-tiers.json holds (its built-in ones
+	// without it), each with its share there, none while it can't be
+	// read; ShareProviders the providers a share can be set for, and
+	// ShareMost the most users one may name (T-243)
+	ShareTiers     []shareTierJSON     `json:"shareTiers"`
+	ShareProviders []shareProviderJSON `json:"shareProviders"`
+	ShareMost      int                 `json:"shareMost"`
 	// Builtins are the built-in plugins: each one's switch, whether it
 	// runs and what of it is in use (builtins.go)
 	Builtins []builtinJSON `json:"builtins"`
@@ -833,6 +840,7 @@ func settingsState() settingsJSON {
 	}
 	s.GrowthPolicyList, s.GrowthInEffect = s.Settings.GrowthPoliciesAll(), g.ID
 	s.BindIdleDefault, s.BindIdleMost = settings.DefaultBindIdleHours, settings.BindIdleMost
+	s.ShareTiers, s.ShareProviders, s.ShareMost = shareTiers(), shareProviders(), settings.ShareMost
 	s.AddrEnv = os.Getenv("MAGPIE_ADDR")
 	s.Log = tilde(applog.Current())
 	s.Builtins = builtinsState()
@@ -1799,6 +1807,46 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			return
 		}
 		s.BindIdleHours = in.Hours
+		if err := settings.Save(s); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
+	// how many users an account of a provider may be bound to, by the
+	// user's tier, in place of user-tiers.json's share (T-243), as
+	// Settings › Growth policy sets it: the provider's shares by tier,
+	// null or none for the file's
+	mux.HandleFunc("POST /api/settings/provider-shares", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Provider string         `json:"provider"`
+			Shares   map[string]int `json:"shares"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		shares, err := providerShares(in.Provider, in.Shares)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		s, err := settings.LoadChecked()
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		if len(shares) == 0 {
+			delete(s.ProviderShares, in.Provider)
+		} else {
+			if s.ProviderShares == nil {
+				s.ProviderShares = map[string]map[string]int{}
+			}
+			s.ProviderShares[in.Provider] = shares
+		}
+		if len(s.ProviderShares) == 0 {
+			s.ProviderShares = nil
+		}
 		if err := settings.Save(s); err != nil {
 			fail(rw, err)
 			return
