@@ -158,13 +158,3 @@ func (s *Server) conflicted(c adminCall, now time.Time) bool {
 	}
 	return held
 }
-
-// conflictsLeft is how many more conflicts c may be told of at now
-// before it is held, the fewest any count it spends has left.
-func (s *Server) conflictsLeft(c adminCall, now time.Time) int {
-	left := conflictMost
-	for _, id := range budgets(c) {
-		left = min(left, conflictLimit(id)-s.conflicts.count(id, now))
-	}
-	return left
-}

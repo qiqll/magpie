@@ -3,9 +3,12 @@ package gateway
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -481,4 +484,131 @@ func TestAdminProxyChecksConsoleBudget(t *testing.T) {
 	if _, _, ok := p.begin(on("ar_c"), now.Add(checksWindow)); !ok {
 		t.Fatal("the window let go of none")
 	}
+}
+
+// consoleConflicts spends n of the console's conflicts across areas
+// made for it, 19 an area so none is held, with the owner's key.
+func consoleConflicts(t *testing.T, do adminDo, console string, n int) {
+	t.Helper()
+	if err := provider.AddKey("plan", "owner's", "sk-owners-probe-0001", ""); err != nil {
+		t.Fatal(err)
+	}
+	for done := 0; done < n; {
+		id, _ := makeArea(t, do, console, "探"+strconv.Itoa(done), "plan")
+		for k := 0; k < conflictMost-1 && done < n; k, done = k+1, done+1 {
+			if c, body := do("POST", AdminPath+"/areas/"+id+"/accounts/key", lanPeer, console, `{"provider":"plan","key":"sk-owners-probe-0001"}`); c != http.StatusConflict {
+				t.Fatalf("the console's conflict %d: %d %s", done+1, c, body)
+			}
+		}
+	}
+}
+
+// Every console route that counts conflicts or checks spends the
+// console's total (T-222). One short of its 40, a fresh area's
+// accounts/keys, ips/batch and accounts/import each stop at the line
+// midway, the rows after saying why, and then every add route is 429 at
+// the door for another fresh area. One short of its 20 checks, a
+// batch's second name fails "check limit reached".
+func TestAdminConsoleTotalOnEveryRoute(t *testing.T) {
+	post := func(t *testing.T, w *ipsWorld, id, route string, in any) (int, string) {
+		t.Helper()
+		return w.post(t, w.console, "/areas/"+id+"/"+route, in)
+	}
+	fresh := func(t *testing.T, w *ipsWorld, note string, signIns ...string) string {
+		t.Helper()
+		id, _ := makeArea(t, w.do, w.console, note, "plan")
+		if len(signIns) > 0 {
+			openSignIns(t, w.do, w.console, id, signIns...)
+		}
+		return id
+	}
+	midway := map[string]func(t *testing.T, w *ipsWorld){
+		"accounts/keys": func(t *testing.T, w *ipsWorld) {
+			var keys []string
+			for i := range 3 {
+				k := fmt.Sprintf("sk-owners-total-%04d", i)
+				if err := provider.AddKey("plan", "", k, ""); err != nil {
+					t.Fatal(err)
+				}
+				keys = append(keys, k)
+			}
+			c, body := post(t, w, fresh(t, w, "多 key"), "accounts/keys", map[string]any{"provider": "plan", "keys": keys})
+			var out keysOut
+			json.Unmarshal([]byte(body), &out)
+			if c != 200 || out.Conflict != 1 || out.Failed != 2 || out.Results[2].Message != "too many conflicts; try again later" {
+				t.Fatal(c, body)
+			}
+		},
+		"ips/batch": func(t *testing.T, w *ipsWorld) {
+			ownerIPs(t, pubIP+"30", pubIP+"31", pubIP+"32")
+			c, body := post(t, w, fresh(t, w, "批量"), "ips/batch", map[string]any{"text": pubIP + "30:1080\n" + pubIP + "31:1080\n" + pubIP + "32:1080"})
+			var out batchOut
+			json.Unmarshal([]byte(body), &out)
+			if c != 200 || !slices.Equal(statuses(out), []string{batchConflict, batchFailed, batchFailed}) || out.Rows[2].Message != "too many conflicts; try again later" {
+				t.Fatal(c, body)
+			}
+		},
+		"accounts/import": func(t *testing.T, w *ipsWorld) {
+			fakeAnthropic(t)
+			if rs, err := ownersClaude(); err != nil || rs[0].Status != "added" {
+				t.Fatal("the owner's:", rs, err)
+			}
+			var files []string
+			for i := range 3 {
+				files = append(files, claudeFile("at-owner-"+strconv.Itoa(i), "rt-o"+strconv.Itoa(i), time.Now().Add(time.Hour)))
+			}
+			c, body := post(t, w, fresh(t, w, "导入", "claude"), "accounts/import", map[string]any{"agent": "claude", "files": files})
+			var out importResult
+			json.Unmarshal([]byte(body), &out)
+			if c != 200 || out.Conflict != 1 || out.Failed != 2 || out.Results[2].Message != importConflictsHeld {
+				t.Fatal(c, body)
+			}
+		},
+	}
+	for name, stop := range midway {
+		t.Run(name, func(t *testing.T) {
+			w := newIPsWorld(t)
+			consoleConflicts(t, w.do, w.console, consoleConflictMost-1)
+			stop(t, w)
+			id := fresh(t, w, "门口", "claude")
+			for route, in := range map[string]any{
+				"accounts/key":        map[string]any{"provider": "plan", "key": "sk-not-in-magpie-0002"},
+				"accounts/keys":       map[string]any{"provider": "plan", "keys": []string{"sk-not-in-magpie-0003"}},
+				"accounts/import":     map[string]any{"agent": "claude", "files": []string{"x"}},
+				"signin/claude-token": map[string]any{"token": "x"},
+				"ips":                 map[string]any{"ip": "203.0.113.20", "name": "x", "proxies": []string{}},
+				"ips/batch":           map[string]any{"text": pubIP + "40:1080"},
+				"ips/reread":          map[string]any{},
+			} {
+				c, body := post(t, w, id, route, in)
+				if c != http.StatusTooManyRequests || !strings.Contains(body, adminTooManyConflicts) {
+					t.Errorf("%s past the console's total: %d %s", route, c, body)
+				}
+			}
+		})
+	}
+	t.Run("ips/batch checks", func(t *testing.T) {
+		w := newIPsWorld(t)
+		px := w.addIP(t, w.a, "203.0.113.7")
+		for i := range consoleChecksMost - 1 {
+			id := w.aID
+			if i >= checksMost {
+				id = w.bID
+				if i == checksMost {
+					px = w.addIP(t, w.b, "203.0.113.8")
+				}
+			}
+			ip := map[string]string{w.aID: "203.0.113.7", w.bID: "203.0.113.8"}[id]
+			if c, body := post(t, w, id, "ips/check", map[string]any{"ip": ip, "proxy": px}); c != 200 {
+				t.Fatal(i, c, body)
+			}
+		}
+		port := w.proxy.port()
+		c, body := post(t, w, fresh(t, w, "检测"), "ips/batch", map[string]any{"text": proxyHost("203.0.113.42") + ":" + port + "\n" + proxyHost("203.0.113.43") + ":" + port, "type": "http", "check": true})
+		var out batchOut
+		json.Unmarshal([]byte(body), &out)
+		if c != 200 || len(out.Rows) != 2 || out.Rows[0].Status == batchFailed || out.Rows[1].Status != batchFailed || out.Rows[1].Message != "check limit reached" {
+			t.Fatal(c, body)
+		}
+	})
 }

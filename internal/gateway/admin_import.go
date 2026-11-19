@@ -237,36 +237,52 @@ type areaImport struct {
 	agent, pid string
 	pick       *proxyPick
 	opened     time.Time
-	mu         sync.Mutex
-	moved      *sync.Cond // an account read ended (on mu)
-	owned      int        // the area's accounts, and those being read
-	reading    int        // those being read
+	owned      int // the area's accounts, and those being read
+	reading    int // those being read
+}
+
+// importReads is every import's admit and release, under one lock: the
+// console's imports for different areas run side by side and share its
+// total (T-222), so each judges the accounts the others are reading.
+var importReads struct {
+	sync.Mutex
+	moved   *sync.Cond // an account read ended (on the Mutex)
+	console int        // accounts the console's imports are reading
 }
 
 // admit is the import's ImportOptions.Admit: none once the area is held
 // for its conflicts or full, the account counted as the area's while it
 // is read. Near the line it waits for those being read, each of which
 // may be a conflict, so an import never tells the area of more conflicts
-// than the line lets through.
+// than the line lets through, nor the console, with its other imports'
+// reads, more than its total.
 func (im *areaImport) admit() (func(provider.ImportedAccount) provider.ImportedAccount, string) {
-	im.mu.Lock()
-	defer im.mu.Unlock()
-	if im.moved == nil {
-		im.moved = sync.NewCond(&im.mu)
+	importReads.Lock()
+	defer importReads.Unlock()
+	if importReads.moved == nil {
+		importReads.moved = sync.NewCond(&importReads.Mutex)
 	}
 	for {
-		left := im.s.conflictsLeft(im.c, time.Now())
+		now := time.Now()
+		areaLeft := conflictMost - im.s.conflicts.count(im.c.area.ID, now)
+		consoleLeft := consoleConflictMost
+		if im.c.console {
+			consoleLeft -= im.s.conflicts.count(consoleBudget, now)
+		}
 		switch {
-		case left <= 0:
+		case areaLeft <= 0 || consoleLeft <= 0:
 			return nil, importConflictsHeld
 		case im.owned >= adminAccountsLimit && im.reading == 0:
 			return nil, area.ErrFull.Error()
-		case im.reading < left && im.owned < adminAccountsLimit:
+		case im.reading < areaLeft && (!im.c.console || importReads.console < consoleLeft) && im.owned < adminAccountsLimit:
 			im.owned++
 			im.reading++
+			if im.c.console {
+				importReads.console++
+			}
 			return im.done, ""
 		}
-		im.moved.Wait()
+		importReads.moved.Wait()
 	}
 }
 
@@ -299,13 +315,16 @@ func (im *areaImport) done(r provider.ImportedAccount) provider.ImportedAccount 
 
 // release ends an admitted account's read, added or not, as done does.
 func (im *areaImport) release(added bool) {
-	im.mu.Lock()
+	importReads.Lock()
 	if !added {
 		im.owned--
 	}
 	im.reading--
-	im.moved.Broadcast()
-	im.mu.Unlock()
+	if im.c.console {
+		importReads.console--
+	}
+	importReads.moved.Broadcast()
+	importReads.Unlock()
 }
 
 func (im *areaImport) ref(user string) string {

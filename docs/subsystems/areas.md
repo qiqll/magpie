@@ -775,7 +775,9 @@ console, so `TestAdminKeyEveryRoute` covers it.
   names the console. The batch routes stop the rest as they do at an
   area's line. An area's own key spends its area's counts alone, so its
   20 and 10 are unchanged, and the console's one-at-a-time is each
-  area's, not one across areas.
+  area's, not one across areas. The console's imports for different
+  areas judge their reads together (`importReads`, one lock for every
+  import's admit), so four at once still tell it no more than 40.
 
 ## Plugin sign-ins an area can use (T-221)
 
