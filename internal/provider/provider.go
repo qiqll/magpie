@@ -476,6 +476,13 @@ type Provider struct {
 	// case, a key by its KeyID. One not in it follows Proxy (see
 	// ProxyChoice).
 	AccountProxies map[string]string `json:"accountProxies,omitempty"`
+	// AreaProxies are those of AccountProxies an area put there (T-224,
+	// area_proxy.go), by the same key, with the value it wrote. Magpie's
+	// own, never the editor's: any other write of that value, the owner's
+	// in the editor or at a sign-in, takes its entry out (storeQuiet), so
+	// a value the owner set is never the area's again, even one the same
+	// as the area's.
+	AreaProxies map[string]string `json:"areaProxies,omitempty"`
 	// AccountModels is, for a provider holding several accounts or keys,
 	// the models each one the user narrowed serves, and no others (#474):
 	// an account by its name in lower case, a key by its KeyID. One not in
@@ -995,6 +1002,12 @@ func storeQuiet(f file) error {
 	for i := range f.Groups {
 		f.Groups[i] = f.Groups[i].stored()
 	}
+	// an area's mark goes with the value it wrote alone: any other write
+	// there, the owner's, takes it out (T-224)
+	f.Providers = slices.Clone(f.Providers)
+	for i := range f.Providers {
+		f.Providers[i].AreaProxies = areaProxiesKept(f.Providers[i])
+	}
 	b, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return err
@@ -1066,6 +1079,7 @@ func (p Provider) clone() Provider {
 	p.ReplyHeaders = slices.Clone(p.ReplyHeaders)
 	p.PassHeaders = slices.Clone(p.PassHeaders)
 	p.AccountProxies = maps.Clone(p.AccountProxies)
+	p.AreaProxies = maps.Clone(p.AreaProxies)
 	p.AccountCaps = maps.Clone(p.AccountCaps)
 	p.AccountAdded = maps.Clone(p.AccountAdded)
 	p.AccountFirstUsed = maps.Clone(p.AccountFirstUsed)
@@ -1484,6 +1498,8 @@ func saveRead(p *Provider, account bool, now *listing) (wrote, asked bool, err e
 		p.AccountOpened = was.AccountOpened
 		// and how long its accounts' bound users may be idle (T-242)
 		p.AccountBindIdle = was.AccountBindIdle
+		// and which accounts' proxies an area put there (T-224)
+		p.AreaProxies = was.AreaProxies
 		if p.Was == nil {
 			p.Was = was.Was
 		}

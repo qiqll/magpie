@@ -746,6 +746,7 @@ func ReplaceKey(id, keyRef, key string) (was, now string, err error) {
 		moveKeyed(q.AccountModels, keyRef, now)
 		moveKeyed(q.AccountModelsAll, keyRef, now)
 		moveKeyed(q.AccountProxies, keyRef, now)
+		moveKeyed(q.AreaProxies, keyRef, now)
 		moveKeyed(q.AccountConcurrency, keyRef, now)
 		moveKeyed(q.KeySpendCaps, keyRef, now)
 		moveKeyed(q.KeyOwnBalances, keyRef, now)

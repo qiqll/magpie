@@ -167,6 +167,7 @@ func moveAccountSettings(id string, moves map[string]string) error {
 		for was, now := range moves {
 			from, to := accountKey(was), accountKey(now)
 			moved = moveKey(p.AccountProxies, from, to) || moved
+			moved = moveKey(p.AreaProxies, from, to) || moved
 			moved = moveKey(p.AccountModels, from, to) || moved
 			moved = moveKey(p.AccountCaps, from, to) || moved
 			moved = moveKey(p.AccountWindowCaps, from, to) || moved

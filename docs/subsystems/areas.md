@@ -299,14 +299,24 @@ proxies on its own accounts
   (`ownsRef`, and again `area.SetProxy` under the areas lock). The proxy's
   address is written to the provider's `AccountProxies` (a key by its
   fingerprint, an account by its login in lower case), which
-  `ProxyChoice` reads. `areas.json` keeps `{ip, id, key}` on the area's
-  account. Once the value there is no longer the area's proxy, the owner
-  set it: the account says `overridden`, a new attach is `409`, and
-  nothing of the area's takes the owner's value off.
+  `ProxyChoice` reads. `areas.json` keeps `{ip, id, key, marked}` on the
+  area's account, and the provider marks the value as the area's
+  (`AreaProxies`, by the same key, T-224). Any other write there takes
+  the mark out: the owner's editor or a sign-in's pick (`keepSignInProxy`
+  drops it even for the same value), and every `providers.json` write
+  keeps a mark only while the value is still the one the area wrote
+  (`areaProxiesKept` in `storeQuiet`). Once the mark is gone the owner
+  set it, even back to the area's own value: the account says
+  `overridden`, a new attach is `409`, and nothing of the area's takes
+  the owner's value off (`areaHas`). A key's new value carries the mark
+  (`ReplaceKey`), as an account's new name does (Copilot). A record from
+  before the mark (no `marked`) is judged by its value alone, as then,
+  until the area puts a proxy or direct on it again; nothing is
+  migrated.
 - **Direct** (`{"id","direct":true}`, `provider.AttachAreaDirect`, T-213):
   `"direct"` is written as the account's own proxy, so it goes through
   none, and `areas.json` keeps `{key, direct: true}` with no IP or proxy.
-  It is checked and taken off as a proxy is (`areaValue`, `overWrites`):
+  It is checked and taken off as a proxy is (`areaHas`, `overWrites`):
   the owner's own value for the account, set before or since, wins
   (`overridden`, `409`); the subscription's and the global proxy don't.
   The account tells `"proxy": {"direct": true, "overridden": …}`.

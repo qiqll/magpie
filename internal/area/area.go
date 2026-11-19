@@ -67,11 +67,17 @@ type Account struct {
 //
 // Direct is the admin's "direct" on the account (T-213): no IP and no
 // proxy, "direct" written as its own proxy, so it goes through none.
+//
+// Marked says the provider marks the value written as the area's
+// (provider.Provider.AreaProxies, T-224), so an owner's write of it, even
+// of the same value, is told apart. A record from before is judged by
+// the value alone until the area puts a proxy or direct on it again.
 type AccountProxy struct {
 	IP     string `json:"ip,omitempty"`
 	ID     string `json:"id,omitempty"`
 	Key    string `json:"key"`
 	Direct bool   `json:"direct,omitempty"`
+	Marked bool   `json:"marked,omitempty"`
 }
 
 // Released is told each account an area let go of (Release,
@@ -356,7 +362,7 @@ func SetProxy(id, ref string, p *AccountProxy) error {
 			return ErrNotOwned
 		}
 		if p != nil {
-			p = &AccountProxy{IP: p.IP, ID: p.ID, Key: p.Key, Direct: p.Direct}
+			p = &AccountProxy{IP: p.IP, ID: p.ID, Key: p.Key, Direct: p.Direct, Marked: p.Marked}
 		}
 		f.Areas[i].Accounts[j].Proxy = p
 		return nil

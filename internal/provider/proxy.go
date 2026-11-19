@@ -187,7 +187,7 @@ func keepSignInProxy(id, user, proxy string) error {
 	if err := settings.CheckProxy(proxy); err != nil {
 		return err
 	}
-	if ProxyOfLogin(id, user) == proxy {
+	if ProxyOfLogin(id, user) == proxy && !areaMarked(id, user) {
 		return nil
 	}
 	alone := true
@@ -230,7 +230,21 @@ func keepSignInProxy(id, user, proxy string) error {
 		own[accountKey(user)] = proxy
 	}
 	p.AccountProxies = normalAccountProxies(own)
+	// picked by the owner, the same as an area's or not: the owner's now
+	p.AreaProxies = maps.Clone(p.AreaProxies)
+	delete(p.AreaProxies, accountKey(user))
 	return store(f)
+}
+
+// areaMarked says an area's mark is on the own proxy of the account user
+// of the subscription id (AreaProxies, T-224).
+func areaMarked(id, user string) bool {
+	p, ok := storedPicks(id)
+	if !ok {
+		return false
+	}
+	_, marked := accountOwnProxy(p, accountKey(user))
+	return marked
 }
 
 // checkAccountProxies refuses an account's proxy Settings would refuse.

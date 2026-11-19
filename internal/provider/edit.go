@@ -35,7 +35,7 @@ func Edit(id string, change func(p *Provider) error) (was, now Provider, err err
 // keptStored are the fields magpie keeps of a provider, never one a change
 // sets: as the record has them, the picks' list worked out again as Save
 // works it out when the picks changed.
-var keptStored = []string{"pickedFrom", "delisted", "delistedAt", "accountAdded", "was", "gave"}
+var keptStored = []string{"pickedFrom", "delisted", "delistedAt", "accountAdded", "was", "gave", "areaProxies"}
 
 // pickFields are those whose change has the picks' list worked out again.
 var pickFields = []string{"models", "noModels", "bestInFamily"}

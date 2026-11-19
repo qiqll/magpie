@@ -19,11 +19,12 @@ import (
 // Providers editor writes an account's own proxy (AccountProxies: a key
 // by its fingerprint, an account by its login in lower case), which
 // ProxyChoice reads, and areas.json keeps which IP and proxy it was
-// (area.AccountProxy), by its id alone. A value there that is no longer
-// the area's proxy (the owner changed or cleared it) is the owner's: the
-// area is told it is overridden, can't change it, and nothing of the
-// area's ever takes it away. A direct (T-213) is the same with "direct"
-// written there, and no IP or proxy recorded.
+// (area.AccountProxy), by its id alone. The provider marks the value as
+// the area's (AreaProxies, T-224), and any other write of it takes the
+// mark out, so a value the owner set, even back to the area's own, is
+// the owner's: the area is told it is overridden, can't change it, and
+// nothing of the area's ever takes it away. A direct (T-213) is the same
+// with "direct" written there, and no IP or proxy recorded.
 
 // ErrOverridden: the owner set this account's proxy.
 var ErrOverridden = errors.New("the owner set this account's proxy")
@@ -93,18 +94,50 @@ func areaAccountKey(pid, ref string) (string, error) {
 	return "", ErrNoAccount
 }
 
-// ownProxyOf is the account key's own proxy in provider pid, "" for none.
-func ownProxyOf(pid, key string) string {
+// ownProxyOf is the account key's own proxy in provider pid, "" for none,
+// and whether an area's mark says it wrote it (AreaProxies).
+func ownProxyOf(pid, key string) (cur string, marked bool) {
 	if p, ok := picksIn(storedFile(), pid); ok {
-		return p.AccountProxies[key]
+		return accountOwnProxy(p, key)
 	}
-	return ""
+	return "", false
+}
+
+// accountOwnProxy is ownProxyOf of the provider p as read.
+func accountOwnProxy(p Provider, key string) (cur string, marked bool) {
+	cur = p.AccountProxies[key]
+	return cur, cur != "" && p.AreaProxies[accountKey(key)] == cur
+}
+
+// areaProxiesKept is p's AreaProxies as it is written: an entry only
+// where the account's own proxy is still the value the area wrote.
+func areaProxiesKept(p Provider) map[string]string {
+	var out map[string]string
+	for k, v := range p.AreaProxies {
+		if v == "" || p.AccountProxies[k] != v {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // AreaProxyOverridden says the account's proxy as the provider has it is
 // no longer the one the area put on it (rec): the owner's.
 func AreaProxyOverridden(pid string, rec area.AccountProxy) bool {
-	return !areaValue(rec, ownProxyOf(pid, rec.Key))
+	cur, marked := ownProxyOf(pid, rec.Key)
+	return !areaHas(rec, cur, marked)
+}
+
+// areaHas says cur, an account's own proxy, is still the area's own: the
+// value rec put there (areaValue), with the provider's mark on it
+// (marked). A record of before the mark (not rec.Marked) is judged by
+// its value alone, as it was then.
+func areaHas(rec area.AccountProxy, cur string, marked bool) bool {
+	return areaValue(rec, cur) && (marked || !rec.Marked)
 }
 
 // areaValue says cur, an account's own proxy, is the one rec put there:
@@ -116,13 +149,13 @@ func areaValue(rec area.AccountProxy, cur string) bool {
 	return cur != "" && renewal.ProxyID(cur) == rec.ID
 }
 
-// overWrites is the check setOwnProxy makes before an area's attach
+// overWrites is the check setAreaProxy makes before an area's attach
 // writes the account key's own proxy: the value there is none, with no
 // record of the area's before (was), or still the area's own; else it is
 // the owner's (ErrOverridden).
-func overWrites(was *area.AccountProxy, key string) func(cur string) error {
-	return func(cur string) error {
-		if cur == "" && was == nil || was != nil && was.Key == key && areaValue(*was, cur) {
+func overWrites(was *area.AccountProxy, key string) func(cur string, marked bool) error {
+	return func(cur string, marked bool) error {
+		if cur == "" && was == nil || was != nil && was.Key == key && areaHas(*was, cur, marked) {
 			return nil
 		}
 		return ErrOverridden
@@ -165,11 +198,11 @@ func AttachAreaProxy(areaID, ref, ip, proxyID string) error {
 			beforeAttachWrite()
 		}
 		was := recordOf(areaID, ref)
-		rec := area.AccountProxy{IP: x.IP, ID: proxyID, Key: key}
+		rec := area.AccountProxy{IP: x.IP, ID: proxyID, Key: key, Marked: true}
 		if err := area.SetProxy(areaID, ref, &rec); err != nil {
 			return err
 		}
-		if err := setOwnProxy(pid, key, url, overWrites(was, key)); err != nil {
+		if err := setAreaProxy(pid, key, url, overWrites(was, key)); err != nil {
 			area.SetProxy(areaID, ref, was)
 			return err
 		}
@@ -207,11 +240,11 @@ func AttachAreaDirect(areaID, ref string) error {
 	attachMu.Lock()
 	defer attachMu.Unlock()
 	was := recordOf(areaID, ref)
-	rec := area.AccountProxy{Key: key, Direct: true}
+	rec := area.AccountProxy{Key: key, Direct: true, Marked: true}
 	if err := area.SetProxy(areaID, ref, &rec); err != nil {
 		return err
 	}
-	if err := setOwnProxy(pid, key, "direct", overWrites(was, key)); err != nil {
+	if err := setAreaProxy(pid, key, "direct", overWrites(was, key)); err != nil {
 		area.SetProxy(areaID, ref, was)
 		return err
 	}
@@ -277,13 +310,13 @@ func releaseAreaProxy(c area.Account) {
 }
 
 // clearAreaProxy takes rec's proxy, or direct, off the account rec.Key
-// of provider pid when it is still the area's (areaValue).
+// of provider pid when it is still the area's (areaHas).
 func clearAreaProxy(pid string, rec area.AccountProxy) error {
-	if !areaValue(rec, ownProxyOf(pid, rec.Key)) {
+	if cur, marked := ownProxyOf(pid, rec.Key); !areaHas(rec, cur, marked) {
 		return nil
 	}
-	return setOwnProxy(pid, rec.Key, "", func(cur string) error {
-		if !areaValue(rec, cur) {
+	return setAreaProxy(pid, rec.Key, "", func(cur string, marked bool) error {
+		if !areaHas(rec, cur, marked) {
 			return errLeftAlone
 		}
 		return nil
@@ -295,10 +328,22 @@ var errLeftAlone = errors.New("left alone")
 
 // setOwnProxy writes url ("" for none) as the own proxy of the account
 // key of provider pid, in providers.json's lock, when allow (nil: always)
-// takes the value there now, read in the same lock: a value the owner
-// set a moment before is never written over. errLeftAlone from allow is
-// no error.
-func setOwnProxy(pid, key, url string, allow func(cur string) error) error {
+// takes the value there now and whether an area's mark is on it, read in
+// the same lock: a value the owner set a moment before is never written
+// over. errLeftAlone from allow is no error. It is the owner's write: an
+// area's mark on the account goes.
+func setOwnProxy(pid, key, url string, allow func(cur string, marked bool) error) error {
+	return writeOwnProxy(pid, key, url, false, allow)
+}
+
+// setAreaProxy is setOwnProxy for an area's write: url is marked as the
+// area's (AreaProxies), or the mark goes with the value ("").
+func setAreaProxy(pid, key, url string, allow func(cur string, marked bool) error) error {
+	return writeOwnProxy(pid, key, url, true, allow)
+}
+
+// writeOwnProxy is setOwnProxy, and setAreaProxy when byArea.
+func writeOwnProxy(pid, key, url string, byArea bool, allow func(cur string, marked bool) error) error {
 	if beforeOwnProxyWrite != nil {
 		beforeOwnProxyWrite()
 	}
@@ -311,12 +356,12 @@ func setOwnProxy(pid, key, url string, allow func(cur string) error) error {
 		return err
 	}
 	i := slices.IndexFunc(f.Providers, func(p Provider) bool { return p.ID == pid })
-	cur := ""
+	cur, marked := "", false
 	if i >= 0 {
-		cur = f.Providers[i].AccountProxies[key]
+		cur, marked = accountOwnProxy(f.Providers[i], key)
 	}
 	if allow != nil {
-		if err := allow(cur); errors.Is(err, errLeftAlone) {
+		if err := allow(cur, marked); errors.Is(err, errLeftAlone) {
 			return nil
 		} else if err != nil {
 			return err
@@ -343,6 +388,15 @@ func setOwnProxy(pid, key, url string, allow func(cur string) error) error {
 		return err
 	}
 	p.AccountProxies = normalAccountProxies(own)
+	ours := maps.Clone(p.AreaProxies)
+	delete(ours, accountKey(key))
+	if byArea && url != "" {
+		if ours == nil {
+			ours = map[string]string{}
+		}
+		ours[accountKey(key)] = strings.TrimSpace(url)
+	}
+	p.AreaProxies = ours
 	return store(f)
 }
 
