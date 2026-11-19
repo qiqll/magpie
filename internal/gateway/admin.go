@@ -594,10 +594,45 @@ func adminClaimErr(w http.ResponseWriter, err error) {
 	adminError(w, status, code, msg)
 }
 
+// The reasons stillActs gives.
+var (
+	errKeyChanged = errors.New("the admin key this came with was changed (rotated, turned off or removed) while it ran: no more accounts are made the area's with it")
+	errAreaOff    = errors.New("this admin key's area was turned off while it ran: no more accounts are made the area's")
+)
+
+// stillActs reads again, just before an account is made c's area's, that
+// the area admin key c came with is still current and its area still
+// there and on (T-260): an import runs up to three minutes and a batch
+// of keys or a plugin's key sign-in up to a minute a key, and the key may
+// be rotated, turned off or removed (by the console, the window or the
+// CLI), or the area turned off or deleted, while it does. Nothing of the
+// account is the area's then. An areas.json it can't read is no answer
+// either. The console acts for an area whatever its own key's change
+// (T-261) and for one turned off, as keepAreaSignIn lets it; a call with
+// no key (the window's claimOnDone) is the owner's.
+func stillActs(c adminCall) error {
+	if c.console || c.who.KeyID == "" {
+		return nil
+	}
+	if !access.Current(c.who) {
+		return errKeyChanged
+	}
+	a, err := area.Get(c.area.ID)
+	switch {
+	case err != nil:
+		return err
+	case a.Off:
+		return errAreaOff
+	}
+	return nil
+}
+
 // claimFailure is the answer to a claim that failed with err: the status,
 // code and message, as adminClaimErr writes them.
 func claimFailure(err error) (adminAccount, int, string, string) {
 	switch {
+	case errors.Is(err, errKeyChanged), errors.Is(err, errAreaOff):
+		return adminAccount{}, http.StatusUnauthorized, adminKeyRequired, err.Error()
 	case errors.Is(err, area.ErrFull):
 		return adminAccount{}, http.StatusConflict, adminConflict, err.Error()
 	case errors.Is(err, area.ErrTaken):

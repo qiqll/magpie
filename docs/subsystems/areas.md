@@ -826,9 +826,17 @@ console, so `TestAdminKeyEveryRoute` covers it.
   (`AuthorizeNew`, `APIKeyNew`), so that is never the owner's or
   another area's, which the plugin answers as known and leaves.
 
-  Not covered: an import or a batch of keys already
-  under way when the key changes claims till it ends, and the console's
-  sign-ins go on through a change of the console's own key.
+  An import, a batch of keys or a plugin's key sign-in already under way
+  when the key changes, or the area is turned off or deleted, claims no
+  account after (T-260): `stillActs` reads `access.Current` and the area
+  again before each account is admitted and just before it is claimed,
+  and the rest fail saying why (`401`'s words, not counted as the area's
+  failures). A plugin's key saved meanwhile is signed out again by its
+  own record (`unclaimed`, `SignOutSaved`). An account claimed before the
+  change stays the area's.
+
+  Not covered: the console's sign-ins and imports go on through a change
+  of the console's own key (T-261).
 - **Log.** Each action's line is `admin: console for area <id> (<note>)
   <action> actor=<X-Magpie-Actor or ->` (`adminCall.logf`, the same line
   an area's key writes as `admin: area <id> (<note>) <action>`). A write

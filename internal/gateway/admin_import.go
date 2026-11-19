@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yetone/magpie/internal/area"
@@ -257,6 +258,10 @@ type areaImport struct {
 	opened     time.Time
 	owned      int // the area's accounts, and those being read
 	reading    int // those being read
+	// changed is set once the key the import came with, or its area,
+	// was found changed (stillActs): the accounts refused for it are no
+	// failures the area is counted for
+	changed atomic.Bool
 }
 
 // importReads is every import's admit and release, under one lock: the
@@ -281,6 +286,12 @@ func (im *areaImport) admit() (func(provider.ImportedAccount) provider.ImportedA
 		importReads.moved = sync.NewCond(&importReads.Mutex)
 	}
 	for {
+		// the key and the area read again before each account (T-260),
+		// and after each wait
+		if err := stillActs(im.c); err != nil {
+			im.changed.Store(true)
+			return nil, err.Error()
+		}
 		now := time.Now()
 		areaLeft := conflictMost - im.s.conflicts.count(im.c.area.ID, now)
 		consoleLeft := consoleConflictMost
@@ -318,8 +329,11 @@ func (im *areaImport) done(r provider.ImportedAccount) provider.ImportedAccount 
 		im.s.countConflict(im.c)
 	case keyAdded:
 	default:
-		// any other reads as failed (importResult.add)
-		im.s.importFailed(im.c, time.Now())
+		// any other reads as failed (importResult.add), but for one the
+		// changed key kept out
+		if !im.changed.Load() {
+			im.s.importFailed(im.c, time.Now())
+		}
 	}
 	im.release(r.Status == keyAdded)
 	switch r.Status {
@@ -361,6 +375,13 @@ func (im *areaImport) ref(user string) string {
 // claim makes a new account the area's before anything of it is written
 // (ImportOptions.Claim): one another area has reads as one magpie has.
 func (im *areaImport) claim(agent, user string) error {
+	// read again here too: the vendor was asked whose it is since admit,
+	// and nothing of it is written once the key or the area changed
+	// (T-260)
+	if err := stillActs(im.c); err != nil {
+		im.changed.Store(true)
+		return err
+	}
 	err := area.ClaimUpTo(im.c.area.ID, im.ref(user), adminAccountsLimit)
 	if errors.Is(err, area.ErrTaken) {
 		return provider.ErrKnownAccount
@@ -457,7 +478,11 @@ func (im *areaImport) pluginKeys(pm adminPluginMethod, keys []string, o provider
 			default:
 				row.Status, row.Message = keyFailed, msg
 			}
-			if row.Status == keyFailed {
+			if msg == errKeyChanged.Error() || msg == errAreaOff.Error() {
+				// kept out by stillActs (T-260), the rest with it
+				im.changed.Store(true)
+			}
+			if row.Status == keyFailed && !im.changed.Load() {
 				// the plugin asked its vendor (T-233)
 				im.s.importFailed(im.c, time.Now())
 			}

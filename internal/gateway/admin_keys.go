@@ -108,6 +108,11 @@ func addAreaKey(c adminCall, p provider.Provider, name, key string, proto provid
 	if slices.ContainsFunc(p.KeyList(), func(k provider.KeyInfo) bool { return k.ID == fp }) {
 		return adminAccount{}, http.StatusConflict, adminConflict, "this key is in magpie already"
 	}
+	// the key a batch came with, and its area, read again before each
+	// key is claimed (T-260): nothing is written once either changed
+	if err := stillActs(c); err != nil {
+		return claimFailure(err)
+	}
 	// owned first, so the key is the area's from the moment it is there;
 	// the area's 500 judged in the same lock
 	if err := area.ClaimUpTo(c.area.ID, ref, adminAccountsLimit); err != nil {

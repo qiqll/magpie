@@ -721,7 +721,12 @@ func (s *Server) areaPluginKey(c adminCall, pp plugin.Provider, pm adminPluginMe
 	case user == "":
 		err = errors.New("the account has no name in magpie")
 	default:
-		err = area.ClaimUpTo(c.area.ID, ref, adminAccountsLimit)
+		// the plugin's save takes up to a minute: the key and the area
+		// are read again before the account is the area's (T-260), and
+		// what was saved signed out again if either changed
+		if err = stillActs(c); err == nil {
+			err = area.ClaimUpTo(c.area.ID, ref, adminAccountsLimit)
+		}
 	}
 	if err != nil {
 		unclaimed(c, agent, saved)
