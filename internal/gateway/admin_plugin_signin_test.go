@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -457,18 +459,40 @@ func TestAdminPluginSignInByPastedKey(t *testing.T) {
 // too_many_plugin_calls and another area's isn't. Each area asks the host
 // pluginCallsMost times in the window, the start route held with the
 // prompt past it, and the console consolePluginCallsMost across the areas
-// it acts for, an area's own calls not among them.
+// it acts for, an area's own calls not among them, its calls for an area
+// spending that area's too. A call held asks the host nothing.
 func TestAdminPluginCallsHeld(t *testing.T) {
 	do, console, _, key, _ := pluginArea(t, wayPasteCode)
 	const ask = `{"agent":"fakeco","method":1}`
+	var asked atomic.Int32
+	wasNext, wasValidate := hostNextPrompt, hostValidate
+	t.Cleanup(func() { hostNextPrompt, hostValidate = wasNext, wasValidate })
+	hostNextPrompt = func(ctx context.Context, id string, method int, inputs map[string]string) (*plugin.Prompt, error) {
+		asked.Add(1)
+		return wasNext(ctx, id, method, inputs)
+	}
+	hostValidate = func(ctx context.Context, id string, method int, key, value string) (string, error) {
+		asked.Add(1)
+		return wasValidate(ctx, id, method, key, value)
+	}
+	held := func(c int, body string) bool {
+		return c == http.StatusTooManyRequests && strings.Contains(body, adminTooManyPluginCalls)
+	}
+	// heldUnasked: the call is 429 and asks the host nothing
+	heldUnasked := func(what, method, path, secret, body string) string {
+		t.Helper()
+		before := asked.Load()
+		c, b := do(method, path, lanPeer, secret, body)
+		if !held(c, b) || asked.Load() != before {
+			t.Fatal(what, ":", c, b, "host asked", asked.Load()-before, "times")
+		}
+		return b
+	}
 	area := func(note string) (string, string) {
 		t.Helper()
 		id, key := makeArea(t, do, console, note)
 		openSignIns(t, do, console, id, "fakeco")
 		return id, key
-	}
-	held := func(c int, body string) bool {
-		return c == http.StatusTooManyRequests && strings.Contains(body, adminTooManyPluginCalls)
 	}
 
 	was := startAreaPluginSignIn
@@ -487,8 +511,8 @@ func TestAdminPluginCallsHeld(t *testing.T) {
 		started <- c
 	}()
 	<-in
-	if c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, key, ask); !held(c, body) {
-		t.Fatal("the area's prompt while its start runs:", c, body)
+	if b := heldUnasked("the area's prompt while its start runs", "POST", AdminPath+"/signin/plugin/prompt", key, ask); !strings.Contains(b, "still running") {
+		t.Fatal("the area's prompt while its start runs:", b)
 	}
 	_, other := area("B")
 	if c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, other, ask); c != http.StatusOK {
@@ -509,18 +533,31 @@ func TestAdminPluginCallsHeld(t *testing.T) {
 			t.Fatal("prompt", i, c, body)
 		}
 	}
-	if c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, spent, ask); !held(c, body) {
-		t.Fatal("a prompt past the area's line:", c, body)
-	}
-	if c, body := do("POST", AdminPath+"/signin/plugin", lanPeer, spent, `{"agent":"fakeco","method":0,"way":"api-key","key":"k-c"}`); !held(c, body) {
-		t.Fatal("a start past the area's line:", c, body)
-	}
+	heldUnasked("a prompt past the area's line", "POST", AdminPath+"/signin/plugin/prompt", spent, ask)
+	heldUnasked("a start past the area's line", "POST", AdminPath+"/signin/plugin", spent, `{"agent":"fakeco","method":0,"way":"api-key","key":"k-c"}`)
 	if c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, key, ask); c != http.StatusOK {
 		t.Fatal("another area's prompt once one is held:", c, body)
 	}
 
+	// a route that runs out midway asks the host for no call past the
+	// line: with 198 spent, the question (199) and the answer's check
+	// (200) are asked, the question after isn't; with 199, the check isn't
+	for _, n := range []int32{198, 199} {
+		_, k := area(fmt.Sprint("mid", n))
+		for range n {
+			if c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, k, ask); c != http.StatusOK {
+				t.Fatal("prompt:", c, body)
+			}
+		}
+		before := asked.Load()
+		c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, k, `{"agent":"fakeco","method":1,"value":"home"}`)
+		if !held(c, body) || asked.Load()-before != pluginCallsMost-n {
+			t.Fatal("an answer with", n, "spent:", c, body, "host asked", asked.Load()-before, "times")
+		}
+	}
+
 	// the console's: the areas' own calls above spent none of it
-	d, _ := area("D")
+	d, dKey := area("D")
 	e, _ := area("E")
 	for _, id := range []string{d, e} {
 		for i := range consolePluginCallsMost / 2 {
@@ -529,9 +566,11 @@ func TestAdminPluginCallsHeld(t *testing.T) {
 			}
 		}
 	}
+	// the console's calls for D spent D's count too: D's line is reached
+	heldUnasked("the area's own prompt once the console spent its line", "POST", AdminPath+"/signin/plugin/prompt", dKey, ask)
 	f, fKey := area("F")
-	if c, body := do("POST", AdminPath+"/areas/"+f+"/signin/plugin/prompt", lanPeer, console, ask); !held(c, body) || !strings.Contains(body, "the console") {
-		t.Fatal("the console's prompt past its line:", c, body)
+	if b := heldUnasked("the console's prompt past its line", "POST", AdminPath+"/areas/"+f+"/signin/plugin/prompt", console, ask); !strings.Contains(b, "the console") {
+		t.Fatal("the console's prompt past its line:", b)
 	}
 	if c, body := do("POST", AdminPath+"/signin/plugin/prompt", lanPeer, fKey, ask); c != http.StatusOK {
 		t.Fatal("the area's own prompt once the console is held:", c, body)

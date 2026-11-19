@@ -347,7 +347,7 @@ func pluginAnswerOf(ctx context.Context, ask pluginAsk, pp plugin.Provider, meth
 	if err := ask(); err != nil {
 		return "", err
 	}
-	why, err := plugin.Validate(ctx, pp.ID, method, p.Key, v)
+	why, err := hostValidate(ctx, pp.ID, method, p.Key, v)
 	if err != nil || why == "" {
 		return "", err
 	}

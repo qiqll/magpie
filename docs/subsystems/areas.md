@@ -605,8 +605,11 @@ magpie-api.md §11. An area signs in to a subscription a plugin serves at
   memory); past either, or while the area's other call runs, the route
   is `429 too_many_plugin_calls` with `Retry-After` and asks the host
   nothing more. A sign-in of 16 questions, each answered at the prompt
-  route and then started, asks 83 times. The sign-in's later steps
-  (`signin/{id}`, its callback, cancel) are not counted.
+  route and then started, asks 83 times. Not counted yet: a plugin
+  sign-in's pasted callback (`signin/{id}/callback`, which the host
+  takes) and an import's plugin keys (`accounts/import`, one host call a
+  key, held by the import's own limits: one at a time, 200 rows, 20
+  failures); `signin/{id}` and cancel ask the host nothing.
 - **Conflicts count where they are decided.** An area held for its
   conflicts is `429` at the door. A key's `ErrKnown` (or a claim
   `ErrTaken`) counts at once; a sign-in that ends in `conflict`, as its
