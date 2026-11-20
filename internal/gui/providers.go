@@ -1483,6 +1483,12 @@ func moveContext(r *http.Request) (context.Context, context.CancelFunc) {
 // (agent.OpenAppLink); tests stand in for the system's answer.
 var appLink = agent.OpenAppLink
 
+// providerBodyMost is the most a provider's save, a paste of its keys or a
+// copy reads of a request's body: a save carries every key, account's
+// models and header, so thousands of keys fit, and more is refused rather
+// than read whole into memory (T-165)
+const providerBodyMost = 8 << 20
+
 func providerRoutes(mux *http.ServeMux, w Windows) {
 	importAppsRoutes(mux)
 	pluginRoutes(mux, w)
@@ -1578,7 +1584,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 	// are tried in too (#499)
 	mux.HandleFunc("POST /api/providers/arrange", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ Order []string }
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<20)).Decode(&in); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -1867,7 +1873,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// that leaves it out keeps it
 			ListOff *bool `json:"listOff"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, providerBodyMost)).Decode(&req); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -3005,7 +3011,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 	// remembers, and forgetting one.
 	mux.HandleFunc("POST /api/login/{action}", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ Agent, User string }
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 16<<10)).Decode(&in); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -3067,7 +3073,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 	// default), as `magpie settings set authHoldHours` sets it
 	mux.HandleFunc("POST /api/auth-holds/hours", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ Hours *int }
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 16<<10)).Decode(&in); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -3094,7 +3100,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 	})
 	mux.HandleFunc("POST /api/auth-holds/release", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ Holder string }
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 16<<10)).Decode(&in); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -3152,7 +3158,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 	// Agents row's Restart): quit it and open it again.
 	mux.HandleFunc("POST /api/codex/app/reopen", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ Bundle string }
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 16<<10)).Decode(&in); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -3174,7 +3180,8 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			Plan               string
 		}
 		var added, had, removed int
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		// many keys pasted at once are the largest body it takes
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, providerBodyMost)).Decode(&in); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -3254,7 +3261,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			Proxy *string
 			User  string // the account signed in to again
 		}
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 64<<10)).Decode(&in); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -3426,7 +3433,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 	// clipboard API is refused or missing, depending on the system
 	mux.HandleFunc("POST /api/copy", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ Text string }
-		_ = json.NewDecoder(r.Body).Decode(&in)
+		_ = json.NewDecoder(http.MaxBytesReader(rw, r.Body, providerBodyMost)).Decode(&in)
 		if in.Text == "" || !w.Copy(in.Text) {
 			http.Error(rw, "", http.StatusNotImplemented)
 			return
@@ -3452,7 +3459,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 	})
 	mux.HandleFunc("POST /api/open", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ URL string }
-		_ = json.NewDecoder(r.Body).Decode(&in)
+		_ = json.NewDecoder(http.MaxBytesReader(rw, r.Body, 64<<10)).Decode(&in)
 		// and System Settings' Login Items, where Open at login is allowed
 		// again: that one pane, not System Settings' scheme at large
 		if strings.HasPrefix(in.URL, "https://") || strings.HasPrefix(in.URL, "http://") || strings.HasPrefix(in.URL, agent.CindyScheme) || strings.HasPrefix(in.URL, agent.LodyScheme) || strings.HasPrefix(in.URL, agent.AionUiScheme) || strings.HasPrefix(in.URL, agent.CherryStudioScheme) || in.URL == autostart.LoginItemsURL {
