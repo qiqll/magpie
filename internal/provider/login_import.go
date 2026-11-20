@@ -26,6 +26,13 @@ package provider
 // time it runs on it. An area's import (ImportOptions.NewOnly) asks
 // Anthropic whose it is instead (claude_profile.go). Tokens are never
 // logged or sent back.
+//
+// An area's ChatGPT import refreshes nothing it can tell is magpie's
+// already (T-234): the account its id_token (or access token) names is
+// judged before the refresh, and one magpie has is a conflict, its
+// refresh token never sent, so an old export of the owner's never has
+// ChatGPT trade a token of the owner's sign-in. A file with a refresh
+// token alone says nothing of whose it is, so an area doesn't take it.
 
 import (
 	"cmp"
@@ -401,11 +408,20 @@ func ImportLoginsWith(ctx context.Context, agent string, files []string, accessO
 		ls = append(ls, l)
 	}
 	var kept []savedLogin
+	// who each kept ChatGPT account is, its email and workspace
+	var keptWho [][2]string
 	for _, l := range ls {
 		if l.Agent != agent {
 			continue
 		}
 		kept = append(kept, l)
+		if agent == "codex" {
+			email, ws := codexWho(l.Auth)
+			if email == "" {
+				email, _, _ = strings.Cut(l.User, " · ")
+			}
+			keptWho = append(keptWho, [2]string{strings.TrimSpace(email), ws})
+		}
 		if t := loginRefreshToken(l); t != "" {
 			have[t] = l.User
 		}
@@ -432,6 +448,13 @@ func ImportLoginsWith(ctx context.Context, agent string, files []string, accessO
 			out[i] = ImportedAccount{User: name, File: e.file, Status: "failed", Error: e.err}
 			continue
 		}
+		// an area's ChatGPT import, judged by whose the file says it is
+		// before ChatGPT is asked (T-234)
+		var fileEmail, fileWS string
+		codexArea := o.NewOnly && agent == "codex" && !accessOnly
+		if codexArea {
+			fileEmail, fileWS = codexFileWho(e)
+		}
 		var r ImportedAccount
 		switch {
 		case accessOnly && e.accessToken == "":
@@ -447,6 +470,10 @@ func ImportLoginsWith(ctx context.Context, agent string, files []string, accessO
 			r = o.known(ImportedAccount{User: have[e.refreshToken], Status: "exists"})
 		case seen[e.refreshToken]:
 			r = ImportedAccount{User: name, Status: "failed", Error: "in the files twice"}
+		case codexArea && fileEmail == "":
+			r = ImportedAccount{User: name, Status: "failed", Error: codexRefreshOnly}
+		case codexArea && codexWhoKept(keptWho, fileEmail, fileWS):
+			r = o.known(ImportedAccount{Status: "exists"})
 		}
 		if r.Status == "failed" {
 			out[i] = r // its own reason, whatever the line
@@ -519,6 +546,40 @@ func importNames(agent string, es []loginImport, out []ImportedAccount) {
 			_ = SetAccountName(agent, r.User, e.alias)
 		}
 	}
+}
+
+// codexRefreshOnly is why an area's import doesn't take a ChatGPT sign-in
+// with no id_token or access token that names its account.
+const codexRefreshOnly = "only a refresh token in it, which doesn't say whose account it is: import Codex's auth.json, or an export that keeps its id_token"
+
+// codexFileWho is whose a ChatGPT sign-in read from a file says it is: the
+// email and workspace its id_token names, or else its access token's own
+// claims, "" when neither names an email. It is the file's word (jwtClaims
+// checks no signature), so an area's import goes by it only to refuse.
+func codexFileWho(e loginImport) (email, workspace string) {
+	id, at := jwtClaims(e.idToken), jwtClaims(e.accessToken)
+	email = claimString(id, "email")
+	workspace = claimString(id, "https://api.openai.com/auth", "chatgpt_account_id")
+	if email == "" {
+		email = claimString(at, "https://api.openai.com/profile", "email")
+		workspace = claimString(at, "https://api.openai.com/auth", "chatgpt_account_id")
+	}
+	if workspace == "" {
+		workspace = e.accountID
+	}
+	return strings.TrimSpace(email), workspace
+}
+
+// codexWhoKept says whether email in workspace is one of the accounts
+// whose who is kept: by the email when either doesn't name its workspace,
+// so what can't be told apart is refused, not refreshed.
+func codexWhoKept(kept [][2]string, email, workspace string) bool {
+	for _, k := range kept {
+		if strings.EqualFold(k[0], email) && (workspace == "" || k[1] == "" || k[1] == workspace) {
+			return true
+		}
+	}
+	return false
 }
 
 // loginRefreshToken is the refresh token a saved sign-in holds.

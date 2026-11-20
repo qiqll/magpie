@@ -690,7 +690,27 @@ taken: an area pastes it to `signin/{id}/callback`.
   `conflict`: nothing of it is written or renewed, and the row names no
   one. A ChatGPT account whose refresh token magpie doesn't have is
   refreshed before it is judged, which signs the file's own sign-in out:
-  the file's id_token says nothing an area can be believed on. The check and the write are one step under the logins' lock
+  the file's id_token says nothing an area can be believed on to take an
+  account. It is believed to refuse one (T-234, the owner's call of
+  2026-11-20): before the refresh, the account the file's id_token
+  names, or else its access token's own claims (email, and workspace
+  when both sides name one; `codexFileWho`, `codexWhoKept`), is judged
+  against magpie's, and one magpie has is `conflict` with its refresh
+  token never sent. A file with a refresh token alone (a bare line, or
+  JSON with no id_token and no access token that names its email) fails:
+  "only a refresh token in it, which doesn't say whose account it is"
+  (`codexRefreshOnly`). So an old export of the owner's is never
+  replayed to ChatGPT from an area. What OpenAI does with a replayed
+  refresh token isn't settled: openai/codex#10332 says one is taken again
+  for about an hour, then refused for good (`refresh_token_reused`), and
+  Codex's own login code treats only the sign-in that sent it as spent;
+  no evidence was found that it revokes the whole chain. The rule only
+  refuses more, never takes more. Its cost: a forged id_token naming an
+  account magpie has reads `conflict`, so an area can learn whether
+  magpie has an email (and workspace) without holding its sign-in; the
+  row still names no one.
+  The window's import is unchanged: it still takes a refresh token alone
+  and refreshes it. The check and the write are one step under the logins' lock
   (`addLoginWith`, `addSideLoginNew`), which also claims the account for
   the area (`ImportOptions.Claim`, `area.ClaimUpTo` of its 500) before
   anything of it is written; another area's ref is `ErrTaken`, read as a

@@ -47,8 +47,9 @@ func fakeImportRefresh(t *testing.T) map[string]int {
 
 // An area's import (NewOnly) adds a new ChatGPT account, claimed before it
 // is written, and tells one magpie has as a conflict: no name, nothing of
-// it written. The file's own id_token is never taken for whose it is. The
-// window's import of the same file still renews it ("updated").
+// it written. The file's own id_token is never taken for whose it is, only
+// to refuse before ChatGPT is asked (T-234). The window's import of the
+// same file still renews it ("updated").
 func TestImportNewOnlyCodex(t *testing.T) {
 	home := claudeHome(t)
 	asked := fakeImportRefresh(t)
@@ -70,7 +71,7 @@ func TestImportNewOnlyCodex(t *testing.T) {
 	// kept's file has another refresh token now, its id_token says whose
 	again := `{"type":"codex","refresh_token":"r-kept2","id_token":"` + idOf("kept") + `","account_id":"acct-kept"}`
 	rs, err := ImportLoginsWith(context.Background(), "codex", []string{
-		`{"type":"codex","refresh_token":"r-new","email":"file-says@example.com"}`,
+		`{"type":"codex","refresh_token":"r-new","id_token":"` + idOf("file-says") + `","email":"file-says@example.com"}`,
 		`{"type":"codex","refresh_token":"r-live"}`,
 		again,
 	}, false, o)
@@ -85,8 +86,8 @@ func TestImportNewOnlyCodex(t *testing.T) {
 			t.Errorf("a conflict says %q", r.Error)
 		}
 	}
-	if asked["r-live"] != 0 {
-		t.Fatalf("a refresh token magpie has was refreshed: %v", asked)
+	if asked["r-live"] != 0 || asked["r-kept2"] != 0 {
+		t.Fatalf("a refresh token magpie has, or one of an account it has, was refreshed: %v", asked)
 	}
 	if len(claimed) != 1 || claimed[0] != "codex:new@example.com" {
 		t.Fatalf("claimed %v", claimed)
@@ -101,7 +102,7 @@ func TestImportNewOnlyCodex(t *testing.T) {
 
 	// a claim refused keeps the account out: nothing written
 	o.Claim = func(string, string) error { return ErrKnownAccount }
-	rs, _ = ImportLoginsWith(context.Background(), "codex", []string{`{"type":"codex","refresh_token":"r-other"}`}, false, o)
+	rs, _ = ImportLoginsWith(context.Background(), "codex", []string{`{"type":"codex","refresh_token":"r-other","id_token":"` + idOf("other") + `"}`}, false, o)
 	if got := importStatuses(rs); got != ":conflict" {
 		t.Fatalf("claim refused: %s", got)
 	}
@@ -113,6 +114,62 @@ func TestImportNewOnlyCodex(t *testing.T) {
 	rs, _ = ImportLogins(context.Background(), "codex", []string{again})
 	if got := importStatuses(rs); got != "kept@example.com:updated" {
 		t.Fatalf("the window's import: %s", got)
+	}
+}
+
+// An area's ChatGPT import judges the account a file names before ChatGPT
+// is asked (T-234): an old export of an account magpie has, by its
+// id_token or its access token's claims, is a conflict with its refresh
+// token never sent, and a sign-in that is a refresh token alone fails,
+// saying why. Another workspace of the same email is still new. The
+// window's import of a refresh token alone is as it was.
+func TestImportNewOnlyCodexJudgedBeforeRefresh(t *testing.T) {
+	claudeHome(t)
+	asked := fakeImportRefresh(t)
+	if rs, err := ImportLogins(context.Background(), "codex", []string{`{"type":"codex","refresh_token":"r-owner"}`}); err != nil || importStatuses(rs) != "owner@example.com:added" {
+		t.Fatal(importStatuses(rs), err)
+	}
+	before, _ := os.ReadFile(loginsPath())
+	o := ImportOptions{NewOnly: true, Claim: func(string, string) error { return nil }}
+	id := func(who, ws string) string {
+		return fakeJWT(map[string]any{"email": who + "@example.com", "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": ws}})
+	}
+	at := fakeJWT(map[string]any{"exp": float64(time.Now().Add(time.Hour).Unix()), "https://api.openai.com/profile": map[string]any{"email": "OWNER@example.com"},
+		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-owner"}})
+	rs, err := ImportLoginsWith(context.Background(), "codex", []string{
+		`{"type":"codex","refresh_token":"r-old1","id_token":"` + id("owner", "acct-owner") + `"}`,
+		`{"tokens":{"refresh_token":"r-old2","access_token":"` + at + `"}}`,
+		`{"type":"codex","refresh_token":"r-old3","id_token":"` + id("owner", "") + `"}`,
+		"r-bare",
+		`{"type":"codex","refresh_token":"r-noid","email":"owner@example.com"}`,
+		`{"type":"codex","refresh_token":"r-seat","id_token":"` + id("owner", "acct-team") + `"}`,
+	}, false, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := importStatuses(rs); got != ":conflict,:conflict,:conflict,#4:failed,owner@example.com:failed,seat@example.com:added" {
+		t.Fatalf("got %s", got)
+	}
+	for _, r := range rs[3:5] {
+		if r.Error != codexRefreshOnly {
+			t.Errorf("a refresh token alone says %q", r.Error)
+		}
+	}
+	for _, rt := range []string{"r-old1", "r-old2", "r-old3", "r-bare", "r-noid"} {
+		if asked[rt] != 0 {
+			t.Fatalf("%s was sent to ChatGPT: %v", rt, asked)
+		}
+	}
+	if asked["r-seat"] != 1 {
+		t.Fatalf("another workspace of the email wasn't asked: %v", asked)
+	}
+	after, _ := os.ReadFile(loginsPath())
+	if !bytes.Contains(after, []byte("n-owner")) || !bytes.Contains(before, []byte("n-owner")) {
+		t.Fatal("the owner's sign-in was written over:", string(after))
+	}
+	// the window's import takes a refresh token alone, as it did
+	if rs, _ := ImportLogins(context.Background(), "codex", []string{"r-win"}); importStatuses(rs) != "win@example.com:added" {
+		t.Fatalf("the window's: %s", importStatuses(rs))
 	}
 }
 

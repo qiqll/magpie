@@ -246,7 +246,11 @@ func TestAdminImportCodexLimits(t *testing.T) {
 	openSignIns(t, do, console, aID, "codex", "claude")
 	codexLogin(t, "live@example.com")
 
-	c, out, body := importOf(t, do, a, map[string]any{"agent": "codex", "files": []string{"r-cid\nr-dan"}, "proxy": map[string]any{"direct": true}, "opened": "2026-11-01"})
+	// a file names whose it is (T-234): a refresh token alone isn't taken
+	file := func(rt, who string) string {
+		return `{"tokens":{"refresh_token":"` + rt + `","id_token":"` + importIDToken(who) + `"}}`
+	}
+	c, out, body := importOf(t, do, a, map[string]any{"agent": "codex", "files": []string{file("r-cid", "cid"), file("r-dan", "dan")}, "proxy": map[string]any{"direct": true}, "opened": "2026-11-01"})
 	if c != http.StatusOK || importStatuses(out) != "1:added,2:added" {
 		t.Fatal("import:", c, body)
 	}
@@ -266,6 +270,20 @@ func TestAdminImportCodexLimits(t *testing.T) {
 	if b, _ := os.ReadFile(logins); !strings.Contains(string(b), "n-cid") {
 		t.Fatal("cid's sign-in was written over")
 	}
+	// an old export of an account magpie has is a conflict before ChatGPT
+	// is asked, and a refresh token alone fails, saying why (T-234)
+	mu.Lock()
+	was := asked
+	mu.Unlock()
+	if c, out, body := importOf(t, do, a, map[string]any{"agent": "codex", "files": []string{file("r-cid-old", "cid"), "r-eve"}}); c != http.StatusOK || importStatuses(out) != "1:conflict,2:failed" ||
+		!strings.Contains(body, "only a refresh token in it") || strings.Contains(body, "cid@") || strings.Contains(body, "r-eve") {
+		t.Fatal("an old export:", c, body)
+	}
+	mu.Lock()
+	if asked != was {
+		t.Errorf("ChatGPT was asked %d times for an account magpie has or a refresh token alone", asked-was)
+	}
+	mu.Unlock()
 
 	for _, x := range []struct {
 		name string
@@ -559,7 +577,8 @@ func TestAdminImportConsoleShare(t *testing.T) {
 	})
 	for _, n := range []string{"a", "b"} {
 		go func() {
-			c, body := byConsole(ids[n], `{"agent":"codex","files":["r-`+n+`"]}`)
+			b, _ := json.Marshal(map[string]any{"agent": "codex", "files": []string{`{"tokens":{"refresh_token":"r-` + n + `","id_token":"` + importIDToken(n) + `"}}`}})
+			c, body := byConsole(ids[n], string(b))
 			codes <- strconv.Itoa(c) + " " + body
 		}()
 	}
