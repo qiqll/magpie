@@ -10,7 +10,8 @@
 // listed, each IP names its accounts with their state, and the list is
 // found by that state. T-172: an import checks every proxy again and
 // moves one whose exit moved; an IP's form lists its proxies, each
-// unlinked there. Every language, at a wide and a phone's width; no
+// unlinked there. T-173: one whose exit moved to a full IP stays where it
+// was and is said. Every language, at a wide and a phone's width; no
 // backend, the API is faked here.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
@@ -396,6 +397,78 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(seen.posts.length, posted + 1);
         assert.equal(await page.locator("#ipsSaid").textContent(), x("Every proxy an account goes through is listed already"));
         assert.ok(await page.locator("#ipsErr").isHidden());
+        assert.deepEqual(errors, []);
+      });
+    }
+  }
+}
+
+// T-173: a proxy whose exit moved to an IP told 20 proxies already (the
+// server's most) stays at the IP it was read from, and is named with both
+// addresses apart from one a full IP couldn't take as new (T-172 review
+// M1); its accounts stay with it, and a save made for another proxy keeps
+// it there
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  for (const lang of LANGS) {
+    const x = (s, a) => tr(lang, s, a);
+    for (const width of [1000, 380]) {
+      test(`${engine} ${lang} ${width}: a proxy whose exit moved to a full IP stays where it was, and is said`, { timeout: TEST_MS }, async (t) => {
+        const filler = Array.from({ length: 20 }, (_, i) => `http://f${i}.example:3128`);
+        // Tokyo, read as 198.51.100.42's exit, now leaves from the full
+        // 203.0.113.8, and HK, in no IP, does too
+        const seen = { posts: [], checks: [], rev: 1, providers: accountProviders(), exits: { [TOKYO]: "203.0.113.8", [AT_IP]: "203.0.113.7", [HK]: "203.0.113.8" }, ips: [
+          { ip: "203.0.113.7", name: "Osaka", proxies: [AT_IP] },
+          { ip: "198.51.100.42", name: "Tokyo line", proxies: [TOKYO] },
+          { ip: "203.0.113.8", name: "Full", proxies: filler },
+        ] };
+        const browser = await launch(engine);
+        t.after(() => browser.close());
+        const page = await newPage(browser, engine, { viewport: { width, height: 800 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" });
+        page.setDefaultTimeout(5000);
+        page.setDefaultNavigationTimeout(60000);
+        const errors = [];
+        page.on("pageerror", (e) => errors.push(e.message));
+        await page.route("**/*", serve(lang, seen));
+        await page.addInitScript(() => { try { if (!sessionStorage.getItem("set")) { localStorage.clear(); sessionStorage.setItem("set", "1"); } } catch {} });
+        await page.goto("http://magpie.test/?view=ips");
+        // a whole boot: room for a busy machine, as after a reload
+        await page.waitForFunction(() => document.querySelectorAll("#ipsList .ips-row .ips-accts").length === 3, null, { timeout: 30000 });
+        const on = "on " + x("In rotation"), banned = "banned " + x("Banned");
+        const tokyo = ["Work " + on, "qa@example.com " + banned, "Relay · Main " + on];
+        assert.deepEqual(await accountsOf(page), { "203.0.113.7": ["alice@example.com " + on], "198.51.100.42": tokyo, "203.0.113.8": "none" });
+        const imported = async () => {
+          const checked = seen.checks.length;
+          await page.locator("#ipsImport").click();
+          await page.waitForFunction(() => !document.querySelector("#ipsImport").disabled);
+          return seen.checks.slice(checked).map((c) => c.proxy).sort();
+        };
+        const fullSaid = x("These IPs are told {n} proxies already, so no more were added: {list}", { n: 20, list: "203.0.113.8" });
+        const stuckSaid = x("These proxies' exit moved to an IP told {n} proxies already, so they stay where they were: {list}", { n: 20, list: "tokyo.example:3128 (198.51.100.42 → 203.0.113.8)" });
+
+        // imported: nothing changed, so nothing is saved; Tokyo stays at
+        // the IP it was read from and is named with both addresses, HK is
+        // the full IP's alone, and nothing says every proxy is listed
+        assert.deepEqual(await imported(), [AT_IP, HK, TOKYO].sort());
+        assert.equal(seen.posts.length, 0);
+        assert.ok(await page.locator("#ipsSaid").isHidden());
+        assert.equal(await page.locator("#ipsErr").textContent(), fullSaid + " " + stuckSaid);
+        assert.deepEqual(await accountsOf(page), { "203.0.113.7": ["alice@example.com " + on], "198.51.100.42": tokyo, "203.0.113.8": "none" });
+        assert.ok(await wider(page) <= 0.5, `the page reaches ${await wider(page)}px past the window`);
+
+        // HK answering at a new exit is added and saved; Tokyo, still
+        // moved to the full IP, is kept where it was in what is saved
+        seen.exits[HK] = "192.0.2.50";
+        await imported();
+        assert.equal(seen.posts.length, 1);
+        assert.deepEqual(seen.posts[0].ips, [
+          { ip: "203.0.113.7", name: "Osaka", proxies: [AT_IP] },
+          { ip: "198.51.100.42", name: "Tokyo line", proxies: [TOKYO] },
+          { ip: "203.0.113.8", name: "Full", proxies: filler },
+          { ip: "192.0.2.50", name: "", proxies: [HK] },
+        ]);
+        assert.equal(await page.locator("#ipsSaid").textContent(), x("1 IP added"));
+        assert.equal(await page.locator("#ipsErr").textContent(), stuckSaid);
+        assert.deepEqual((await accountsOf(page))["198.51.100.42"], tokyo);
         assert.deepEqual(errors, []);
       });
     }
