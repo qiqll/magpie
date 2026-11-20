@@ -1483,8 +1483,8 @@ func moveContext(r *http.Request) (context.Context, context.CancelFunc) {
 // (agent.OpenAppLink); tests stand in for the system's answer.
 var appLink = agent.OpenAppLink
 
-// providerBodyMost is the most a provider's save, a paste of its keys or a
-// copy reads of a request's body: a save carries every key, account's
+// providerBodyMost is the most a provider's save or a paste of its keys
+// reads of a request's body: a save carries every key, account's
 // models and header, so thousands of keys fit, and more is refused rather
 // than read whole into memory (T-165)
 const providerBodyMost = 8 << 20
@@ -3433,7 +3433,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 	// clipboard API is refused or missing, depending on the system
 	mux.HandleFunc("POST /api/copy", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ Text string }
-		_ = json.NewDecoder(http.MaxBytesReader(rw, r.Body, providerBodyMost)).Decode(&in)
+		_ = json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<20)).Decode(&in)
 		if in.Text == "" || !w.Copy(in.Text) {
 			http.Error(rw, "", http.StatusNotImplemented)
 			return

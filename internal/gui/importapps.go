@@ -69,7 +69,8 @@ func importAppsRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /api/importapps", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ Picks []provider.AppPick }
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		// each pick is a source's id and an item's fingerprint
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<20)).Decode(&in); err != nil {
 			fail(rw, err)
 			return
 		}

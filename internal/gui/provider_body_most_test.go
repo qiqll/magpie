@@ -69,8 +69,8 @@ func TestProviderBodiesAreBounded(t *testing.T) {
 
 	// the small bodies beside them have small bounds
 	small := strings.Repeat("x", 1<<20)
-	for _, path := range []string{"/api/providers/arrange", "/api/login/switch", "/api/auth-holds/hours", "/api/auth-holds/release", "/api/codex/app/reopen", "/api/signin"} {
-		if code, out := post(path, body(map[string]any{"order": []string{small}, "agent": small, "holder": small, "bundle": small, "user": small})); code != http.StatusBadRequest || !strings.Contains(out, "too large") {
+	for _, path := range []string{"/api/providers/arrange", "/api/login/switch", "/api/auth-holds/hours", "/api/auth-holds/release", "/api/codex/app/reopen", "/api/signin", "/api/importapps"} {
+		if code, out := post(path, body(map[string]any{"order": []string{small}, "agent": small, "holder": small, "bundle": small, "user": small, "picks": []string{small}})); code != http.StatusBadRequest || !strings.Contains(out, "too large") {
 			t.Errorf("%s over its bound: %d %.200s", path, code, out)
 		}
 	}
