@@ -52,6 +52,9 @@ function serve(lang, seen) {
         seen.posts.push(body);
         if (body.rev !== "r" + seen.rev) return json({ error: "the IPs were changed elsewhere since they were read" }, 400);
         if (body.ips.some((x) => x.ip === "bad")) return json({ error: "\"bad\" is not an IP address" }, 400);
+        // as renewal.MaxIPProxies holds it (T-173 review L1)
+        const over = body.ips.find((x) => (x.proxies || []).length > 20);
+        if (over) return json({ error: `${over.ip}: at most 20 proxies are kept for one IP, not ${over.proxies.length}` }, 400);
         seen.ips = body.ips.map((x) => Object.fromEntries(Object.entries(x).filter(([, v]) => v !== undefined && v !== "")));
         seen.rev++;
       }
@@ -405,9 +408,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
 // T-173: a proxy whose exit moved to an IP told 20 proxies already (the
 // server's most) stays at the IP it was read from, and is named with both
-// addresses apart from one a full IP couldn't take as new (T-172 review
-// M1); its accounts stay with it, and a save made for another proxy keeps
-// it there
+// addresses in a line of its own, apart from the line for a new proxy a
+// full IP couldn't take (T-172 review M1); its accounts stay with it, and
+// a save made for another proxy keeps it there
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   for (const lang of LANGS) {
     const x = (s, a) => tr(lang, s, a);
