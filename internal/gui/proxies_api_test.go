@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -90,10 +93,25 @@ func TestSignInCallbackThroughAPickedProxy(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Setenv("MAGPIE_PLUGIN_MARKET", "off")
-	t.Setenv("FAKE_SIGNIN", "http://vendor.invalid/signin")
 	t.Cleanup(plugin.Settle)
 	var mu sync.Mutex
-	var seen []string
+	var seen, direct []string
+	// the vendor, on this computer, keeps what was asked of it direct: the
+	// sign-in's start, which no proxy was picked for. A name that resolves
+	// nowhere, as vendor.invalid was, still asks DNS, and a TUN proxy's
+	// fake-IP DNS (Clash's 198.18/15) answers it and holds the connection.
+	// 0.0.0.0 is neither loopback nor on the LAN to host.js (loopback,
+	// lanIP), so the picked proxy is used for it, and a direct dial of it
+	// stays on this computer.
+	vendorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		direct = append(direct, r.URL.Path)
+		mu.Unlock()
+	}))
+	t.Cleanup(vendorSrv.Close)
+	_, port, _ := net.SplitHostPort(vendorSrv.Listener.Addr().String())
+	vendor := "http://0.0.0.0:" + port + "/signin"
+	t.Setenv("FAKE_SIGNIN", vendor)
 	picked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		seen = append(seen, r.URL.String())
@@ -142,9 +160,14 @@ func TestSignInCallbackThroughAPickedProxy(t *testing.T) {
 	}
 	mu.Lock()
 	got := append([]string(nil), seen...)
+	went := append([]string(nil), direct...)
 	mu.Unlock()
-	if len(got) != 1 || got[0] != "http://vendor.invalid/signin/token" {
+	if len(got) != 1 || got[0] != vendor+"/token" {
 		t.Fatalf("the picked proxy saw %q", got)
+	}
+	if runtime.GOOS != "windows" && !slices.Equal(went, []string{"/signin/device"}) {
+		// on Windows a dial to 0.0.0.0 fails at once, still on this computer
+		t.Fatalf("the vendor was asked direct for %q, want the start alone", went)
 	}
 	if l := provider.ProxyOfLogin(provider.PluginID("fakeco"), st.User); l != picked.URL {
 		t.Fatalf("%s's requests go through %q", st.User, l)

@@ -2,6 +2,7 @@ package gui
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -31,19 +32,33 @@ func TestSettingsProxyRechecksAFailedUpdate(t *testing.T) {
 	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"} {
 		t.Setenv(k, "")
 	}
+	// the feed, on this computer, refuses a check sent to it direct: only
+	// the proxy answers for it. A name that resolves nowhere, as
+	// feed.magpie.invalid was, still asks DNS, and a TUN proxy's fake-IP
+	// DNS (Clash's 198.18/15) answers it and holds the connection. 0.0.0.0
+	// is no loopback or LAN address to netproxy, so the proxy is used for
+	// it, and a direct dial of it stays on this computer.
+	var direct atomic.Int32
+	feedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		direct.Add(1)
+		http.Error(w, "not through a proxy", http.StatusForbidden)
+	}))
+	defer feedSrv.Close()
+	_, port, _ := net.SplitHostPort(feedSrv.Listener.Addr().String())
+	feed := "0.0.0.0:" + port
 	var hits atomic.Int32
 	px := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Host == "feed.magpie.invalid" {
+		if r.URL.Host == feed {
 			hits.Add(1)
 		}
 		json.NewEncoder(w).Encode(update.Release{Version: "9.9.9"})
 	}))
 	defer px.Close()
-	// direct, the feed is nowhere to be found
+	// direct, the feed refuses it
 	if err := settings.Save(settings.Settings{Proxy: "direct"}); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MAGPIE_UPDATE_FEED", "http://feed.magpie.invalid/api/latest")
+	t.Setenv("MAGPIE_UPDATE_FEED", "http://"+feed+"/api/latest")
 	old := updates
 	updates = &updater{}
 	defer func() { updates = old }()
@@ -70,6 +85,11 @@ func TestSettingsProxyRechecksAFailedUpdate(t *testing.T) {
 		if j.State != "error" && j.State != "checking" {
 			if j.Latest != "9.9.9" || hits.Load() != 1 {
 				t.Fatalf("%+v, %d through the proxy", j, hits.Load())
+			}
+			// on Windows a dial to 0.0.0.0 fails at once, still on this
+			// computer
+			if runtime.GOOS != "windows" && direct.Load() != 1 {
+				t.Fatalf("the feed was asked direct %d times, want the first check alone", direct.Load())
 			}
 			return
 		}

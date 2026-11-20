@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -80,9 +81,33 @@ func TestPluginHTTP2TakesTheProxy(t *testing.T) {
 	vendor.StartTLS()
 	defer vendor.Close()
 	proxy, carried, asked := connectTo(t, strings.TrimPrefix(vendor.URL, "https://"))
-	// a host that resolves nowhere: reached only through the proxy
-	t.Setenv("FAKE_H2", "https://h2vendor.invalid:8443")
-	t.Setenv("FAKE_BASE", "https://h2vendor.invalid:8443/v1")
+	// the origin the plugin names, on this computer: the proxy carries a
+	// session for it to the vendor, and a session sent direct is dropped
+	// here. A name that resolves nowhere, as h2vendor.invalid was, still
+	// asks DNS, and a TUN proxy's fake-IP DNS (Clash's 198.18/15) answers
+	// it and holds the connection. 0.0.0.0 is neither loopback nor on the
+	// LAN to host.js (loopback, lanIP), so the proxy is used for it, and a
+	// direct dial of it stays on this computer.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	var direct atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			direct.Add(1)
+			c.Close()
+		}
+	}()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	origin := "0.0.0.0:" + port
+	t.Setenv("FAKE_H2", "https://"+origin)
+	t.Setenv("FAKE_BASE", "https://"+origin+"/v1")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	abs, _ := filepath.Abs("testdata/fake/index.js")
@@ -97,7 +122,7 @@ func TestPluginHTTP2TakesTheProxy(t *testing.T) {
 	}
 	fetch := func(proxy string) (int, string) {
 		res, err := Fetch(netproxy.With(ctx, proxy), FetchRequest{Provider: "fakeco", Model: "fake-1", NPM: "@ai-sdk/openai-compatible",
-			URL: "https://h2vendor.invalid:8443/v1/chat/completions", Method: "POST", Body: []byte(`{}`)})
+			URL: "https://" + origin + "/v1/chat/completions", Method: "POST", Body: []byte(`{}`)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -108,11 +133,16 @@ func TestPluginHTTP2TakesTheProxy(t *testing.T) {
 	if code, b := fetch(proxy); code != 200 || b != "vendor HTTP/2.0 /v1/chat/completions" || carried.Load() != 1 {
 		t.Fatalf("an HTTP/2 session through the proxy: %d %q; it carried %d", code, b, carried.Load())
 	}
-	if got := asked.Load(); got != "h2vendor.invalid:8443" {
-		t.Fatalf("the proxy was asked for %v, want h2vendor.invalid:8443", got)
+	if got := asked.Load(); got != origin {
+		t.Fatalf("the proxy was asked for %v, want %s", got, origin)
 	}
-	if code, b := fetch("direct"); code != 502 || carried.Load() != 1 {
-		t.Fatalf("a provider set to direct: %d %q; the proxy carried %d, want it untouched", code, b, carried.Load())
+	if direct.Load() != 0 {
+		t.Fatalf("a session through the proxy was also dialled direct %d times", direct.Load())
+	}
+	// on Windows a dial to 0.0.0.0 fails at once instead, still on this
+	// computer
+	if code, b := fetch("direct"); code != 502 || carried.Load() != 1 || (runtime.GOOS != "windows" && direct.Load() == 0) {
+		t.Fatalf("a provider set to direct: %d %q; the proxy carried %d, want it untouched; dialled direct %d times", code, b, carried.Load(), direct.Load())
 	}
 	dead := "http://" + closedPort(t)
 	if code, b := fetch(dead); code != 502 || !strings.Contains(b, "proxyconnect tcp: dial tcp 127.0.0.1:") {

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -26,10 +27,24 @@ func TestPluginModelListThroughAccountProxy(t *testing.T) {
 	}
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)
+	// the vendor, on this computer, answers a list asked of it direct with
+	// nothing, so it names no model. A name that resolves nowhere, as
+	// models.invalid was, still asks DNS, and a TUN proxy's fake-IP DNS
+	// (Clash's 198.18/15) answers it and holds the connection: the lists
+	// asked before the accounts have proxies went out to the network.
+	// 0.0.0.0 is neither loopback nor on the LAN to host.js (loopback,
+	// lanIP), so an account's proxy is used for it, and a direct dial of it
+	// stays on this computer.
+	vendorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer vendorSrv.Close()
+	_, port, _ := net.SplitHostPort(vendorSrv.Listener.Addr().String())
+	vendor := "0.0.0.0:" + port
 	// each proxy answers the vendor's list with a model of its own
 	proxyOf := func(name string) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Host != "models.invalid" {
+			if r.URL.Host != vendor || r.URL.Path != "/list" {
 				http.Error(w, "not the list: "+r.URL.String(), 400)
 				return
 			}
@@ -39,8 +54,8 @@ func TestPluginModelListThroughAccountProxy(t *testing.T) {
 	pa, pb := proxyOf("via-a"), proxyOf("via-b")
 	defer pa.Close()
 	defer pb.Close()
-	t.Setenv("FAKE_BASE", "http://vendor.invalid/v1")
-	t.Setenv("FAKE_MODELS", "http://models.invalid/list")
+	t.Setenv("FAKE_BASE", "http://"+vendor+"/v1")
+	t.Setenv("FAKE_MODELS", "http://"+vendor+"/list")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
