@@ -40,6 +40,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -408,19 +409,15 @@ func ImportLoginsWith(ctx context.Context, agent string, files []string, accessO
 		ls = append(ls, l)
 	}
 	var kept []savedLogin
-	// who each kept ChatGPT account is, its email and workspace
-	var keptWho [][2]string
+	// who each kept ChatGPT account is, its email and workspaces
+	var keptWho []codexFileAccount
 	for _, l := range ls {
 		if l.Agent != agent {
 			continue
 		}
 		kept = append(kept, l)
 		if agent == "codex" {
-			email, ws := codexWho(l.Auth)
-			if email == "" {
-				email, _, _ = strings.Cut(l.User, " · ")
-			}
-			keptWho = append(keptWho, [2]string{strings.TrimSpace(email), ws})
+			keptWho = append(keptWho, codexKeptWho(l))
 		}
 		if t := loginRefreshToken(l); t != "" {
 			have[t] = l.User
@@ -433,6 +430,8 @@ func ImportLoginsWith(ctx context.Context, agent string, files []string, accessO
 
 	out := make([]ImportedAccount, len(all))
 	seen := map[string]bool{}
+	// the ChatGPT accounts an area's import has sent to be asked
+	var batchWho []codexFileAccount
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 4)
 	for i, e := range all {
@@ -450,10 +449,10 @@ func ImportLoginsWith(ctx context.Context, agent string, files []string, accessO
 		}
 		// an area's ChatGPT import, judged by whose the file says it is
 		// before ChatGPT is asked (T-234)
-		var fileEmail, fileWS string
+		var file codexFileAccount
 		codexArea := o.NewOnly && agent == "codex" && !accessOnly
 		if codexArea {
-			fileEmail, fileWS = codexFileWho(e)
+			file = codexFileWho(e)
 		}
 		var r ImportedAccount
 		switch {
@@ -470,10 +469,13 @@ func ImportLoginsWith(ctx context.Context, agent string, files []string, accessO
 			r = o.known(ImportedAccount{User: have[e.refreshToken], Status: "exists"})
 		case seen[e.refreshToken]:
 			r = ImportedAccount{User: name, Status: "failed", Error: "in the files twice"}
-		case codexArea && fileEmail == "":
+		case codexArea && file.email == "":
 			r = ImportedAccount{User: name, Status: "failed", Error: codexRefreshOnly}
-		case codexArea && codexWhoKept(keptWho, fileEmail, fileWS):
+		case codexArea && codexWhoKept(keptWho, file):
 			r = o.known(ImportedAccount{Status: "exists"})
+		case codexArea && codexWhoKept(batchWho, file):
+			// one account by two sign-ins in the files: the first is asked
+			r = ImportedAccount{User: name, Status: "failed", Error: "in the files twice"}
 		}
 		if r.Status == "failed" {
 			out[i] = r // its own reason, whatever the line
@@ -490,6 +492,9 @@ func ImportLoginsWith(ctx context.Context, agent string, files []string, accessO
 			continue
 		}
 		seen[key] = true
+		if codexArea {
+			batchWho = append(batchWho, file)
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -549,34 +554,72 @@ func importNames(agent string, es []loginImport, out []ImportedAccount) {
 }
 
 // codexRefreshOnly is why an area's import doesn't take a ChatGPT sign-in
-// with no id_token or access token that names its account.
-const codexRefreshOnly = "only a refresh token in it, which doesn't say whose account it is: import Codex's auth.json, or an export that keeps its id_token"
+// with no id_token or access token that names its account: a refresh
+// token alone, or one beside a file's own email field.
+const codexRefreshOnly = "nothing in it names whose account it is (no id_token, or access token, with its email): import Codex's auth.json, or an export that keeps its id_token"
+
+// codexFileAccount is whose a ChatGPT sign-in says it is: its email and
+// the workspaces it names (its token's claim and its account_id, which
+// should be one; either is taken).
+type codexFileAccount struct {
+	email      string
+	workspaces []string
+}
 
 // codexFileWho is whose a ChatGPT sign-in read from a file says it is: the
 // email and workspace its id_token names, or else its access token's own
-// claims, "" when neither names an email. It is the file's word (jwtClaims
+// claims, no email when neither names one. It is the file's word (jwtClaims
 // checks no signature), so an area's import goes by it only to refuse.
-func codexFileWho(e loginImport) (email, workspace string) {
+func codexFileWho(e loginImport) codexFileAccount {
 	id, at := jwtClaims(e.idToken), jwtClaims(e.accessToken)
-	email = claimString(id, "email")
-	workspace = claimString(id, "https://api.openai.com/auth", "chatgpt_account_id")
+	email := claimString(id, "email")
+	ws := claimString(id, "https://api.openai.com/auth", "chatgpt_account_id")
 	if email == "" {
 		email = claimString(at, "https://api.openai.com/profile", "email")
-		workspace = claimString(at, "https://api.openai.com/auth", "chatgpt_account_id")
+		ws = claimString(at, "https://api.openai.com/auth", "chatgpt_account_id")
 	}
-	if workspace == "" {
-		workspace = e.accountID
-	}
-	return strings.TrimSpace(email), workspace
+	return codexFileAccount{strings.TrimSpace(email), nonEmpty(ws, e.accountID)}
 }
 
-// codexWhoKept says whether email in workspace is one of the accounts
-// whose who is kept: by the email when either doesn't name its workspace,
-// so what can't be told apart is refused, not refreshed.
-func codexWhoKept(kept [][2]string, email, workspace string) bool {
+// codexKeptWho is whose a kept ChatGPT sign-in is, read as codexFileWho
+// reads a file: both its workspaces, and its name's email when its
+// id_token says none.
+func codexKeptWho(l savedLogin) codexFileAccount {
+	var a codexAuth
+	_ = json.Unmarshal(l.Auth, &a)
+	id := jwtClaims(a.Tokens.IDToken)
+	email := claimString(id, "email")
+	if email == "" {
+		email, _, _ = strings.Cut(l.User, " · ")
+	}
+	return codexFileAccount{strings.TrimSpace(email), nonEmpty(claimString(id, "https://api.openai.com/auth", "chatgpt_account_id"), a.Tokens.AccountID)}
+}
+
+func nonEmpty(xs ...string) []string {
+	var out []string
+	for _, x := range xs {
+		if x != "" {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// codexWhoKept says whether f is one of the kept accounts: the same email,
+// and a workspace in common, or by the email alone when either names no
+// workspace, so what can't be told apart is refused, not refreshed.
+func codexWhoKept(kept []codexFileAccount, f codexFileAccount) bool {
 	for _, k := range kept {
-		if strings.EqualFold(k[0], email) && (workspace == "" || k[1] == "" || k[1] == workspace) {
+		if !strings.EqualFold(k.email, f.email) {
+			continue
+		}
+		if len(k.workspaces) == 0 || len(f.workspaces) == 0 {
 			return true
+		}
+		for _, w := range f.workspaces {
+			if slices.Contains(k.workspaces, w) {
+				return true
+			}
 		}
 	}
 	return false

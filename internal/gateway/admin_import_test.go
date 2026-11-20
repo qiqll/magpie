@@ -276,7 +276,7 @@ func TestAdminImportCodexLimits(t *testing.T) {
 	was := asked
 	mu.Unlock()
 	if c, out, body := importOf(t, do, a, map[string]any{"agent": "codex", "files": []string{file("r-cid-old", "cid"), "r-eve"}}); c != http.StatusOK || importStatuses(out) != "1:conflict,2:failed" ||
-		!strings.Contains(body, "only a refresh token in it") || strings.Contains(body, "cid@") || strings.Contains(body, "r-eve") {
+		!strings.Contains(body, "nothing in it names whose account it is") || strings.Contains(body, "cid@") || strings.Contains(body, "r-eve") {
 		t.Fatal("an old export:", c, body)
 	}
 	mu.Lock()

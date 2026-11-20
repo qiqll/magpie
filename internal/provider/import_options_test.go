@@ -124,8 +124,9 @@ func TestImportNewOnlyCodex(t *testing.T) {
 // saying why. Another workspace of the same email is still new. The
 // window's import of a refresh token alone is as it was.
 func TestImportNewOnlyCodexJudgedBeforeRefresh(t *testing.T) {
-	claudeHome(t)
+	home := claudeHome(t)
 	asked := fakeImportRefresh(t)
+	codexSignIn(t, home, "live@example.com", "r-live")
 	if rs, err := ImportLogins(context.Background(), "codex", []string{`{"type":"codex","refresh_token":"r-owner"}`}); err != nil || importStatuses(rs) != "owner@example.com:added" {
 		t.Fatal(importStatuses(rs), err)
 	}
@@ -143,11 +144,18 @@ func TestImportNewOnlyCodexJudgedBeforeRefresh(t *testing.T) {
 		"r-bare",
 		`{"type":"codex","refresh_token":"r-noid","email":"owner@example.com"}`,
 		`{"type":"codex","refresh_token":"r-seat","id_token":"` + id("owner", "acct-team") + `"}`,
+		// Codex's own sign-in, the agent signed in to it here
+		`{"type":"codex","refresh_token":"r-live2","id_token":"` + id(" Live", "") + `"}`,
+		// a file whose claim and account_id disagree: either names it
+		`{"type":"codex","refresh_token":"r-old4","id_token":"` + id("owner", "acct-other") + `","account_id":"acct-owner"}`,
+		// one new account by two sign-ins: the first is asked
+		`{"type":"codex","refresh_token":"r-twice","id_token":"` + id("twin", "acct-twin") + `"}`,
+		`{"type":"codex","refresh_token":"r-twice2","id_token":"` + id("TWIN", "acct-twin") + `"}`,
 	}, false, o)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := importStatuses(rs); got != ":conflict,:conflict,:conflict,#4:failed,owner@example.com:failed,seat@example.com:added" {
+	if got := importStatuses(rs); got != ":conflict,:conflict,:conflict,#4:failed,owner@example.com:failed,seat@example.com:added,:conflict,:conflict,twice@example.com:added,#10:failed" {
 		t.Fatalf("got %s", got)
 	}
 	for _, r := range rs[3:5] {
@@ -155,7 +163,10 @@ func TestImportNewOnlyCodexJudgedBeforeRefresh(t *testing.T) {
 			t.Errorf("a refresh token alone says %q", r.Error)
 		}
 	}
-	for _, rt := range []string{"r-old1", "r-old2", "r-old3", "r-bare", "r-noid"} {
+	if rs[9].Error != "in the files twice" {
+		t.Errorf("one account twice says %q", rs[9].Error)
+	}
+	for _, rt := range []string{"r-old1", "r-old2", "r-old3", "r-bare", "r-noid", "r-live2", "r-old4", "r-twice2"} {
 		if asked[rt] != 0 {
 			t.Fatalf("%s was sent to ChatGPT: %v", rt, asked)
 		}

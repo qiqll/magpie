@@ -693,14 +693,22 @@ taken: an area pastes it to `signin/{id}/callback`.
   the file's id_token says nothing an area can be believed on to take an
   account. It is believed to refuse one (T-234, the owner's call of
   2026-11-20): before the refresh, the account the file's id_token
-  names, or else its access token's own claims (email, and workspace
-  when both sides name one; `codexFileWho`, `codexWhoKept`), is judged
-  against magpie's, and one magpie has is `conflict` with its refresh
-  token never sent. A file with a refresh token alone (a bare line, or
-  JSON with no id_token and no access token that names its email) fails:
-  "only a refresh token in it, which doesn't say whose account it is"
-  (`codexRefreshOnly`). So an old export of the owner's is never
-  replayed to ChatGPT from an area. What OpenAI does with a replayed
+  names, or else its access token's own claims (email, and a workspace
+  in common, the claim's or `account_id`, when both sides name one;
+  `codexFileWho`, `codexKeptWho`, `codexWhoKept`), is judged against
+  magpie's, Codex's own sign-in here included, and one magpie has is
+  `conflict` with its refresh token never sent. A second sign-in of one
+  new account in the same files is "in the files twice", the first
+  alone asked. A file with a refresh token alone (a bare line, or JSON
+  with no id_token and no access token that names its email) fails:
+  "nothing in it names whose account it is" (`codexRefreshOnly`). So an
+  honest old export of the owner's (its id_token the owner's) is never
+  replayed to ChatGPT from an area; one beside a forged id_token naming
+  an account magpie doesn't have can't be told apart and is refreshed,
+  as before, which whoever holds the token could do without magpie.
+  The list is read before the batch is admitted, so an account the
+  owner signs in to while an import waits its turn is judged only after
+  its refresh. What OpenAI does with a replayed
   refresh token isn't settled: openai/codex#10332 says one is taken again
   for about an hour, then refused for good (`refresh_token_reused`), and
   Codex's own login code treats only the sign-in that sent it as spent;
