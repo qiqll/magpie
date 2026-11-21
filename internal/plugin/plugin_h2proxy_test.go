@@ -144,8 +144,8 @@ func TestPluginHTTP2TakesTheProxy(t *testing.T) {
 	if code, b := fetch("direct"); code != 502 || carried.Load() != 1 || (runtime.GOOS != "windows" && direct.Load() == 0) {
 		t.Fatalf("a provider set to direct: %d %q; the proxy carried %d, want it untouched; dialled direct %d times", code, b, carried.Load(), direct.Load())
 	}
-	dead := "http://" + closedPort(t)
-	if code, b := fetch(dead); code != 502 || !strings.Contains(b, "proxyconnect tcp: dial tcp 127.0.0.1:") {
-		t.Fatalf("through a proxy that is down: %d %q, want it said as Go's transport says it", code, b)
+	dead, before := "http://"+closedPort(t), direct.Load()
+	if code, b := fetch(dead); code != 502 || !strings.Contains(b, "proxyconnect tcp: dial tcp 127.0.0.1:") || direct.Load() != before {
+		t.Fatalf("through a proxy that is down: %d %q, want it said as Go's transport says it; dialled direct %d more times", code, b, direct.Load()-before)
 	}
 }

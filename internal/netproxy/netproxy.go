@@ -662,6 +662,10 @@ func refreshSystem(done chan struct{}) {
 	close(done)
 }
 
+// 0.0.0.0 is neither loopback here nor on the LAN (lanIP): proxy tests
+// (TestSettingsProxyRechecksAFailedUpdate) serve their vendor at it, so a
+// proxy is used for it and a direct dial stays on this computer. Change
+// them with it.
 func loopback(host string) bool {
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return true
