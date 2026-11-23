@@ -97,7 +97,7 @@ func pluginLoginQuota(ctx context.Context, l Login) SubscriptionQuota {
 		}
 	}
 	if key == "" {
-		q.Error = "not signed in"
+		q.Error = errNotSignedIn
 		return q
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)

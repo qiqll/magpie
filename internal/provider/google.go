@@ -1744,7 +1744,7 @@ func googleLoginQuota(ctx context.Context, l Login) SubscriptionQuota {
 			return g.acct.quota(ctx, l.Plan)
 		}
 	}
-	return SubscriptionQuota{Provider: l.Agent, Plan: l.Plan, Windows: []QuotaWindow{}, Error: "not signed in"}
+	return SubscriptionQuota{Provider: l.Agent, Plan: l.Plan, Windows: []QuotaWindow{}, Error: errNotSignedIn}
 }
 
 // ---- signing in -----------------------------------------------------------------

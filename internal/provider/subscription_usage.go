@@ -190,6 +190,10 @@ type SubscriptionQuota struct {
 	Until *time.Time `json:"until,omitempty"`
 	Renew string     `json:"renew,omitempty"`
 	Error string     `json:"error,omitempty"`
+	// Unusable is set, for the GUI only (WithUnusable), on an account's
+	// card that can't be used now: marked banned or disabled, resting
+	// after authentication_failed, or signed out until it signs in again.
+	Unusable bool `json:"unusable,omitempty"`
 	// PluginError is an Error a plugin's own usage read gave, in its own
 	// words: magpie has no reading of it to say better, so the GUI shows
 	// it on the card rather than only in a tooltip (aqiu817/magpie-sensenova#1).

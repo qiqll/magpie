@@ -411,7 +411,7 @@ func loginQuota(ctx context.Context, l Login) SubscriptionQuota {
 				return q
 			}
 		}
-		return SubscriptionQuota{Provider: l.Agent, Plan: l.Plan, Windows: []QuotaWindow{}, Error: "not signed in"}
+		return SubscriptionQuota{Provider: l.Agent, Plan: l.Plan, Windows: []QuotaWindow{}, Error: errNotSignedIn}
 	}
 	q := SubscriptionQuota{Provider: l.Agent, Plan: l.Plan, Windows: []QuotaWindow{}}
 	if l.Agent == "claude" && !l.Active {

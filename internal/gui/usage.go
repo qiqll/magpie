@@ -283,6 +283,9 @@ func usageRoutes(mux *http.ServeMux, w Windows) {
 		// a WorkBuddy (China) account's card says how its daily check-in
 		// went (#694)
 		qs := provider.InProviderOrder(provider.WithCheckins(provider.Quotas(ctx)))
+		// and which accounts can't be used now, banned or signed out, for
+		// the Overview to leave out (WithUnusable)
+		qs = provider.WithUnusable(qs)
 		// and what each window holds whole, by what magpie routed in it
 		qs = usage.WithWindowHolds(qs, usage.Clock())
 		// and when each began, for its Pace number (fflake33)
@@ -315,7 +318,7 @@ func usageRoutes(mux *http.ServeMux, w Windows) {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 		provider.RefreshUsage(ctx, id, r.URL.Query().Get("user"))
-		writeJSON(rw, withTrayKinds(claudeModelWeeks(provider.WithHeldWindows(provider.WithWindowStarts(usage.WithWindowHolds(provider.InProviderOrder(provider.WithCheckins(provider.Quotas(ctx))), usage.Clock()), usage.Clock()), usage.Clock()), usage.Clock())))
+		writeJSON(rw, withTrayKinds(claudeModelWeeks(provider.WithHeldWindows(provider.WithWindowStarts(usage.WithWindowHolds(provider.WithUnusable(provider.InProviderOrder(provider.WithCheckins(provider.Quotas(ctx)))), usage.Clock()), usage.Clock()), usage.Clock()), usage.Clock())))
 	})
 	// WorkBuddy's daily check-in pressed now, from the Usage card, for
 	// each account not in yet today, as `magpie accounts checkin` does; the

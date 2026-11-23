@@ -1070,10 +1070,13 @@ const cardHideKeys = (q) => [cardHideKey(q), ...(q.balanceCard ? [q.balanceCard 
 const hiddenCards = () => new Set(state.settings?.usageCardsHidden || []);
 const cardPeeked = (q) => !!usagePeek && (trayCardID(q) === usagePeek || q.provider === usagePeek);
 // overviewCards: the cards the Overview draws, a provider's keys sharing
-// one balance already one card (sharedBalances), the hidden left out
+// one balance already one card (sharedBalances), the hidden left out, and
+// the accounts that can't be used now, banned or signed out (unusable,
+// provider.WithUnusable; 需求方 2026-11-23: 被封、未在登录状态的账号不要显示),
+// which the Providers page still lists with their way back
 function overviewCards(list) {
   const hid = hiddenCards();
-  list = sharedBalances(list);
+  list = sharedBalances(list).filter((q) => !q.unusable || cardPeeked(q));
   return hid.size ? list.filter((q) => !hid.has(cardHideKey(q)) || cardPeeked(q)) : list;
 }
 // quotaCardMenus gives a card its menu: a right-click, the keyboard's menu
