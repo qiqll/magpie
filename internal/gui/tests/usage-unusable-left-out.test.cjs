@@ -25,7 +25,9 @@ function server(web) {
   return async (route) => {
     const url = new URL(route.request().url());
     const json = (data) => route.fulfill({ json: data });
-    const settings = { lang: "en", theme: "light" };
+    // the Copilot card was hidden by the user too: the "{n} hidden" line
+    // doesn't count it, as Unhide wouldn't bring it back
+    const settings = { lang: "en", theme: "light", usageCardsHidden: ["copilot|gone|plan"] };
     if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: `window.bootPrefs = {lang:"en",theme:"light",web:${web}};` });
     if (url.pathname === "/wails/runtime.js") return route.fulfill({ contentType: "text/javascript", body: "export const Window = {};" });
     if (url.pathname === "/api/state") return json({ agents: [], clients: [], profiles: [], settings, fx: { rate: 7.2, at: new Date().toISOString() } });
@@ -70,7 +72,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.match(text, /ok@example\.com/);
           assert.doesNotMatch(text, /banned@example\.com/, "the banned account's section is left out");
           assert.doesNotMatch(text, /not signed in/i);
-          // not counted as hidden by the user either
+          // not counted as hidden by the user either, though it is
           assert.equal(await page.locator("#quotaHid").isHidden(), true);
           assert.deepEqual(errors, []);
         } finally {

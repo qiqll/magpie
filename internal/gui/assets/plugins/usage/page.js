@@ -1167,10 +1167,12 @@ function idleMore(subs, n) {
   };
   return b;
 }
-// hiddenQuotas: the cards the Overview leaves out, those the line lists
+// hiddenQuotas: the cards the Overview leaves out, those the line lists;
+// not one that can't be used now (overviewCards), which Unhide wouldn't
+// bring back
 function hiddenQuotas() {
   const hid = hiddenCards();
-  return quotas && hid.size ? sharedBalances(quotas).filter((q) => hid.has(cardHideKey(q)) && !cardPeeked(q)) : [];
+  return quotas && hid.size ? sharedBalances(quotas).filter((q) => hid.has(cardHideKey(q)) && !cardPeeked(q) && !q.unusable) : [];
 }
 // renderQuotaHid: the line under the cards saying how many are hidden,
 // opening them, each with Unhide, and Show all
