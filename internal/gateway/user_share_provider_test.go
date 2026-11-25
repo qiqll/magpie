@@ -43,7 +43,9 @@ func TestTierSharesOfAProviderStandInForTheFiles(t *testing.T) {
 		writeTiers(t, noShareTiers)
 		providerShares(t, map[string]map[string]int{"codex": {"free": 2, "PLUS": 1}})
 		s := byUser(New())
-		for _, u := range []struct{ user, tier string }{{"alice", "plus"}, {"carol", "free"}, {"dave", "free"}, {"bob", "plus"}} {
+		// the plus users first: a free user takes an empty one before
+		// sharing (T-287), so dave before bob would leave bob none alone
+		for _, u := range []struct{ user, tier string }{{"alice", "plus"}, {"bob", "plus"}, {"carol", "free"}, {"dave", "free"}} {
 			if rec := tierPost(s, u.user, u.tier, "hi"); rec.Code != 200 {
 				t.Fatalf("%s: %d %s", u.user, rec.Code, rec.Body.String())
 			}
@@ -67,14 +69,15 @@ func TestTierSharesOfAProviderStandInForTheFiles(t *testing.T) {
 		asked, _ := usersUpstream(t, nil)
 		providerShares(t, map[string]map[string]int{"codex": {"free": 10, "plus": 2, "pro": 2, "max": 2}})
 		s := byUser(New())
-		for _, u := range []string{"p1", "p2"} {
-			if rec := tierPost(s, u, "plus", "hi"); rec.Code != 200 {
-				t.Fatalf("%s: %d %s", u, rec.Code, rec.Body.String())
-			}
+		// p1 and f0 each take an empty one first (T-287), so p2 joins p1
+		// and the other free users f0: p2 before f0 would leave free none
+		users := []struct{ user, tier string }{{"p1", "plus"}, {"f0", "free"}, {"p2", "plus"}}
+		for i := 1; i < 10; i++ {
+			users = append(users, struct{ user, tier string }{fmt.Sprint("f", i), "free"})
 		}
-		for i := range 10 {
-			if rec := tierPost(s, fmt.Sprint("f", i), "free", "hi"); rec.Code != 200 {
-				t.Fatalf("free %d: %d %s", i, rec.Code, rec.Body.String())
+		for _, u := range users {
+			if rec := tierPost(s, u.user, u.tier, "hi"); rec.Code != 200 {
+				t.Fatalf("%s: %d %s", u.user, rec.Code, rec.Body.String())
 			}
 		}
 		asked(true)

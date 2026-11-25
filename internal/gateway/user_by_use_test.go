@@ -88,9 +88,31 @@ func bobOnMe(t *testing.T) []usage.Record {
 	return spread("bob", "me@example.com", 1_200_000, 6.5)
 }
 
+// bobOnMeCarolOnB is bobOnMe with carol, of free, on b@example.com
+// beside, sending it 0.2M tokens over 6.5 days: b@'s week, 10% used,
+// holds 2M, and carol's is ~0.22M of it, ~11%. Neither account is empty,
+// so a free user isn't simply bound to the one nobody is on (T-287): by
+// use, or the plan's order between the two, says which it shares.
+func bobOnMeCarolOnB(t *testing.T) []usage.Record {
+	t.Helper()
+	carolOnB(t)
+	return append(spread("bob", "me@example.com", 1_200_000, 6.5), spread("carol", "b@example.com", 200_000, 6.5)...)
+}
+
+// carolOnB binds carol, of free, to b@example.com beside the users
+// bobOnMe binds, so neither account is empty (T-287).
+func carolOnB(t *testing.T) {
+	t.Helper()
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob":   bound("me@example.com", "free", ago(time.Minute)),
+		"carol": bound("b@example.com", "free", ago(time.Minute))}}})
+}
+
 // A free user whose use, beside the one already on a shared account,
-// would be past the account's week target is bound to the empty one
-// instead; without by_use it shares bob's, as the most users are on it.
+// would be past the account's week target is bound to the other one
+// instead; without by_use it shares bob's, the first in the plan's order
+// of the two alike (neither is empty: an empty one is taken first,
+// T-287).
 func TestByUseKeepsAHeavyUserOffASharedAccount(t *testing.T) {
 	for _, on := range []bool{true, false} {
 		name := "by_use off"
@@ -107,7 +129,7 @@ func TestByUseKeepsAHeavyUserOffASharedAccount(t *testing.T) {
 			}
 			weekUsed(t, map[string]float64{"me@example.com": 60, "b@example.com": 10})
 			// alice's ~0.86M a week is ~43% of me@'s week: 108% with bob's
-			usedLately(t, bobOnMe(t), spread("alice", "b@example.com", 800_000, 6.5))
+			usedLately(t, bobOnMeCarolOnB(t), spread("alice", "z@example.com", 800_000, 6.5))
 			s := byUser(New())
 			if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
 				t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
@@ -134,16 +156,16 @@ func TestByUseLetsALightUserShare(t *testing.T) {
 		want  string
 	}{
 		// ~0.22M a week, ~11%: 76% with bob's
-		{"light", spread("alice", "b@example.com", 200_000, 6.5), "me@example.com"},
+		{"light", spread("alice", "z@example.com", 200_000, 6.5), "me@example.com"},
 		// a few hours of use only: counted as half an account, 115%
-		{"new", spread("alice", "b@example.com", 10_000_000, 0.2), "b@example.com"},
+		{"new", spread("alice", "z@example.com", 10_000_000, 0.2), "b@example.com"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			codexSignedIn(t, "b@example.com")
 			asked, _ := usersUpstream(t, nil)
 			byUseTiers(t, `{"on": true}`)
 			weekUsed(t, map[string]float64{"me@example.com": 60, "b@example.com": 10})
-			usedLately(t, bobOnMe(t), c.alice)
+			usedLately(t, bobOnMeCarolOnB(t), c.alice)
 			s := byUser(New())
 			if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
 				t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
@@ -199,6 +221,7 @@ func TestByUseUnknownAccountTakesTheOthersMedian(t *testing.T) {
 	// b@ holds 2M (0.3M routed at 15%); me@'s 1% is too little to tell
 	weekUsed(t, map[string]float64{"me@example.com": 1, "b@example.com": 15})
 	usedLately(t, bobOnMe(t), spread("carol", "b@example.com", 300_000, 6.5), spread("alice", "z@example.com", 800_000, 6.5))
+	carolOnB(t)
 	s := byUser(New())
 	if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
 		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
@@ -314,14 +337,16 @@ func TestByUseSpreadsAUsersUseOverItsAccounts(t *testing.T) {
 }
 
 // An account whose allowance isn't read is unknown, never room: it takes
-// its provider's others' median, and a heavy user goes to the empty one.
+// its provider's others' median, and a heavy user goes to the one with
+// room beside its user.
 func TestByUseUnreadAccountIsNotRoom(t *testing.T) {
 	codexSignedIn(t, "b@example.com")
 	asked, _ := usersUpstream(t, nil)
 	byUseTiers(t, `{"on": true}`)
 	// me@'s allowance not read; b@ holds 2M (0.3M routed at 15%)
 	weekUsed(t, map[string]float64{"b@example.com": 15})
-	usedLately(t, bobOnMe(t), spread("", "b@example.com", 300_000, 6.5), spread("alice", "z@example.com", 800_000, 6.5))
+	usedLately(t, bobOnMe(t), spread("carol", "b@example.com", 300_000, 6.5), spread("alice", "z@example.com", 800_000, 6.5))
+	carolOnB(t)
 	s := byUser(New())
 	if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
 		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
@@ -339,7 +364,7 @@ func TestByUseShortLookbackStillWeighsTheWeek(t *testing.T) {
 	asked, _ := usersUpstream(t, nil)
 	byUseTiers(t, `{"on": true, "lookback_days": 3}`)
 	weekUsed(t, map[string]float64{"me@example.com": 60, "b@example.com": 10})
-	usedLatelyBack(t, 3, bobOnMe(t), spread("alice", "z@example.com", 800_000, 6.5))
+	usedLatelyBack(t, 3, bobOnMeCarolOnB(t), spread("alice", "z@example.com", 800_000, 6.5))
 	s := byUser(New())
 	if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
 		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
@@ -406,13 +431,15 @@ func TestByUseCountsAUsersUseByItsGroup(t *testing.T) {
 			// me@'s week, 15% used, holds 2M: the light bob's ~0.32M a
 			// week is ~16% of it, alice's ~0.86M ~43%
 			weekUsed(t, map[string]float64{"me@example.com": 15, "b@example.com": 10})
+			// carol on b@, ~11% of it, so neither account is empty (T-287)
 			writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
-				"bob": bound("me@example.com", "free", ago(time.Minute))}}})
+				"bob":   bound("me@example.com", "free", ago(time.Minute)),
+				"carol": bound("b@example.com", "free", ago(time.Minute))}}})
 			heavy := spread("bob", "z@example.com", 1_200_000, 6.5)
 			for i := range heavy {
 				heavy[i].CallerKeyID = "k1"
 			}
-			usedLately(t, spread("bob", "me@example.com", 300_000, 6.5), heavy, spread("alice", "z@example.com", 800_000, 6.5))
+			usedLately(t, spread("bob", "me@example.com", 300_000, 6.5), heavy, spread("carol", "b@example.com", 200_000, 6.5), spread("alice", "z@example.com", 800_000, 6.5))
 			s := byUser(New())
 			if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
 				t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())

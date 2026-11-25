@@ -3,7 +3,8 @@ package gateway
 // A caller's own users, each bound to accounts of a provider (or its
 // keys), bound so when the gateway is (--bind=user, bind.go): the caller
 // names the user in UserHeader, the first request of that user to the
-// provider binds it to the account fewest users are bound to, and from
+// provider binds it to the account fewest users are bound to (an empty
+// one first, whatever its tier's share, T-287), and from
 // then on only its accounts are asked for it, of any of the provider's
 // models: its first, then its spares, in order. An account takes a user
 // only while it has a seat for it (seatUse.takes): as many users as the
@@ -1543,10 +1544,13 @@ func firstOf(pid string, cands []candidate, pl planned, tier Tier, uses seatUses
 // (seatUse.takes), not resting, not to be signed in again (lapsedWho,
 // lapsedOf's, read before userBinds was locked)
 // and, with room, under routes.LowShare of each window counting the
-// model, the one fewest users of every key are bound to; for a tier that
-// shares one with a few (share 2 or more), the one most are, so a user
-// that shares leaves alone the accounts nobody is on, for the users that
-// have theirs alone. The plan's order (Smart's) between those alike.
+// model, the one fewest users of every key are bound to, an empty one
+// first, whatever the tier's share: users that share one are spread over
+// the accounts before they pair up, so two on one don't run it out and
+// move on together (the owner's choice A, 2026-11-25, T-287; until then a
+// tier of share 2 or more took the one most were on, to leave the empty
+// ones for users that have theirs alone). The plan's order (Smart's)
+// between those alike.
 // Those held at a cap aren't among cands. -1 for none. Called with
 // userBinds held.
 func spareOf(pid string, cands []candidate, pl planned, seats []userSeat, room bool, tier Tier, uses seatUses, lapsedWho map[string]string) int {
@@ -1559,7 +1563,7 @@ func spareOf(pid string, cands []candidate, pl planned, seats []userSeat, room b
 			continue
 		}
 		n, at := uses.of(c).on(), uses.of(cands[max(pick, 0)]).on()
-		if pick < 0 || tier.Share >= 2 && n > at || tier.Share < 2 && n < at {
+		if pick < 0 || n < at {
 			pick = i
 		}
 	}

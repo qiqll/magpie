@@ -76,10 +76,13 @@ func TestPaidUserHasItsAccountAlone(t *testing.T) {
 	}
 }
 
-// Free users share the account one is on already before taking one
-// nobody is on, whichever that account is, so a pro user that comes
-// after still finds one alone.
-func TestSharingUsersLeaveAnAccountEmpty(t *testing.T) {
+// Free users take an account nobody is on before sharing one, whichever
+// account the first is on (the owner's choice A, 2026-11-25, T-287; until
+// then they packed onto it to leave the empty ones for users with theirs
+// alone): dave goes to an empty one, a pro user to the one left, and a
+// second pro user, with none left alone, is a 429 that says the pool is
+// full, nobody asked.
+func TestSharingUsersTakeAnEmptyAccountFirst(t *testing.T) {
 	for _, on := range []string{"me@example.com", "b@example.com", "c@example.com"} {
 		t.Run(on, func(t *testing.T) {
 			codexSignedIn(t, "b@example.com", "c@example.com")
@@ -87,17 +90,56 @@ func TestSharingUsersLeaveAnAccountEmpty(t *testing.T) {
 			s := byUser(New())
 			writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
 				"carol": {Who: "codex@" + on, Account: on, At: time.Now().UTC(), Tier: "free"}}}})
-			for _, u := range []struct{ user, tier string }{{"dave", "free"}, {"alice", "pro"}, {"bob", "pro"}} {
+			for _, u := range []struct{ user, tier string }{{"dave", "free"}, {"alice", "pro"}} {
 				if rec := tierPost(s, u.user, u.tier, "hi"); rec.Code != 200 {
 					t.Fatalf("%s: %d %s", u.user, rec.Code, rec.Body.String())
 				}
 			}
 			asked(true)
 			seats := seatsIn(t, "codex")
-			if d, a, b := seats["dave"], seats["alice"], seats["bob"]; !slices.Equal(d, []string{on}) || len(a) != 1 || len(b) != 1 || a[0] == on || b[0] == on || a[0] == b[0] {
-				t.Fatalf("free packed on %s, pro alone: %v", on, seats)
+			if d, a := seats["dave"], seats["alice"]; len(d) != 1 || len(a) != 1 || d[0] == on || a[0] == on || a[0] == d[0] {
+				t.Fatalf("free on an empty one, not %s; pro on the last: %v", on, seats)
+			}
+			rec := tierPost(s, "bob", "pro", "hi")
+			if limit, _ := limitOf(t, rec); rec.Code != 429 || limit != "seats" {
+				t.Fatalf("bob, none alone left: %d %q %s", rec.Code, limit, rec.Body.String())
+			}
+			if got := asked(true); len(got) != 0 {
+				t.Fatalf("asked: %v", got)
 			}
 		})
+	}
+}
+
+// Two free users, two to an account, on two accounts nobody is on, are
+// bound one to each, not both to the first (T-287: they filled one, ran
+// out its five hours together, and both took the other as a spare). When
+// one's account is out for hours, the other is answered on its own.
+func TestSharingUsersSpreadOverEmptyAccounts(t *testing.T) {
+	codexSignedIn(t, "b@example.com")
+	out, asked := limitUpstream(t)
+	s := byUser(New())
+	if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
+		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())
+	}
+	alices := asked(true)[0]
+	if rec := tierPost(s, "bob", "free", "hi"); rec.Code != 200 {
+		t.Fatalf("bob: %d %s", rec.Code, rec.Body.String())
+	}
+	bobs := asked(true)[0]
+	seats := seatsIn(t, "codex")
+	if a, b := seats["alice"], seats["bob"]; len(a) != 1 || len(b) != 1 || a[0] == b[0] || bobs == alices {
+		t.Fatalf("both on one: %v, asked %s and %s", seats, alices, bobs)
+	}
+	// alice's is out: she may take bob's as a spare, he keeps his
+	out(alices, 7200)
+	tierPost(s, "alice", "free", "spent")
+	asked(true)
+	if rec := tierPost(s, "bob", "free", "again"); rec.Code != 200 {
+		t.Fatalf("bob, alice's out: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := asked(true); len(got) != 1 || got[0] != bobs {
+		t.Fatalf("bob asked %v, want %s", got, bobs)
 	}
 }
 

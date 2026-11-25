@@ -2655,8 +2655,10 @@ those not resting and with a seat for its tier: an account takes no more
 users than the `share` of each user's tier on it, the new user's too
 (below), so a user of a tier with `share` 1 is bound only to an account
 nobody is on, and nobody joins it. A user of a tier that shares (`share` 2
-or more) goes to the account most users are on that still has a seat
-instead, leaving the empty ones to users who have theirs alone. With no
+or more) goes the same way, to an account nobody is on first, so two such
+users are spread over two empty accounts rather than paired on one (before
+2026-11-25 it went to the account most users were on that still had a
+seat, leaving the empty ones to users who have theirs alone). With no
 account of the provider that has a seat for it, the request is a 429,
 and nothing is sent: with the limit of the accounts it could share and
 `X-Magpie-User-Until` when they rest (the first of them back), and
@@ -2673,7 +2675,7 @@ was sent rests first), at its usage cap, or all but used up. The spare is
 the account fewest users are on, the plan's order between those alike, of
 those not already the user's, with a seat for its tier, not resting, not
 signed out by the vendor, not held at a cap and under 90% of each window
-that counts the model (most users on it first, for a tier that shares);
+that counts the model, whatever the tier's `share`;
 with only such accounts left, none is added. How many accounts of a
 provider a user may have, its first and its spares, is its tier's (below).
 When its accounts can't answer and no spare is added (rate limited, back
