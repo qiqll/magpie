@@ -277,30 +277,42 @@ function growthIdleRow(s) {
 // user-tiers.json's share (its placeholder), each change saved at once
 // (settings/provider-shares) apart from the policies' draft. A provider
 // is added from a menu, and kept off the list again with no share set.
+// With a free tier, a last input a provider's low use (T-279): under that
+// daily share of its week an account takes one free user more, empty off
+// (settings/provider-low-use).
 function growthSharesRow(s) {
   const row = el("div", "row pref growth-shares");
   const who = el("div", "who");
   who.append(el("div", "name", t("Users per account, by provider")),
     el("div", "sub", t("With the gateway bound by user, how many users one account of a provider may be bound to, by each user's tier. Empty follows user-tiers.json (its number shown); 1 is the user's own alone, 0 any number. An account is shared by users of one tier only; users of several tiers bound to one before keep it.")));
   row.append(who);
-  const tiers = s.shareTiers || [], most = s.shareMost || 1000;
+  const tiers = s.shareTiers || [], most = s.shareMost || 1000, lowMost = s.lowUseMost || 100;
+  // the tier an account of low use takes one more user of (lowUseTier)
+  const free = tiers.some((x) => x.name.toLowerCase() === "free");
   if (!tiers.length) {
     row.append(el("div", "sub err growth-shares-unknown", t("user-tiers.json can't be read, so its tiers aren't known")));
     return row;
   }
   const names = new Map((s.shareProviders || []).map((p) => [p.id, p.name]));
-  // the providers shown: those with shares saved, and one just added
-  const shown = Object.keys(s.providerShares || {});
+  // the providers shown: those with shares or a low use saved, and one
+  // just added
+  const shown = [...new Set([...Object.keys(s.providerShares || {}), ...(free ? Object.keys(s.providerLowUse || {}) : [])])];
   const added = growthSharesRow.added?.filter((id) => !shown.includes(id) && names.has(id)) || [];
   growthSharesRow.added = added;
   const ids = [...shown, ...added].sort((a, b) => (names.get(a) || a).localeCompare(names.get(b) || b));
   const wrap = el("div", "growth-shares-wrap");
   const grid = el("div", "growth-shares-grid");
-  grid.style.gridTemplateColumns = `minmax(4em, 12em) repeat(${tiers.length}, minmax(3.2em, 4.5em)) auto`;
+  grid.style.gridTemplateColumns = `minmax(4em, 12em) repeat(${tiers.length}, minmax(3.2em, 4.5em))${free ? " minmax(3.6em, 5em)" : ""} auto`;
   grid.setAttribute("role", "table");
   grid.setAttribute("aria-label", t("Users per account, by provider"));
   const cell = (cls, text) => { const c = el("div", cls, text); c.setAttribute("role", "cell"); return c; };
-  grid.append(cell("gs-head", t("Provider")), ...tiers.map((x) => { const c = cell("gs-head gs-tier", x.name); c.title = x.aliases?.length ? `${x.name} (${x.aliases.join(", ")})` : x.name; return c; }), cell("gs-head", ""));
+  grid.append(cell("gs-head", t("Provider")), ...tiers.map((x) => { const c = cell("gs-head gs-tier", x.name); c.title = x.aliases?.length ? `${x.name} (${x.aliases.join(", ")})` : x.name; return c; }));
+  if (free) { const c = cell("gs-head gs-low-head", t("free +1 under")); c.title = t("free +1 under (% a day)"); grid.append(c); }
+  grid.append(cell("gs-head", ""));
+  // whether provider id has shares, or a low use, saved, as the settings
+  // now say
+  const ownShares = (id) => Object.keys((prefs || s).providerShares?.[id] || {}).length > 0;
+  const ownLow = (id) => free && (prefs || s).providerLowUse?.[id] != null;
   const redraw = () => row.replaceWith(growthSharesRow(prefs || s));
   // send is the provider's shares as its inputs hold them, null with none,
   // each after the one before it of the row (chain): two cells changed in
@@ -310,11 +322,27 @@ function growthSharesRow(s) {
     tiers.forEach((x, i) => { const v = inputs[i].value.trim(); if (v !== "") out[x.name] = +v; });
     const none = !Object.keys(out).length;
     const go = () => writingPrefs(api("settings/provider-shares", { provider: id, shares: none ? null : out }))
-      .then((ns) => { prefs = state.settings = ns; if (none) growthSharesRow.added = (growthSharesRow.added || []).filter((x) => x !== id); status(t("Saved"), "ok", 1500); if (none) redraw(); });
+      .then((ns) => { prefs = state.settings = ns; gone(id); status(t("Saved"), "ok", 1500); });
     const p = chain.at.then(go, go);
     chain.at = p.catch(() => {});
     return p;
   };
+  // gone drops provider id's row once nothing of it is saved
+  const gone = (id) => {
+    if (ownShares(id) || ownLow(id)) return;
+    growthSharesRow.added = (growthSharesRow.added || []).filter((x) => x !== id);
+    redraw();
+  };
+  // sendLow is the provider's low use as its input holds it, null empty,
+  // in the row's turn (chain)
+  const sendLow = (id, v, chain) => {
+    const go = () => writingPrefs(api("settings/provider-low-use", { provider: id, percent: v === "" ? null : +v }))
+      .then((ns) => { prefs = state.settings = ns; gone(id); status(t("Saved"), "ok", 1500); });
+    const p = chain.at.then(go, go);
+    chain.at = p.catch(() => {});
+    return p;
+  };
+  const lowInputs = new Map();
   for (const id of ids) {
     const own = s.providerShares?.[id] || {};
     const chain = { at: Promise.resolve() };
@@ -348,16 +376,48 @@ function growthSharesRow(s) {
       grid.append(c);
       return i;
     });
+    if (free) {
+      const was = s.providerLowUse?.[id];
+      const i = input(was == null ? "" : String(was), t("Off"), "number");
+      i.className = "gs-low";
+      i.min = "1";
+      i.max = String(lowMost);
+      i.step = "1";
+      i.setAttribute("aria-label", t("Free +1 under this share a day of the week, for {provider}", { provider: names.get(id) || id }));
+      let sent = i.value;
+      i.onchange = () => {
+        const v = i.value.trim();
+        if (i.validity.badInput || v !== "" && (!/^\d+$/.test(v) || +v < 1 || +v > lowMost)) {
+          status(t("Free +1 is under 1% to {n}% a day, or empty for off", { n: lowMost }), "err");
+          i.value = sent;
+          return;
+        }
+        const back = sent;
+        sent = v;
+        sendLow(id, v, chain).catch((e) => { if (sent === v) { sent = back; i.value = back; } statusErr(e); });
+      };
+      lowInputs.set(id, i);
+      const c = cell("gs-cell");
+      c.append(i);
+      grid.append(c);
+    }
     const rm = el("button", "text gs-remove", t("Remove"));
     rm.type = "button";
     rm.setAttribute("aria-label", t("Follow user-tiers.json for {provider}", { provider: names.get(id) || id }));
     // saved since the row was drawn too (a provider just added): its
     // shares as the settings now say
     rm.onclick = () => {
-      if (!Object.keys((prefs || s).providerShares?.[id] || {}).length) { growthSharesRow.added = (growthSharesRow.added || []).filter((x) => x !== id); return redraw(); }
-      const was = inputs.map((i) => i.value);
-      inputs.forEach((i) => { i.value = ""; });
-      send(id, inputs, chain).catch((e) => { inputs.forEach((i, n) => { i.value = was[n]; }); statusErr(e); });
+      const shares = ownShares(id), low = ownLow(id), li = lowInputs.get(id);
+      if (!shares && !low) { growthSharesRow.added = (growthSharesRow.added || []).filter((x) => x !== id); return redraw(); }
+      const was = inputs.map((i) => i.value), lowWas = li?.value;
+      if (shares) {
+        inputs.forEach((i) => { i.value = ""; });
+        send(id, inputs, chain).catch((e) => { inputs.forEach((i, n) => { i.value = was[n]; }); statusErr(e); });
+      }
+      if (low) {
+        li.value = "";
+        sendLow(id, "", chain).catch((e) => { li.value = lowWas; statusErr(e); });
+      }
     };
     const c = cell("gs-cell");
     c.append(rm);
@@ -366,6 +426,7 @@ function growthSharesRow(s) {
   if (ids.length) {
     wrap.append(grid);
   }
+  if (free) wrap.append(el("div", "sub growth-low-says", t("Free +1: an account whose week is used, on average, less than this share a day (from its second day) takes one free user more than its share, once; a user who goes idle frees the seat, given again only while the use is still low. Empty is off.")));
   const left = [...names].filter(([id]) => !ids.includes(id));
   const add = el("button", "text gs-add", t("Add a provider"));
   add.type = "button";

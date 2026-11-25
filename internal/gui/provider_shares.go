@@ -90,3 +90,23 @@ func providerShares(pid string, in map[string]int) (map[string]int, error) {
 	}
 	return out, nil
 }
+
+// providerLowUse is in, the low use the user set for provider pid
+// (T-279): a daily share of its accounts' week, 1 to settings.LowUseMost
+// percent; nil for none, which clears it, a provider not in Providers
+// too; or why it can't be taken.
+func providerLowUse(pid string, in *int) (int, error) {
+	if strings.TrimSpace(pid) == "" {
+		return 0, fmt.Errorf("no provider named")
+	}
+	if in == nil {
+		return 0, nil
+	}
+	if !slices.ContainsFunc(provider.All(), func(p provider.Provider) bool { return p.ID == pid }) {
+		return 0, fmt.Errorf("%q isn't in Providers", pid)
+	}
+	if *in < 1 || *in > settings.LowUseMost {
+		return 0, fmt.Errorf("an account takes one free user more under 1%% to %d%% a day of its week, not %d", settings.LowUseMost, *in)
+	}
+	return *in, nil
+}

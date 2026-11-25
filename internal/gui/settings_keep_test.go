@@ -225,6 +225,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 	twelve := 12
 	was.BindIdleHours = &twelve                                           // Settings › Growth policy's settings/bind-idle (T-242)
 	was.ProviderShares = map[string]map[string]int{"codex": {"free": 10}} // and its settings/provider-shares (T-243)
+	was.ProviderLowUse = map[string]int{"codex": 10}                      // and its settings/provider-low-use (T-279)
 	// the Routing groups page's defaults for every group (groups/defaults)
 	was.GroupSink, was.GroupFirstToken, was.GroupPatience = true, 30, 120
 	if err := settings.Save(was); err != nil {

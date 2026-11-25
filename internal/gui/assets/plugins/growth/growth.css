@@ -87,5 +87,5 @@
 .growth-shares-grid .gs-head { color: var(--muted); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .growth-shares-grid .gs-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
 .growth-shares-grid .gs-name.gone { color: var(--muted); text-decoration: line-through; }
-.growth-shares-grid .gs-share { width: 100%; min-width: 0; }
+.growth-shares-grid .gs-share, .growth-shares-grid .gs-low { width: 100%; min-width: 0; }
 .growth-shares-unknown { flex: 1 1 100%; }

@@ -416,6 +416,9 @@ type settingsJSON struct {
 	ShareTiers     []shareTierJSON     `json:"shareTiers"`
 	ShareProviders []shareProviderJSON `json:"shareProviders"`
 	ShareMost      int                 `json:"shareMost"`
+	// LowUseMost is the highest low use a provider may name, in percent
+	// a day (settings.ProviderLowUse, T-279)
+	LowUseMost int `json:"lowUseMost"`
 	// Builtins are the built-in plugins: each one's switch, whether it
 	// runs and what of it is in use (builtins.go)
 	Builtins []builtinJSON `json:"builtins"`
@@ -841,6 +844,7 @@ func settingsState() settingsJSON {
 	s.GrowthPolicyList, s.GrowthInEffect = s.Settings.GrowthPoliciesAll(), g.ID
 	s.BindIdleDefault, s.BindIdleMost = settings.DefaultBindIdleHours, settings.BindIdleMost
 	s.ShareTiers, s.ShareProviders, s.ShareMost = shareTiers(), shareProviders(), settings.ShareMost
+	s.LowUseMost = settings.LowUseMost
 	s.AddrEnv = os.Getenv("MAGPIE_ADDR")
 	s.Log = tilde(applog.Current())
 	s.Builtins = builtinsState()
@@ -1846,6 +1850,45 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		if len(s.ProviderShares) == 0 {
 			s.ProviderShares = nil
+		}
+		if err := settings.Save(s); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
+	// the daily share of its week under which an account of a provider
+	// takes one free user more than its share (T-279), as Settings ›
+	// Growth policy sets it beside the provider's shares: null for none
+	mux.HandleFunc("POST /api/settings/provider-low-use", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Provider string `json:"provider"`
+			Percent  *int   `json:"percent"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		low, err := providerLowUse(in.Provider, in.Percent)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		s, err := settings.LoadChecked()
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		if low == 0 {
+			delete(s.ProviderLowUse, in.Provider)
+		} else {
+			if s.ProviderLowUse == nil {
+				s.ProviderLowUse = map[string]int{}
+			}
+			s.ProviderLowUse[in.Provider] = low
+		}
+		if len(s.ProviderLowUse) == 0 {
+			s.ProviderLowUse = nil
 		}
 		if err := settings.Save(s); err != nil {
 			fail(rw, err)

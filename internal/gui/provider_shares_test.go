@@ -66,3 +66,50 @@ func TestTierSharesByProviderSaved(t *testing.T) {
 		t.Fatalf("gone cleared: %d", code)
 	}
 }
+
+// Settings › Growth policy sets the low use under which an account of a
+// provider takes one free user more (T-279): POST
+// /api/settings/provider-low-use keeps 1 to 100 for a provider in
+// Providers, refuses anything else writing nothing, and null clears it,
+// a provider gone from Providers too.
+func TestTierLowUseByProviderSaved(t *testing.T) {
+	sandboxHome(t)
+	if _, err := provider.Add(provider.Provider{ID: "own", Name: "Own", Chat: "http://127.0.0.1:1/v1", Key: "sk-own", Models: []string{"m1"}}); err != nil {
+		t.Fatal(err)
+	}
+	srv := Handler(nil, nil)
+	post := func(body string) (int, settingsJSON) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest("POST", "/api/settings/provider-low-use", strings.NewReader(body)))
+		var s settingsJSON
+		if rec.Code == 200 {
+			if err := json.Unmarshal(rec.Body.Bytes(), &s); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return rec.Code, s
+	}
+	code, s := post(`{"provider":"own","percent":10}`)
+	if want := map[string]int{"own": 10}; code != 200 || !maps.Equal(settings.Load().ProviderLowUse, want) || !maps.Equal(s.ProviderLowUse, want) || s.LowUseMost != 100 {
+		t.Fatalf("%d %v %d", code, settings.Load().ProviderLowUse, s.LowUseMost)
+	}
+	for _, body := range []string{
+		`{"provider":"own","percent":0}`,
+		`{"provider":"own","percent":101}`,
+		`{"provider":"own","percent":-3}`,
+		`{"provider":"own","percent":"10"}`,
+		`{"provider":"gone","percent":10}`,
+		`{"provider":"","percent":10}`,
+	} {
+		if code, _ := post(body); code != 400 || !maps.Equal(settings.Load().ProviderLowUse, map[string]int{"own": 10}) {
+			t.Fatalf("%s: %d %v", body, code, settings.Load().ProviderLowUse)
+		}
+	}
+	if code, _ := post(`{"provider":"own","percent":null}`); code != 200 || settings.Load().ProviderLowUse != nil {
+		t.Fatalf("cleared: %d %v", code, settings.Load().ProviderLowUse)
+	}
+	if code, _ := post(`{"provider":"gone"}`); code != 200 {
+		t.Fatalf("gone cleared: %d", code)
+	}
+}
