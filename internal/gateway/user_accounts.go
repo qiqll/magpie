@@ -1643,10 +1643,10 @@ func fullRefusal(user string, tier Tier, pid string, cands []candidate, pl plann
 		why = append(why, "one is signed out by its vendor")
 	}
 	if len(why) == 0 {
-		r.msg = fmt.Sprintf("%s: no account of the provider is free for %q: each is taken by as many users as can share it (its %s, %s)%s%s; nothing was sent", UserHeader, user, tier.shares(), UserTierHeader, uses.tierSaid(pid, cands, tier), uses.byUseSaid(pid, cands))
+		r.msg = fmt.Sprintf("%s: no account of the provider is free for %q: each is taken by as many users as can share it (its %s%s, %s)%s%s; nothing was sent", UserHeader, user, tier.shares(), uses.lowUseSaid(pid, cands, tier), UserTierHeader, uses.tierSaid(pid, cands, tier), uses.byUseSaid(pid, cands))
 		return r
 	}
-	r.msg = fmt.Sprintf("%s: no account of the provider is free for %q: of those its %s (%s) can share, the first back %s, and the others are taken%s%s; nothing was sent", UserHeader, user, tier.shares(), UserTierHeader, strings.Join(why, "; "), uses.tierSaid(pid, cands, tier), uses.byUseSaid(pid, cands))
+	r.msg = fmt.Sprintf("%s: no account of the provider is free for %q: of those its %s%s (%s) can share, the first back %s, and the others are taken%s%s; nothing was sent", UserHeader, user, tier.shares(), uses.lowUseSaid(pid, cands, tier), UserTierHeader, strings.Join(why, "; "), uses.tierSaid(pid, cands, tier), uses.byUseSaid(pid, cands))
 	return r
 }
 
@@ -1657,6 +1657,21 @@ func (uses seatUses) tierSaid(pid string, cands []candidate, tier Tier) string {
 	for _, c := range cands {
 		if u := uses.of(c); c.p.ID == pid && u.seatedAs(tier) && u.otherTier(tier.Name) {
 			return fmt.Sprintf(", or are shared by users of another tier (an account is shared by users of one tier only, and tier %s's users join none another tier's are on)", tier.Name)
+		}
+	}
+	return ""
+}
+
+// lowUseSaid is what a refusal adds when an account of provider pid
+// among cands is of low use for tier (T-279): "", or that it took one
+// user more than the share said.
+func (uses seatUses) lowUseSaid(pid string, cands []candidate, tier Tier) string {
+	if !strings.EqualFold(tier.Name, lowUseTier) || oneMore(tier.Share) == tier.Share {
+		return ""
+	}
+	for _, c := range cands {
+		if c.p.ID == pid && uses.of(c).low {
+			return fmt.Sprintf(" (and %s, of low use, one %s user more)", shownAs(c), tier.Name)
 		}
 	}
 	return ""
@@ -1808,7 +1823,7 @@ func growUser(u *UserBound, pool []candidate, poolPl planned, cands []candidate,
 		if !slices.ContainsFunc(pool, func(c candidate) bool {
 			return c.p.ID == u.pid && !seatIn(now, c.who()) && uses.of(c).takes(u.tier)
 		}) {
-			return refuse(fmt.Sprintf("every other account of the provider is taken by as many users as can share it (its %s, %s)%s%s", u.tier.shares(), UserTierHeader, uses.tierSaid(u.pid, pool, u.tier), uses.byUseSaid(u.pid, pool)), "")
+			return refuse(fmt.Sprintf("every other account of the provider is taken by as many users as can share it (its %s%s, %s)%s%s", u.tier.shares(), uses.lowUseSaid(u.pid, pool, u.tier), UserTierHeader, uses.tierSaid(u.pid, pool, u.tier), uses.byUseSaid(u.pid, pool)), "")
 		}
 		return refuse("no other account of the provider has room to be added", "")
 	}

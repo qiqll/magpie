@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,8 +75,8 @@ func TestLowUseTierTakesOneFreeUserMore(t *testing.T) {
 	asked(true)
 	weeksRan(t, map[string]lowWeek{"me@example.com": {used: 3, ran: days(3)}, "b@example.com": {used: 36, ran: days(3)}})
 	rec := tierPost(s, "frank", "free", "hi")
-	if limit, _ := limitOf(t, rec); rec.Code != 429 || limit != "seats" {
-		t.Fatalf("a fourth on me@: %d %q %s", rec.Code, limit, rec.Body.String())
+	if limit, _ := limitOf(t, rec); rec.Code != 429 || limit != "seats" || !strings.Contains(refusedWhy(s), "(and me@example.com, of low use, one free user more)") {
+		t.Fatalf("a fourth on me@: %d %q %s", rec.Code, limit, refusedWhy(s))
 	}
 	if got := asked(true); len(got) != 0 {
 		t.Fatalf("asked: %v", got)
@@ -226,10 +227,10 @@ func TestLowUseSeatJudgedAgainWhenIdleLetsGo(t *testing.T) {
 }
 
 // lowUseOf reads each account's week: 8% a day under 10 is low, 12 isn't;
-// of two weeks of every model, the busier; a week of one model alone
-// isn't one.
+// of two weeks of every model, the busier; an account with only five
+// hours, or a week of one model alone, has no week and isn't low.
 func TestLowUseOfReadsTheWeek(t *testing.T) {
-	codexSignedIn(t, "b@example.com", "c@example.com")
+	codexSignedIn(t, "b@example.com", "c@example.com", "d@example.com", "e@example.com")
 	providerLowUse(t, map[string]int{"codex": 10})
 	now := time.Now()
 	old := allowances
@@ -242,6 +243,9 @@ func TestLowUseOfReadsTheWeek(t *testing.T) {
 			"me@example.com": {w(24, ""), {Used: 90, Resets: now.Add(time.Hour), Span: 5 * time.Hour}, w(90, "opus")},
 			"b@example.com":  {w(36, "")},
 			"c@example.com":  {w(24, ""), w(33, "")},
+			// no week of every model: none told, never low
+			"d@example.com": {{Used: 1, Resets: now.Add(time.Hour), Span: 5 * time.Hour}},
+			"e@example.com": {w(1, "opus")},
 		}
 	}
 	var cands []candidate
