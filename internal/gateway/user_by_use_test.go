@@ -338,15 +338,22 @@ func TestByUseSpreadsAUsersUseOverItsAccounts(t *testing.T) {
 
 // An account whose allowance isn't read is unknown, never room: it takes
 // its provider's others' median, and a heavy user goes to the one with
-// room beside its user.
+// room, though more users are on it. Free shares three to an account
+// here, so b@ with carol and erin still has a seat and me@, bob's alone,
+// is the one fewest are on (T-287): only by_use keeps alice off it.
 func TestByUseUnreadAccountIsNotRoom(t *testing.T) {
 	codexSignedIn(t, "b@example.com")
 	asked, _ := usersUpstream(t, nil)
-	byUseTiers(t, `{"on": true}`)
-	// me@'s allowance not read; b@ holds 2M (0.3M routed at 15%)
+	writeTiers(t, `{"default": "free", "tiers": {"free": {"max_accounts": 2, "share": 3}}, "by_use": {"on": true}}`)
+	// me@'s allowance not read; b@ holds ~2.7M (0.4M routed at 15%), and
+	// so me@ by the median: bob's ~48% of it and alice's ~48% are past
+	// 90%, beside carol's and erin's ~16% on b@ they aren't
 	weekUsed(t, map[string]float64{"b@example.com": 15})
-	usedLately(t, bobOnMe(t), spread("carol", "b@example.com", 300_000, 6.5), spread("alice", "z@example.com", 800_000, 6.5))
-	carolOnB(t)
+	usedLately(t, bobOnMe(t), spread("carol", "b@example.com", 300_000, 6.5), spread("erin", "b@example.com", 100_000, 6.5), spread("alice", "z@example.com", 1_200_000, 6.5))
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"bob":   bound("me@example.com", "free", ago(time.Minute)),
+		"carol": bound("b@example.com", "free", ago(time.Minute)),
+		"erin":  bound("b@example.com", "free", ago(time.Minute))}}})
 	s := byUser(New())
 	if rec := tierPost(s, "alice", "free", "hi"); rec.Code != 200 {
 		t.Fatalf("alice: %d %s", rec.Code, rec.Body.String())

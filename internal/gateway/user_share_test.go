@@ -143,6 +143,27 @@ func TestSharingUsersSpreadOverEmptyAccounts(t *testing.T) {
 	}
 }
 
+// A free user whose account is out for hours is given the empty account
+// as its spare, not the one another free user is on (T-287).
+func TestSharingUserSpareIsAnEmptyAccount(t *testing.T) {
+	codexSignedIn(t, "b@example.com", "c@example.com")
+	out, asked := limitUpstream(t)
+	writeUsers(t, userFile{Users: map[string]map[string]userBinding{"codex": {
+		"alice": bound("me@example.com", "free", ago(time.Minute)),
+		"dave":  bound("c@example.com", "free", ago(time.Minute))}}})
+	s := byUser(New())
+	out("acct-1", 7200)
+	if rec := tierPost(s, "alice", "free", "spent"); rec.Code != 200 {
+		t.Fatalf("alice, a spare added: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := asked(true); !slices.Equal(got, []string{"acct-1", "acct-2"}) {
+		t.Fatalf("asked %v", got)
+	}
+	if a := seatsIn(t, "codex")["alice"]; !slices.Equal(a, []string{"me@example.com", "b@example.com"}) {
+		t.Fatalf("alice on %v", a)
+	}
+}
+
 // A free user whose account is out for hours is given no spare that is
 // another's alone: the 429 says every other account is taken, and the
 // pro user's account is never asked for it.
