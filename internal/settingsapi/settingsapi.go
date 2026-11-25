@@ -340,6 +340,7 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.AuthHoldHours = cur.AuthHoldHours   // and the hold after authentication_failed (auth-holds/hours)
 	in.BindIdleHours = cur.BindIdleHours   // and when an idle user's accounts are let go (bind-idle, T-242)
 	in.ProviderShares = cur.ProviderShares // and each provider's users per account (provider-shares, T-243)
+	in.ProviderLowUse = cur.ProviderLowUse // and the low use that seats one more free user (provider-low-use, T-279)
 	in.CodexAgentsV1 = cur.CodexAgentsV1
 	in.FullContext = cur.FullContext     // set on its own (full-context)
 	in.CompactAt = cur.CompactAt         // and so is the threshold

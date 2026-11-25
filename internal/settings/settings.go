@@ -456,6 +456,13 @@ type Settings struct {
 	// that provider; a provider or tier not named keeps the file's. Set
 	// on its own (settings/provider-shares) from Settings › Growth policy.
 	ProviderShares map[string]map[string]int `json:"providerShares,omitempty"`
+	// ProviderLowUse is, by provider id, the daily share of an account's
+	// week below which it takes one free user more than its share
+	// (gateway --bind=user, T-279): in percent, 1 to LowUseMost, the
+	// week's share used over the days it has run; a provider not named
+	// takes none more. Set on its own (settings/provider-low-use) from
+	// Settings › Growth policy.
+	ProviderLowUse map[string]int `json:"providerLowUse,omitempty"`
 	// RefusalRetries is how many more times a request the vendor's safety
 	// filter refused, with nothing said, is asked of another account or
 	// routing group member (#248), unset for every one left. 0 hands the
@@ -2937,6 +2944,10 @@ func (s Settings) BindIdle() time.Duration {
 // ShareMost is the most users a provider's share for a tier
 // (ProviderShares) may name: past it, 0 says no limit.
 const ShareMost = 1000
+
+// LowUseMost is the highest daily share a provider's low use
+// (ProviderLowUse) may name, in percent.
+const LowUseMost = 100
 
 // AuthHold is how long a caller is held after authentication_failed, 0 for
 // nobody: s's own, else DefaultAuthHoldHours.

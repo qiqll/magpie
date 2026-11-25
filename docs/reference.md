@@ -2887,6 +2887,27 @@ built-in tiers, codex free 10 and plus, pro and max 2 lets ten free
 users share a Codex account and two plus users another, while Claude's
 accounts keep plus, pro and max alone and free two to one.
 
+A provider can also give its accounts of low use one free user more
+(T-279): Settings › Growth policy's "free +1 under (% a day)" beside the
+provider's shares, kept in settings.json (`providerLowUse`: provider id
+→ percent, 1 to 100, `POST /api/settings/provider-low-use` with
+`{"provider": id, "percent": n}`, null to turn it off). An account of
+that provider whose week (its vendor's 7-day window of every model) is
+used, on average, less than that a day takes one user of the `free` tier
+more than its share: 2 to an account becomes 3. The daily use is the
+week's share used over the days it has run, told once it has run a day:
+a week not a day old, one on credits, an account with no 7-day window
+and one whose window isn't read take none more, and nor does any account
+while settings.json doesn't read. It is one more, never two, and only
+for a share of 2 or more (1 stays its user's alone, 0 any number);
+`plus`, `pro`, `max` and every other tier keep their share. It holds,
+as `by_use` does, only when a user is given a new seat (its first
+account or a spare): nobody bound is moved, so a week that renews or
+rises past it leaves its three users where they are, and a seat let go
+of (a user idle past the idle time) is given again only while the
+account's use is still low then. magpie's log says each user bound as
+the one more, with the account's daily use.
+
 The Gateway page's User bindings says the file's tiers, then each
 provider with shares of its own, "from Settings › Growth policy", with
 each tier it names and its share there, that Settings' shares can't be
